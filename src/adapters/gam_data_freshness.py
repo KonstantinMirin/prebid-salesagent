@@ -66,10 +66,10 @@ class GAMDataFreshnessValidator:
         tz = pytz.timezone(timezone)
         now = now.astimezone(tz)
         ready = time(cls.DAILY_DATA_READY_HOUR_ET, 5)
-        # A day's figures are complete from DAILY_DATA_READY_HOUR_ET the next morning, the rule
-        # GAMReportingService._calculate_data_validity applies. The target is read as a date in
-        # the data's time zone. If that time is already past and GAM is still behind, the next
-        # such morning is the earliest the heuristic can say the figures are complete.
+        # A day's figures are complete from DAILY_DATA_READY_HOUR_ET the next morning;
+        # GAMReportingService._calculate_data_validity reads the same constant. The target is read
+        # as a date in the data's time zone. If that time is already past and GAM is still behind,
+        # the next such morning is the earliest the heuristic can say the figures are complete.
         available_at = tz.localize(datetime.combine(target_date.astimezone(tz).date() + timedelta(days=1), ready))
         if available_at < now:
             available_at = cls._next_wall_time(now, tz, ready)
@@ -79,21 +79,16 @@ class GAMDataFreshnessValidator:
             logger.debug("Too early for complete data (hour %s, need %s+)", now.hour, cls.DAILY_DATA_READY_HOUR_ET)
             return available_at
 
-        # Check 2: Does the report actually include our target date?
-        if reporting_data.end_date.date() < target_date.date():
-            logger.debug(
-                "Report ends %s, figures needed through %s", reporting_data.end_date.date(), target_date.date()
-            )
-            return available_at
-
-        # Check 3: Is the data valid until after our target date?
+        # Check 2: Is the data valid until after our target date? This also covers a report that
+        # ends before the target: GAMReportingService ends every report now, and data_valid_until
+        # is never later than that.
         if reporting_data.data_valid_until.date() < target_date.date():
             logger.debug(
                 "Data only valid until %s, need %s", reporting_data.data_valid_until.date(), target_date.date()
             )
             return available_at
 
-        # Check 4: Is this month-end data that might still be processing?
+        # Check 3: Is this month-end data that might still be processing?
         if target_date.day == 1 and target_date.month != (target_date - timedelta(days=1)).month:
             # First day of new month - previous month might still be processing
             pt_tz = pytz.timezone("America/Los_Angeles")
