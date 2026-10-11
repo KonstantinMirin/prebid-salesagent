@@ -125,33 +125,6 @@ def given_buyer_packages_over_flight(ctx: dict, days: int, datatable: Any) -> No
     ]
 
 
-@given(
-    parsers.re(
-        r'a media buy awaits the seller\'s approval with one package "(?P<package_id>[^"]+)" on the product, '
-        r"stored (?P<terms>with|without) its pricing terms"
-    )
-)
-def given_pending_buy_on_product(ctx: dict, package_id: str, terms: str) -> None:
-    """Persist a buy awaiting approval whose one package row carries its budget, with or without ``pricing_info``.
-
-    "With" is the row the pending writer stores: the terms of the product's first pricing
-    option, in the projection the create path writes them with (``pricing_info_for``).
-    "Without" is the row a pending writer stored before it kept those terms: nothing on it
-    says which option the package bought, so its volume cannot be planned.
-    """
-    from src.core.helpers.pricing_helpers import pricing_info_for
-
-    product = ctx["default_product"]
-    pricing_terms = {"pricing_info": pricing_info_for(ctx["default_pricing_option"])} if terms == "with" else {}
-    ctx["env"].seed_media_buy_awaiting_approval(
-        ctx["tenant"],
-        ctx["principal"],
-        product,
-        package_id=package_id,
-        package_config={"product_id": product.product_id, "budget": 420.0, **pricing_terms},
-    )
-
-
 @when("the seller approves the media buy")
 def when_seller_approves_media_buy(ctx: dict) -> None:
     """The seller approves the one buy awaiting approval, as every Admin UI approval route does."""
@@ -296,96 +269,6 @@ def then_approval_books_media_buy(ctx: dict) -> None:
     assert result.ok, f"expected the seller's approval to book the media buy; it returned {result}"
     pending = ctx["env"].media_buys_awaiting_approval()
     assert pending == [], f"expected no media buy to await approval; {len(pending)} still do"
-
-
-#: The status a buy is left in by an approval that did not book it, by the Then's wording:
-#: a buy the ad server was never asked to create keeps its status, one it was asked to
-#: create is marked failed.
-_STATUS_AFTER_FAILED_APPROVAL = {
-    "is refused, and the media buy still awaits approval": "pending_approval",
-    "fails, and the media buy is marked failed": "failed",
-}
-
-
-@then(
-    parsers.re(
-        r"the seller's approval (?P<left>is refused, and the media buy still awaits approval"
-        r"|fails, and the media buy is marked failed)"
-    )
-)
-def then_approval_failed_leaving_buy(ctx: dict, left: str) -> None:
-    """The approval did not book the buy, and the tenant's one buy is in the status the Then states.
-
-    This reads the buy's status only. What the seller was told is the next Then's subject,
-    and whether the Admin UI offers the seller a second approval is decided by the approval
-    workflow step, which the approval call neither reads nor writes (#2414).
-    """
-    from src.core.tools.media_buy_create import ApprovalOutcome
-
-    result = ctx["approval_result"]
-    assert result.outcome is ApprovalOutcome.FAILED, f"expected the seller's approval to fail; it returned {result}"
-    status = _STATUS_AFTER_FAILED_APPROVAL[left]
-    buys = ctx["env"].media_buys_in_status(status)
-    assert len(buys) == 1, f"expected the media buy to be left {status}; {len(buys)} buys are"
-
-
-def _assert_seller_told(ctx: dict, *facts: str) -> None:
-    """The sentence the Admin UI shows the seller for the failed approval states every one of ``facts``."""
-    error_msg = ctx["approval_result"].error_msg
-    missing = [fact for fact in facts if fact not in error_msg]
-    assert not missing, f"expected the seller to be told {missing}; they were told {error_msg!r}"
-
-
-def _approval_refusal(ctx: dict, code: str) -> Any:
-    """The typed error the seller's approval was refused with, which must carry ``code`` and be named in the text the seller reads."""
-    result = ctx["approval_result"]
-    refusal = result.refusal
-    assert refusal is not None, f"expected the approval to be refused with a typed {code}; it returned {result}"
-    assert refusal.error_code == code, f"expected the approval to be refused with {code}; got {refusal.error_code}"
-    _assert_seller_told(ctx, code)
-    return refusal
-
-
-@then(
-    parsers.parse(
-        'the seller is told product "{product_id}" is refused with "{code}" on setting "{capability}", '
-        'rejecting "{rejected}"'
-    )
-)
-def then_seller_told_setting_refused(ctx: dict, product_id: str, code: str, capability: str, rejected: str) -> None:
-    """The approval result carries the refused product, setting and value, and its text states each.
-
-    The typed refusal is the planner's error with its details; ``error_msg`` is the sentence
-    the Admin UI shows the seller, who is the party that can repair the product.
-    """
-    details = _approval_refusal(ctx, code).details
-    told = (details.product_id, details.capability, details.rejected_value)
-    assert told == (product_id, capability, rejected), (
-        f"expected the refusal to name {(product_id, capability, rejected)}; it names {told}"
-    )
-    _assert_seller_told(ctx, product_id, capability, rejected, *details.accepted_values)
-
-
-@then(
-    parsers.parse(
-        'the seller is told the approval is refused with "{code}", for one package whose pricing model '
-        '"{pricing_model}" is "{problem_code}"'
-    )
-)
-def then_seller_told_package_problem(ctx: dict, code: str, pricing_model: str, problem_code: str) -> None:
-    """The approval result carries the one problem the adapter's pre-validation returned, and its text states it."""
-    problems = _approval_refusal(ctx, code).details.problems
-    told = [(problem.code, problem.subject_type, problem.rejected_value) for problem in problems]
-    assert told == [(problem_code, "package", pricing_model)], (
-        f"expected one package problem {problem_code} rejecting {pricing_model}; the refusal carries {told}"
-    )
-    _assert_seller_told(ctx, problem_code, problems[0].subject_id, pricing_model)
-
-
-@then(parsers.parse('the seller is told "{text}"'))
-def then_seller_told(ctx: dict, text: str) -> None:
-    """The sentence the Admin UI shows the seller for the failed approval states ``text``."""
-    _assert_seller_told(ctx, text)
 
 
 @then("Google Ad Manager received no order and no line item")

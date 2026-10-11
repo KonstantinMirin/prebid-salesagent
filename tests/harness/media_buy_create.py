@@ -285,50 +285,17 @@ class MediaBuyCreateEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
             payload_hash=payload_hash,
         )
 
-    def seed_media_buy_awaiting_approval(
-        self, tenant: Any, principal: Any, product: Any, *, package_id: str, package_config: Mapping[str, Any]
-    ) -> None:
-        """Persist a media buy of *principal* awaiting the seller's approval, with one package on *product*.
+    def media_buys_awaiting_approval(self) -> list[Any]:
+        """The media buys of this env's tenant whose status is ``pending_approval``.
 
-        The flight starts tomorrow and runs 14 days. The package row is *package_id* and
-        stores *package_config* as given, so a scenario states what a stored row carries,
-        such as a row the pending writer wrote before it stored ``pricing_info``.
-        """
-        from datetime import UTC, datetime, timedelta
-
-        from tests.factories import MediaPackageFactory
-        from tests.helpers.media_buy_approval import approvable_media_buy
-
-        start_time = datetime.now(UTC) + timedelta(days=1)
-        media_buy = approvable_media_buy(
-            tenant,
-            principal,
-            product,
-            start_time=start_time,
-            end_time=start_time + timedelta(days=14),
-            budget=420.0,
-            pricing_option_id=product.pricing_options[0].pricing_option_id,
-        )
-        MediaPackageFactory(media_buy=media_buy, package_id=package_id, package_config=dict(package_config))
-        self._commit_factory_data()
-
-    def media_buys_in_status(self, status: str) -> list[Any]:
-        """The media buys of this env's tenant whose persisted status is *status*.
-
-        *status* is a ``PersistedMediaBuyStatus`` value; any other string raises
-        ``ValueError``. Read on the env's own session, so no unit of work commits and
-        closes beside it.
+        Read on the env's own session, so no unit of work commits and closes beside it.
         """
         from src.core.database.models import PersistedMediaBuyStatus
         from src.core.database.repositories.media_buy import MediaBuyRepository
 
         return MediaBuyRepository(self.get_session(), self._tenant_id).list_by_statuses(
-            [PersistedMediaBuyStatus(status)]
+            [PersistedMediaBuyStatus.PENDING_APPROVAL]
         )
-
-    def media_buys_awaiting_approval(self) -> list[Any]:
-        """The media buys of this env's tenant whose status is ``pending_approval``."""
-        return self.media_buys_in_status("pending_approval")
 
     def approve_pending_media_buy(self) -> ApprovalResult:
         """Approve the one media buy of this env's tenant that awaits approval, as an Admin UI route does.

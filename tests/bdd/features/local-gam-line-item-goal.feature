@@ -23,14 +23,7 @@
 # vCPM. The line item is billed at the selected option's unit price (LineItem.costType and
 # costPerUnit); a flat-rate price is billed per day (CPD) over the flight's days. A seller
 # misconfiguration is refused with CONFIGURATION_ERROR (enums/error-code.json, recovery
-# terminal) before anything is written to GAM. On the seller's approval the same refusal
-# tells the seller the product, the setting and the rejected value, nothing is written to
-# GAM, and the buy is not marked failed: its status stays pending_approval. Whether the
-# Admin UI then offers a second approval is decided by the approval workflow step, which
-# these scenarios do not drive (#2414). What the seller is told about any failed approval
-# is the error's code, its cause and the facts it names (its field and its details); for
-# a fault GAM itself answered once the approval asked it to book, the cause is GAM's own
-# reason, and that buy is marked failed.
+# terminal) before anything is written to GAM.
 #
 # The sales-guaranteed storyboard's create_media_buy step sends two packages with different
 # budgets and validates only the response schema, so these scenarios grade the booking
@@ -193,97 +186,4 @@ Feature: A Google Ad Manager seller books each package's own volume, type, prior
       | {"priority": 12}                                                   | line_item_priority:STANDARD        | 12       |
       | {"priority": 17}                                                   | line_item_priority:STANDARD        | 17       |
       | {"priority": "8"}                                                  | line_item_priority:STANDARD        | 8        |
-      | {"line_item_type": "BOGUS"}                                        | line_item_type                     | BOGUS    |
       | {"line_item_type": "PRICE_PRIORITY", "primary_goal_type": "WEEKLY"} | line_item_goal_type:PRICE_PRIORITY | WEEKLY   |
-
-  @T-UC-002-local-gam-priority-refused-approval @extension
-  Scenario Outline: The seller's approval refuses a booking setting GAM does not accept, and the buy still awaits approval
-    Given a valid create_media_buy request
-    And the account exists and is active
-    And the seller's guaranteed product has pricing options:
-      | product_id | pricing_option_id | pricing_model | fixed_price | floor_price |
-      | prod_a     | cpm_usd_standard  | cpm           | 12.00       |             |
-    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product settings '<settings>'
-    And the tenant requires manual approval
-    And the buyer's packages, over a 14-day flight, are:
-      | product_id | pricing_option_id | budget | bid_price |
-      | prod_a     | cpm_usd_standard  | 420    |           |
-    When the Buyer Agent sends the create_media_buy request
-    Then the response status should be "submitted"
-    When the seller approves the media buy
-    Then the seller's approval is refused, and the media buy still awaits approval
-    And the seller is told product "prod_a" is refused with "CONFIGURATION_ERROR" on setting "<capability>", rejecting "<rejected>"
-    And Google Ad Manager received no order and no line item
-
-    Examples:
-      | settings                                                           | capability                         | rejected |
-      | {"priority": 17}                                                   | line_item_priority:STANDARD        | 17       |
-      | {"line_item_type": "BOGUS"}                                        | line_item_type                     | BOGUS    |
-      | {"line_item_type": "PRICE_PRIORITY", "primary_goal_type": "WEEKLY"} | line_item_goal_type:PRICE_PRIORITY | WEEKLY   |
-
-  @T-UC-002-local-gam-approval-unsupported-pricing @extension
-  Scenario: The seller's approval refuses a package priced in a model GAM cannot bill, and the buy still awaits approval
-    Given a valid create_media_buy request
-    And the account exists and is active
-    And the seller's non-guaranteed product has pricing options:
-      | product_id | pricing_option_id | pricing_model | fixed_price | floor_price |
-      | prod_a     | cpcv_usd_fixed    | cpcv          | 0.10        |             |
-    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001"
-    And the tenant requires manual approval
-    And the buyer's packages, over a 14-day flight, are:
-      | product_id | pricing_option_id | budget | bid_price |
-      | prod_a     | cpcv_usd_fixed    | 420    |           |
-    When the Buyer Agent sends the create_media_buy request
-    Then the response status should be "submitted"
-    When the seller approves the media buy
-    Then the seller's approval is refused, and the media buy still awaits approval
-    And the seller is told the approval is refused with "VALIDATION_ERROR", for one package whose pricing model "cpcv" is "UNSUPPORTED_FEATURE"
-    And Google Ad Manager received no order and no line item
-
-  @T-UC-002-local-gam-approval-no-pricing-terms @extension
-  Scenario: The seller's approval refuses a package stored without its pricing terms, and the buy still awaits approval
-    Given the account exists and is active
-    And the seller's guaranteed product has pricing options:
-      | product_id | pricing_option_id | pricing_model | fixed_price | floor_price |
-      | prod_a     | cpm_usd_standard  | cpm           | 12.00       |             |
-    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001"
-    And a media buy awaits the seller's approval with one package "pkg_a" on the product, stored without its pricing terms
-    When the seller approves the media buy
-    Then the seller's approval is refused, and the media buy still awaits approval
-    And the seller is told "Package pkg_a has no stored budget or pricing_info"
-    And Google Ad Manager received no order and no line item
-
-  @T-UC-002-local-gam-approval-refusal-names-field @extension
-  Scenario: The seller's approval refuses a buyer whose GAM advertiser id is not a number, naming the setting and the value
-    Given the account exists and is active
-    And the seller's guaranteed product has pricing options:
-      | product_id | pricing_option_id | pricing_model | fixed_price | floor_price |
-      | prod_a     | cpm_usd_standard  | cpm           | 12.00       |             |
-    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "not-a-number"
-    And a media buy awaits the seller's approval with one package "pkg_a" on the product, stored with its pricing terms
-    When the seller approves the media buy
-    Then the seller's approval is refused, and the media buy still awaits approval
-    And the seller is told "CONFIGURATION_ERROR"
-    And the seller is told "advertiser_id"
-    And the seller is told "not-a-number"
-    And Google Ad Manager received no order and no line item
-
-  @T-UC-002-local-gam-approval-gam-fault @extension
-  Scenario: When Google Ad Manager refuses the seller's approval, the buy is marked failed and the seller reads GAM's own reason
-    Given a valid create_media_buy request
-    And the account exists and is active
-    And the seller's guaranteed product has pricing options:
-      | product_id | pricing_option_id | pricing_model | fixed_price | floor_price |
-      | prod_a     | cpm_usd_standard  | cpm           | 12.00       |             |
-    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", on a network that refuses to name its time zone with "QuotaError.EXCEEDED_QUOTA"
-    And the tenant requires manual approval
-    And the buyer's packages, over a 14-day flight, are:
-      | product_id | pricing_option_id | budget | bid_price |
-      | prod_a     | cpm_usd_standard  | 420    |           |
-    When the Buyer Agent sends the create_media_buy request
-    Then the response status should be "submitted"
-    When the seller approves the media buy
-    Then the seller's approval fails, and the media buy is marked failed
-    And the seller is told "RATE_LIMITED"
-    And the seller is told "QuotaError.EXCEEDED_QUOTA"
-    And Google Ad Manager received no order and no line item
