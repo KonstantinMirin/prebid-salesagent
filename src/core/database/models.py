@@ -1692,15 +1692,6 @@ class MediaPackage(Base):
     # Relationships
     media_buy = relationship("MediaBuy", back_populates="packages")
 
-    @property
-    def platform_line_item_id(self) -> str | None:
-        """The ad server line item this package is booked as, as a string; None until an adapter reported one.
-
-        The one reader of ``package_config["platform_line_item_id"]``, which is written once the
-        adapter's create returns.
-        """
-        return self.package_config.get("platform_line_item_id")
-
     __table_args__ = (
         Index("idx_media_packages_media_buy", "media_buy_id"),
         Index("idx_media_packages_package", "package_id"),

@@ -10,7 +10,6 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 
 from src.adapters.base import AdapterUpdateResult
-from src.core.database.models import MediaPackage
 
 
 def test_update_package_budget_persists_to_database():
@@ -22,7 +21,8 @@ def test_update_package_budget_persists_to_database():
     new_budget = 30000
 
     # Mock database session and MediaPackage
-    mock_package = MediaPackage(media_buy_id="mb_test123", package_id=package_id)
+    mock_package = Mock()
+    mock_package.package_id = package_id
     mock_package.package_config = {
         "budget": 19000,
         "product_id": "prod_1",
@@ -161,7 +161,8 @@ def test_pause_resume_package_actions_work():
     package_id = "pkg_test456"
 
     # Mock database session and MediaPackage
-    mock_package = MediaPackage(media_buy_id="mb_test123", package_id=package_id)
+    mock_package = Mock()
+    mock_package.package_id = package_id
     mock_package.package_config = {
         "budget": 19000,
         "product_id": "prod_1",
@@ -236,10 +237,12 @@ def test_pause_resume_media_buy_actions_work():
     media_buy_id = "mb_test123"
 
     # Mock database session and multiple MediaPackages
-    mock_package1 = MediaPackage(media_buy_id="mb_test123", package_id="pkg1")
+    mock_package1 = Mock()
+    mock_package1.package_id = "pkg1"
     mock_package1.package_config = {"platform_line_item_id": "111"}
 
-    mock_package2 = MediaPackage(media_buy_id="mb_test123", package_id="pkg2")
+    mock_package2 = Mock()
+    mock_package2.package_id = "pkg2"
     mock_package2.package_config = {"platform_line_item_id": "222"}
 
     # Create a minimal mock adapter with orders_manager
@@ -317,7 +320,8 @@ def test_update_package_budget_rejects_budget_below_delivery():
     new_budget = 10000  # Less than current spend
 
     # Mock database session and MediaPackage with delivery metrics
-    mock_package = MediaPackage(media_buy_id="mb_test123", package_id=package_id)
+    mock_package = Mock()
+    mock_package.package_id = package_id
     mock_package.package_config = {
         "budget": 19000,
         "product_id": "prod_1",
@@ -413,7 +417,8 @@ class TestGAMUpdateMediaBuyTaxonomyRaiseSites:
         from src.core.exceptions import AdCPGamUpdateError
 
         package_id = "pkg_test456"
-        mock_package = MediaPackage(media_buy_id="mb_test123", package_id=package_id)
+        mock_package = Mock()
+        mock_package.package_id = package_id
         mock_package.package_config = {
             "budget": 19000,
             "platform_line_item_id": "123456",

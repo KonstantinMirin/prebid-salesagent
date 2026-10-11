@@ -114,7 +114,6 @@ class _PackageData:
     package_config: dict | None
     budget: Decimal | None
     bid_price: Decimal | None
-    platform_line_item_id: str | None
 
 
 from adcp.server.helpers import valid_actions_for_status
@@ -223,7 +222,7 @@ def _get_media_buys_impl(
             package_refs = []
             for buy in target_media_buys:
                 for pkg in packages_by_media_buy.get(buy.media_buy_id, []):
-                    line_item_id = pkg.platform_line_item_id
+                    line_item_id = (pkg.package_config or {}).get("platform_line_item_id")
                     package_refs.append((buy.media_buy_id, pkg.package_id, line_item_id))
 
             snapshot_data = adapter.get_packages_snapshot(package_refs)
@@ -689,7 +688,6 @@ def _fetch_packages(media_buy_ids: list[str], uow: MediaBuyUoW) -> dict[str, lis
                 package_config=pkg.package_config,
                 budget=pkg.budget,
                 bid_price=pkg.bid_price,
-                platform_line_item_id=pkg.platform_line_item_id,
             )
             for pkg in packages
         ]

@@ -995,9 +995,9 @@ class GoogleAdManager(AdServerAdapter):
 
             currency = str(media_buy.currency or "USD")
             package_by_line_item = {
-                package.platform_line_item_id: package.package_id
+                str(package.package_config["platform_line_item_id"]): package.package_id
                 for package in repo.get_packages(media_buy_id)
-                if package.platform_line_item_id
+                if package.package_config.get("platform_line_item_id")
             }
 
         # Initialize GAM reporting service
@@ -1289,7 +1289,7 @@ class GoogleAdManager(AdServerAdapter):
                     )
 
                 # Get platform line item ID from package config
-                platform_line_item_id = media_package.platform_line_item_id
+                platform_line_item_id = media_package.package_config.get("platform_line_item_id")
                 if not platform_line_item_id:
                     self.log(f"[red]Package {package_id} has no platform_line_item_id - cannot sync to GAM[/red]")
                     raise AdCPValidationError(
@@ -1356,7 +1356,7 @@ class GoogleAdManager(AdServerAdapter):
                         raise AdCPPackageNotFoundError(details=EntityRefDetails(package_id=package_id))
 
                     # Get platform line item ID
-                    platform_line_item_id = media_package.platform_line_item_id
+                    platform_line_item_id = media_package.package_config.get("platform_line_item_id")
                     if not platform_line_item_id:
                         raise AdCPValidationError(
                             details=ValidationDetails(package_id=package_id),
@@ -1403,7 +1403,7 @@ class GoogleAdManager(AdServerAdapter):
                     # Pause/resume each package's line item
                     failed_items = []
                     for pkg in packages:
-                        platform_line_item_id = pkg.platform_line_item_id
+                        platform_line_item_id = pkg.package_config.get("platform_line_item_id")
                         if not platform_line_item_id:
                             failed_items.append({"id": pkg.package_id, "reason": "No GAM line item ID"})
                             continue
