@@ -90,6 +90,20 @@ from src.core.schemas import (
 logger = logging.getLogger(__name__)
 
 
+def _report_row_day(row: dict[str, Any]) -> str | None:
+    """A GAM report row's day as YYYY-MM-DD, or None for a row with no parseable date."""
+    from dateutil import parser as dateutil_parser
+
+    date_value = row.get("date", row.get("DATE", ""))
+    if not date_value:
+        return None
+    try:
+        return dateutil_parser.parse(str(date_value)).strftime("%Y-%m-%d")
+    except (ValueError, OverflowError) as e:
+        logger.warning("Unparseable date '%s' in reporting row, skipping: %s", date_value, e)
+        return None
+
+
 class GoogleAdManager(AdServerAdapter):
     """Google Ad Manager adapter using modular architecture."""
 
@@ -1046,51 +1060,21 @@ class GoogleAdManager(AdServerAdapter):
         avg_ctr = reporting_data.metrics.get("average_ctr", 0.0)
 
         # Build daily breakdown from reporting data
-        daily_breakdown = []
-        daily_metrics = {}
-        for row in reporting_data.data:
-            # Extract date from the row (reporting service uses DATE dimension)
-            date_str = row.get("date", row.get("DATE", ""))
-            if date_str:
-                # Normalize to YYYY-MM-DD using dateutil (handles any format)
-                if not isinstance(date_str, str):
-                    date_str = str(date_str)
-                try:
-                    from dateutil import parser as dateutil_parser
-
-                    date_str = dateutil_parser.parse(date_str).strftime("%Y-%m-%d")
-                except (ValueError, OverflowError) as e:
-                    logger.warning("Unparseable date '%s' in reporting row, skipping: %s", date_str, e)
-                    continue
-
-                if date_str not in daily_metrics:
-                    daily_metrics[date_str] = {
-                        "impressions": 0.0,
-                        "spend": 0.0,
-                    }
-                daily_metrics[date_str]["impressions"] += float(row.get("impressions", 0))
-                daily_metrics[date_str]["spend"] += float(row.get("spend", 0.0))
-
-        # Convert daily metrics dict to sorted list of DailyBreakdown objects
-        for date_str in sorted(daily_metrics.keys()):
-            metrics = daily_metrics[date_str]
-            daily_breakdown.append(
-                {
-                    "date": date_str,
-                    "impressions": metrics["impressions"],
-                    "spend": metrics["spend"],
-                }
-            )
+        daily_metrics = reporting_data.sum_by(_report_row_day, ("impressions", "spend"))
+        daily_breakdown = [
+            {
+                "date": date_str,
+                "impressions": float(daily_metrics[date_str]["impressions"]),
+                "spend": float(daily_metrics[date_str]["spend"]),
+            }
+            for date_str in sorted(daily_metrics)
+        ]
 
         # A package's delivery is its line item's. GAM's report covers every line item of
         # the buy, so a line item with no rows has delivered nothing, and is reported at zero.
-        line_item_metrics: dict[str, dict[str, Any]] = {}
-        for row in reporting_data.data:
-            line_item_id = str(row.get("line_item_id") or "")
-            if line_item_id:
-                metrics = line_item_metrics.setdefault(line_item_id, {"impressions": 0, "spend": 0.0})
-                metrics["impressions"] += row.get("impressions", 0)
-                metrics["spend"] += row.get("spend", 0.0)
+        line_item_metrics = reporting_data.sum_by(
+            lambda row: str(row.get("line_item_id") or "") or None, ("impressions", "spend")
+        )
         zero = {"impressions": 0, "spend": 0.0}
         by_package = [
             AdapterPackageDelivery(
