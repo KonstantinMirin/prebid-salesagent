@@ -67,15 +67,6 @@ GAM_CREATE_METHODS: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
-#: Every ``(service, method)`` through which the adapter sends GAM an array of objects: the
-#: creates above, plus the ones the stand-in records without answering them. A reader of what
-#: was sent accepts these only, so a misspelled service or method raises instead of reading
-#: as nothing sent.
-GAM_SENT_METHODS: frozenset[tuple[str, str]] = GAM_CREATE_METHODS | {
-    ("LineItemService", "updateLineItems"),
-    ("CustomTargetingService", "createCustomTargetingValues"),
-}
-
 
 def stub_gam_client(*, line_items: tuple[SoapObject, ...] | list[SoapObject] = ()) -> MagicMock:
     """An ``AdManagerClient`` stand-in: one recorded GAM network.
