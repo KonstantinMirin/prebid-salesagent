@@ -7,22 +7,10 @@ from decimal import Decimal
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
-from src.core.database.models import PricingOption, Product, ProductInventoryMapping
-from src.core.format_cache import DEFAULT_AGENT_URL
+from src.core.database.models import PricingOption, Product
 from src.core.schemas.pricing import PricingOption as PricingOptionSchema
 from tests.factories.core import TenantFactory
 from tests.factories.request import _RequestFactory
-
-#: A format id the captured reference catalog holds
-#: (tests/fixtures/creative_formats/reference_formats.json), so format resolution against
-#: the reference formats succeeds. The legacy "display_300x250" id is NOT in that catalog.
-#: See issue #1418.
-REFERENCE_FORMAT_ID = "display_300x250_image"
-
-
-def reference_format_ids(*ids: str) -> list[dict[str, str]]:
-    """A product's ``format_ids`` naming *ids* on the reference catalog's creative agent."""
-    return [{"agent_url": DEFAULT_AGENT_URL, "id": format_id} for format_id in ids]
 
 
 class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -36,7 +24,13 @@ class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
     product_id = Sequence(lambda n: f"prod_{n:04d}")
     name = LazyAttribute(lambda o: f"Product {o.product_id}")
     description = LazyAttribute(lambda o: f"Description for {o.name}")
-    format_ids = factory.LazyFunction(lambda: reference_format_ids(REFERENCE_FORMAT_ID))
+    # Default to a format_id present in the captured reference catalog
+    # (tests/fixtures/creative_formats/reference_formats.json). The legacy
+    # "display_300x250" id is NOT in the agent's catalog; "display_300x250_image" is,
+    # so format resolution against the reference formats succeeds. See issue #1418.
+    format_ids = factory.LazyFunction(
+        lambda: [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]
+    )
     targeting_template = factory.LazyFunction(lambda: {"geo": ["US"]})
     delivery_type = "guaranteed"
     property_tags = factory.LazyFunction(lambda: ["all_inventory"])
@@ -98,27 +92,6 @@ class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):
         ):
             del kwargs["product"]
         return kwargs
-
-
-class ProductInventoryMappingFactory(factory.alchemy.SQLAlchemyModelFactory):
-    """A product's mapping to one piece of ad-server inventory, as the Admin UI's product form saves it.
-
-    ``product`` is excluded from the model kwargs: ``ProductInventoryMapping`` has a composite
-    foreign key to ``products`` and no relationship, so only the ids reach the row.
-    """
-
-    class Meta:
-        model = ProductInventoryMapping
-        sqlalchemy_session = None
-        sqlalchemy_session_persistence = "commit"
-        exclude = ("product",)
-
-    product = SubFactory(ProductFactory)
-    tenant_id = LazyAttribute(lambda o: o.product.tenant_id)
-    product_id = LazyAttribute(lambda o: o.product.product_id)
-    inventory_type = "ad_unit"
-    inventory_id = Sequence(lambda n: f"au_{n:04d}")
-    is_primary = False
 
 
 #: The id a default-shaped pricing option carries, read off the factory rather than

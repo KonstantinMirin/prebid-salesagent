@@ -69,15 +69,6 @@ GAM_CREATE_METHODS: frozenset[tuple[str, str]] = frozenset(
     }
 )
 
-#: Every ``(service, method)`` through which the adapter sends GAM an array of objects: the
-#: creates above, plus the ones the stand-in records without answering them. A reader of what
-#: was sent accepts these only, so a misspelled service or method raises instead of reading
-#: as nothing sent.
-GAM_SENT_METHODS: frozenset[tuple[str, str]] = GAM_CREATE_METHODS | {
-    ("LineItemService", "updateLineItems"),
-    ("CustomTargetingService", "createCustomTargetingValues"),
-}
-
 
 #: The stand-in network's time zone when a test states none. Neither UTC nor America/New_York,
 #: so a test that does not state a zone cannot pass by matching a hard-coded label or an

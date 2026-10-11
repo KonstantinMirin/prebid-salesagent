@@ -176,14 +176,13 @@ class MediaBuyCreateEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
         """
         from tests.factories import PricingOptionFactory, ProductFactory
         from tests.factories.core import PropertyTagFactory
-        from tests.factories.product import reference_format_ids
 
         if not getattr(self, "_seeded_all_inventory_tag", False):
             PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
             self._seeded_all_inventory_tag = True
 
         if format_ids is None:
-            format_ids = reference_format_ids("display_300x250")
+            format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
 
         product = ProductFactory(
             tenant=tenant,
