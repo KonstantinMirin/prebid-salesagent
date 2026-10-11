@@ -3386,6 +3386,9 @@ async def _create_media_buy_impl(
         # row (AdCP 3.1.1 get-media-buys-response.json: sellers MUST echo the request
         # package's product_id).
         assert req.packages is not None, "packages required - validated earlier"
+        if len(response.packages) != len(req.packages):
+            logger.error(f"Adapter returned {len(response.packages)} packages for {len(req.packages)} requested")
+            raise AdCPAdapterError()
         requested_packages = [
             RequestedPackage(
                 package_id=resp_package.package_id,
