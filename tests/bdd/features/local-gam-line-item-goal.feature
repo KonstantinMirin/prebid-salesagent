@@ -27,7 +27,10 @@
 # tells the seller the product, the setting and the rejected value, nothing is written to
 # GAM, and the buy is not marked failed: its status stays pending_approval. Whether the
 # Admin UI then offers a second approval is decided by the approval workflow step, which
-# these scenarios do not drive (#2414).
+# these scenarios do not drive (#2414). What the seller is told about any failed approval
+# is the error's code, its cause and the facts it names (its field and its details); for
+# a fault GAM itself answered once the approval asked it to book, the cause is GAM's own
+# reason, and that buy is marked failed.
 #
 # The sales-guaranteed storyboard's create_media_buy step sends two packages with different
 # budgets and validates only the response schema, so these scenarios grade the booking
@@ -248,4 +251,39 @@ Feature: A Google Ad Manager seller books each package's own volume, type, prior
     When the seller approves the media buy
     Then the seller's approval is refused, and the media buy still awaits approval
     And the seller is told "Package pkg_a has no stored budget or pricing_info"
+    And Google Ad Manager received no order and no line item
+
+  @T-UC-002-local-gam-approval-refusal-names-field @extension
+  Scenario: The seller's approval refuses a buyer whose GAM advertiser id is not a number, naming the setting and the value
+    Given the account exists and is active
+    And the seller's guaranteed product has pricing options:
+      | product_id | pricing_option_id | pricing_model | fixed_price | floor_price |
+      | prod_a     | cpm_usd_standard  | cpm           | 12.00       |             |
+    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "not-a-number"
+    And a media buy awaits the seller's approval with one package "pkg_a" on the product, stored with its pricing terms
+    When the seller approves the media buy
+    Then the seller's approval is refused, and the media buy still awaits approval
+    And the seller is told "CONFIGURATION_ERROR"
+    And the seller is told "advertiser_id"
+    And the seller is told "not-a-number"
+    And Google Ad Manager received no order and no line item
+
+  @T-UC-002-local-gam-approval-gam-fault @extension
+  Scenario: When Google Ad Manager refuses the seller's approval, the buy is marked failed and the seller reads GAM's own reason
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the seller's guaranteed product has pricing options:
+      | product_id | pricing_option_id | pricing_model | fixed_price | floor_price |
+      | prod_a     | cpm_usd_standard  | cpm           | 12.00       |             |
+    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", on a network that refuses to name its time zone with "QuotaError.EXCEEDED_QUOTA"
+    And the tenant requires manual approval
+    And the buyer's packages, over a 14-day flight, are:
+      | product_id | pricing_option_id | budget | bid_price |
+      | prod_a     | cpm_usd_standard  | 420    |           |
+    When the Buyer Agent sends the create_media_buy request
+    Then the response status should be "submitted"
+    When the seller approves the media buy
+    Then the seller's approval fails, and the media buy is marked failed
+    And the seller is told "RATE_LIMITED"
+    And the seller is told "QuotaError.EXCEEDED_QUOTA"
     And Google Ad Manager received no order and no line item
