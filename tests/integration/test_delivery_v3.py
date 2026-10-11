@@ -16,7 +16,6 @@ import pytest
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     MediaBuy,
-    MediaPackage,
     Principal,
     Product,
 )
@@ -30,7 +29,7 @@ from src.core.schemas import (
 )
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from tests.factories import PricingOptionFactory
-from tests.factories.media_buy import package_config_for, request_package
+from tests.factories.media_buy import package_rows_for, request_package
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.utils.database_helpers import add_product_prerequisites, create_tenant_with_timestamps
 
@@ -205,14 +204,7 @@ def _create_media_buy(
 
     # Also create the MediaPackage rows, which are the buy's packages: each carries the
     # pricing_info create stores with it, the terms the delivery report prices it from.
-    for pkg_data in raw_request.get("packages", []):
-        pkg_id = pkg_data.get("package_id", f"pkg_{media_buy_id}")
-        media_pkg = MediaPackage(
-            media_buy_id=media_buy_id,
-            package_id=pkg_id,
-            package_config=package_config_for(pkg_data),
-        )
-        session.add(media_pkg)
+    session.add_all(package_rows_for(media_buy_id, raw_request.get("packages", [])))
 
     return buy
 

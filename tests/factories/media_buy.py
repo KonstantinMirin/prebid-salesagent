@@ -112,17 +112,28 @@ def package_config_for(package: dict[str, Any]) -> dict[str, Any]:
     return {**package, "pricing_info": pricing_info_for(option, bid_price=package.get("bid_price"))}
 
 
+def persisted_request_packages(packages: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The request *packages* a buy stores as ``MediaPackage`` rows: those naming a ``package_id``.
+
+    That id is what the repository injects when it persists them; a package that carries
+    none describes a package that was never persisted, and inventing a row for it would
+    invent an identity too.
+    """
+    return [pkg for pkg in packages if pkg.get("package_id")]
+
+
 def package_rows_for(media_buy_id: str, packages: Iterable[dict[str, Any]]) -> list[MediaPackage]:
     """The unpersisted ``MediaPackage`` rows a buy's request *packages* are stored as.
 
-    One row per package that names a ``package_id`` (the id the repository injects when it
-    persists them), carrying the terms create stores with it (``package_config_for``). For
-    unit tests whose mocked repository hands the delivery service a buy's rows.
+    The rows ``MediaBuyFactory`` persists for the same packages, built by the same
+    ``MediaPackageFactory`` and left unpersisted. For unit tests whose mocked repository
+    hands the delivery service a buy's rows.
     """
     return [
-        MediaPackage(media_buy_id=media_buy_id, package_id=pkg["package_id"], package_config=package_config_for(pkg))
-        for pkg in packages
-        if pkg.get("package_id")
+        MediaPackageFactory.build(
+            media_buy=None, media_buy_id=media_buy_id, package_id=pkg["package_id"], source_package=pkg
+        )
+        for pkg in persisted_request_packages(packages)
     ]
 
 
@@ -271,19 +282,15 @@ class MediaBuyFactory(factory.alchemy.SQLAlchemyModelFactory):
         from the row's ``pricing_info``. A factory buy without them is a shape production
         cannot produce — the same reason ``account_id`` above seeds a real Account row.
 
-        Only packages that NAME a ``package_id`` get a row, because that id is what the
-        repository injects when it persists them; a caller who supplies a ``raw_request``
-        whose packages carry none is describing a buy whose packages were never persisted,
-        and inventing rows for it would invent identities too.
+        Only packages that NAME a ``package_id`` get a row (``persisted_request_packages``).
 
         Named ``persisted_packages`` rather than ``packages`` so the model's own
         relationship stays reachable as a constructor kwarg.
         """
         if not create or MediaBuyFactory._meta.sqlalchemy_session is None:
             return
-        for package in (obj.raw_request or {}).get("packages", []):
-            if package.get("package_id"):
-                MediaPackageFactory(media_buy=obj, package_id=package["package_id"])
+        for package in persisted_request_packages((obj.raw_request or {}).get("packages", [])):
+            MediaPackageFactory(media_buy=obj, package_id=package["package_id"])
 
 
 def _ensure_default_account(tenant_id: str) -> str:
@@ -338,21 +345,39 @@ class MediaPackageFactory(factory.alchemy.SQLAlchemyModelFactory):
         session.commit()
         return existing
 
+    @classmethod
+    def _adjust_kwargs(cls, **kwargs):
+        """A row built without its buy (``media_buy=None``) names the buy by ``media_buy_id`` alone.
+
+        The key is removed, never passed as ``None``: an explicit ``None`` on the
+        relationship says the row has no parent, and SQLAlchemy blanks the foreign key
+        at flush (the same reason as ``PricingOptionFactory._adjust_kwargs``).
+        """
+        if kwargs.get("media_buy") is None:
+            kwargs.pop("media_buy", None)
+        return kwargs
+
+    class Params:
+        #: The request package this row is the stored form of. Read off the buy's
+        #: ``raw_request`` by default; ``package_rows_for`` passes it for a row built
+        #: without a buy row.
+        source_package = LazyAttribute(_source_package)
+
     media_buy = SubFactory(MediaBuyFactory)
     media_buy_id = LazyAttribute(lambda o: o.media_buy.media_buy_id)
     package_id = LazyAttribute(
         lambda o: next(
-            (pkg["package_id"] for pkg in _request_packages(o.media_buy) if pkg.get("package_id")), "pkg_001"
+            (pkg["package_id"] for pkg in persisted_request_packages(_request_packages(o.media_buy))), "pkg_001"
         )
     )
-    budget = LazyAttribute(lambda o: Decimal(str(_source_package(o).get("budget", "5000.00"))))
+    budget = LazyAttribute(lambda o: Decimal(str(o.source_package.get("budget", "5000.00"))))
     pacing = "even"
     package_config = LazyAttribute(
         lambda o: package_config_for(
             {
-                **_source_package(o),
+                **o.source_package,
                 "package_id": o.package_id,
-                "product_id": _source_package(o).get("product_id", FIXTURE_PRODUCT_ID),
+                "product_id": o.source_package.get("product_id", FIXTURE_PRODUCT_ID),
                 "budget": float(o.budget),
             }
         )

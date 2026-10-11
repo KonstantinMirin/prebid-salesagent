@@ -27,13 +27,13 @@ Feature: get_media_buy_delivery reports each package of a Google Ad Manager buy 
   Background:
     Given a valid create_media_buy request
     And the account exists and is active
-    And the seller's non_guaranteed product has pricing options:
-      | product     | pricing_option_id | pricing_model | fixed_price | floor_price |
+    And the seller's non-guaranteed products have pricing options:
+      | product_id  | pricing_option_id | pricing_model | fixed_price | floor_price |
       | leaderboard | cpm_usd_fixed     | cpm           | 10.00       |             |
       | rectangle   | cpm_usd_fixed     | cpm           | 12.00       |             |
     And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001"
     And the buyer's packages, over a 30-day flight, are:
-      | product     | pricing_option_id | budget | bid_price |
+      | product_id  | pricing_option_id | budget | bid_price |
       | leaderboard | cpm_usd_fixed     | 500    |           |
       | rectangle   | cpm_usd_fixed     | 600    |           |
     And the buyer already has another active media buy with this seller

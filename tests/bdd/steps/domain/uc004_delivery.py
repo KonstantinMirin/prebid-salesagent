@@ -30,6 +30,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_field,
 )
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._table import rows as table_rows
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
 from tests.factories.webhook import ReportingWebhookRequestFactory
@@ -452,10 +453,8 @@ def given_adapter_package_metrics(ctx: dict, impressions: int, spend: float, pkg
     Per-package, because an effective rate is a ratio of what THIS package delivered; a
     buy-level total would not pin it.
     """
-    mb_id = next(reversed(ctx.get("media_buys", {})), None)
-    assert mb_id, "adapter metrics need a media buy — the scenario must seed one first"
     ctx["env"].set_adapter_response(
-        media_buy_id=mb_id,
+        media_buy_id=_latest_seeded_media_buy_id(ctx),
         impressions=impressions,
         spend=spend,
         packages=[{"package_id": pkg_id, "impressions": impressions, "spend": spend}],
@@ -483,32 +482,35 @@ def given_media_buy_second_package(ctx: dict, mb_id: str, pkg_id: str) -> None:
 
 @given(
     parsers.parse(
-        "another of the seller's products has an option with package \"{pkg_id}\"'s pricing_option_id, "
-        "at {pricing_model} rate {rate:g}"
+        "the seller's catalog now prices package \"{pkg_id}\"'s pricing_option_id at {pricing_model} rate {rate:g}, "
+        "on the package's own product and on another product"
     )
 )
-def given_other_product_shares_option_id(ctx: dict, pkg_id: str, pricing_model: str, rate: float) -> None:
-    """A second product of the tenant prices an option under the package's option id, at another rate.
+def given_catalog_reprices_package_option(ctx: dict, pkg_id: str, pricing_model: str, rate: float) -> None:
+    """The catalog's options under the package's option id now carry another rate than the one agreed.
 
-    ``pricing_option_id`` is unique only within its product (pricing-options/*.json), so
-    this is a catalog the seller may hold. The id is read off the package row the scenario
-    seeded, not restated.
+    One on the package's own product (the seller repriced it after the buy), and one on a
+    second product of the tenant (``pricing_option_id`` is unique only within its product,
+    pricing-options/*.json). The product and option ids are read off the package row the
+    scenario seeded, not restated. Whatever catalog lookup prices the package, by the id
+    alone or by product and id, finds this rate and not the agreed one.
     """
     from decimal import Decimal
 
-    from tests.factories import PricingOptionFactory, ProductFactory
+    from tests.factories.product import priced_product
 
-    mb_id = next(reversed(ctx.get("media_buys", {})), None)
-    assert mb_id, "the shared option id needs a seeded media buy"
-    package = next(row for row in _seeded_media_buy(ctx, mb_id).packages if row.package_id == pkg_id)
-    PricingOptionFactory(
-        product=ProductFactory(tenant=ctx["db_tenant"]),
-        pricing_option_id=package.package_config["pricing_option_id"],
-        pricing_model=pricing_model,
-        currency="USD",
-        is_fixed=True,
-        rate=Decimal(str(rate)),
+    package = next(
+        row for row in _seeded_media_buy(ctx, _latest_seeded_media_buy_id(ctx)).packages if row.package_id == pkg_id
     )
+    option = {
+        "pricing_option_id": package.package_config["pricing_option_id"],
+        "pricing_model": pricing_model,
+        "currency": "USD",
+        "is_fixed": True,
+        "rate": Decimal(str(rate)),
+    }
+    priced_product(ctx["db_tenant"], product_id=package.package_config["product_id"], pricing_options=[option])
+    priced_product(ctx["db_tenant"], pricing_options=[option])
 
 
 @given("the ad server adapter has delivery data for both media buys")
@@ -3635,12 +3637,7 @@ def _assert_wire_delivery_totals(ctx: dict, mb_id: str, *, impressions: int, spe
 @then(parsers.parse('the delivery report for "{mb_id}" has exactly these packages:'))
 def then_delivery_report_has_packages(ctx: dict, mb_id: str, datatable: list[list[str]]) -> None:
     """The buy's ``by_package`` is exactly the table's packages, each with the stated figures."""
-    header, *rows = datatable
-    expected = {}
-    for row in rows:
-        cells = dict(zip(header, (cell.strip() for cell in row), strict=True))
-        expected[cells.pop("package")] = cells
-    assert_by_package_exactly(wire_entry(ctx, "media_buy_deliveries", media_buy_id=mb_id), expected)
+    assert_by_package_exactly(wire_entry(ctx, "media_buy_deliveries", media_buy_id=mb_id), table_rows(datatable))
 
 
 @then("no real billing records should have been created")
@@ -4113,9 +4110,7 @@ def _seed_package_terms(
     if bid_price is not None:
         package["bid_price"] = bid_price
 
-    mb_id = next(reversed(ctx.get("media_buys", {})), None)
-    assert mb_id, "package terms need a media buy — the scenario must seed one first"
-    buy = _seeded_media_buy(ctx, mb_id)
+    buy = _seeded_media_buy(ctx, _latest_seeded_media_buy_id(ctx))
 
     buy.raw_request = {**(buy.raw_request or {}), "packages": [package]}
     attributes.flag_modified(buy, "raw_request")
@@ -4126,6 +4121,13 @@ def _seed_package_terms(
         package_config={**package, "pricing_info": pricing_info_for(option, bid_price=bid_price)},
     )
     env._session.commit()
+
+
+def _latest_seeded_media_buy_id(ctx: dict) -> str:
+    """The id of the media buy the scenario's Givens seeded last."""
+    mb_id = next(reversed(ctx.get("media_buys", {})), None)
+    assert mb_id, "this step needs a media buy — the scenario must seed one first"
+    return mb_id
 
 
 def _seeded_media_buy(ctx: dict, mb_id: str) -> Any:

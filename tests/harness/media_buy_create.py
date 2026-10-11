@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -178,16 +179,19 @@ class MediaBuyCreateEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
         currency: str = "USD",
         with_pricing: bool = True,
         format_ids: list[dict[str, str]] | None = None,
+        delivery_type: str = "non_guaranteed",
+        pricing_options: Sequence[Mapping[str, Any]] = ({},),
     ) -> tuple:
         """Seed a real PropertyTag ("all_inventory") + Product + PricingOption row set.
 
         The "all_inventory" tag is created once per env (idempotent across repeated
-        calls). Returns ``(product, pricing_option)``; ``pricing_option`` is ``None``
-        when ``with_pricing=False``.
+        calls). *pricing_options* holds one mapping of ``PricingOptionFactory`` fields per
+        option, over a fixed CPM option in *currency*; the default is that one option.
+        Returns ``(product, pricing_option)``, the product's first option; ``pricing_option``
+        is ``None`` when ``with_pricing=False``.
         """
-        from tests.factories import PricingOptionFactory, ProductFactory
         from tests.factories.core import PropertyTagFactory
-        from tests.factories.product import reference_format_ids
+        from tests.factories.product import priced_product, reference_format_ids
 
         if not getattr(self, "_seeded_all_inventory_tag", False):
             PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
@@ -196,19 +200,18 @@ class MediaBuyCreateEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
         if format_ids is None:
             format_ids = reference_format_ids("display_300x250")
 
-        product = ProductFactory(
-            tenant=tenant,
+        product, options = priced_product(
+            tenant,
             product_id=product_id,
-            delivery_type="non_guaranteed",
+            delivery_type=delivery_type,
             format_ids=format_ids,
             property_tags=["all_inventory"],
+            pricing_options=[
+                {"pricing_model": "cpm", "currency": currency, "is_fixed": True, **terms}
+                for terms in (pricing_options if with_pricing else ())
+            ],
         )
-        pricing_option = None
-        if with_pricing:
-            pricing_option = PricingOptionFactory(
-                product=product, pricing_model="cpm", currency=currency, is_fixed=True
-            )
-        return product, pricing_option
+        return product, options[0] if options else None
 
     def _build_mock_context_manager(self, tool_name: str) -> MagicMock:
         """Mock context manager that delegates create_context / create_workflow_step /
@@ -376,12 +379,12 @@ class MediaBuyCreateEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
             # live server resolves under ADCP_TESTING (format_cache), so
             # in-process and e2e format resolution agree by construction.
             # Synthetic ids stay unresolvable (None), matching the server.
-            from src.core.format_cache import load_reference_formats
+            from tests.factories.format import reference_format
 
-            for fmt in load_reference_formats():
-                if fmt.format_id.id == format_id:
-                    return fmt
-            return None
+            try:
+                return reference_format(format_id)
+            except ValueError:
+                return None
 
         self.mock["format_spec"].side_effect = _format_spec_side_effect
 

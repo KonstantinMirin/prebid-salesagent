@@ -13,6 +13,8 @@ Eliminates the 7-line boilerplate repeated 49 times in test_delivery_behavioral.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
 from unittest.mock import MagicMock
 
 
@@ -89,3 +91,13 @@ def make_mock_uow(
     mock_uow_cls = MagicMock(return_value=mock_uow)
 
     return mock_uow_cls, mock_uow
+
+
+def serve_package_rows(repo: MagicMock, rows_by_buy: Mapping[str, list[Any]]) -> None:
+    """Answer the mocked repo's ``get_packages_for_ids`` with *rows_by_buy*, for the buys asked for.
+
+    A buy's rows are its packages. Left unset, the mock hands back a ``MagicMock``, which
+    the delivery service reads as a buy with no packages only by accident. *rows_by_buy* is
+    read at call time, so rows registered after this call are served too.
+    """
+    repo.get_packages_for_ids.side_effect = lambda ids: {i: rows_by_buy[i] for i in ids if i in rows_by_buy}

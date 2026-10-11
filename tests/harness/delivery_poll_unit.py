@@ -26,7 +26,7 @@ from src.core.schemas import AdapterGetMediaBuyDeliveryResponse, GetMediaBuyDeli
 from tests.factories.media_buy import default_request_packages, package_rows_for
 from tests.harness._base import BaseTestEnv
 from tests.harness._mixins import DeliveryPollMixin
-from tests.harness._mock_uow import make_mock_uow
+from tests.harness._mock_uow import make_mock_uow, serve_package_rows
 from tests.harness.delivery_poll import DeliveryDispatchMixin
 
 
@@ -68,12 +68,8 @@ class DeliveryPollEnv(DeliveryDispatchMixin, DeliveryPollMixin, BaseTestEnv):
         # Adapter: default happy path (from mixin)
         self._configure_adapter_mock()
 
-        # Packages: the rows add_buy registered, for the buys asked for. A mocked repo would
-        # otherwise hand back a MagicMock, which reads as a dict with no entries only by
-        # accident.
-        self._uow_instance.media_buys.get_packages_for_ids.side_effect = lambda ids: {
-            media_buy_id: self._packages[media_buy_id] for media_buy_id in ids if media_buy_id in self._packages
-        }
+        # Packages: the rows add_buy registers.
+        serve_package_rows(self._uow_instance.media_buys, self._packages)
 
         # Circuit breaker: CLOSED. A bare MagicMock return value is TRUTHY, so leaving it
         # unset runs every test in this env with the breaker OPEN — which rewrites an

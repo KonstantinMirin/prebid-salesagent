@@ -25,6 +25,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import assert_by_package_exactly, capture_created_media_buy, wire_field
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._table import rows as table_rows
 from tests.helpers.gam_client import gam_delivery_row
 
 
@@ -37,124 +38,124 @@ from tests.helpers.gam_client import gam_delivery_row
 def given_seller_sells_through_gam(ctx: dict, trafficker_id: str, ad_unit_id: str, advertiser_id: str) -> None:
     """Onboard the env's tenant to GAM and sell every product the scenario built on one ad unit.
 
-    The products the product Given built, or the route's seeded product when the scenario
-    built none.
+    The products are the scenario's default product and any further products a Given built
+    beside it (``ctx["extra_products"]``).
     """
     ctx["env"].sell_through_gam(
         trafficker_id=trafficker_id,
         advertiser_id=advertiser_id,
         ad_unit_id=ad_unit_id,
-        products=list(ctx.get("products", {}).values()) or [ctx["default_product"]],
+        products=[ctx["default_product"], *(product for product, _ in ctx.get("extra_products") or [])],
     )
 
 
-@given(parsers.parse("the seller's {delivery_type} product has pricing options:"))
-def given_product_pricing_options(ctx: dict, delivery_type: str, datatable: list[list[str]]) -> None:
-    """Build the seller's products, each with the pricing options its rows state.
+@given(parsers.re(r"the seller's (?P<delivery>guaranteed|non-guaranteed) products? (?:has|have) pricing options:"))
+def given_seller_products_with_pricing_options(ctx: dict, delivery: str, datatable: Any) -> None:
+    """Build the scenario's products, one per ``product_id`` in the table, with the listed pricing options.
 
-    Columns: ``product`` (a label naming the product; rows sharing a label are one
-    product's options, and a table without the column builds one product),
-    ``pricing_option_id``, ``pricing_model``, ``fixed_price`` and ``floor_price`` (one of the
-    two; ``fixed_price`` makes the option fixed). The products are recorded under their
-    labels in ``ctx["products"]``; the first product and its first option become
-    ``ctx["default_product"]`` / ``ctx["default_pricing_option"]``, the keys the route's seed
-    sets. It does not sell them: the seller Given sells every product built here.
+    Columns: ``product_id | pricing_option_id | pricing_model | fixed_price | floor_price``.
+    A row with a ``fixed_price`` is a fixed option at that rate; a row without one is an
+    auction option with that ``floor_price``. Rows keep their order within each product, so
+    a product's first row is its first pricing option.
+
+    The first product becomes the scenario's default product and its first option the
+    default pricing option, the two keys the route's seed sets; every further product is
+    added to ``ctx["extra_products"]``, which the seller Given sells beside the default
+    product. This step does not make the tenant a GAM seller: the seller Given that follows
+    it does.
     """
     from decimal import Decimal
 
-    from tests.factories import PricingOptionFactory, ProductFactory
-
-    header, *rows = datatable
-    products = ctx.setdefault("products", {})
-    options = []
-    for row in rows:
-        cells = dict(zip(header, (cell.strip() for cell in row), strict=True))
-        label = cells.get("product", delivery_type)
-        if label not in products:
-            products[label] = ProductFactory(
-                tenant=ctx["tenant"],
-                product_id=label,
-                delivery_type=delivery_type,
-                property_tags=["all_inventory"],
-            )
-        fixed = bool(cells.get("fixed_price"))
-        option = PricingOptionFactory(
-            product=products[label],
-            pricing_option_id=cells["pricing_option_id"],
-            pricing_model=cells["pricing_model"],
-            currency="USD",
-            is_fixed=fixed,
-            rate=Decimal(cells["fixed_price"]) if fixed else None,
-            price_guidance=None if fixed else {"floor": float(cells["floor_price"])},
+    env = ctx["env"]
+    options: dict[str, list[dict[str, Any]]] = {}
+    for row in table_rows(datatable):
+        fixed_price = row["fixed_price"]
+        options.setdefault(row["product_id"], []).append(
+            {
+                "pricing_option_id": row["pricing_option_id"],
+                "pricing_model": row["pricing_model"],
+                "is_fixed": bool(fixed_price),
+                "rate": Decimal(fixed_price) if fixed_price else None,
+                "price_guidance": None if fixed_price else {"floor": float(row["floor_price"])},
+            }
         )
-        options.append(option)
-    ctx["default_product"] = next(iter(products.values()))
-    ctx["default_pricing_option"] = options[0]
+    built = [
+        env.setup_product_chain(
+            ctx["tenant"],
+            product_id=product_id,
+            delivery_type=delivery.replace("-", "_"),
+            pricing_options=product_options,
+        )
+        for product_id, product_options in options.items()
+    ]
+    env._commit_factory_data()
+    (ctx["default_product"], ctx["default_pricing_option"]), *extra = built
+    ctx["extra_products"] = extra
 
 
 @given(parsers.parse("the buyer's packages, over a {days:d}-day flight, are:"))
-def given_buyer_packages(ctx: dict, days: int, datatable: list[list[str]]) -> None:
-    """The request's packages, one per row, over a flight of *days* days starting tomorrow.
+def given_buyer_packages_over_flight(ctx: dict, days: int, datatable: Any) -> None:
+    """Replace the request's packages with the table's, over a flight exactly ``days`` long.
 
-    Columns: ``product`` (a label from the product Given; without the column, every package
-    is on ``ctx["default_product"]``), ``pricing_option_id``, ``budget`` and ``bid_price``
-    (empty for a fixed price).
+    Columns: ``product_id | pricing_option_id | budget | bid_price``; an empty ``bid_price``
+    sends none. Built by ``build_request_packages``, the DTO-bound package builder.
     """
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults, _future
-    from tests.factories.request import PackageRequestFactory
+    from tests.harness.create_request import build_request_packages
 
     kwargs = _ensure_request_defaults(ctx)
     kwargs["start_time"] = _future(1).isoformat()
     kwargs["end_time"] = _future(1 + days).isoformat()
-    header, *rows = datatable
-    packages = []
-    for row in rows:
-        cells = dict(zip(header, (cell.strip() for cell in row), strict=True))
-        product = ctx["products"][cells["product"]] if "product" in cells else ctx["default_product"]
-        package: dict[str, Any] = {
-            "product_id": product.product_id,
-            "pricing_option_id": cells["pricing_option_id"],
-            "budget": float(cells["budget"]),
-        }
-        if cells.get("bid_price"):
-            package["bid_price"] = float(cells["bid_price"])
-        packages.append(PackageRequestFactory.payload(**package))
-    kwargs["packages"] = packages
+    rows = table_rows(datatable)
+    kwargs["packages"] = build_request_packages(
+        [(row["product_id"], row["pricing_option_id"]) for row in rows],
+        terms=[
+            {"budget": float(row["budget"]), **({"bid_price": float(row["bid_price"])} if row["bid_price"] else {})}
+            for row in rows
+        ],
+    )
 
 
 @given("the buyer already has another active media buy with this seller")
 def given_buyer_has_another_active_buy(ctx: dict) -> None:
     """One more buy of this principal, active and mid-flight, with one package.
 
-    It makes a delivery request's filter observable: a request naming no buy reads every
-    active buy of the principal, which reports this one and not a buy the scenario just
-    created. The Then compares the reported buys with the created one alone, so this buy
-    needs no name.
+    A delivery request that names the created buy must report that buy alone, not the
+    principal's other active buy. The Then compares the reported buys with the created one,
+    so this buy needs no name.
     """
     from tests.factories import MediaBuyFactory
 
     MediaBuyFactory(tenant=ctx["tenant"], principal=ctx["principal"], status="active")
 
 
-def _line_item_for(ctx: dict, product_label: str) -> Any:
-    """The line item GAM created for the package on *product_label*, matched by its own price.
+def _line_item_for(ctx: dict, product_id: str) -> Any:
+    """The line item GAM created for the package on *product_id*, matched by its own price.
 
     Not by position: among the line items the stand-in network created, the one whose
     ``costPerUnit`` is the product's fixed rate. Exactly one line item per package, and
     exactly one match.
     """
-    line_items = ctx["env"].gam_objects_created("LineItemService", "createLineItems")
+    line_items = _line_items_created(ctx)
     packages = ctx["request_kwargs"]["packages"]
     assert len(line_items) == len(packages), (
         f"expected GAM to create one line item per package ({len(packages)}); it created {len(line_items)}"
     )
-    rate = ctx["products"][product_label].pricing_options[0].rate
+    rate = _scenario_product(ctx, product_id).pricing_options[0].rate
     micros = round(float(rate) * 1_000_000)
     matching = [item for item in line_items if int(item["costPerUnit"]["microAmount"]) == micros]
     assert len(matching) == 1, (
-        f"expected exactly one line item priced {rate} for the {product_label!r} package; "
+        f"expected exactly one line item priced {rate} for the {product_id!r} package; "
         f"line items cost {[item['costPerUnit']['microAmount'] for item in line_items]}"
     )
+    return matching[0]
+
+
+def _scenario_product(ctx: dict, product_id: str) -> Any:
+    """The product the pricing-options Given built under *product_id*."""
+    products = [ctx["default_product"], *(product for product, _ in ctx.get("extra_products") or [])]
+    matching = [product for product in products if product.product_id == product_id]
+    assert matching, f"no product {product_id!r} was built; built {[p.product_id for p in products]}"
     return matching[0]
 
 
@@ -177,24 +178,25 @@ def given_gam_reports_line_items(
 ) -> None:
     """GAM's finished report holds a row for each package's line item it states figures for.
 
-    "nothing" is no row for that line item. Each row names the line item and order the
-    stand-in network created, and the order's advertiser.
+    A package is named by its product's id. "nothing" is no row for that line item. Each
+    row names the line item and order the stand-in network created, and the order's
+    advertiser.
     """
-    orders = {str(order["id"]): order for order in ctx["env"].gam_objects_created("OrderService", "createOrders")}
+    orders = {str(order["id"]): order for order in _orders_created(ctx)}
     stated = [(reported, impressions, spend)]
     if other_impressions is not None and other_spend is not None:
         stated.append((other, other_impressions, other_spend))
     rows = []
-    for label, label_impressions, label_spend in stated:
-        line_item = _line_item_for(ctx, label)
+    for product_id, product_impressions, product_spend in stated:
+        line_item = _line_item_for(ctx, product_id)
         order = orders[str(line_item["orderId"])]
         rows.append(
             gam_delivery_row(
                 advertiser_id=str(order["advertiserId"]),
                 order_id=str(order["id"]),
                 line_item_id=str(line_item["id"]),
-                impressions=int(label_impressions),
-                spend=float(label_spend),
+                impressions=int(product_impressions),
+                spend=float(product_spend),
             )
         )
     ctx["env"].serve_gam_report_rows(rows)
@@ -220,10 +222,10 @@ def when_request_delivery_for_created_buy(ctx: dict) -> None:
     "the delivery report covers only the media buy it just created, "
     "with exactly these packages under the ids create_media_buy returned:"
 )
-def then_delivery_covers_created_buy_packages(ctx: dict, datatable: list[list[str]]) -> None:
+def then_delivery_covers_created_buy_packages(ctx: dict, datatable: Any) -> None:
     """The report is the created buy alone, and its packages are the created ones with these figures.
 
-    Each row's ``package`` is a product label; it names the package create_media_buy
+    Each row's ``package`` is a product id; it names the package create_media_buy
     returned for that product.
     """
     deliveries = wire_field(ctx, "media_buy_deliveries")
@@ -231,13 +233,9 @@ def then_delivery_covers_created_buy_packages(ctx: dict, datatable: list[list[st
     assert reported == [ctx["created_media_buy_id"]], (
         f"expected a report of exactly the created buy {ctx['created_media_buy_id']!r}; it reported {reported}"
     )
-    header, *rows = datatable
-    expected = {}
-    for row in rows:
-        cells = dict(zip(header, (cell.strip() for cell in row), strict=True))
-        product_id = ctx["products"][cells.pop("package")].product_id
-        expected[ctx["created_package_ids"][product_id]] = cells
-    assert_by_package_exactly(deliveries[0], expected)
+    assert_by_package_exactly(
+        deliveries[0], table_rows(datatable), package_of=lambda product_id: ctx["created_package_ids"][product_id]
+    )
 
 
 @given(
@@ -276,6 +274,11 @@ def given_gam_fails_report_job(ctx: dict, advertiser_id: str) -> None:
 def _orders_created(ctx: dict) -> list[Any]:
     """The orders the stand-in GAM network created, each carrying the id it assigned."""
     return ctx["env"].gam_objects_created("OrderService", "createOrders")
+
+
+def _line_items_created(ctx: dict) -> list[Any]:
+    """The line items the stand-in GAM network created, each carrying the id it assigned."""
+    return ctx["env"].gam_objects_created("LineItemService", "createLineItems")
 
 
 @then(

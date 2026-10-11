@@ -51,6 +51,7 @@ from tests.factories.media_buy import (
     request_package,
 )
 from tests.factories.principal import PrincipalFactory
+from tests.harness._mock_uow import make_mock_uow, serve_package_rows
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
 # ---------------------------------------------------------------------------
@@ -163,15 +164,13 @@ def _standard_patches(
     if target_buys is None:
         target_buys = []
 
-    # Mock UoW so _get_media_buy_delivery_impl doesn't hit real DB.
-    # The __enter__ must return an object with a media_buys attribute (the repo).
-    mock_uow = MagicMock()
-    mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-    mock_uow.__exit__ = MagicMock(return_value=False)
-    mock_uow.media_buys = MagicMock()
-    # The buys' packages are their rows, each carrying the terms create stores with it.
-    rows = {mb_id: package_rows_for(mb_id, buy.raw_request.get("packages", [])) for mb_id, buy in target_buys}
-    mock_uow.media_buys.get_packages_for_ids.side_effect = lambda ids: {i: rows[i] for i in ids if i in rows}
+    # Mock UoW so _get_media_buy_delivery_impl doesn't hit real DB. The buys' packages are
+    # their rows, each carrying the terms create stores with it.
+    _, mock_uow = make_mock_uow()
+    serve_package_rows(
+        mock_uow.media_buys,
+        {mb_id: package_rows_for(mb_id, buy.raw_request.get("packages", [])) for mb_id, buy in target_buys},
+    )
 
     return {
         "adapter": patch(

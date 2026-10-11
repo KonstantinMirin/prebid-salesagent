@@ -11,9 +11,10 @@
 # and spent amounts. A package the ad server did not report is therefore reported at zero,
 # not credited with a share of the buy; a buy's only package carries the buy's delivery,
 # which is what an ad server with no per-package reporting (Kevel, Broadstreet) returns.
-# pricing-options/cpc-option.json: `pricing_option_id` is unique only within its product, so
-# a package's clicks are priced at the rate agreed for that package, not at another product's
-# option that shares the id.
+# pricing-options/cpc-option.json: `pricing_option_id` is unique only within its product, and
+# `by_package[].rate` is "the agreed rate", so a package's clicks are priced at the rate agreed
+# for that package: not at its own product's option as the seller has since repriced it, and
+# not at another product's option that shares the id.
 #
 # Ungraded by storyboard: delivery_reporting's get_delivery step validates the response
 # schema and the presence of `media_buy_deliveries`, not per-package figures.
@@ -46,10 +47,10 @@ Feature: get_media_buy_delivery never credits a package with a share of the buy 
       | pkg_001 | 1000        | 10.00 |
 
   @T-UC-004-local-unreported-package-cpc-own-rate @extension
-  Scenario: A CPC package's clicks are priced at its own agreed rate, not another product's option with the same id
+  Scenario: A CPC package's clicks are priced at its own agreed rate, not at the catalog's current options under its id
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And package "pkg_cpc" uses pricing_model "cpc" with rate 0.50 and currency "USD"
-    And another of the seller's products has an option with package "pkg_cpc"'s pricing_option_id, at cpc rate 2.00
+    And the seller's catalog now prices package "pkg_cpc"'s pricing_option_id at cpc rate 2.00, on the package's own product and on another product
     And the ad server adapter reports 1000 impressions and 10.00 spend for "pkg_cpc"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
     Then the delivery report for "mb-001" has exactly these packages:
