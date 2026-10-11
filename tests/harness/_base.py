@@ -1379,11 +1379,11 @@ class BaseTestEnv:
 
         return attach_agent_url(self, agent_url)
 
-    def declare_signed_requests_grading(self) -> None:
+    def declare_signed_requests_grading(self, *, replay_cap: int | None = None) -> None:
         """Declare this env's tenant a signed-requests grading target accepting this env's keys."""
         from tests.harness.signing_capability import declare_signed_requests_grading
 
-        declare_signed_requests_grading(self)
+        declare_signed_requests_grading(self, replay_cap=replay_cap)
 
     def declare_test_kit_grading_target(self, *, replay_cap: int) -> None:
         """Declare this env's tenant a signed-requests grading target for the test kit's keys and replay cap."""

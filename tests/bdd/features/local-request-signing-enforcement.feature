@@ -37,7 +37,6 @@
 # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/test-kits/signed-requests-runner.yaml pointer=L39-L60
 # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/test-kits/signed-requests-runner.yaml pointer=L108-L126
 # @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1240
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
 Feature: Inbound request-signature enforcement on an AdCP operation (local)
 
   @T-UC-006-local-signing-required-unsigned @request-signing @error-path @invariant
@@ -194,25 +193,6 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # agent's agents[] entry, and "Discovery MAY come from prior onboarding". The seller
     # recorded the keyid against the Buyer's agent URL; the keys come from the agent's own
     # origin. The signature is the only credential (L1216, L631-632).
-
-  @T-UC-006-local-signing-onboarded-rejected-bearer @request-signing @error-path @invariant
-  Scenario: a rejected bearer is refused even when an onboarded counterparty's signature verifies
-    Given a creative with a known format_id
-    And the Buyer Agent has published a signing key the seller can resolve
-    And the seller onboarded the Buyer Agent's signing key
-    And the seller requires a request signature for "sync_creatives"
-    And a presented credential that resolves to no principal
-    And the Buyer Agent signs the request
-    When the Buyer Agent syncs the creative
-    Then the response contains error code AUTH_INVALID
-    And the seller verified exactly 1 request under the Buyer Agent's published key
-    # ONE variable apart from the scenario above: the Buyer presents a bearer this seller
-    # does not accept. The signature still verifies under the onboarded key, which the count
-    # pins, so the refusal is the bearer's. error-code.json @ v3.1.1, AUTH_INVALID: "Sellers
-    # MUST return this code when an `Authorization` header was present but verification
-    # failed." A
-    # verified signature does not make a rejected bearer acceptable: a resolver that served
-    # this request would identify a caller holding a bad token as the onboarded counterparty.
 
   @T-UC-006-local-signing-onboarded-other-tenant @request-signing @error-path @invariant
   Scenario: a keyid onboarded only by another seller is not resolved

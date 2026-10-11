@@ -72,8 +72,8 @@ class SigningCapability:
     """One counterparty's ability to sign, as the env holds it.
 
     ``private_key``/``key_id`` sign; ``jwks`` is what the verifier resolves to
-    when it walks the counterparty's trust root. The bearer a request carries is the
-    caller's own credential (``BaseTestEnv.wire_request``), not the capability's.
+    when it walks the counterparty's trust root; ``token`` is the bearer that
+    ties the request back to the Principal carrying ``agent_url``.
 
     The capability carries no verification record of its own. It used to hold a
     ``verifications`` list fed by :func:`tests.helpers.signing.verifier_spy`, which
@@ -93,6 +93,7 @@ class SigningCapability:
 
     private_key: Any
     jwks: dict[str, Any]
+    token: str
     key_id: str
     agent_url: str
 
@@ -170,7 +171,7 @@ def build_signing_capability(env: Any) -> SigningCapability:
 
     key_id = f"{COUNTERPARTY_KID}-{unique_run_id()}"
     private_key, jwks = keypair_for(key_id)
-    attach_agent_url(env, COUNTERPARTY_AGENT_URL)
+    token = attach_agent_url(env, COUNTERPARTY_AGENT_URL)
 
     stack = ExitStack()
     stack.enter_context(counterparty_key(jwks))
@@ -179,6 +180,7 @@ def build_signing_capability(env: Any) -> SigningCapability:
     return SigningCapability(
         private_key=private_key,
         jwks=jwks,
+        token=token,
         key_id=key_id,
         agent_url=COUNTERPARTY_AGENT_URL,
     )
@@ -222,7 +224,7 @@ def build_e2e_signing_capability(env: Any) -> SigningCapability:
     agent_url = slot_agent_url(run_id)
 
     _publish_jwks(config, slot_control_path(run_id), jwks)
-    attach_agent_url(env, agent_url)
+    token = attach_agent_url(env, agent_url)
 
     # The published trust root, read back as the SERVER will read it. A slot that
     # answers 404 or serves an empty keyset must fail HERE, naming the origin,
@@ -258,6 +260,7 @@ def build_e2e_signing_capability(env: Any) -> SigningCapability:
     return SigningCapability(
         private_key=private_key,
         jwks=jwks,
+        token=token,
         key_id=key_id,
         agent_url=agent_url,
     )
