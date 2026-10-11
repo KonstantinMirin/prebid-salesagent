@@ -27,17 +27,24 @@ from tests.bdd.steps._outcome_helpers import wire_field
     parsers.re(
         r'the seller sells through Google Ad Manager as trafficker "(?P<trafficker_id>[^"]+)" on ad unit '
         r'"(?P<ad_unit_id>[^"]+)", and the buyer is its advertiser "(?P<advertiser_id>[^"]+)"'
-        r'(?:, on a network in time zone "(?P<network_time_zone>[^"]+)")?'
+        r'(?:, on a network (?:in time zone "(?P<network_time_zone>[^"]+)"'
+        r'|that refuses to name its time zone with "(?P<network_fault>[^"]+)"))?'
     )
 )
 def given_seller_sells_through_gam(
-    ctx: dict, trafficker_id: str, ad_unit_id: str, advertiser_id: str, network_time_zone: str | None
+    ctx: dict,
+    trafficker_id: str,
+    ad_unit_id: str,
+    advertiser_id: str,
+    network_time_zone: str | None,
+    network_fault: str | None,
 ) -> None:
     """Onboard the env's tenant to GAM and sell the scenario's product on one ad unit.
 
-    The optional clause states the GAM network's own time zone; without it the stand-in
-    network keeps its default zone. A scenario that needs another seller fact adds a clause
-    to this sentence rather than a second seller Given.
+    The optional clause states the GAM network's own time zone, or the ``ApiError`` reason
+    with which the network refuses to name it; without it the stand-in network keeps its
+    default zone. A scenario that needs another seller fact adds a clause to this sentence
+    rather than a second seller Given.
     """
     ctx["env"].sell_through_gam(
         trafficker_id=trafficker_id,
@@ -45,6 +52,7 @@ def given_seller_sells_through_gam(
         ad_unit_id=ad_unit_id,
         products=[ctx["default_product"]],
         network_time_zone=network_time_zone,
+        network_fault=network_fault,
     )
 
 
@@ -136,3 +144,13 @@ def then_one_order_without_flight(ctx: dict) -> None:
     """GAM created exactly one order, and the seller sent it none of the flight keys GAM derives from its line items."""
     flights = _flights(ctx, "OrderService", "createOrders")
     assert flights == [{}], f"expected GAM to create one order carrying no flight dates; it created {flights}"
+
+
+@then("Google Ad Manager received no order and no line item")
+def then_no_order_and_no_line_item(ctx: dict) -> None:
+    """The seller sent GAM no order and no line item: the refusal left nothing behind in GAM."""
+    sent = {
+        method: ctx["env"].gam_objects_sent(service, method)
+        for service, method in (("OrderService", "createOrders"), ("LineItemService", "createLineItems"))
+    }
+    assert sent == {"createOrders": [], "createLineItems": []}, f"expected GAM to receive nothing; it received {sent}"
