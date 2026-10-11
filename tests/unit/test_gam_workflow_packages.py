@@ -19,7 +19,7 @@ import pytest
 from src.adapters.base import AdapterCreateRequest
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.helpers.pricing_helpers import pricing_info_for
-from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, PackageRequest
+from src.core.schemas import CreateMediaBuyRequest, PackageRequest
 from tests.factories import PricingOptionFactory
 
 
@@ -68,29 +68,6 @@ def sample_request():
             end_time=end_time,
         )
     )
-
-
-@pytest.fixture
-def sample_packages():
-    """Sample packages list."""
-    return [
-        MediaPackage(
-            package_id="pkg_001",
-            name="Package 1",
-            delivery_type="guaranteed",
-            impressions=10000,
-            cpm=5.0,
-            format_ids=[FormatId(agent_url="https://test.com", id="display_300x250")],
-        ),
-        MediaPackage(
-            package_id="pkg_002",
-            name="Package 2",
-            delivery_type="guaranteed",
-            impressions=20000,
-            cpm=7.5,
-            format_ids=[FormatId(agent_url="https://test.com", id="display_728x90")],
-        ),
-    ]
 
 
 def _pricing_info_for(packages):

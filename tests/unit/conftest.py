@@ -69,6 +69,33 @@ def mock_all_external_dependencies():
 
 
 @pytest.fixture
+def sample_packages():
+    """Two guaranteed packages on one product, each naming it as both of production's package builders do."""
+    from src.core.schemas import FormatId, MediaPackage
+
+    return [
+        MediaPackage(
+            package_id="pkg_001",
+            name="Package 1",
+            delivery_type="guaranteed",
+            impressions=10000,
+            cpm=5.0,
+            format_ids=[FormatId(agent_url="https://test.com", id="display_300x250")],
+            product_id="prod_test",
+        ),
+        MediaPackage(
+            package_id="pkg_002",
+            name="Package 2",
+            delivery_type="guaranteed",
+            impressions=20000,
+            cpm=7.5,
+            format_ids=[FormatId(agent_url="https://test.com", id="display_728x90")],
+            product_id="prod_test",
+        ),
+    ]
+
+
+@pytest.fixture
 def isolated_imports():
     """Provide isolated imports for testing."""
     # Store original modules

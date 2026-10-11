@@ -35,7 +35,6 @@ from src.adapters.triton_digital import TritonDigital
 from src.adapters.vendor_http import VendorHttpClient
 from src.adapters.xandr import XandrAdapter
 from src.core.exceptions import AdCPConfigurationError
-from src.core.schemas import FormatId, MediaPackage
 
 
 @pytest.fixture
@@ -57,29 +56,6 @@ def sample_request():
     by it — Xandr's daily-budget split — gets a number rather than a null.
     """
     return AdapterCreateRequest(brand={"domain": "testbrand.com"}, total_budget=Decimal("10000.00"))
-
-
-@pytest.fixture
-def sample_packages():
-    """Sample packages list."""
-    return [
-        MediaPackage(
-            package_id="pkg_001",
-            name="Package 1",
-            delivery_type="guaranteed",
-            impressions=10000,
-            cpm=5.0,
-            format_ids=[FormatId(agent_url="https://test.com", id="display_300x250")],
-        ),
-        MediaPackage(
-            package_id="pkg_002",
-            name="Package 2",
-            delivery_type="guaranteed",
-            impressions=20000,
-            cpm=7.5,
-            format_ids=[FormatId(agent_url="https://test.com", id="display_728x90")],
-        ),
-    ]
 
 
 def _vendor_reply(payload: dict) -> Mock:
