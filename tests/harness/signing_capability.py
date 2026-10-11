@@ -72,8 +72,8 @@ class SigningCapability:
     """One counterparty's ability to sign, as the env holds it.
 
     ``private_key``/``key_id`` sign; ``jwks`` is what the verifier resolves to
-    when it walks the counterparty's trust root; ``token`` is the bearer that
-    ties the request back to the Principal carrying ``agent_url``.
+    when it walks the counterparty's trust root. The bearer a request carries is the
+    caller's own credential (``BaseTestEnv.wire_request``), not the capability's.
 
     The capability carries no verification record of its own. It used to hold a
     ``verifications`` list fed by :func:`tests.helpers.signing.verifier_spy`, which
@@ -93,7 +93,6 @@ class SigningCapability:
 
     private_key: Any
     jwks: dict[str, Any]
-    token: str
     key_id: str
     agent_url: str
 
@@ -171,7 +170,7 @@ def build_signing_capability(env: Any) -> SigningCapability:
 
     key_id = f"{COUNTERPARTY_KID}-{unique_run_id()}"
     private_key, jwks = keypair_for(key_id)
-    token = attach_agent_url(env, COUNTERPARTY_AGENT_URL)
+    attach_agent_url(env, COUNTERPARTY_AGENT_URL)
 
     stack = ExitStack()
     stack.enter_context(counterparty_key(jwks))
@@ -180,7 +179,6 @@ def build_signing_capability(env: Any) -> SigningCapability:
     return SigningCapability(
         private_key=private_key,
         jwks=jwks,
-        token=token,
         key_id=key_id,
         agent_url=COUNTERPARTY_AGENT_URL,
     )
@@ -224,7 +222,7 @@ def build_e2e_signing_capability(env: Any) -> SigningCapability:
     agent_url = slot_agent_url(run_id)
 
     _publish_jwks(config, slot_control_path(run_id), jwks)
-    token = attach_agent_url(env, agent_url)
+    attach_agent_url(env, agent_url)
 
     # The published trust root, read back as the SERVER will read it. A slot that
     # answers 404 or serves an empty keyset must fail HERE, naming the origin,
@@ -260,7 +258,6 @@ def build_e2e_signing_capability(env: Any) -> SigningCapability:
     return SigningCapability(
         private_key=private_key,
         jwks=jwks,
-        token=token,
         key_id=key_id,
         agent_url=agent_url,
     )
@@ -378,21 +375,21 @@ def onboard_buyer_agent_key_for_another_counterparty(env: Any, tenant: Any) -> N
     PrincipalSigningKeyidFactory(principal=other, keyid=env.signing.key_id)
 
 
-def declare_signed_requests_grading(env: Any) -> None:
+def declare_signed_requests_grading(env: Any, *, replay_cap: int | None = None) -> None:
     """Make the env's tenant a signed-requests grading target that accepts the env's keys.
 
     The env principal becomes the test-kit counterparty: it moves to
     :data:`~tests.helpers.signing.UNRESOLVABLE_AGENT_URL`, where nothing publishes keys (the
     walk fails at the capabilities fetch, ``capabilities_unreachable``, on every leg), its
     key's ``key_id`` is onboarded at that URL, and the tenant's ``signed_requests_grading``
-    record carries the env's JWKS. Only the record's accepted JWKS can then verify the
-    env's signature.
+    record carries the env's JWKS and *replay_cap*. Only the record's accepted JWKS can then
+    verify the env's signature, and the record's cap is the one its keyid meets.
     """
     from tests.helpers.signing import UNRESOLVABLE_AGENT_URL
 
     attach_agent_url(env, UNRESOLVABLE_AGENT_URL)
     onboard_signing_keyid(env)
-    _write_signed_requests_grading(env, env.signing.jwks)
+    _write_signed_requests_grading(env, env.signing.jwks, replay_cap=replay_cap)
 
 
 def declare_test_kit_grading_target(env: Any, *, replay_cap: int) -> None:

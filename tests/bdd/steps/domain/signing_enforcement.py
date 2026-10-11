@@ -152,16 +152,22 @@ def given_buyer_onboarded_without_agent_url(ctx: dict) -> None:
     ctx["env"].attach_agent_url(None)
 
 
-@given("the seller is a signed-requests grading target that accepts the Buyer Agent's keys")
-def given_seller_is_grading_target(ctx: dict) -> None:
+@given(
+    parsers.re(
+        r"the seller is a signed-requests grading target that accepts the Buyer Agent's keys"
+        r"(?:, with a replay cap of (?P<cap>\d+) for their keyids)?$"
+    )
+)
+def given_seller_is_grading_target(ctx: dict, cap: str | None) -> None:
     """Declare this seller a ``signed_requests`` grading target whose accepted JWKS is the Buyer Agent's.
 
     runner.yaml @ v3.1.1 L32-34, L55-60: the agent under test pre-configures an accepted
     JWKS for the test-kit counterparty only. The Buyer becomes that counterparty: its keyid
     is onboarded at an agent URL where nothing publishes keys, so only the accepted JWKS can
-    verify its signature.
+    verify its signature. With a replay cap named, the record carries it too: L108-126 allow
+    the lower per-keyid cap for the test-kit counterparty's keyids only.
     """
-    ctx["env"].declare_signed_requests_grading()
+    ctx["env"].declare_signed_requests_grading(replay_cap=int(cap) if cap is not None else None)
 
 
 @given(

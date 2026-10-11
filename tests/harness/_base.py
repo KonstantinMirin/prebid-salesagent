@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Self, cast, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -105,25 +105,26 @@ def json_safe(value: Any) -> Any:
     return value
 
 
-def _presents_a_credential(credential: Any) -> bool:
-    """Whether a caller-supplied headers mapping actually carries a CREDENTIAL.
+def presented_bearer(credential: Mapping[str, str]) -> str | None:
+    """The bearer a caller-supplied headers mapping presents, or ``None`` when it presents none.
 
-    ``bool(credential)`` is not that question, and the difference is the whole bug this
-    replaced. ``env.credential(token=None)`` -- what every "the Buyer has no authentication
-    credentials" Given passes -- returns ``{"x-adcp-tenant": "..."}``: a non-empty mapping
-    that presents NO credential. Truthiness read that as credentialed, so the signing legs
-    attached the capability's bearer to a call the scenario had asked to make anonymous, the
-    request became authenticated, and security.mdx :1269 then makes an unsigned authenticated
-    request a spec-correct 200. The refusal never fired and the scenarios reported, accurately,
-    that the request was ACCEPTED.
+    What the signing legs put on ``Authorization``. They rebuild the header set themselves
+    (``BaseTestEnv.wire_request``), so the bearer is the one thing they carry over from the
+    scenario's credential, and it is carried VERBATIM: a scenario presenting a token this
+    seller rejects (``env.credential(token=INVALID_TOKEN)``) sends that token, signed or not.
 
-    A tenant hint addresses a seller. It does not authenticate anyone. Only the credential
-    header does, which is what this reads -- case-insensitively, because the harness and
-    production both spell it either way on different legs.
+    Truthiness of the mapping is not this question. ``env.credential(token=None)`` -- what
+    every "the Buyer has no authentication credentials" Given passes -- returns
+    ``{"x-adcp-tenant": "..."}``: a non-empty mapping that presents NO credential. A tenant
+    hint addresses a seller; it does not authenticate anyone.
+
+    Read by production's own reader (``resolved_identity._extract_auth_token``), so the
+    harness and the resolver cannot disagree about which header, or which spelling of it,
+    carries the bearer.
     """
-    if not credential:
-        return False
-    return any(str(name).lower() == "authorization" for name in credential)
+    from src.core.resolved_identity import _extract_auth_token
+
+    return _extract_auth_token(credential)
 
 
 class WireError(Exception):
@@ -1379,11 +1380,11 @@ class BaseTestEnv:
 
         return attach_agent_url(self, agent_url)
 
-    def declare_signed_requests_grading(self) -> None:
+    def declare_signed_requests_grading(self, *, replay_cap: int | None = None) -> None:
         """Declare this env's tenant a signed-requests grading target accepting this env's keys."""
         from tests.harness.signing_capability import declare_signed_requests_grading
 
-        declare_signed_requests_grading(self)
+        declare_signed_requests_grading(self, replay_cap=replay_cap)
 
     def declare_test_kit_grading_target(self, *, replay_cap: int) -> None:
         """Declare this env's tenant a signed-requests grading target for the test kit's keys and replay cap."""
@@ -2055,12 +2056,12 @@ class BaseTestEnv:
         # would replay the pre-redirect signature against the new target-uri —
         # a genuine signature failing as request_signature_invalid.
         #
-        # ``credential={}`` means "send without a credential" everywhere else in the
-        # harness, so it decides ``credentialed`` here too rather than the leg
-        # quietly attaching the capability's bearer to a call the caller asked to
-        # make anonymous. It is the only way this leg reaches the composition rule's
-        # refusal branch at all: security.mdx :1269 makes an unsigned request
-        # carrying a valid bearer a spec-correct 200.
+        # The bearer is the CALLER's (``presented_bearer``): ``credential={}`` sends none,
+        # and a rejected token is sent as presented, rather than the leg attaching the
+        # env's own bearer to a call the caller asked to make anonymous or with a bad
+        # token. It is the only way this leg reaches the composition rule's refusal
+        # branch at all: security.mdx :1269 makes an unsigned request carrying a valid
+        # bearer a spec-correct 200.
         raw, headers = self.wire_request(
             path=_A2A_PATH,
             body=body,
@@ -2069,7 +2070,7 @@ class BaseTestEnv:
             # rule 1 applied to headers).
             extra=dict(_A2A_VERSION_HEADER),
             signed=self._signed_dispatch,
-            credentialed=_presents_a_credential(credential),
+            bearer=presented_bearer(credential),
         )
         response = self.get_rest_client().post(_A2A_PATH, content=raw, headers=headers)
 
@@ -2259,18 +2260,17 @@ class BaseTestEnv:
 
         arguments = self._mcp_tool_arguments(kwargs)
 
-        # ``credential={}`` is "send without a credential" (see ``_run_a2a_over_http``);
-        # it applies to the handshake frames too, because a session opened under a
-        # bearer and used without one would differ from the anonymous request under
-        # test by more than the credential.
-        credentialed = _presents_a_credential(credential)
+        # The caller's bearer (see ``_run_a2a_over_http``) applies to the handshake frames
+        # too, because a session opened under one bearer and used with another would
+        # differ from the request under test by more than the credential.
+        bearer = presented_bearer(credential)
         with preserved_global_app_state(), TestClient(app) as client:
-            session_id = self._mcp_open_session(client, credentialed=credentialed)
+            session_id = self._mcp_open_session(client, bearer=bearer)
             envelope, response = self._mcp_post(
                 client,
                 _mcp_jsonrpc_request(2, "tools/call", {"name": tool_name, "arguments": arguments}),
                 session_id=session_id,
-                credentialed=credentialed,
+                bearer=bearer,
             )
 
         # Both arms hand the RESPONSE to the error they raise. They used to raise the
@@ -2291,7 +2291,7 @@ class BaseTestEnv:
         # one.
         return DeliverResult(payload=response_cls(**structured), wire_response=structured)
 
-    def _mcp_open_session(self, client: Any, *, credentialed: bool = True) -> str | None:
+    def _mcp_open_session(self, client: Any, *, bearer: str | None) -> str | None:
         """Run the handshake and return the server's session id, if it mints one.
 
         ``initialize`` mints the session; a server that tracks one REFUSES any request
@@ -2341,7 +2341,7 @@ class BaseTestEnv:
                     ),
                 },
             ),
-            credentialed=credentialed,
+            bearer=bearer,
             signed=handshake_signed,
         )
         if response.status_code >= 400:
@@ -2375,7 +2375,7 @@ class BaseTestEnv:
             client,
             initialized.model_dump(by_alias=True, mode="json", exclude_none=True),
             session_id=session_id,
-            credentialed=credentialed,
+            bearer=bearer,
             signed=handshake_signed,
         )
         if acknowledged.status_code >= 400:
@@ -2392,7 +2392,7 @@ class BaseTestEnv:
         body: dict[str, Any],
         *,
         session_id: str | None = None,
-        credentialed: bool = True,
+        bearer: str | None,
         signed: SignatureRealization,
     ) -> Any:
         """POST one MCP frame, signed-or-not by the SAME rules every other leg obeys.
@@ -2407,13 +2407,11 @@ class BaseTestEnv:
         extra = {"Accept": _MCP_ACCEPT}
         if session_id:
             extra["mcp-session-id"] = session_id
-        raw, headers = self.wire_request(
-            path=_MCP_PATH, body=body, signed=signed, extra=extra, credentialed=credentialed
-        )
+        raw, headers = self.wire_request(path=_MCP_PATH, body=body, signed=signed, extra=extra, bearer=bearer)
         return client.post(_MCP_PATH, content=raw, headers=headers)
 
     def _mcp_post(
-        self, client: Any, body: dict[str, Any], *, session_id: str | None = None, credentialed: bool = True
+        self, client: Any, body: dict[str, Any], *, session_id: str | None = None, bearer: str | None
     ) -> tuple[dict[str, Any], Any]:
         """POST one MCP frame and return ``(JSON-RPC envelope, raw response)``.
 
@@ -2427,9 +2425,7 @@ class BaseTestEnv:
         Signature error="<code>"`` is a HEADER. Returning the envelope alone left the
         caller nothing to attach to the error it raised.
         """
-        response = self._mcp_send(
-            client, body, session_id=session_id, credentialed=credentialed, signed=self._signed_dispatch
-        )
+        response = self._mcp_send(client, body, session_id=session_id, bearer=bearer, signed=self._signed_dispatch)
         return _jsonrpc_body(response, surface=_MCP_PATH), response
 
     def _pop_credential(self, kwargs: dict[str, Any]) -> dict[str, str]:
@@ -2484,16 +2480,13 @@ class BaseTestEnv:
             # a valid bearer is a spec-correct 200).
             return client.post(endpoint, json=body, headers=credential)
 
-        # ``credential={}`` already means "send without a credential" everywhere else in
-        # the harness (``_pop_credential`` returns it verbatim, and ``RestE2EDispatcher``
-        # reads it the same way) — so it decides ``credentialed`` here too, rather than
-        # the signed path quietly attaching the capability's bearer to a call the caller
-        # asked to make anonymous. It is the ONLY way an in-process leg reaches the
-        # verifier's refusal branch at all: security.mdx :1269 makes an unsigned request
-        # carrying a valid bearer a spec-correct 200.
-        raw, headers = self.wire_request(
-            path=endpoint, body=body, signed=signed, credentialed=_presents_a_credential(credential)
-        )
+        # The signed path sends the CALLER's bearer (``presented_bearer``):
+        # ``credential={}`` sends none (``_pop_credential`` returns it verbatim, and
+        # ``RestE2EDispatcher`` reads it the same way), and a rejected token is sent as
+        # presented. It is the ONLY way an in-process leg reaches the verifier's refusal
+        # branch at all: security.mdx :1269 makes an unsigned request carrying a valid
+        # bearer a spec-correct 200.
+        raw, headers = self.wire_request(path=endpoint, body=body, signed=signed, bearer=presented_bearer(credential))
         return client.post(endpoint, content=raw, headers=headers)
 
     @property
@@ -2516,7 +2509,7 @@ class BaseTestEnv:
         signed: SignatureRealization,
         extra: dict[str, str] | None = None,
         origin: str | None = None,
-        credentialed: bool = True,
+        bearer: str | None,
         method: str = "POST",
     ) -> tuple[bytes, dict[str, str]]:
         """The bytes and headers ONE signed-or-unsigned request puts on the wire.
@@ -2540,7 +2533,7 @@ class BaseTestEnv:
            produced exactly that false green.
         3. **One identity, on the spec-canonical header** (owner decision D3/D4), and
            ONE tenant hint — the env's own, set here so no leg can send a different one.
-           ``signed_headers``/``request_headers`` put the capability's token in
+           ``signed_headers``/``request_headers`` put the caller's bearer in
            ``Authorization: Bearer`` and set no ``x-adcp-auth``: the alias appears
            nowhere in the pinned 3.1 schemas, and the pinned SDK calls Bearer "the
            spec-canonical header" with the alias "purely additive"
@@ -2566,15 +2559,18 @@ class BaseTestEnv:
         refused as ``request_signature_invalid`` — a fixture bug wearing a
         verifier bug's clothes.
 
-        *credentialed* exists for exactly one case, and it is a case rule 2 does
-        not cover: grading the REFUSAL. security.mdx :1269 says an unsigned
-        request carrying a valid bearer that resolves to an accepted Principal
-        MUST NOT be refused for the missing signature, so a credentialed unsigned
-        request is a spec-correct 200 and cannot produce a
-        ``request_signature_required`` challenge to read. Only an UNACCEPTABLE
-        credential — here, none at all — reaches that branch. Everything else
-        about the request (the path, the body, the tenant hint) stays identical,
-        so the challenge is attributable to the missing credential.
+        *bearer* is the token the caller presents on ``Authorization``, or ``None``
+        for none (:func:`presented_bearer` reads it off the scenario's credential).
+        It is the caller's, never substituted, because two cases grade a credential
+        the env's own would not be. An unacceptable or absent credential is what
+        reaches the composition rule's refusal: security.mdx :1269 says an unsigned
+        request carrying a valid bearer that resolves to an accepted Principal MUST
+        NOT be refused for the missing signature, so a credentialed unsigned request
+        is a spec-correct 200 and cannot produce a ``request_signature_required``
+        challenge to read. And a rejected bearer beside a signature that verifies is
+        answered on the bearer. Everything else about the request (the path, the
+        body, the tenant hint) stays identical, so the answer is attributable to the
+        credential.
 
         *signed* is a REALIZATION, not a flag
         (:data:`tests.helpers.signing.SIGNATURE_REALIZATIONS`). This is the one place
@@ -2619,7 +2615,6 @@ class BaseTestEnv:
         # of those paths must not fall through to the correct-signature arm below.
         signed = realization(signed)
         capability = self.signing
-        token = capability.token if credentialed else None
         # ``body=None`` is a BODYLESS request (a GET with no parameters), not an
         # empty JSON document: it must sign — and send — zero bytes, or the
         # content-digest covers a ``{}`` the wire does not carry.
@@ -2633,14 +2628,14 @@ class BaseTestEnv:
         # used to carry its own copy).
         merged = {"Content-Type": "application/json", "x-adcp-tenant": self._tenant_id, **(extra or {})}
         if signed is False:
-            return raw, request_headers(token, merged)
+            return raw, request_headers(bearer, merged)
         if signed == "malformed":
             # No real signature is computed at all: the shape under test is headers
             # that cannot be PARSED, and a parseable one beside them would be graded
             # instead. Merged onto the same base every other realization carries, so
             # the malformed request differs from the True control by the signature
             # headers alone.
-            return raw, {**request_headers(token, merged), **MALFORMED_SIGNATURE_HEADERS}
+            return raw, {**request_headers(bearer, merged), **MALFORMED_SIGNATURE_HEADERS}
         # ``"tampered"`` signs over a MUTATED COPY and sends the caller's own bytes;
         # ``True`` signs over exactly what it sends. One call, because everything else
         # about the two — key, kid, origin, method, header set — must be identical or
@@ -2648,7 +2643,7 @@ class BaseTestEnv:
         signed_over = tampered_signing_body(raw) if signed == "tampered" else raw
         headers = signed_headers(
             capability.private_key,
-            token,
+            bearer,
             # ``@method`` is inside the signature base, so a signature made as
             # POST and sent as GET is refused as request_signature_invalid.
             method=method,

@@ -36,6 +36,8 @@
 # @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1216
 # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/test-kits/signed-requests-runner.yaml pointer=L39-L60
 # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/test-kits/signed-requests-runner.yaml pointer=L108-L126
+# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1240
+# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
 Feature: Inbound request-signature enforcement on an AdCP operation (local)
 
   @T-UC-006-local-signing-required-unsigned @request-signing @error-path @invariant
@@ -193,6 +195,25 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # recorded the keyid against the Buyer's agent URL; the keys come from the agent's own
     # origin. The signature is the only credential (L1216, L631-632).
 
+  @T-UC-006-local-signing-onboarded-rejected-bearer @request-signing @error-path @invariant
+  Scenario: a rejected bearer is refused even when an onboarded counterparty's signature verifies
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller onboarded the Buyer Agent's signing key
+    And the seller requires a request signature for "sync_creatives"
+    And a presented credential that resolves to no principal
+    And the Buyer Agent signs the request
+    When the Buyer Agent syncs the creative
+    Then the response contains error code AUTH_INVALID
+    And the seller verified exactly 1 request under the Buyer Agent's published key
+    # ONE variable apart from the scenario above: the Buyer presents a bearer this seller
+    # does not accept. The signature still verifies under the onboarded key, which the count
+    # pins, so the refusal is the bearer's. error-code.json @ v3.1.1, AUTH_INVALID: "Sellers
+    # MUST return this code when an `Authorization` header was present but verification
+    # failed." A
+    # verified signature does not make a rejected bearer acceptable: a resolver that served
+    # this request would identify a caller holding a bad token as the onboarded counterparty.
+
   @T-UC-006-local-signing-onboarded-other-tenant @request-signing @error-path @invariant
   Scenario: a keyid onboarded only by another seller is not resolved
     Given a creative with a known format_id
@@ -294,6 +315,26 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # keeps every other keyid at the production floor of 1,000,000. A verifier that applied
     # the record's cap of 1 to the Buyer would refuse the second request with
     # request_signature_rate_abuse.
+
+  @T-UC-006-local-signing-grading-target-replay-cap @request-signing @error-path @invariant
+  Scenario: on a grading target the test counterparty's keyid meets the grading record's replay cap
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller is a signed-requests grading target that accepts the Buyer Agent's keys, with a replay cap of 1 for their keyids
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer has no authentication credentials
+    And the Buyer Agent signs the request
+    And that creative was already synced with idempotency_key "sig-replay-cap-0001"
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "request_signature_rate_abuse" and recovery "terminal"
+    And the seller verified exactly 1 request under the Buyer Agent's published key
+    # ONE variable apart from the scenario above: the Buyer is the test-kit counterparty, so
+    # its keyid is one the grading record lists. runner.yaml @ v3.1.1 L108-126: the agent
+    # MUST reject the (N+1)th distinct-nonce request with request_signature_rate_abuse once
+    # the per-keyid cap is hit, and MAY lower the cap for the test-kit counterparty only. The
+    # first sync leaves one live replay entry, so the second meets the record's cap of 1 at
+    # checklist step 9a (security.mdx L1240; "No (block new)" at L1392). A verifier that kept the
+    # deployment's cap for the kit's keyid would serve it.
 
   @T-UC-006-local-signing-verified-label-identifies @request-signing @invariant
   Scenario: an onboarded counterparty is identified by the signature label the seller verifies
