@@ -35,6 +35,7 @@ from rich.console import Console
 
 from src.core.database.integrity import is_constraint_violation
 from src.core.database.repositories.creative import CreativeRepository
+from src.core.errors.operator_text import operator_text
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthorizationError,
@@ -785,8 +786,9 @@ class ApprovalResult:
     publishes both.
 
     ``refusal`` is the typed error an approval was refused with, when there is one.
-    ``error_msg`` already states its code and details in words; the error itself is
-    carried so a caller can read the facts without parsing the sentence.
+    ``error_msg`` already states it in words (``operator_text``: its code, its cause and
+    the facts it names); the error itself is carried so a caller can read the facts
+    without parsing the sentence.
     """
 
     outcome: ApprovalOutcome
@@ -804,19 +806,6 @@ class ApprovalResult:
     @classmethod
     def failed(cls, error_msg: str, *, refusal: AdCPSalesAgentError[Any] | None = None) -> "ApprovalResult":
         return cls(outcome=ApprovalOutcome.FAILED, error_msg=error_msg, refusal=refusal)
-
-
-def _failure_reason(failure: Exception) -> str:
-    """What a failure tells the operator who has to act on it.
-
-    A typed error's ``str()`` is its code's table sentence, the same for every raise
-    site of that code, so the code and the facts in its details are stated beside it.
-    Any other exception speaks for itself.
-    """
-    if not isinstance(failure, AdCPSalesAgentError):
-        return str(failure)
-    facts = failure.details.facts() if failure.details is not None else ""
-    return f"{failure.error_code}: {failure.message}" + (f" ({facts})" if facts else "")
 
 
 def _approval_failed(
@@ -1124,7 +1113,7 @@ def execute_approved_media_buy(
                         f"Failed to reconstruct package {db_pkg.package_id}: {format_validation_error(ve)}"
                     )
                 except Exception as e:
-                    return _approval_failed(f"Failed to reconstruct package {db_pkg.package_id}: {str(e)}")
+                    return _approval_failed(f"Failed to reconstruct package {db_pkg.package_id}: {operator_text(e)}")
 
             # Use start_time/end_time from media_buy (already resolved)
             start_time = media_buy.start_time
@@ -1321,7 +1310,7 @@ def execute_approved_media_buy(
                             logger.warning("[APPROVAL] Adapter does not support creative upload, skipping")
                     except Exception as creative_error:
                         # Creative upload failed - this is critical for GAM orders
-                        error_msg = f"Failed to upload creatives to adapter: {str(creative_error)}"
+                        error_msg = f"Failed to upload creatives to adapter: {operator_text(creative_error)}"
                         logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
                         return _mark_approval_failed(tenant_id, media_buy_id, error_msg, uow=uow2)
             else:
@@ -1353,7 +1342,7 @@ def execute_approved_media_buy(
                 logger.info("[APPROVAL] Adapter does not support order approval, skipping")
         except Exception as approval_error:
             # Approval exception - return failure
-            error_msg = f"Failed to approve order {response.media_buy_id}: {str(approval_error)}"
+            error_msg = f"Failed to approve order {response.media_buy_id}: {operator_text(approval_error)}"
             logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
             return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
 
@@ -1400,7 +1389,7 @@ def execute_approved_media_buy(
             )
 
     except Exception as e:
-        reason = _failure_reason(e)
+        reason = operator_text(e)
         if not adapter_ran:
             # The ad server was never asked to write: the persisted row refused
             # reconstruction (a NULL account_id, above), the adapter's pre-validation

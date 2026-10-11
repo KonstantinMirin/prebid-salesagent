@@ -843,7 +843,7 @@ class ContextManager(DatabaseManager):
                     # have to ride buyer-facing text.
                     #
                     # ``getattr`` rather than a branch, by the same idiom as
-                    # ``operator_mcp._operator_cause``: a refusal may carry no details
+                    # ``errors.operator_text.operator_cause``: a refusal may carry no details
                     # at all (the missing-URL branch), and nothing here may raise
                     # inside an error-handling path. A detail-less refusal still logs
                     # a whole sentence naming its field.

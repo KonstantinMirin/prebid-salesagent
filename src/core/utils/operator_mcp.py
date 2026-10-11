@@ -25,7 +25,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.core.exceptions import AdCPConfigurationError, AdCPSalesAgentError
+from src.core.errors.operator_text import operator_cause
+from src.core.exceptions import AdCPConfigurationError
 from src.core.helpers.mcp_tool_payload import extract_tool_payload
 from src.core.helpers.outbound_error_mapping import raise_mapped_mcp_error, raise_mapped_outbound_error
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError
@@ -69,48 +70,6 @@ class ProbeResult:
     samples: tuple[str, ...] = field(default_factory=tuple)
 
 
-def _operator_cause(exc: Exception) -> str:
-    """The most specific operator-readable cause *exc* carries.
-
-    ONE extraction for every one of :func:`probe_failure`'s branches. They ask the
-    same question -- "how do I get the operator-facing cause out of this exception?"
-    -- and answering it once per branch is how the configuration branch came to be
-    fixed while the unreachable branch stayed mute, which is a worse state than
-    either consistent one because it reads as deliberate. The signing branch is
-    the third asker, and it gets the same answer for free.
-
-    ``internal_detail`` first. Post-ADR-010 an ``AdCPSalesAgentError``'s
-    ``message`` is a read-only property over ``CODE_TABLE`` -- a function of the
-    CODE, not of the raise site -- because it is the text that reaches a BUYER
-    over the wire, where AdCP 3.1.1 ``transport-errors.mdx`` § Security
-    Considerations forbids deployment specifics. So ``message`` reads
-    "Configuration error" for a handshake refusal, an egress refusal and an
-    unparseable answer alike, and "Service temporarily unavailable" for an
-    unreachable endpoint, a rate-limited one and an undelivered request alike.
-    The raise sites' own diagnostics moved to ``internal_detail`` for that
-    reason, and this surface -- the admin "test connection" dialog, read by the
-    tenant operator who configured the agent -- is exactly where they belong.
-
-    ``str(exc)`` second. For an ``AdCPSalesAgentError`` that is its ``message``
-    (``__str__`` returns the property), so a typed error carrying no detail still
-    renders its table sentence. For an UNTYPED exception -- one the seam did not
-    classify, which reaches this module's caller because an operator probe
-    reports every failure rather than 500ing -- it is the exception's own text,
-    which may be third-party. That is deliberate and unchanged: the reader is an
-    authenticated tenant operator on their own deployment's admin route, not a
-    buyer whose error responses flow through LLM context, and the unanticipated
-    failure is the one where a raw diagnostic is worth the most. Nothing else
-    reads this value (see :class:`ProbeResult`).
-
-    The type name last, so a cause-less exception (``asyncio.TimeoutError()``
-    stringifies to ``""``) renders a sentence rather than a blank one.
-    """
-    detail = exc.internal_detail if isinstance(exc, AdCPSalesAgentError) else None
-    if detail is not None and (text := str(detail).strip()):
-        return text
-    return str(exc).strip() or type(exc).__name__
-
-
 def probe_failure(exc: Exception, *, logger: logging.Logger) -> ProbeResult:
     """The operator-facing sentence for a probe that did not connect.
 
@@ -127,7 +86,8 @@ def probe_failure(exc: Exception, *, logger: logging.Logger) -> ProbeResult:
     the dial, and an endpoint answering with nothing parseable. The seam does
     not distinguish "bad auth" from "bad request", so the advice names every
     lever rather than presuming credentials -- an egress refusal has nothing to
-    do with them, and :func:`_operator_cause` says which one it was.
+    do with them, and :func:`~src.core.errors.operator_text.operator_cause` says
+    which one it was.
 
     A SIGNING failure is an ``AdCPConfigurationError`` too -- same wire code,
     same terminal recovery -- but NONE of those levers is its cause, so it gets
@@ -154,7 +114,7 @@ def probe_failure(exc: Exception, *, logger: logging.Logger) -> ProbeResult:
     same reason the configuration branch did, and is fixed the same way rather
     than half-fixed.
     """
-    cause = _operator_cause(exc)
+    cause = operator_cause(exc)
     if isinstance(exc, MCPSigningError):
         logger.error("Connection test failed (signing): %s", cause)
         return ProbeResult(
@@ -253,7 +213,7 @@ async def call_operator_mcp_tool(
         # which also matches the seam, whose retry loop deliberately does not retry an
         # unsignable request. The buyer-facing sentence is CODE_TABLE's property; the
         # signer's own diagnostic rides ``internal_detail`` (server-log only, and what
-        # :func:`_operator_cause` shows the tenant operator); the role name goes to the
+        # ``operator_cause`` shows the tenant operator); the role name goes to the
         # log line here, where the original exception is.
         logger.error("Could not sign the dial to %s, so nothing was sent: %s", provenance.name, exc)
         raise
