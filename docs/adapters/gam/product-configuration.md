@@ -41,7 +41,7 @@ For where adapters sit in the overall system, see [Architecture](../../developme
 1. Create the product in the Admin UI (name, price, delivery type, formats). The system generates a default GAM configuration from the delivery type and formats.
 2. On the product edit page, click **Configure GAM Adapter** to open the GAM configuration UI.
 3. Use the inventory picker to select ad units or placements.
-4. Adjust priority and other settings if needed.
+4. Adjust the other settings if needed.
 5. Save the configuration.
 6. Create a media buy. The adapter creates the GAM line items from the stored configuration. If a product still has no configuration at media buy time, the system generates defaults then.
 
@@ -57,8 +57,7 @@ Guaranteed products:
 {
   "cost_type": "CPM",
   "line_item_type": "STANDARD",
-  "priority": 6,
-  "primary_goal_type": "DAILY",
+  "primary_goal_type": "LIFETIME",
   "primary_goal_unit_type": "IMPRESSIONS",
   "delivery_rate_type": "EVENLY",
   "creative_rotation_type": "EVEN",
@@ -74,7 +73,6 @@ Non-guaranteed products:
 {
   "cost_type": "CPM",
   "line_item_type": "PRICE_PRIORITY",
-  "priority": 10,
   "primary_goal_type": "NONE",
   "primary_goal_unit_type": "IMPRESSIONS",
   "delivery_rate_type": "AS_FAST_AS_POSSIBLE",
@@ -85,6 +83,8 @@ Non-guaranteed products:
 }
 ```
 
+The generator writes no `priority`: a line item books the GAM default priority of its type unless you set one (see [Priority](#priority)).
+
 ### GAM configuration UI
 
 Open the product edit page in the Admin UI and click **Configure GAM Adapter**. The UI is served at `/adapters/gam/config/<tenant_id>/<product_id>`.
@@ -92,35 +92,33 @@ Open the product edit page in the Admin UI and click **Configure GAM Adapter**. 
 The UI provides the following features:
 
 - Searchable inventory picker for ad units and placements
-- Priority selection (1-16)
 - Frequency cap configuration
 - Creative placeholder management
 - Custom targeting options
 
 ### Validation
 
-`GAMProductConfigService.validate_config()` checks the configuration when you save it and again when a media buy is created:
+`GAMProductConfigService.validate_config()` checks the configuration when a media buy is created (there is no check when you save it):
 
-- `priority` and `creative_placeholders` are present.
-- `priority` is an integer between 1 and 16.
+- `creative_placeholders` is present.
 - Every creative placeholder has a `width` and a `height`.
 - `line_item_type`, if present, is one of the valid values.
 
 If no inventory targeting is set, validation passes but the adapter logs a warning and falls back to the network root ad unit.
 
-At media buy creation, a missing or invalid configuration fails with an explicit error message.
+At media buy creation, a missing or invalid configuration fails with an explicit error message. `priority` is optional and is not checked here: the adapter checks it against the range of the line item type it books (see [Priority](#priority)), before it creates anything in GAM.
 
 ## Line item type selection
 
-You can set `line_item_type` explicitly, but you don't have to: when it is absent, `PricingCompatibility.select_line_item_type()` (in `src/adapters/gam/pricing_compatibility.py`) picks the type from the pricing model and the delivery guarantee. An explicit type that is incompatible with the pricing model is rejected with a `ValueError`.
+You can set `line_item_type` explicitly, but you don't have to. `PricingCompatibility.select_line_item_type()` (in `src/adapters/gam/pricing_compatibility.py`) uses a configured type when it can book the package: GAM supports the package's pricing model on it, and SPONSORSHIP, NETWORK and HOUSE are used only for flat-rate packages. Those three types take only a daily goal of a percentage of impressions, which cannot hold a CPM, vCPM or CPC package to its budget. Otherwise the type is picked from the pricing model and the delivery guarantee, as when no type is configured. A configured HOUSE is therefore never used: GAM allows only CPM on it.
 
 The following decision tree shows how the adapter selects the line item type:
 
 ```mermaid
 flowchart TD
     Start["Pricing model + guarantee"] --> OV{"line_item_type set in\nimplementation_config?"}
-    OV -->|"yes"| CHK{"Compatible with the\npricing model?"}
-    CHK -->|"no"| ERR["Error: incompatible\nline item type"]
+    OV -->|"yes"| CHK{"GAM supports the pricing model\non it, and a share-of-voice\ntype only for flat_rate?"}
+    CHK -->|"no"| FR
     CHK -->|"yes"| USE["Use the configured type"]
     OV -->|"no"| FR{"flat_rate?"}
     FR -->|"yes"| SP["SPONSORSHIP\nbilled as CPD:\ntotal budget / flight days"]
@@ -141,14 +139,19 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
 
 #### Priority
 
-- **Field**: `priority` (required)
-- **Type**: Integer, 1-16, where 1 is the highest priority
-- **Defaults**: 6 for guaranteed, 10 for non-guaranteed
-- **Guidelines**:
-  - 1-4: Reserved for emergency or critical campaigns
-  - 4-6: Guaranteed inventory
-  - 8-12: Non-guaranteed and price priority
-  - 16: House ads
+- **Field**: `priority` (optional)
+- **Type**: Integer, where 1 is the highest priority
+- **Default**: the GAM default of the line item type the package books
+- **Behavior**: A configured priority applies to the configured `line_item_type` (or to the selected type when none is configured), and must lie inside GAM's range for that type. Otherwise the media buy is refused with `CONFIGURATION_ERROR` before anything is written to GAM. A priority configured for a type that is not booked does not carry over.
+
+| Line item type | Default | Range |
+|---|---|---|
+| `SPONSORSHIP` | 4 | 2-5 |
+| `STANDARD` | 8 | 6-10 |
+| `NETWORK` | 12 | 11-14 |
+| `BULK` | 12 | 11-14 |
+| `PRICE_PRIORITY` | 12 | 11-14 |
+| `HOUSE` | 16 | 15-16 |
 
 #### Creative placeholders
 
@@ -181,7 +184,9 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
 #### Primary goal
 
 - **Fields**: `primary_goal_type` (`DAILY`, `LIFETIME`, `NONE`) and `primary_goal_unit_type` (`IMPRESSIONS`, `CLICKS`, `VIEWABLE_IMPRESSIONS`)
-- **Defaults**: `DAILY` for guaranteed, `NONE` for non-guaranteed; unit defaults to `IMPRESSIONS`
+- **Defaults**: `LIFETIME` for guaranteed, `NONE` for non-guaranteed; unit defaults to `IMPRESSIONS`
+- **Behavior**: The goal type follows the line item type: `STANDARD` and `BULK` book `LIFETIME`; `SPONSORSHIP` and `NETWORK` (flat rate only) book a `DAILY` share of 100% of impressions. The configured `primary_goal_type` applies to `PRICE_PRIORITY`, where a value GAM does not accept is refused with `CONFIGURATION_ERROR`. CPC packages book `CLICKS` and vCPM packages `VIEWABLE_IMPRESSIONS`.
+- **Units**: the package's volume, which is its budget at the price of the pricing option it selected (per thousand for CPM and vCPM). A `DAILY` goal spreads it over the flight's days.
 
 #### Inventory targeting
 
@@ -250,7 +255,7 @@ docker compose up -d
 open http://localhost:8000
 ```
 
-In the Admin UI, open a product, click **Configure GAM Adapter**, and exercise the inventory picker, priority setting, and save-time validation.
+In the Admin UI, open a product, click **Configure GAM Adapter**, and exercise the inventory picker and the save.
 
 ### Verify the stored configuration
 
@@ -353,10 +358,8 @@ Response:
 
 ### Priority
 
-- **Emergency or critical**: 1-4 (use sparingly)
-- **Guaranteed**: 4-6
-- **Non-guaranteed**: 8-12
-- **House ads**: 16
+- Leave `priority` unset unless you need to order line items of one type against each other; the type's GAM default then applies.
+- A priority you set must lie inside GAM's range for the line item type (see [Priority](#priority) in the field reference).
 
 ### Inventory targeting
 

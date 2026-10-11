@@ -49,7 +49,7 @@ from src.adapters.gam.managers.orders import (
     GUARANTEED_LINE_ITEM_TYPES,
     NON_GUARANTEED_LINE_ITEM_TYPES,
 )
-from src.adapters.gam.pricing_compatibility import PricingCompatibility
+from src.adapters.gam.pricing_compatibility import LineItemPlan, PricingCompatibility
 from src.adapters.gam_data_freshness import validate_and_log_freshness
 from src.core.audit_logger import AuditLogger
 from src.core.errors.codes import AppErrorCode
@@ -499,6 +499,7 @@ class GoogleAdManager(AdServerAdapter):
 
         # Validate products have required inventory targeting BEFORE creating order
         # This prevents the "hidden failure" where order is created but line items fail
+        line_item_plans: dict[str, LineItemPlan] = {}
         for package in packages:
             product_config = products_map.get(package.package_id)
             if not product_config:
@@ -529,6 +530,20 @@ class GoogleAdManager(AdServerAdapter):
                 )
                 self.log(f"[red]Error: {error_msg}[/red]")
                 raise AdCPProductUnavailableError()
+
+            # Plan the package's line item (type, priority, goal) now, so a configuration
+            # GAM would refuse is refused before the order exists.
+            pricing_info = (package_pricing_info or {}).get(package.package_id)
+            if not pricing_info:
+                raise AdCPConfigurationError(
+                    details=ConfigurationDetails(product_id=cast(str, product_config["product_id"]))
+                )
+            line_item_plans[package.package_id] = PricingCompatibility.plan_line_item(
+                pricing_info["pricing_model"],
+                is_guaranteed=product_config["delivery_type"] == "guaranteed",
+                implementation_config=product_impl_config,
+                product_id=cast(str, product_config["product_id"]),
+            )
 
         # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
         unsupported_features = []
@@ -673,6 +688,7 @@ class GoogleAdManager(AdServerAdapter):
                 end_time=end_time,
                 network_time_zone=flight_time_zone,
                 products_map=products_map,
+                line_item_plans=line_item_plans,
                 log_func=self.log,
                 tenant_id=self.tenant_id,
                 order_name=order_name,
