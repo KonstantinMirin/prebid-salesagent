@@ -22,7 +22,9 @@ from unittest.mock import MagicMock, patch
 from src.adapters.base import AdapterCreateResult
 from src.core.database.models import PersistedMediaBuyStatus
 from src.core.database.repositories.creative import CreativeAssignmentRepository
+from src.core.helpers.pricing_helpers import pricing_info_for
 from src.core.tools.media_buy_create import ApprovalOutcome
+from tests.factories import PricingOptionFactory
 from tests.factories.principal import PrincipalFactory
 
 # Who approved, and when. Passed in by the caller and written by the same
@@ -81,7 +83,13 @@ def _make_mock_package():
     pkg = MagicMock()
     pkg.package_id = "pkg_001"
     pkg.media_buy_id = "mb_test_001"
-    pkg.package_config = {"product_id": "prod_1", "name": "Test Package", "budget": 5000.0, "pricing_model": "CPM"}
+    pkg.budget = Decimal("5000.00")
+    pkg.package_config = {
+        "product_id": "prod_1",
+        "name": "Test Package",
+        "budget": 5000.0,
+        "pricing_info": pricing_info_for(PricingOptionFactory.build(rate=Decimal("10.00"))),
+    }
     return pkg
 
 
@@ -92,15 +100,6 @@ def _make_mock_product():
     product.name = "Test Product"
     product.delivery_type = "non_guaranteed"
     product.format_ids = [{"agent_url": "https://example.com/formats", "format_id": "fmt_1", "id": "fmt_1"}]
-
-    # Set up pricing option
-    pricing_option = MagicMock()
-    pricing_option.pricing_model = "CPM"
-    pricing_option.rate = Decimal("10.00")
-    pricing_option.currency = "USD"
-    pricing_option.is_fixed = True
-    pricing_option.root = pricing_option  # Self-reference for getattr(po, "root", po)
-    product.pricing_options = [pricing_option]
 
     return product
 

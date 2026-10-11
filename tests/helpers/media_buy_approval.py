@@ -193,11 +193,9 @@ def seed_pending_buy(*, starts_in_days: int, status: str = "pending_approval") -
             ],
         },
     )
-    MediaPackageFactory(
-        media_buy=media_buy,
-        package_id=f"pkg_appr_{suffix}",
-        package_config={"product_id": product.product_id, "budget": 5000.0},
-    )
+    # The row's budget and package_config (with the pricing_info the approval books from)
+    # come from the raw_request package, as production's pending writer writes them.
+    MediaPackageFactory(media_buy=media_buy, package_id=f"pkg_appr_{suffix}")
 
     # The access grant that used to be written here by hand is now MediaBuyFactory's own
     # ``grant_account_access`` post-generation hook: a factory that cannot produce a

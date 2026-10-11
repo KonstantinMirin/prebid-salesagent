@@ -92,7 +92,7 @@ from src.core.helpers.creative_helpers import (
     extract_media_url_and_dimensions,
     process_and_upload_package_creatives,
 )
-from src.core.helpers.pricing_helpers import pricing_info_for
+from src.core.helpers.pricing_helpers import package_volume, pricing_info_for
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import AccountIdentity, ResolvedIdentity, identity_of
 from src.core.schemas import (
@@ -953,8 +953,6 @@ def execute_approved_media_buy(
 
             # Reconstruct MediaPackage objects (what adapters expect) from database
             # We need to load Products to get name, delivery_type, format_ids, etc.
-            from sqlalchemy.orm import selectinload
-
             from src.core.database.models import Product as ProductModel
 
             packages: list[MediaPackage] = []
@@ -972,12 +970,8 @@ def execute_approved_media_buy(
                         logger.error(f"[APPROVAL] {error_msg}")
                         return ApprovalResult.failed(error_msg)
 
-                    # Load product to get name, delivery_type, format_ids, pricing
-                    stmt_product = (
-                        select(ProductModel)
-                        .filter_by(tenant_id=tenant_id, product_id=product_id)
-                        .options(selectinload(ProductModel.pricing_options))
-                    )
+                    # Load product to get name, delivery_type, format_ids
+                    stmt_product = select(ProductModel).filter_by(tenant_id=tenant_id, product_id=product_id)
                     product = session.scalars(stmt_product).first()
 
                     if not product:
@@ -985,56 +979,23 @@ def execute_approved_media_buy(
                         logger.error(f"[APPROVAL] {error_msg}")
                         return ApprovalResult.failed(error_msg)
 
-                    # Get budget from package_config (AdCP 2.5.0: budget is always float | None)
-                    budget_data = package_config.get("budget")
-                    if isinstance(budget_data, dict):
-                        # Legacy dict format (Budget object) - extract total
-                        total_budget = float(budget_data.get("total", 0.0))
-                        budget = total_budget  # MediaPackage expects float
-                    elif isinstance(budget_data, (int, float)):
-                        # AdCP 2.5.0 format - flat number
-                        total_budget = float(budget_data)
-                        budget = total_budget  # MediaPackage expects float
-                    else:
-                        total_budget = 0.0
-                        budget = None
-
-                    # Get pricing option from product
-                    # adcp 2.14.0+ uses RootModel wrapper - access via .root
-                    pricing_option_inner = None
-                    if product.pricing_options:
-                        # Try to match pricing_model from package_config if present
-                        pkg_pricing_model = package_config.get("pricing_model")
-                        if pkg_pricing_model:
-                            for po in product.pricing_options:
-                                po_inner = getattr(po, "root", po)
-                                if po_inner.pricing_model == pkg_pricing_model:
-                                    pricing_option_inner = po_inner
-                                    break
-                        if not pricing_option_inner:
-                            # Fall back to first pricing option
-                            first_po = product.pricing_options[0]
-                            pricing_option_inner = getattr(first_po, "root", first_po)
-
-                    if not pricing_option_inner:
-                        error_msg = f"Product {product_id} has no pricing options"
+                    # The package's own budget (the typed column both package writers fill)
+                    # at the unit price of the pricing option it selected (the pricing_info
+                    # stored when the request was validated): the rule the create path
+                    # applies, so an approved buy books what an auto-approved one would.
+                    if db_pkg.budget is None:
+                        error_msg = f"Package {package_id} missing budget"
                         logger.error(f"[APPROVAL] {error_msg}")
                         return ApprovalResult.failed(error_msg)
+                    budget = float(db_pkg.budget)
 
-                    # Calculate CPM and impressions (convert Decimal to float for math operations)
-                    cpm = float(pricing_option_inner.rate) if pricing_option_inner.rate else 0.0
-                    impressions = int(total_budget / cpm * 1000) if cpm > 0 else 0
-
-                    # Reconstruct package_pricing_info from package_config if available
-                    # This includes the bid_price for auction pricing
-                    pricing_info_from_config = package_config.get("pricing_info")
-                    if pricing_info_from_config and package_id:
-                        # Use the stored pricing_info which has the correct bid_price
-                        package_pricing_info[package_id] = pricing_info_from_config
-                    elif package_id:
-                        # Fallback for buys stored without pricing_info: the option's terms
-                        # with no bid_price, because the package that bid one is not on hand.
-                        package_pricing_info[package_id] = pricing_info_for(pricing_option_inner)
+                    pricing_info = package_config.get("pricing_info")
+                    if not pricing_info:
+                        error_msg = f"Package {package_id} missing pricing_info"
+                        logger.error(f"[APPROVAL] {error_msg}")
+                        return ApprovalResult.failed(error_msg)
+                    cpm, impressions = package_volume(budget, pricing_info)
+                    package_pricing_info[package_id] = pricing_info
 
                     # Get targeting_overlay from package_config if present
                     # Fallback to "targeting" key for data written before fix.
@@ -3302,37 +3263,14 @@ async def _create_media_buy_impl(
                 else:
                     format_ids_to_use = []
 
-            # Get CPM from pricing_options
-            cpm = 10.0  # Default
-            if pkg_product.pricing_options and len(pkg_product.pricing_options) > 0:
-                first_option = pkg_product.pricing_options[0]
-                # adcp 2.14.0+ uses RootModel wrapper - access via .root
-                inner_option = getattr(first_option, "root", first_option)
-                rate = getattr(inner_option, "rate", None)
-                if rate:
-                    cpm = float(rate)
-
             # Generate permanent package ID (not product_id)
             package_id = f"pkg_{pkg_product.product_id}_{secrets.token_hex(4)}_{idx}"
 
-            # Get budget from matching request package if available
-            package_budget_value: float | None = None
-            if matching_package:
-                if matching_package.budget is not None:
-                    raw_budget = matching_package.budget
-                    # Normalize budget: MediaPackage expects float | None (ADCP 2.5.0)
-                    if raw_budget is not None:
-                        if isinstance(raw_budget, (int, float)):
-                            # ADCP 2.5.0 flat format: use as-is (float)
-                            package_budget_value = float(raw_budget)
-                        elif isinstance(raw_budget, dict):
-                            # Legacy dict format: extract total
-                            package_budget_value = float(raw_budget.get("total", 0.0))
-                        elif isinstance(raw_budget, BaseModel):
-                            # Budget object: extract total
-                            package_budget_value = float(raw_budget.total)
-                        else:
-                            package_budget_value = None
+            # The package's own budget at the unit price of the option it selected
+            # (validated above into package_pricing_info_by_index; a package whose product
+            # does not exist was refused before this loop).
+            media_package_budget = float(pkg.budget)
+            unit_cost, volume = package_volume(media_package_budget, package_pricing_info_by_index[pkg_index])
 
             delivery_type_str = enum_value(pkg_product.delivery_type)
 
@@ -3345,15 +3283,15 @@ async def _create_media_buy_impl(
                     package_id=package_id,
                     name=pkg_product.name,
                     delivery_type=delivery_type_value,
-                    cpm=cpm,
-                    impressions=int(float(total_budget) / cpm * 1000),
+                    cpm=unit_cost,
+                    impressions=volume,
                     format_ids=cast(list[Any], format_ids_to_use),
                     targeting_overlay=cast(
                         "Targeting | None",
                         matching_package.targeting_overlay if matching_package else None,
                     ),
                     product_id=pkg_product.product_id,  # Include product_id
-                    budget=package_budget_value,  # Include budget from request (now normalized)
+                    budget=media_package_budget,
                     creative_ids=(
                         _get_creative_ids(matching_package) if matching_package else None
                     ),  # Include creative_ids from uploaded creatives
