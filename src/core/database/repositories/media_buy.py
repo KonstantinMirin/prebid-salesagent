@@ -38,14 +38,12 @@ class RequestedPackage:
 
     ``request`` is the buyer's package as sent; the row records it (product, budget, targeting,
     creatives, formats). ``package_id`` is the id the seller minted for it, ``pricing_info`` the
-    pricing option the seller resolved, ``currency`` the request's currency (the budget's
-    currency when ``pricing_info`` names none), and ``paused`` the state the adapter reported.
+    pricing option the seller resolved, and ``paused`` the state the adapter reported.
     """
 
     package_id: str
     request: PackageRequest
     pricing_info: dict[str, Any] | None
-    currency: str
     paused: bool = False
 
 
@@ -440,23 +438,23 @@ class MediaBuyRepository:
         self._stamp_confirmation_if_needed(media_buy, seller_committed=seller_committed)
         self._session.add(media_buy)
         for requested in packages:
-            self._session.add(self._requested_package_row(media_buy_id, requested))
+            self._session.add(self._requested_package_row(media_buy_id, requested, currency))
         self._session.flush()
         return media_buy
 
     @staticmethod
-    def _requested_package_row(media_buy_id: str, requested: RequestedPackage) -> MediaPackage:
+    def _requested_package_row(media_buy_id: str, requested: RequestedPackage, currency: str) -> MediaPackage:
         """The package row for one requested package: what the buyer booked, as the request carried it.
 
         The budget is stored as ``{"total", "currency"}``, its currency the pricing option's when
-        the seller resolved one; the ``budget`` and ``bid_price`` columns carry the same values.
+        the seller resolved one and the buy's otherwise; the ``budget`` and ``bid_price`` columns
+        carry the same values.
         """
         request = requested.request
         pricing_info = requested.pricing_info
         budget: dict[str, Any] | None = None
         if request.budget is not None:
-            currency = (pricing_info or {}).get("currency", requested.currency)
-            budget = {"total": float(request.budget), "currency": currency}
+            budget = {"total": float(request.budget), "currency": (pricing_info or {}).get("currency", currency)}
         bid_price = (pricing_info or {}).get("bid_price")
         package_config = {
             "package_id": requested.package_id,
@@ -464,38 +462,17 @@ class MediaBuyRepository:
             "product_id": request.product_id,
             "budget": budget,
             "targeting_overlay": request.targeting_overlay,
-            "creative_ids": getattr(request, "creative_ids", None),
+            "creative_ids": request.creative_ids,
             "format_ids": request.format_ids,
             "pricing_info": pricing_info,
-            "impressions": getattr(request, "impressions", None),
+            "impressions": request.impressions,
         }
-        return MediaBuyRepository._package_row(
-            media_buy_id,
-            requested.package_id,
-            package_config,
-            budget=Decimal(str(budget["total"])) if budget is not None else None,
-            bid_price=Decimal(str(bid_price)) if bid_price is not None else None,
-            pacing=None,
-        )
-
-    @staticmethod
-    def _package_row(
-        media_buy_id: str,
-        package_id: str,
-        package_config: dict,
-        *,
-        budget: Decimal | None,
-        bid_price: Decimal | None,
-        pacing: str | None,
-    ) -> MediaPackage:
-        """One ``media_packages`` row; the package writers build theirs here."""
         return MediaPackage(
             media_buy_id=media_buy_id,
-            package_id=package_id,
+            package_id=requested.package_id,
             package_config=package_config,
-            budget=budget,
-            bid_price=bid_price,
-            pacing=pacing,
+            budget=Decimal(str(budget["total"])) if budget is not None else None,
+            bid_price=Decimal(str(bid_price)) if bid_price is not None else None,
         )
 
     def create(self, media_buy: MediaBuy, *, seller_committed: bool = False) -> MediaBuy:
@@ -720,8 +697,13 @@ class MediaBuyRepository:
         media_buy = self.get_by_id(media_buy_id)
         if media_buy is None:
             raise ValueError(f"MediaBuy {media_buy_id!r} not found in tenant {self._tenant_id!r}")
-        package = self._package_row(
-            media_buy_id, package_id, package_config, budget=budget, bid_price=bid_price, pacing=pacing
+        package = MediaPackage(
+            media_buy_id=media_buy_id,
+            package_id=package_id,
+            package_config=package_config,
+            budget=budget,
+            bid_price=bid_price,
+            pacing=pacing,
         )
         self._session.add(package)
         self._bump_revision(media_buy)

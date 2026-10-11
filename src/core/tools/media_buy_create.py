@@ -2799,7 +2799,6 @@ async def _create_media_buy_impl(
                                 package_id=minted_id,
                                 request=req_pkg,
                                 pricing_info=package_pricing_info_by_index.get(idx),
-                                currency=request_currency or "USD",
                             )
                             for idx, (minted_id, req_pkg) in enumerate(
                                 zip(minted_package_ids, req.packages, strict=True)
@@ -3397,7 +3396,6 @@ async def _create_media_buy_impl(
                     package_id=media_pkg.package_id,
                     request=req_pkg,
                     pricing_info=package_pricing_info.get(media_pkg.package_id),
-                    currency=request_currency,
                     paused=bool(paused_by_package_id[media_pkg.package_id]),
                 )
             )
