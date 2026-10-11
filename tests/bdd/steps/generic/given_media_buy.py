@@ -19,6 +19,7 @@ from adcp.types import ErrorCode
 from pytest_bdd import given, parsers
 
 from src.core.database.models import PricingOption
+from src.core.format_cache import DEFAULT_AGENT_URL
 from tests.bdd.steps.generic._create_request import (
     build_create_request_kwargs,
     pricing_option_id,
@@ -2051,11 +2052,16 @@ def _add_creative_ids_to_package(ctx: dict, creative_ids: list[str]) -> None:
 
 
 def _create_approved_creative(
-    ctx: dict, creative_id: str, fmt: str = "display_300x250", asset_key: str = "primary"
+    ctx: dict,
+    creative_id: str,
+    fmt: str = "display_300x250",
+    asset_key: str = "primary",
+    principal: Any = None,
 ) -> Any:
     """Create an approved Creative in the DB and return it.
 
-    Uses CreativeFactory with the tenant/principal from harness context.
+    Uses CreativeFactory with the tenant from harness context, owned by *principal*
+    (the harness's principal when not given).
     The default asset key "primary" matches the harness format spec's
     asset_id; scenarios seeding a real reference-catalog format pass the
     format's actual asset_id (e.g. "banner_image" for display_300x250_image).
@@ -2066,7 +2072,7 @@ def _create_approved_creative(
     creative = CreativeFactory(
         creative_id=creative_id,
         tenant=ctx["tenant"],
-        principal=ctx["principal"],
+        principal=principal if principal is not None else ctx["principal"],
         format=fmt,
         approved=True,
         data={"assets": {asset_key: {"url": "https://example.com/banner.png", "width": 300, "height": 250}}},
@@ -2079,7 +2085,7 @@ def _add_inline_creatives(
     ctx: dict,
     count: int = 1,
     fmt_id: str = "display_300x250",
-    agent_url: str = "https://creative.adcontextprotocol.org",
+    agent_url: str = DEFAULT_AGENT_URL,
     asset_id: str = "primary",
 ) -> None:
     """Add inline creative dicts to the first package's 'creatives' field.
@@ -2114,6 +2120,7 @@ def _add_inline_creatives(
 
 
 @given("the request's package carries an inline image creative in its product's format")
+@given("the request's first package carries an inline image creative in its product's format")
 def given_package_carries_inline_creative_in_product_format(ctx: dict) -> None:
     """The first package uploads one image creative, in the format its product row declares.
 
@@ -2122,16 +2129,27 @@ def given_package_carries_inline_creative_in_product_format(ctx: dict) -> None:
     in-network creative agent included. The image goes under the format's own image asset
     id, read off the reference catalog's definition of that format.
     """
-    from adcp.utils import get_individual_assets
-
-    from src.core.format_cache import load_reference_formats
+    from tests.factories.format import asset_ids_of_type, reference_format
 
     product_format = ctx["default_product"].format_ids[0]
-    definition = next(fmt for fmt in load_reference_formats() if fmt.format_id.id == product_format["id"])
-    image_asset_id = next(asset.asset_id for asset in get_individual_assets(definition) if asset.asset_type == "image")
+    image_asset_id = asset_ids_of_type(reference_format(product_format["id"]), "image")[0]
     _add_inline_creatives(
         ctx, fmt_id=product_format["id"], agent_url=product_format["agent_url"], asset_id=image_asset_id
     )
+
+
+@given("another principal of the tenant holds an approved creative under the id of the request's inline creative")
+def given_other_principal_holds_inline_creative_id(ctx: dict) -> None:
+    """Another principal of the tenant holds an approved creative under the request's inline creative id.
+
+    A creative is keyed by ``(creative_id, tenant_id, principal_id)``, so two principals of
+    one tenant may each hold a creative under the same id. The id is read off the request
+    the scenario built.
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    creative_id = _ensure_request_defaults(ctx)["packages"][0]["creatives"][0]["creative_id"]
+    _create_approved_creative(ctx, creative_id, principal=PrincipalFactory(tenant=ctx["tenant"]))
 
 
 @given(parsers.parse("the creative scenario is {partition}"))

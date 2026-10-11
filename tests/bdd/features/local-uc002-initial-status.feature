@@ -19,9 +19,16 @@
 # scenarios are the in-process grading of that obligation, on a tenant that auto-approves
 # creatives, with the creative uploaded inline on the package.
 #
-# Not graded here: a buy whose assigned creatives are still under review keeps
-# `pending_creatives` (whether it should is #2399), and a package naming an approved library
-# creative by id goes through the same status decision as the inline upload.
+# The status is decided per package: the same section says "Delivery cannot begin until the
+# buyer supplies at least one creative per package", so a buy with an approved creative on
+# only some of its packages stays `pending_creatives`. A creative is the buyer's own: another
+# principal's creative under the same id does not clear it. A buy whose own creative is still
+# under review keeps `pending_creatives`; whether it should is #2399, and that scenario asserts
+# today's answer only to show the other principal's approved creative does not change it.
+#
+# Not graded here: a library creative attached to a package by id. The pinned request attaches
+# one through `packages[].creative_assignments`, which create does not read (#2392); the
+# `creative_ids` field create does read is not in the 3.1.1 package-request schema.
 #
 # Transports: a2a, mcp, rest and e2e_rest.
 #
@@ -50,3 +57,33 @@ Feature: A media buy created with approved creatives starts in its flight state 
       | start             | status        |
       | asap              | active        |
       | {7 days from now} | pending_start |
+
+  @T-UC-002-local-initial-status-partial-creatives @extension
+  Scenario: A buy whose approved creative covers only one of its two packages stays pending_creatives
+    Given a valid create_media_buy request with:
+      | field      | value              |
+      | start_time | asap               |
+      | end_time   | {30 days from now} |
+    And the account exists and is active
+    And the tenant has approval_mode "auto-approve"
+    And the product "prod-1" supports format_ids ["display_300x250_image"]
+    And the request includes 2 packages with valid product_ids
+    And the request's first package carries an inline image creative in its product's format
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And the wire media_buy_status should be "pending_creatives"
+
+  @T-UC-002-local-initial-status-other-principal-creative @extension
+  Scenario: Another principal's approved creative under the same id does not clear the buyer's creative under review
+    Given a valid create_media_buy request with:
+      | field      | value              |
+      | start_time | asap               |
+      | end_time   | {30 days from now} |
+    And the account exists and is active
+    And the tenant has approval_mode "require-human"
+    And the product "prod-1" supports format_ids ["display_300x250_image"]
+    And the request's package carries an inline image creative in its product's format
+    And another principal of the tenant holds an approved creative under the id of the request's inline creative
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And the wire media_buy_status should be "pending_creatives"

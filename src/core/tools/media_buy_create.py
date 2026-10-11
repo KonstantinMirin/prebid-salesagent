@@ -3425,7 +3425,11 @@ async def _create_media_buy_impl(
         for i, pkg_item in enumerate(response.packages):
             logger.info(f"[DEBUG] create_media_buy: Response package {i} = {pkg_item}")
 
-        named_creative_ids = _named_creative_ids(req.packages or [])
+        request_packages = req.packages or []
+        named_creative_ids = _named_creative_ids(request_packages)
+        # lifecycle.mdx: "Delivery cannot begin until the buyer supplies at least one creative
+        # per package", so a buy has its creatives only when every package names one.
+        has_creatives = bool(request_packages) and all(_get_creative_ids(package) for package in request_packages)
         now = datetime.now(UTC)
 
         # Store the media buy in database (context_id is NULL for synchronous operations)
@@ -3438,7 +3442,6 @@ async def _create_media_buy_impl(
                 # writes (unknown ids were refused before the adapter ran), so their stored
                 # state decides the status, through the statuses the approval gate counts as
                 # cleared. A failure in that step leaves this row committed; that is #2393.
-                has_creatives = bool(named_creative_ids)
                 creatives_approved = not create_uow.creatives.uncleared_ids(named_creative_ids, principal_id)
                 media_buy_status = _determine_media_buy_status(
                     manual_approval_required=False,  # This path only runs when approval NOT required
