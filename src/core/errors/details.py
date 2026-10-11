@@ -554,6 +554,9 @@ class ValidationDetails(EntityRefDetails, ValueRejectionDetails, ProblemsDetails
     # break, not a cleanup. (A `managed_only_dimensions` sibling went with the
     # non-spec field it reported, salesagent-3cs7o.22.)
     geo_overlaps: list[dict[str, Any]] | None = None
+    # Its sibling from the same composer: inclusion fields with no place in common
+    # (`geo_disjoint_inclusions`, src/services/targeting_capabilities.py).
+    geo_disjoint: list[dict[str, Any]] | None = None
 
 
 class TimeWindowDetails(ValidationDetails):

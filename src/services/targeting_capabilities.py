@@ -14,10 +14,12 @@ for upstream inclusion in AdCP.
 
 from typing import TYPE_CHECKING, Any
 
+from adcp.types.generated_poc.enums.metro_system import MetroAreaSystem
+
 from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPInvalidRequestError, AdCPValidationError
 from src.core.schemas import Error, Targeting, TargetingCapability
 from src.core.validation_helpers import PACKAGES_FIELD
 
@@ -291,12 +293,12 @@ _GEO_STRUCTURED_PAIRS: list[tuple[str, str]] = [
 ]
 
 
-def _extract_simple_values(items: list) -> set[str]:
+def extract_simple_values(items: list) -> set[str]:
     """Extract string values from a list of GeoCountry/GeoRegion (RootModel[str]) or plain strings."""
     return {getattr(item, "root", item) for item in items}
 
 
-def _extract_system_values(items: list) -> dict[str, set[str]]:
+def extract_system_values(items: list) -> dict[str, set[str]]:
     """Extract ``{system: set(values)}`` from geo items that carry a system and values.
 
     Reads ``system``/``values`` off whatever it is given rather than gating on a list of
@@ -332,6 +334,76 @@ def _extract_system_values(items: list) -> dict[str, set[str]]:
     return by_system
 
 
+#: The country every Nielsen DMA lies in.
+NIELSEN_DMA_COUNTRY = "US"
+
+
+def region_country(code: str) -> str:
+    """The ISO 3166-1 country of an ISO 3166-2 region code: the part before ``-``.
+
+    The pinned ``geo_regions`` item pattern (``^[A-Z]{2}-[A-Z0-9]{1,3}$``, core/targeting.json)
+    guarantees the ``-``.
+    """
+    return code.split("-", 1)[0]
+
+
+def _geo_inclusions(targeting: Targeting) -> dict[str, tuple[set[str], set[str]]]:
+    """Per finer inclusion field, ``(named, kept)``: the codes the buyer named, and those inside a listed country.
+
+    Inclusion fields combine with AND (docs/reference/migration/geo-targeting.mdx at
+    v3.1.1), so a region or Nielsen DMA outside every listed country names no place the
+    buy may deliver. ``kept`` is ``named`` when ``geo_countries`` is absent. The one place
+    the containment the codes state is computed.
+
+    Ceiling: postal areas and non-Nielsen metro systems are not cut. No adapter books them
+    against countries today (GAM refuses both); an adapter that adds them extends this
+    function rather than computing its own containment.
+    """
+    regions = extract_simple_values(targeting.geo_regions or [])
+    dmas = extract_system_values(targeting.geo_metros or []).get(MetroAreaSystem.nielsen_dma.value, set())
+    if not targeting.geo_countries:
+        return {"geo_regions": (regions, regions), "geo_metros": (dmas, dmas)}
+    countries = extract_simple_values(targeting.geo_countries)
+    return {
+        "geo_regions": (regions, {code for code in regions if region_country(code) in countries}),
+        "geo_metros": (dmas, dmas if NIELSEN_DMA_COUNTRY in countries else set()),
+    }
+
+
+def geo_disjoint_inclusions(targeting: Targeting) -> list[dict[str, object]]:
+    """One record per inclusion field whose codes all lie outside the listed countries.
+
+    Such an overlay names no place at all: its inclusion fields AND to nothing, so the buy
+    could never deliver. The spec is silent on this case; it is refused like the same-value
+    overlap (docs/media-buy/advanced-topics/targeting.mdx, Exclusion Semantics), as data:
+    ``{include, within, values}``, plus ``system`` for Nielsen DMAs.
+    """
+    records: list[dict[str, object]] = []
+    for field, (named, kept) in _geo_inclusions(targeting).items():
+        if named and not kept:
+            record: dict[str, object] = {"include": field, "within": "geo_countries"}
+            if field == "geo_metros":
+                record["system"] = MetroAreaSystem.nielsen_dma.value
+            record["values"] = sorted(named)
+            records.append(record)
+    return records
+
+
+def geo_inclusion_cut(targeting: Targeting) -> tuple[set[str], set[str]]:
+    """The regions and Nielsen DMAs the overlay's inclusion fields AND to, or the refusal.
+
+    Returns ``(regions, dmas)`` cut to the listed countries. Raises ``INVALID_REQUEST`` on
+    ``targeting_overlay`` (``geo_disjoint``) when a field that named places keeps none, so a
+    caller that books from the cut never receives an empty set for such a field, whatever
+    ran before it.
+    """
+    disjoint = geo_disjoint_inclusions(targeting)
+    if disjoint:
+        raise AdCPInvalidRequestError(details=ValidationDetails(geo_disjoint=disjoint), field="targeting_overlay")
+    inclusions = _geo_inclusions(targeting)
+    return inclusions["geo_regions"][1], inclusions["geo_metros"][1]
+
+
 def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
     """Assemble every targeting-overlay violation into buyer-facing ``details``.
 
@@ -346,6 +418,9 @@ def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
 
         geo_overlaps              {include, exclude, values} per conflicting field pair,
                                   plus `system` for metro/postal pairs
+        geo_disjoint              {include, within, values} per inclusion field whose
+                                  codes all lie outside the listed countries, plus
+                                  `system` for Nielsen DMAs (geo_disjoint_inclusions)
 
     Empty mapping means the overlay is clean, so the caller can branch on truthiness.
 
@@ -367,6 +442,7 @@ def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
     """
     candidates: dict[str, object] = {
         "geo_overlaps": geo_overlap_conflicts(targeting),
+        "geo_disjoint": geo_disjoint_inclusions(targeting),
     }
     return {key: value for key, value in candidates.items() if value}
 
@@ -390,8 +466,8 @@ def geo_overlap_conflicts(targeting: Targeting) -> list[dict[str, object]]:
         exclude_vals = getattr(targeting, exclude_field, None)
         if not include_vals or not exclude_vals:
             continue
-        inc_set = _extract_simple_values(include_vals)
-        exc_set = _extract_simple_values(exclude_vals)
+        inc_set = extract_simple_values(include_vals)
+        exc_set = extract_simple_values(exclude_vals)
         overlap = sorted(inc_set & exc_set)
         if overlap:
             violations.append({"include": include_field, "exclude": exclude_field, "values": overlap})
@@ -402,8 +478,8 @@ def geo_overlap_conflicts(targeting: Targeting) -> list[dict[str, object]]:
         exclude_vals = getattr(targeting, exclude_field, None)
         if not include_vals or not exclude_vals:
             continue
-        inc_by_system = _extract_system_values(include_vals)
-        exc_by_system = _extract_system_values(exclude_vals)
+        inc_by_system = extract_system_values(include_vals)
+        exc_by_system = extract_system_values(exclude_vals)
         for system in sorted(set(inc_by_system) & set(exc_by_system)):
             overlap = sorted(inc_by_system[system] & exc_by_system[system])
             if overlap:
