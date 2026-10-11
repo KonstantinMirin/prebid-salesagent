@@ -3380,25 +3380,21 @@ async def _create_media_buy_impl(
             f"has_creatives={has_creatives}, creatives_approved={creatives_approved} → status={media_buy_status}"
         )
 
-        # The packages as the buyer requested them, each with the id this seller minted and
-        # the paused state the adapter reported for it. The adapter decides nothing else
-        # about a package row (AdCP 3.1.1 get-media-buys-response.json: sellers MUST echo the
-        # request package's product_id).
-        paused_by_package_id = {resp_package.package_id: resp_package.paused for resp_package in response.packages}
-        requested_packages: list[RequestedPackage] = []
+        # The packages as the buyer requested them, each with the package_id and paused state
+        # the adapter reported for it, paired by position as the creative assignments and the
+        # create response pair them below. The adapter decides nothing else about a package
+        # row (AdCP 3.1.1 get-media-buys-response.json: sellers MUST echo the request
+        # package's product_id).
         assert req.packages is not None, "packages required - validated earlier"
-        for req_pkg, media_pkg in zip(req.packages, packages, strict=True):
-            if media_pkg.package_id not in paused_by_package_id:
-                logger.error(f"Adapter did not return package {media_pkg.package_id}. This is a bug in the adapter.")
-                raise AdCPAdapterError()
-            requested_packages.append(
-                RequestedPackage(
-                    package_id=media_pkg.package_id,
-                    request=req_pkg,
-                    pricing_info=package_pricing_info.get(media_pkg.package_id),
-                    paused=bool(paused_by_package_id[media_pkg.package_id]),
-                )
+        requested_packages = [
+            RequestedPackage(
+                package_id=resp_package.package_id,
+                request=req_pkg,
+                pricing_info=package_pricing_info.get(resp_package.package_id),
+                paused=bool(resp_package.paused),
             )
+            for req_pkg, resp_package in zip(req.packages, response.packages, strict=True)
+        ]
 
         # Store the media buy and its packages in the database (context_id is NULL for
         # synchronous operations). Repository handles raw_request serialization at the DB boundary
