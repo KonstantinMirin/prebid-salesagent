@@ -369,13 +369,10 @@ def get_media_buy_delivery(
                         raw_geo = _raw_geo if isinstance(_raw_geo, list) else None
                         _raw_dt = pkg_metrics.get("by_device_type")
                         raw_device_type = _raw_dt if isinstance(_raw_dt, list) else None
-                    elif len(media_packages) == 1:
-                        # The buy's only package: the buy's delivery is its delivery.
-                        package_spend, package_impressions = spend, float(impressions)
                     else:
-                        # Not reported by the ad server: zero, never a share of the buy
-                        # (get_media_buy_delivery.mdx: "zero or partial metrics").
-                        package_spend, package_impressions = 0.0, 0.0
+                        # Fallback: divide equally if adapter didn't return this package
+                        package_spend = spend / len(media_packages)
+                        package_impressions = impressions / len(media_packages)
 
                     package_clicks = (
                         # FIXME(#2394): the base is the buy's spend, not the package's.

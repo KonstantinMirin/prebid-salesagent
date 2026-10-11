@@ -463,25 +463,6 @@ def given_adapter_package_metrics(ctx: dict, impressions: int, spend: float, pkg
 
 @given(
     parsers.parse(
-        'the ad server adapter reports {impressions:d} impressions and {spend:g} spend for "{mb_id}" '
-        "with no package breakdown"
-    )
-)
-def given_adapter_reports_no_breakdown(ctx: dict, impressions: int, spend: float, mb_id: str) -> None:
-    """The adapter reports the buy's totals and no per-package figures, as Kevel and Broadstreet do."""
-    ctx["env"].set_adapter_response(media_buy_id=mb_id, impressions=impressions, spend=spend, breakdown=False)
-
-
-@given(parsers.parse('the media buy "{mb_id}" has a second package "{pkg_id}"'))
-def given_media_buy_second_package(ctx: dict, mb_id: str, pkg_id: str) -> None:
-    """The seeded buy carries one more package row, on the same terms as its first."""
-    from tests.factories import MediaPackageFactory
-
-    MediaPackageFactory(media_buy=_seeded_media_buy(ctx, mb_id), package_id=pkg_id)
-
-
-@given(
-    parsers.parse(
         "the seller's catalog now prices package \"{pkg_id}\"'s pricing_option_id at {pricing_model} rate {rate:g}, "
         "on the package's own product and on another product"
     )

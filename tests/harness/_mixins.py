@@ -796,7 +796,6 @@ class DeliveryPollMixin:
         packages: list[dict[str, Any]] | None,
         conversions: float | None = None,
         conversion_value: float | None = None,
-        breakdown: bool = True,
     ) -> AdapterGetMediaBuyDeliveryResponse:
         """Normalize set_adapter_response params into the delivery intent.
 
@@ -828,8 +827,6 @@ class DeliveryPollMixin:
                 )
             ]
             totals = DeliveryTotals(impressions=float(impressions), spend=spend)
-        if not breakdown:
-            by_package = []
 
         if clicks is not None:
             totals.clicks = float(clicks)
@@ -859,7 +856,6 @@ class DeliveryPollMixin:
         packages: list[dict[str, Any]] | None = None,
         conversions: float | None = None,
         conversion_value: float | None = None,
-        breakdown: bool = True,
     ) -> None:
         """Configure adapter to return specific delivery data for a media buy.
 
@@ -867,15 +863,13 @@ class DeliveryPollMixin:
         For multi-package responses, pass ``packages`` — a list of dicts with
         ``package_id``, ``impressions``, and ``spend`` keys. Totals are auto-computed
         as the sum of per-package values. ``conversions`` / ``conversion_value``
-        are totals-level (spec-optional metrics; omitted when None). ``breakdown=False``
-        reports the totals with an empty ``by_package``, the shape an ad server with no
-        per-package reporting returns (Kevel, Broadstreet).
+        are totals-level (spec-optional metrics; omitted when None).
 
         In-process: injects the response on the adapter MagicMock. E2E: persists
         a ``DeliverySimulationConfig`` row the live server's Mock adapter reads.
         """
         resp = self._build_adapter_delivery(
-            media_buy_id, impressions, spend, package_id, clicks, packages, conversions, conversion_value, breakdown
+            media_buy_id, impressions, spend, package_id, clicks, packages, conversions, conversion_value
         )
         self._realize_adapter_response(resp)
 

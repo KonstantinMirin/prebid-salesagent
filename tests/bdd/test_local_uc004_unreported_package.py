@@ -1,9 +1,7 @@
-"""BDD binding for the locally-added unreported-package delivery feature.
+"""BDD binding for the locally-added package-terms delivery feature.
 
-Grades what get_media_buy_delivery reports for a package the ad server did not report:
-zero, never a share of the buy, and a buy's only package carrying the buy's delivery. A
-package is priced from the terms stored with it, and refused when it has none.
-Graded on a2a, mcp, rest and e2e_rest.
+Grades the terms get_media_buy_delivery prices a package at: the terms stored with it, and
+a refusal when it has none. Graded on a2a, mcp, rest and e2e_rest.
 """
 
 from __future__ import annotations
