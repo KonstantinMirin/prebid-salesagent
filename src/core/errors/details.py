@@ -37,6 +37,7 @@ prevents — so it holds in production too.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -96,6 +97,14 @@ class ErrorDetails(BaseModel):
         UUID field on any detail class would not be.
         """
         return self.model_dump(mode="json", exclude_none=True)
+
+    def facts(self) -> str:
+        """The set fields as ``name=value`` pairs, for a reader of text rather than of the wire.
+
+        The same fields ``to_wire`` emits, in the same spelling and with each value as
+        JSON, so an operator's screen and a buyer's envelope state one set of facts.
+        """
+        return ", ".join(f"{name}={json.dumps(value)}" for name, value in self.to_wire().items())
 
 
 class ErrorProblem(BaseModel):

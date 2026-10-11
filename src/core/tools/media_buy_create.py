@@ -76,7 +76,7 @@ from enum import StrEnum
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.adapters.base import AdapterCreateRequest, AdapterCreateResult
+from src.adapters.base import AdapterCreateRequest, AdapterCreateResult, AdServerAdapter
 from src.core.audit_logger import get_audit_logger
 from src.core.context_manager import get_context_manager
 from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, PersistedMediaBuyStatus, Tenant
@@ -543,8 +543,31 @@ def _pre_validate_package_creatives(
         raise
 
 
-class AdapterPreValidationRefused(Exception):
-    """An adapter's pre-validation refused a buy: the ad server was asked to write nothing."""
+def _pre_validate_adapter_request(
+    adapter: AdServerAdapter,
+    request: AdapterCreateRequest,
+    packages: list[MediaPackage],
+    start_time: datetime,
+    end_time: datetime,
+    package_pricing_info: dict[str, dict[str, Any]],
+) -> None:
+    """Ask the adapter whether it can book the buy, before it is asked to write anything.
+
+    The auto-approval and manual approval flows both call this immediately before
+    ``_execute_adapter_media_buy_creation``, with the material that call receives.
+    ``validate_media_buy_request`` writes nothing to the ad server, so a refusal here
+    leaves nothing behind in it.
+
+    Raises:
+        AdCPSalesAgentError: the adapter's own typed refusal, or VALIDATION_ERROR
+            carrying the problems it returned.
+    """
+    problems = adapter.validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
+    if problems:
+        # Forwarded unchanged into `problems`: the adapter returns classified facts, and
+        # ValidationDetails.problems is typed list[ErrorProblem], so a sentence cannot
+        # arrive here.
+        raise AdCPValidationError(details=ValidationDetails(problems=problems))
 
 
 def _execute_adapter_media_buy_creation(
@@ -554,18 +577,11 @@ def _execute_adapter_media_buy_creation(
     end_time: datetime,
     package_pricing_info: dict[str, dict[str, Any]],
     identity: ResolvedIdentity,
-    *,
-    pre_validate: bool = False,
 ) -> AdapterCreateResult:
     """Execute adapter's create_media_buy call.
 
     This function is shared between auto-approval and manual approval flows
     to ensure consistent adapter behavior across all adapters (GAM, Mock, Kevel, etc.).
-
-    ``pre_validate`` first runs the adapter's ``validate_media_buy_request``, which asks
-    the ad server to write nothing, and raises ``AdapterPreValidationRefused`` when it
-    refuses. The approval flow passes it; the create path has already run that method
-    on the same material before it calls this.
 
     Args:
         request: The buy to place, as the adapters read it. The buyer's DTO does not
@@ -586,14 +602,6 @@ def _execute_adapter_media_buy_creation(
     """
     principal = identity.principal
     adapter = get_adapter(identity)
-
-    if pre_validate:
-        try:
-            problems = adapter.validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
-        except Exception as refusal:
-            raise AdapterPreValidationRefused(str(refusal)) from refusal
-        if problems:
-            raise AdapterPreValidationRefused(str(problems))
 
     # Call adapter with detailed error logging
     try:
@@ -775,6 +783,10 @@ class ApprovalResult:
 
     ``confirmed_at`` and ``revision`` are carried because the webhook envelope
     publishes both.
+
+    ``refusal`` is the typed error an approval was refused with, when there is one.
+    ``error_msg`` already states its code and details in words; the error itself is
+    carried so a caller can read the facts without parsing the sentence.
     """
 
     outcome: ApprovalOutcome
@@ -782,6 +794,7 @@ class ApprovalResult:
     revision: int | None = None
     confirmed_at: datetime | None = None
     error_msg: str | None = None
+    refusal: AdCPSalesAgentError[Any] | None = None
 
     @property
     def ok(self) -> bool:
@@ -789,19 +802,33 @@ class ApprovalResult:
         return self.outcome is ApprovalOutcome.EXECUTED
 
     @classmethod
-    def failed(cls, error_msg: str) -> "ApprovalResult":
-        return cls(outcome=ApprovalOutcome.FAILED, error_msg=error_msg)
+    def failed(cls, error_msg: str, *, refusal: AdCPSalesAgentError[Any] | None = None) -> "ApprovalResult":
+        return cls(outcome=ApprovalOutcome.FAILED, error_msg=error_msg, refusal=refusal)
 
 
-def _approval_failed(error_msg: str, *, exc_info: bool = False) -> ApprovalResult:
-    """Log an approval that stopped before the adapter wrote anything, and report it.
+def _failure_reason(failure: Exception) -> str:
+    """What a failure tells the operator who has to act on it.
 
-    Writes nothing: the buy stays where it was, so an operator who repairs what was
-    wrong can approve it again. ``_mark_approval_failed`` is the branch for a buy the ad
-    server was asked to create.
+    A typed error's ``str()`` is its code's table sentence, the same for every raise
+    site of that code, so the code and the facts in its details are stated beside it.
+    Any other exception speaks for itself.
+    """
+    if not isinstance(failure, AdCPSalesAgentError):
+        return str(failure)
+    facts = failure.details.facts() if failure.details is not None else ""
+    return f"{failure.error_code}: {failure.message}" + (f" ({facts})" if facts else "")
+
+
+def _approval_failed(
+    error_msg: str, *, exc_info: bool = False, refusal: AdCPSalesAgentError[Any] | None = None
+) -> ApprovalResult:
+    """Log an approval that stopped before the ad server was asked to write, and report it.
+
+    Writes nothing: the buy keeps the status it had. ``_mark_approval_failed`` is the
+    branch for a buy the ad server was asked to create.
     """
     logger.error(f"[APPROVAL] {error_msg}", exc_info=exc_info)
-    return ApprovalResult.failed(error_msg)
+    return ApprovalResult.failed(error_msg, refusal=refusal)
 
 
 def _mark_approval_failed(
@@ -1131,6 +1158,14 @@ def execute_approved_media_buy(
         # is separate from this line.
         identity = identity_of(tenant_id, buy_principal_id, buy_account_id)
 
+        # The adapter's own pre-validation, as the auto-approval flow runs it before the
+        # same creation call. It asks the ad server to write nothing, so it comes before
+        # ``adapter_ran``: a refusal here (a product configuration the ad server would not
+        # accept, say) is answered by the ``not adapter_ran`` branch below.
+        _pre_validate_adapter_request(
+            get_adapter(identity), request, packages, start_time, end_time, package_pricing_info
+        )
+
         # Execute adapter creation (outside session to avoid conflicts)
         # Set BEFORE the call, not after: the condition is whether the ad server was
         # ASKED, not whether it answered. A raising adapter may still have created a
@@ -1144,7 +1179,6 @@ def execute_approved_media_buy(
             end_time,
             package_pricing_info,
             identity,
-            pre_validate=True,
         )
 
         logger.info(log_safe(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}: {response.media_buy_id}"))
@@ -1174,9 +1208,6 @@ def execute_approved_media_buy(
             assert uow2.session is not None
             session = uow2.session
             from src.core.database.models import CreativeAssignment
-
-            # Import adapter helper here (used for both creative upload and order approval)
-            from src.core.helpers.adapter_helpers import get_adapter
 
             # Get all creative assignments for this media buy
             stmt_assignments = select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
@@ -1368,28 +1399,21 @@ def execute_approved_media_buy(
                 confirmed_at=written.confirmed_at,
             )
 
-    except AdapterPreValidationRefused as e:
-        # The adapter refused before it asked the ad server to write anything (a product
-        # configuration the ad server would not accept, say). The buy stays
-        # pending_approval so an operator who repairs the configuration can approve it again.
-        return _approval_failed(f"Adapter pre-validation refused media buy {media_buy_id}: {e}", exc_info=True)
-    except AdCPPersistedStateError as e:
-        # The persisted row refused reconstruction (a NULL account_id, above); no adapter
-        # ran, so this is a store defect and not an adapter failure. The buy stays
-        # pending_approval so an operator who repairs the row can retry.
-        return _approval_failed(f"Persisted media buy {media_buy_id} cannot be acted on: {e}", exc_info=True)
     except Exception as e:
-        import traceback
-
-        error_traceback = traceback.format_exc()
-        error_msg = f"Adapter creation failed: {str(e)}"
-        logger.error(f"[APPROVAL] {error_msg}\n{error_traceback}")
+        reason = _failure_reason(e)
         if not adapter_ran:
-            # The adapter never ran, so nothing was created and the buy has not failed —
-            # it was never attempted. Persisting FAILED here would be a dead end: all
-            # three approval routes gate on status == "pending_approval", so an operator
-            # who fixed the underlying row could never retry.
-            return ApprovalResult.failed(error_msg)
+            # The ad server was never asked to write: the persisted row refused
+            # reconstruction (a NULL account_id, above), the adapter's pre-validation
+            # refused the buy, or something failed before either. Nothing was created, so
+            # the buy has not failed — it was never attempted — and it keeps its status.
+            # The approval workflow step is the route's, not this function's (#2414).
+            return _approval_failed(
+                f"Media buy {media_buy_id} was not sent to the ad server: {reason}",
+                exc_info=True,
+                refusal=e if isinstance(e, AdCPSalesAgentError) else None,
+            )
+        error_msg = f"Adapter creation failed: {reason}"
+        logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
         return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
 
 
@@ -3324,22 +3348,11 @@ async def _create_media_buy_impl(
         # material.
         adapter_request = AdapterCreateRequest.from_buyer_request(req)
 
-        # Pre-validate adapter-specific constraints (pricing models, budget limits)
-        # This runs regardless of dry_run so adapter restrictions are always enforced.
-        pre_creation_problems: list[ErrorProblem] = adapter.validate_media_buy_request(
-            adapter_request, packages, start_time, end_time, package_pricing_info
-        )
-        if pre_creation_problems:
-            logger.error(f"[PRE-VALIDATE] Adapter validation failed: {pre_creation_problems}")
-            if step:
-                ctx_manager.update_workflow_step(
-                    step.step_id, status="failed", error_message="Adapter validation failed"
-                )
-            # Forwarded unchanged into `problems`, not `reasons` (salesagent-rys3u.4).
-            # The adapter now returns classified facts rather than sentences, and
-            # ValidationDetails.problems is already typed list[ErrorProblem] -- so the
-            # type system, not a review, is what stops a string arriving here.
-            raise AdCPValidationError(details=ValidationDetails(problems=pre_creation_problems))
+        # Pre-validate adapter-specific constraints (pricing models, budget limits, the
+        # product's ad-server configuration). This runs regardless of dry_run so adapter
+        # restrictions are always enforced. A refusal propagates typed; the handler at the
+        # end of this function marks the workflow step failed with the error's envelope.
+        _pre_validate_adapter_request(adapter, adapter_request, packages, start_time, end_time, package_pricing_info)
 
         # Call adapter using shared creation logic
         # Note: start_time variable already resolved from 'asap' to actual datetime if needed

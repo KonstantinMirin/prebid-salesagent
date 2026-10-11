@@ -26,6 +26,26 @@ from typing import Any
 # module global.
 ADAPTER_BOUNDARY = "src.core.tools.media_buy_create._execute_adapter_media_buy_creation"
 
+# The question the approval asks the tenant's adapter before that boundary: can it book
+# this buy? It runs for real under ``ADAPTER_BOUNDARY`` (it writes nothing), so a test
+# stubs it only when its buy is one the tenant's adapter refuses and the refusal is not
+# its subject, such as a flight that has already ended on the mock ad server.
+ADAPTER_PRE_VALIDATION = "src.core.tools.media_buy_create._pre_validate_adapter_request"
+
+
+# Where the approval gets its adapter: the pre-validation, the creative upload and the
+# order approval all resolve it through this one name.
+ADAPTER_FACTORY = "src.core.tools.media_buy_create.get_adapter"
+
+
+def stand_in_adapter(**attributes: Any) -> Any:
+    """An adapter stand-in whose pre-validation accepts the buy; *attributes* set what a test reads off it."""
+    from unittest.mock import MagicMock
+
+    adapter = MagicMock(**attributes)
+    adapter.validate_media_buy_request.return_value = []
+    return adapter
+
 
 def adapter_success(*_args: Any, **_kwargs: Any) -> Any:
     """What a healthy adapter hands back: an order id and no packages to map.

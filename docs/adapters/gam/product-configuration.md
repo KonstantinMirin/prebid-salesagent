@@ -103,7 +103,7 @@ The UI provides the following features:
 
 If no inventory targeting is set, validation passes but the adapter logs a warning and falls back to the network root ad unit.
 
-At media buy creation, a missing or invalid configuration fails with an explicit error message. The booking fields `line_item_type`, `priority` and `primary_goal_type` are not checked here. `PricingCompatibility.plan_line_item()` (in `src/adapters/gam/pricing_compatibility.py`) is their one reader and validator. The adapter runs it in `validate_media_buy_request()`, before it creates anything in GAM, both when a media buy is created and when the seller approves one. A value GAM does not accept is refused with `CONFIGURATION_ERROR`; on approval the media buy stays `pending_approval`, so it can be approved again once the configuration is repaired.
+At media buy creation, a missing or invalid configuration fails with an explicit error message. The booking fields `line_item_type`, `priority` and `primary_goal_type` are not checked here. `PricingCompatibility.plan_line_item()` (in `src/adapters/gam/pricing_compatibility.py`) is their one reader and validator. The adapter runs it in `validate_media_buy_request()`, before it creates anything in GAM, both when a media buy is created and when the seller approves one. A value GAM does not accept is refused with `CONFIGURATION_ERROR`, whose details name the product (`product_id`), the setting (`capability`), the value (`rejected_value`) and what GAM accepts (`accepted_values`). On creation the buyer receives it. On approval the Admin UI shows the seller the same facts, nothing is written to GAM, and the media buy is not marked failed: its status stays `pending_approval`.
 
 ## Line item type selection
 

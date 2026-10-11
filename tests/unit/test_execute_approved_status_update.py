@@ -26,6 +26,7 @@ from src.core.helpers.pricing_helpers import pricing_info_for
 from src.core.tools.media_buy_create import ApprovalOutcome
 from tests.factories import PricingOptionFactory
 from tests.factories.principal import PrincipalFactory
+from tests.helpers.media_buy_approval import ADAPTER_FACTORY, stand_in_adapter
 
 # Who approved, and when. Passed in by the caller and written by the same
 # ``update_status`` call as the status, so the assertion can name all three.
@@ -124,9 +125,8 @@ class TestExecuteApprovedStatusUpdate:
             packages=[],
         )
 
-        # Mock adapter with no orders_manager (skip order approval)
-        mock_adapter = MagicMock()
-        mock_adapter.orders_manager = None
+        # A stand-in adapter that accepts the buy and has no orders_manager (skip order approval)
+        mock_adapter = stand_in_adapter(orders_manager=None)
 
         # Set up four UoW instances the function opens:
         # 1. Load tenant, media_buy, packages, products
@@ -200,7 +200,7 @@ class TestExecuteApprovedStatusUpdate:
                 return_value=adapter_response,
             ),
             patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
-            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=mock_adapter),
+            patch(ADAPTER_FACTORY, return_value=mock_adapter),
             # The creative gate is a separate concern with its own tests; this buy has
             # nothing outstanding, so the run reaches the adapter and the status write.
             patch.object(CreativeAssignmentRepository, "unapproved_creative_ids", return_value=[]),

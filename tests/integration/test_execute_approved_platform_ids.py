@@ -26,7 +26,7 @@ model to plant an attribute.
 """
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import ANY, patch
 
 import pytest
 
@@ -34,7 +34,7 @@ from src.adapters.base import AdapterCreateResult
 from src.core.database.database_session import get_db_session, get_engine
 from src.core.database.models import MediaPackage as DBMediaPackage
 from tests.helpers.gam_client import gam_line_item, stub_gam_client_manager
-from tests.helpers.media_buy_approval import run_approval
+from tests.helpers.media_buy_approval import ADAPTER_FACTORY, run_approval, stand_in_adapter
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -232,10 +232,7 @@ def _run_execute_approved(media_buy_id, tenant_id, adapter_response):
             return_value=adapter_response,
         ),
         patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
-        patch(
-            "src.core.helpers.adapter_helpers.get_adapter",
-            return_value=type("MockAdapter", (), {"orders_manager": None})(),
-        ),
+        patch(ADAPTER_FACTORY, return_value=stand_in_adapter(orders_manager=None)),
     ):
         return run_approval(media_buy_id, tenant_id)
 
@@ -266,10 +263,7 @@ class TestExecuteApprovedPlatformIds:
                 return_value=adapter_response,
             ),
             patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
-            patch(
-                "src.core.helpers.adapter_helpers.get_adapter",
-                return_value=type("MockAdapter", (), {"orders_manager": None})(),
-            ),
+            patch(ADAPTER_FACTORY, return_value=stand_in_adapter(orders_manager=None)),
         ):
             result = run_approval(media_buy_id, tenant_id)
 
@@ -528,7 +522,7 @@ class TestExecuteApprovedEnrichesSellerConcept:
         # response carries the GAM order id; the adapter itself is a stand-in whose
         # creatives_manager returns the real producer's output.
         adapter_response = AdapterCreateResult(media_buy_id=gam_order_id, packages=[])
-        mock_adapter = MagicMock()
+        mock_adapter = stand_in_adapter()
         mock_adapter.creatives_manager.add_creative_assets.return_value = produced
         mock_adapter.orders_manager.approve_order.return_value = True
         valid_asset = {
@@ -551,7 +545,7 @@ class TestExecuteApprovedEnrichesSellerConcept:
                 "src.core.tools.media_buy_create._build_adapter_asset_from_creative",
                 return_value=(valid_asset, None),
             ),
-            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=mock_adapter),
+            patch(ADAPTER_FACTORY, return_value=mock_adapter),
         ):
             result = run_approval(media_buy_id, tenant_id)
 

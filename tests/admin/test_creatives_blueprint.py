@@ -18,6 +18,7 @@ from src.core.database.models import Creative, Principal, Tenant
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.media_buy_approval import (
     ADAPTER_BOUNDARY,
+    ADAPTER_PRE_VALIDATION,
     adapter_success,
     login_as,
     seed_pending_buy,
@@ -551,8 +552,11 @@ class TestCreativeApprovalUnblocksMediaBuy:
         seeded = _seed_buy_held_on_one_creative(starts_in_days=-60)
         login_as(client, tenant_id=seeded.tenant_id)
 
+        # The mock ad server refuses to book a flight that has ended, and the status rule
+        # is this test's subject, so the ad server is stood in for both of its answers.
         with (
             patch(_SIDE_EFFECTS_PATCH),
+            patch(ADAPTER_PRE_VALIDATION),
             patch(ADAPTER_BOUNDARY, side_effect=adapter_success),
         ):
             response = client.post(
