@@ -1823,7 +1823,7 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the wire error details geo_disjoint should be <records>
+    And the wire error INVALID_REQUEST details geo_disjoint should be <records>
     And the error should include "suggestion" field
 
     Examples:

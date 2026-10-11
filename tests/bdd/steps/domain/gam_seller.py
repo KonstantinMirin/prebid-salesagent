@@ -106,8 +106,11 @@ def then_one_line_item_geo_targeting(ctx: dict, targeted: str, excluded: str) ->
     )
 
 
-@then("Google Ad Manager received no order")
-def then_gam_received_no_order(ctx: dict) -> None:
-    """The seller refused before it created anything in Google Ad Manager: GAM holds no order."""
-    orders = _orders_created(ctx)
-    assert orders == [], f"expected GAM to hold no order; it created {orders}"
+@then("Google Ad Manager received no order and no line item")
+def then_no_order_and_no_line_item(ctx: dict) -> None:
+    """The seller sent GAM no order and no line item: the refusal left nothing behind in GAM."""
+    sent = {
+        method: ctx["env"].gam_objects_sent(service, method)
+        for service, method in (("OrderService", "createOrders"), ("LineItemService", "createLineItems"))
+    }
+    assert sent == {"createOrders": [], "createLineItems": []}, f"expected GAM to receive nothing; it received {sent}"

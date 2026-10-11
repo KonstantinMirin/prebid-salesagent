@@ -324,7 +324,7 @@ Feature: BR-UC-002 Create Media Buy
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
-    And the wire error details geo_disjoint should be <records>
+    And the wire error INVALID_REQUEST details geo_disjoint should be <records>
     And the error should include "suggestion" field
 
     Examples:

@@ -72,7 +72,7 @@ Feature: A Google Ad Manager seller books exactly the geo the buyer's targeting 
     Then the response contains error code UNSUPPORTED_FEATURE
     And the wire error details should include capability "<capability>"
     And the wire error details should include rejected_value "<value>"
-    And Google Ad Manager received no order
+    And Google Ad Manager received no order and no line item
 
     Examples:
       | case                                      | overlay                                                                                                       | capability            | value          |
@@ -98,7 +98,7 @@ Feature: A Google Ad Manager seller books exactly the geo the buyer's targeting 
     Then the response contains error code UNSUPPORTED_FEATURE
     And the wire error details should include capability "geo_system"
     And the wire error details should include rejected_value "<value>"
-    And Google Ad Manager received no order
+    And Google Ad Manager received no order and no line item
 
     Examples:
       | case              | overlay                                                                                            | value      |
@@ -122,7 +122,7 @@ Feature: A Google Ad Manager seller books exactly the geo the buyer's targeting 
     When the Buyer Agent sends the create_media_buy request
     Then the response contains error code UNSUPPORTED_FEATURE
     And the wire error details should include capability "<capability>"
-    And Google Ad Manager received no order
+    And Google Ad Manager received no order and no line item
 
     Examples:
       | case                                     | overlay                                     | capability          |
@@ -151,8 +151,8 @@ Feature: A Google Ad Manager seller books exactly the geo the buyer's targeting 
     And the package targeting_overlay is <overlay>
     When the Buyer Agent sends the create_media_buy request
     Then the response contains error code INVALID_REQUEST
-    And the wire error details geo_disjoint should be <records>
-    And Google Ad Manager received no order
+    And the wire error INVALID_REQUEST details geo_disjoint should be <records>
+    And Google Ad Manager received no order and no line item
 
     Examples:
       | case                   | overlay                                                                                 | records                                                                                            |
