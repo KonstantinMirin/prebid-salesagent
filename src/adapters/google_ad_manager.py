@@ -14,7 +14,7 @@ __all__ = [
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import sqlalchemy.exc
@@ -50,7 +50,7 @@ from src.adapters.gam.managers.orders import (
     NON_GUARANTEED_LINE_ITEM_TYPES,
 )
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
-from src.adapters.gam_data_freshness import validate_and_log_freshness
+from src.adapters.gam_data_freshness import GAMDataFreshnessValidator
 from src.core.audit_logger import AuditLogger
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.details import (
@@ -64,7 +64,6 @@ from src.core.errors.details import (
 )
 from src.core.exceptions import (
     AdCPActivationWorkflowError,
-    AdCPAdapterError,
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPBulkUpdateError,
@@ -1025,15 +1024,20 @@ class GoogleAdManager(AdServerAdapter):
             requested_timezone="America/New_York",
         )
 
-        # Validate data freshness
-        # The adapter decides whether to return data or raise error if data is stale
-        # Target date is the end of the reporting period
+        # The figures GAM has reported are the answer, whether or not GAM has finished the period
+        # (get_media_buy_delivery.mdx: "zero or partial metrics"). A report GAM failed to produce
+        # raised out of get_reporting_data above. When the period is unfinished, say when its
+        # figures are expected complete; the caller decides what that means for it.
         target_date = date_range.end
-
-        is_fresh = validate_and_log_freshness(reporting_data, media_buy_id, target_date=target_date)
-
-        if not is_fresh:
-            raise AdCPAdapterError(details=AdapterFailureDetails(media_buy_id=media_buy_id))
+        expected_availability = GAMDataFreshnessValidator.expected_availability(
+            reporting_data, target_date, now=datetime.now(UTC)
+        )
+        if expected_availability is not None:
+            logger.info(
+                "GAM has not finished reporting media buy %s; figures expected complete at %s",
+                media_buy_id,
+                expected_availability,
+            )
 
         # Aggregate totals across all packages
         total_impressions = reporting_data.metrics.get("total_impressions", 0)
@@ -1126,6 +1130,7 @@ class GoogleAdManager(AdServerAdapter):
             ),
             currency=str(media_buy.currency or "USD"),
             daily_breakdown=daily_breakdown if daily_breakdown else None,
+            expected_availability=expected_availability,
         )
 
     def get_packages_snapshot(
