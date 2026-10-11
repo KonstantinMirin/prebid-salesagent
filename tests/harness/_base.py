@@ -24,8 +24,8 @@ from __future__ import annotations
 
 import os
 import uuid
-from collections.abc import Callable, Sequence
-from contextlib import suppress
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING, Any, Self, cast, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2156,28 +2156,90 @@ class BaseTestEnv:
         return dict(kwargs)
 
     def _run_mcp_over_http(self, tool_name: str, response_cls: type, **kwargs: Any) -> Any:
-        """MCP dispatch as real streamable-HTTP POSTs to ``/mcp/`` on ``src.app.app``.
+        """MCP dispatch as a real streamable-HTTP ``tools/call`` POST to ``/mcp/`` on ``src.app.app``.
 
         The leg the signing capability needs. FastMCP exposes no per-request
         header seam on its in-memory transport (``Client.call_tool`` has no
         ``headers=``), and more fundamentally that transport never touches
-        ``src.app.app``, where the verifier lives — so the session is driven
-        directly here: ``initialize`` → ``notifications/initialized`` →
-        ``tools/call``, each POSTed through the SAME ``TestClient``-on-
-        ``src.app.app`` the REST leg uses, each serialized ONCE and signed over
-        exactly the bytes sent.
+        ``src.app.app``, where the verifier lives. The session is opened by
+        :meth:`_mcp_http_session` (why it is driven by hand, and when that stops,
+        is written there); this method sends the ``tools/call`` through it,
+        serialized ONCE and signed over exactly the bytes sent.
 
         Only the ``tools/call`` frame is a graded operation. ``initialize`` and
         ``notifications/initialized`` are session frames that name no AdCP operation, so
         FastMCP answers them without ever calling the boundary — no posture is read for
         them and the verifier never sees them. Signing them anyway is correct (each gets
         its own fresh nonce) and keeps "the verifier ran exactly once per dispatch" true.
+        """
+        credential = self._pop_credential(kwargs)
+        arguments = self._mcp_tool_arguments(kwargs)
 
-        Driving the three frames by hand rather than through FastMCP's
+        with self._mcp_http_session(credential) as (client, session_id):
+            envelope, response = self._mcp_post(
+                client,
+                _mcp_jsonrpc_request(2, "tools/call", {"name": tool_name, "arguments": arguments}),
+                session_id=session_id,
+                credential=credential,
+            )
+
+        # Both arms hand the RESPONSE to the error they raise. They used to raise the
+        # reconstructed envelope alone, which strands the refusal's headers — and the
+        # signature challenge lives there.
+        if "error" in envelope:
+            raise _mcp_wire_error(_mcp_error_to_exception(envelope["error"]), response)
+        result = envelope.get("result") or {}
+        if result.get("isError"):
+            raise _mcp_wire_error(_mcp_error_to_exception(result), response)
+        structured = result.get("structuredContent")
+        if structured is None:
+            raise AssertionError(f"MCP tools/call for {tool_name!r} returned no structuredContent: {result!r}")
+        # A ``DeliverResult``, not a bare payload: this method is a drop-in
+        # substitute for the in-memory leg inside ``_run_mcp_client``, whose
+        # return value the dispatchers read the wire off. Returning the response
+        # alone would strand the real HTTP wire on the one leg that actually has
+        # one.
+        return DeliverResult(payload=response_cls(**structured), wire_response=structured)
+
+    def list_mcp_tools(self) -> list[dict[str, Any]]:
+        """The ``tools`` a buyer's ``tools/list`` receives from ``/mcp/`` on ``src.app.app``.
+
+        In-process only: the frame is POSTed through the same session
+        :meth:`_run_mcp_over_http` uses, so it crosses every ASGI middleware a buyer's
+        bytes cross, and it carries this env's credential as a buyer's listing does.
+        ``tools/list`` is MCP's own discovery frame and names no AdCP operation, so it is
+        not dispatched through ``call_via``.
+        """
+        credential = self.credential()
+        with self._mcp_http_session(credential) as (client, session_id):
+            envelope, _response = self._mcp_post(
+                client, _mcp_jsonrpc_request(2, "tools/list", {}), session_id=session_id, credential=credential
+            )
+        if "error" in envelope:
+            raise AssertionError(f"MCP tools/list failed: {envelope['error']!r}")
+        return list(envelope["result"]["tools"])
+
+    @contextmanager
+    def _mcp_http_session(self, credential: dict[str, str]) -> Iterator[tuple[Any, str | None]]:
+        """An MCP session on ``src.app.app``, yielded as ``(client, session_id)``.
+
+        The one session both graded MCP frames are sent through: the ``tools/call`` of
+        :meth:`_run_mcp_over_http` and the ``tools/list`` of :meth:`list_mcp_tools`. The
+        handshake (``initialize`` → ``notifications/initialized`` when the mount mints a
+        session) is POSTed through the SAME ``TestClient``-on-``src.app.app`` the REST leg
+        uses; see :meth:`_mcp_open_session`.
+
+        *credential* is what every frame of the session presents, the handshake included.
+        ``credential={}`` is "send without a credential" (see ``_run_a2a_over_http``); it
+        applies to the handshake frames too, because a session opened under a bearer and
+        used without one would differ from the anonymous request under test by more than
+        the credential.
+
+        Driving the frames by hand rather than through FastMCP's
         ``StreamableHttpTransport`` is deliberate: that client also opens a
         long-lived ``GET`` SSE stream, and httpx's ASGI transport BUFFERS the
         whole app call before returning, so the stream would never complete.
-        Hand-driving also means no frame is sent that this leg did not choose.
+        Hand-driving also means no frame is sent that a caller did not choose.
 
         REMOVAL TRIGGER — **salesagent-n78j0.12** (convention:
         ``src/core/signing/_upstream/``). This is a HAND-ROLLED PROTOCOL SEQUENCE
@@ -2201,10 +2263,11 @@ class BaseTestEnv:
         this method's trigger; if it does not, a second blocker exists and the
         ticket would be unactionable. Scheduled after S1 closes.
 
-        So: delete this method and dispatch through the SDK transport when
-        n78j0.12 shows the ASGI-backed factory completing the handshake — or if
-        an MCP/FastMCP transport appears that speaks streamable-HTTP without a
-        standalone ``GET`` stream at all.
+        So: delete this method and send both callers' frames (``tools/call`` and
+        ``tools/list``) through the SDK transport when n78j0.12 shows the
+        ASGI-backed factory completing the handshake — or if an MCP/FastMCP
+        transport appears that speaks streamable-HTTP without a standalone
+        ``GET`` stream at all.
 
         What must NOT happen meanwhile is this sequence quietly accreting frames
         as the MCP spec evolves: if a future SDK adds or reorders a handshake
@@ -2214,7 +2277,7 @@ class BaseTestEnv:
 
         The app LIFESPAN must be running — the ``/mcp`` mount's session manager
         is started there — so a dedicated ``TestClient`` is entered for the
-        dispatch, wrapped in ``preserved_global_app_state`` because lifespan
+        session, wrapped in ``preserved_global_app_state`` because lifespan
         startup rewrites the process-global route table and shutdown does not
         undo it (``tests/helpers/app_state.py``, salesagent-66a1).
         """
@@ -2223,45 +2286,12 @@ class BaseTestEnv:
         from src.app import app
         from tests.helpers.app_state import preserved_global_app_state
 
-        credential = self._pop_credential(kwargs)
         self._commit_factory_data()
         self._seed_ambient_tenant(credential)
-
-        arguments = self._mcp_tool_arguments(kwargs)
-
-        # ``credential={}`` is "send without a credential" (see ``_run_a2a_over_http``);
-        # it applies to the handshake frames too, because a session opened under a
-        # bearer and used without one would differ from the anonymous request under
-        # test by more than the credential.
-        credentialed = _presents_a_credential(credential)
         with preserved_global_app_state(), TestClient(app) as client:
-            session_id = self._mcp_open_session(client, credentialed=credentialed)
-            envelope, response = self._mcp_post(
-                client,
-                _mcp_jsonrpc_request(2, "tools/call", {"name": tool_name, "arguments": arguments}),
-                session_id=session_id,
-                credentialed=credentialed,
-            )
+            yield client, self._mcp_open_session(client, credential=credential)
 
-        # Both arms hand the RESPONSE to the error they raise. They used to raise the
-        # reconstructed envelope alone, which strands the refusal's headers — and the
-        # signature challenge lives there.
-        if "error" in envelope:
-            raise _mcp_wire_error(_mcp_error_to_exception(envelope["error"]), response)
-        result = envelope.get("result") or {}
-        if result.get("isError"):
-            raise _mcp_wire_error(_mcp_error_to_exception(result), response)
-        structured = result.get("structuredContent")
-        if structured is None:
-            raise AssertionError(f"MCP tools/call for {tool_name!r} returned no structuredContent: {result!r}")
-        # A ``DeliverResult``, not a bare payload: this method is a drop-in
-        # substitute for the in-memory leg inside ``_run_mcp_client``, whose
-        # return value the dispatchers read the wire off. Returning the response
-        # alone would strand the real HTTP wire on the one leg that actually has
-        # one.
-        return DeliverResult(payload=response_cls(**structured), wire_response=structured)
-
-    def _mcp_open_session(self, client: Any, *, credentialed: bool = True) -> str | None:
+    def _mcp_open_session(self, client: Any, *, credential: dict[str, str]) -> str | None:
         """Run the handshake and return the server's session id, if it mints one.
 
         ``initialize`` mints the session; a server that tracks one REFUSES any request
@@ -2311,7 +2341,7 @@ class BaseTestEnv:
                     ),
                 },
             ),
-            credentialed=credentialed,
+            credential=credential,
             signed=handshake_signed,
         )
         if response.status_code >= 400:
@@ -2345,7 +2375,7 @@ class BaseTestEnv:
             client,
             initialized.model_dump(by_alias=True, mode="json", exclude_none=True),
             session_id=session_id,
-            credentialed=credentialed,
+            credential=credential,
             signed=handshake_signed,
         )
         if acknowledged.status_code >= 400:
@@ -2362,7 +2392,7 @@ class BaseTestEnv:
         body: dict[str, Any],
         *,
         session_id: str | None = None,
-        credentialed: bool = True,
+        credential: dict[str, str],
         signed: SignatureRealization,
     ) -> Any:
         """POST one MCP frame, signed-or-not by the SAME rules every other leg obeys.
@@ -2373,24 +2403,33 @@ class BaseTestEnv:
         scenario's realization on the handshake as well as on the operation. Each
         caller states what ITS frame carries — see :meth:`_mcp_open_session` for why
         the handshake always says ``bool(...)``.
+
+        An env that cannot sign presents *credential* as the frame's headers, as the
+        unsigned REST leg does (``_run_rest_request``); once it can sign, the frame goes
+        through ``wire_request`` and *credential* decides only whether a bearer rides.
         """
         extra = {"Accept": _MCP_ACCEPT}
         if session_id:
             extra["mcp-session-id"] = session_id
+        if not self.can_sign:
+            if signed:
+                self.signing  # raises, naming enable_request_signing()  # noqa: B018
+            return client.post(_MCP_PATH, json=body, headers={**credential, **extra})
         raw, headers = self.wire_request(
-            path=_MCP_PATH, body=body, signed=signed, extra=extra, credentialed=credentialed
+            path=_MCP_PATH, body=body, signed=signed, extra=extra, credentialed=_presents_a_credential(credential)
         )
         return client.post(_MCP_PATH, content=raw, headers=headers)
 
     def _mcp_post(
-        self, client: Any, body: dict[str, Any], *, session_id: str | None = None, credentialed: bool = True
+        self, client: Any, body: dict[str, Any], *, session_id: str | None = None, credential: dict[str, str]
     ) -> tuple[dict[str, Any], Any]:
         """POST one MCP frame and return ``(JSON-RPC envelope, raw response)``.
 
         THE GRADED FRAME: the realization reaches the wire VERBATIM here
-        (``self._signed_dispatch``, not ``bool(...)``). ``_run_mcp_over_http`` sends
-        the ``tools/call`` — the frame the scenario named — through this method and
-        nothing else through it.
+        (``self._signed_dispatch``, not ``bool(...)``). The graded frames sent through
+        this method are ``_run_mcp_over_http``'s ``tools/call`` — the frame the scenario
+        named — and ``list_mcp_tools``'s ``tools/list``; the session frames go through
+        ``_mcp_open_session``.
 
         The response travels back BESIDE the envelope rather than being dropped: an
         envelope is not always the whole refusal, because ``WWW-Authenticate:
@@ -2398,7 +2437,7 @@ class BaseTestEnv:
         caller nothing to attach to the error it raised.
         """
         response = self._mcp_send(
-            client, body, session_id=session_id, credentialed=credentialed, signed=self._signed_dispatch
+            client, body, session_id=session_id, credential=credential, signed=self._signed_dispatch
         )
         return _jsonrpc_body(response, surface=_MCP_PATH), response
 
