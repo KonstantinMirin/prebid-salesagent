@@ -3021,6 +3021,8 @@ def when_sync_creative_with_assignments(ctx: dict) -> None:
         kwargs["assignments"] = ctx["assignment_entries"]
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
+    if "dry_run" in ctx:
+        kwargs["dry_run"] = ctx["dry_run"]
     dispatch_request(ctx, **kwargs)
 
 

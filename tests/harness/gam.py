@@ -29,7 +29,7 @@ class GamSellerMixin:
 
     * its bases: ``class SomeEnv(GamSellerMixin, ..., IntegrationEnv)``;
     * its ``EXTERNAL_PATCHES``: ``{..., **GAM_CLIENT_PATCH}``, next to an ``"adapter"`` patch on
-      the ``get_adapter`` its tool calls;
+      the ``get_adapter`` its tool calls, when it patches one;
     * its ``_configure_mocks``: ``self._configure_gam_client()``.
 
     The client patch is inert for a tenant on the Mock adapter, which never constructs an
@@ -41,10 +41,13 @@ class GamSellerMixin:
         # which owns the patches, the seed and the session (the same statement
         # EgressHatchMixin makes for ``_guard``).
         mock: dict[str, MagicMock]
+        _tenant_id: str
 
         def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]: ...
 
         def _commit_factory_data(self) -> None: ...
+
+        def _guard(self, label: str, cleanup: Any) -> None: ...
 
     def _configure_gam_client(self) -> None:
         """Every ``AdManagerClient(...)`` built during the scenario is the same stand-in client.
@@ -91,7 +94,65 @@ class GamSellerMixin:
         for product in products:
             self._sell_product_through_gam(product, ad_unit_id)
         self._commit_factory_data()
-        self.mock["adapter"].side_effect = get_adapter
+        if "adapter" in self.mock:
+            self.mock["adapter"].side_effect = get_adapter
+
+    def book_in_gam(
+        self, *, package_id: str, line_item_id: str, size: tuple[int, int], order_id: str, product: Any, status: str
+    ) -> Any:
+        """A buy of the env's buyer that the seller already booked in GAM as order *order_id*.
+
+        The rows the create path leaves: one package on *product*, whose ``package_config``
+        carries the order id and its line item id. The stand-in network holds that line
+        item, accepting creatives of *size*.
+        """
+        from datetime import UTC, datetime
+
+        from tests.factories import MediaBuyFactory
+        from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
+        from tests.factories.media_buy import request_package
+        from tests.helpers.gam_client import gam_line_item
+
+        tenant, principal = self.setup_default_data()
+        media_buy = MediaBuyFactory(
+            tenant=tenant,
+            principal=principal,
+            status=status,
+            confirmed_at=datetime.now(UTC),
+            # The flight a create resolves and stores, on the factory's own flight dates.
+            start_time=datetime(2025, 1, 1, tzinfo=UTC),
+            end_time=datetime(2027, 12, 31, 23, 59, 59, tzinfo=UTC),
+            raw_request={
+                "packages": [request_package(product_id=product.product_id, package_id=package_id)],
+                "account": {"account_id": DEFAULT_TEST_ACCOUNT_ID},
+            },
+        )
+        (package,) = media_buy.packages
+        package.package_config = {
+            **package.package_config,
+            "platform_order_id": order_id,
+            "platform_line_item_id": line_item_id,
+        }
+        self._commit_factory_data()
+        self.mock["gam_client"].return_value.line_items.append(
+            gam_line_item(package_id, item_id=line_item_id, sizes=(size,))
+        )
+        return media_buy
+
+    def approve_creative_as_seller(self, creative_id: str) -> None:
+        """The seller approves *creative_id* in the Admin UI's creative review queue, in this process."""
+        from tests.harness.admin_client import AdminClient
+
+        self._commit_factory_data()
+        admin = AdminClient()
+        self._guard("admin_client", admin.close)
+        admin.authenticate(self._tenant_id)
+        response = admin.request(
+            "POST",
+            f"/tenant/{self._tenant_id}/creatives/review/{creative_id}/approve",
+            json={"approved_by": "seller@example.com"},
+        )
+        assert response.status_code == 200, f"approving creative {creative_id} answered {response.status_code}"
 
     def _sell_product_through_gam(self, product: Any, ad_unit_id: str) -> None:
         """Configure *product* for GAM on one ad unit.
