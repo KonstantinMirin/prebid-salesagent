@@ -119,16 +119,62 @@ def given_buyer_holds_booked_buy(
 
 def _image_creative(creative_id: str, url: str) -> dict[str, Any]:
     """A 300x250 image creative as the buyer sends it, in the reference format the GAM product sells."""
+    from tests.factories.creative_asset import image_spec
+
+    return _creative(creative_id, "display_300x250_image", image_spec("banner_image", url=url))
+
+
+def _creative(creative_id: str, format_id: str, asset: Any) -> dict[str, Any]:
+    """A creative as the buyer sends it: one asset, in reference-catalog format *format_id*."""
     from src.core.format_cache import DEFAULT_AGENT_URL
-    from tests.factories.creative_asset import build_assets, image_spec
+    from tests.factories.creative_asset import build_assets
     from tests.factories.request import CreativeAssetRequestFactory
 
     return CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
         name=f"Creative {creative_id}",
-        format_id={"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_image"},
-        assets=build_assets(image_spec("banner_image", url=url)),
+        format_id={"agent_url": DEFAULT_AGENT_URL, "id": format_id},
+        assets=build_assets(asset),
     )
+
+
+@given(parsers.parse('the seller\'s product also sells the reference format "{format_id}"'))
+def given_product_also_sells_format(ctx: dict, format_id: str) -> None:
+    """The GAM product sells one more reference-catalog format, so a creative in it may be assigned."""
+    from src.core.format_cache import DEFAULT_AGENT_URL
+
+    product = ctx["default_product"]
+    product.format_ids = [*product.format_ids, {"agent_url": DEFAULT_AGENT_URL, "id": format_id}]
+    ctx["env"]._commit_factory_data()
+
+
+@given(
+    parsers.parse(
+        'the creative agent previews a creative in the format "{format_id}" at "{preview_url}" as {width:d}x{height:d}'
+    )
+)
+def given_creative_agent_previews(ctx: dict, format_id: str, preview_url: str, width: int, height: int) -> None:
+    """The creative agent lists the format and answers preview_creative with one render: a link, and its size."""
+    ctx["env"].preview_creatives_at(preview_url, format_id=format_id, width=width, height=height)
+
+
+@given(
+    parsers.parse(
+        'the buyer syncs a 300x250 HTML creative "{creative_id}" with markup "{markup}" assigned to package "{package}"'
+    )
+)
+def given_buyer_syncs_html_creative(ctx: dict, creative_id: str, markup: str, package: str) -> None:
+    """The When's sync sends one creative in the reference HTML format, assigned to the package.
+
+    Its one asset is HTML markup (core/assets/html-asset.json: ``asset_type: "html"``, the
+    markup in ``content``).
+    """
+    from tests.factories.creative_asset import asset_spec
+
+    ctx["creatives"] = [
+        _creative(creative_id, "display_300x250_html", asset_spec("html_creative", "html", content=markup))
+    ]
+    ctx["assignments"] = {creative_id: [package]}
 
 
 @given(
@@ -207,12 +253,29 @@ def _creatives_created(ctx: dict) -> list[Any]:
     return ctx["env"].gam_objects_created("CreativeService", "createCreatives")
 
 
+def _assert_creatives_created(ctx: dict, expected: list[tuple[str, str, str | None, str | None]]) -> None:
+    """GAM created exactly *expected*: (type, advertiser id, image URL, snippet) of each creative, in order."""
+    created = [
+        (c["xsi_type"], str(c["advertiserId"]), c.get("imageUrl"), c.get("snippet")) for c in _creatives_created(ctx)
+    ]
+    assert created == expected, f"expected GAM to create {expected}; it created {created}"
+
+
 @then(parsers.parse('Google Ad Manager created one image creative for advertiser "{advertiser_id}" showing "{url}"'))
 def then_gam_created_one_image_creative(ctx: dict, advertiser_id: str, url: str) -> None:
     """GAM holds exactly one creative from this scenario: an image for the advertiser, showing the URL."""
-    created = [(c["xsi_type"], str(c["advertiserId"]), c.get("imageUrl")) for c in _creatives_created(ctx)]
-    expected = [("ImageRedirectCreative", advertiser_id, url)]
-    assert created == expected, f"expected GAM to create {expected}; it created {created}"
+    _assert_creatives_created(ctx, [("ImageRedirectCreative", advertiser_id, url, None)])
+
+
+@then(
+    parsers.parse(
+        'Google Ad Manager created one third-party creative for advertiser "{advertiser_id}" whose snippet is '
+        '"{snippet}" and which names no image URL'
+    )
+)
+def then_gam_created_one_third_party_creative(ctx: dict, advertiser_id: str, snippet: str) -> None:
+    """GAM holds exactly one creative from this scenario: the markup itself, not a picture of a page."""
+    _assert_creatives_created(ctx, [("ThirdPartyCreative", advertiser_id, None, snippet)])
 
 
 @then("Google Ad Manager created no creative")

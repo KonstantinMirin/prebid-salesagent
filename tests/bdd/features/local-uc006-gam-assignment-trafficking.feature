@@ -16,6 +16,8 @@
 #   applying them".
 # - enums/media-buy-status.json, pending_creatives: "the seller has already accepted the
 #   buy ... the buyer must attach creatives via sync_creatives before the buy can serve".
+# - core/assets/html-asset.json: "Inline HTML content asset", the markup in `content`. GAM
+#   serves markup as a ThirdPartyCreative's `snippet`.
 # Ungraded by the storyboard runner.
 #
 # Transports: a2a, mcp and rest with the real GoogleAdManager adapter over a stand-in SOAP
@@ -38,6 +40,18 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     When the Buyer Agent syncs the creative with assignments
     Then creative "cr-banner" is assigned to package "pkg-banner-a"
     And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
+    And Google Ad Manager associated that creative with line items "5000001"
+
+  # The sync stores the creative agent's preview link as the creative's URL. The markup is what
+  # GAM serves; the preview page is not sent to GAM as an image.
+  @T-UC-006-local-gam-html-creative
+  Scenario: A synced HTML creative is created in GAM as a third-party creative whose snippet is its markup
+    Given the seller's product also sells the reference format "display_300x250_html"
+    And the creative agent previews a creative in the format "display_300x250_html" at "https://preview.example.com/cr-html" as 300x250
+    And the buyer syncs a 300x250 HTML creative "cr-html" with markup "<div>Example ad</div>" assigned to package "pkg-banner-a"
+    When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-html" is assigned to package "pkg-banner-a"
+    And Google Ad Manager created one third-party creative for advertiser "3000001" whose snippet is "<div>Example ad</div>" and which names no image URL
     And Google Ad Manager associated that creative with line items "5000001"
 
   @T-UC-006-local-gam-weighted-assignment

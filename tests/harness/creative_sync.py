@@ -529,6 +529,25 @@ class CreativeSyncEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
 
         registry.get_format = AsyncMock(side_effect=_get_format)
 
+    def preview_creatives_at(self, preview_url: str, *, format_id: str, width: int, height: int) -> None:
+        """The creative agent lists reference format *format_id* and previews a creative in it.
+
+        The preview is one render, at *preview_url*, of that size, in the shape of
+        creative/preview-creative-response.json. The sync previews only a creative whose
+        format is on the agent's listing, so the listing carries the format. In-process only:
+        it configures this process's registry stand-in.
+        """
+        from tests.factories.format import pick_reference_formats
+
+        self.set_run_async_result(pick_reference_formats(lambda fmt: fmt.format_id.id == format_id))
+        self.mock["registry"].return_value.preview_creative = AsyncMock(
+            return_value={
+                "previews": [
+                    {"renders": [{"preview_url": preview_url, "dimensions": {"width": width, "height": height}}]}
+                ]
+            }
+        )
+
     # --- the AI-review EFFECT oracle (GH #1972) ---
     #
     # Everything above observes what the SYNC committed. The three members below
