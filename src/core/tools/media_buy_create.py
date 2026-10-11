@@ -140,7 +140,6 @@ from src.services.targeting_capabilities import (
     collect_targeting_violations,
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
-    raise_if_targeting_overlay_violations,
     validate_property_targeting_allowed,
 )
 
@@ -2603,7 +2602,12 @@ async def _create_media_buy_impl(
         if req.packages:
             for pkg in req.packages:
                 if pkg.targeting_overlay is not None:
-                    raise_if_targeting_overlay_violations(collect_targeting_violations(pkg.targeting_overlay))
+                    violations = collect_targeting_violations(pkg.targeting_overlay)
+                    if violations:
+                        raise AdCPInvalidRequestError(
+                            details=ValidationDetails(**violations),
+                            field="targeting_overlay",
+                        )
 
     except (AdCPSalesAgentError, ValueError, PermissionError) as e:
         # Audit-update then re-raise via the shared helper so this early-validation

@@ -236,6 +236,15 @@ class GoogleAdManager(AdServerAdapter):
             return self.client_manager.auth_manager.get_credentials()
         return None
 
+    # Legacy targeting methods - delegated to targeting manager
+    def _validate_targeting(self, targeting_overlay):
+        """Validate targeting and return unsupported features (delegated to targeting manager)."""
+        return self.targeting_manager.validate_targeting(targeting_overlay)
+
+    def _build_targeting(self, targeting_overlay):
+        """Build GAM targeting criteria from AdCP targeting (delegated to targeting manager)."""
+        return self.targeting_manager.build_targeting(targeting_overlay)
+
     # HITL (Human-in-the-Loop) support methods
     def _requires_manual_approval(self, operation: str) -> bool:
         """Check if an operation requires manual approval based on configuration.
@@ -304,8 +313,41 @@ class GoogleAdManager(AdServerAdapter):
 
     @staticmethod
     def get_targeting_capabilities() -> TargetingCapabilities:
-        """The targeting the GAM targeting manager books, which also refuses every system it omits."""
-        return GAMTargetingManager.targeting_capabilities()
+        """Return targeting capabilities GAM adapter supports.
+
+        Declares the geo targeting this adapter books: countries, regions and Nielsen
+        DMAs, for the codes in its geo data (src/adapters/gam/geo_codes.json); any other
+        code is refused. Postal codes are refused, so no postal system is declared.
+
+        Returns:
+            TargetingCapabilities describing GAM's targeting support
+        """
+        return TargetingCapabilities(
+            geo_countries=True,
+            geo_regions=True,
+            nielsen_dma=True,
+        )
+
+    # Legacy properties for backward compatibility
+    @property
+    def GEO_COUNTRY_MAP(self):
+        return self.targeting_manager.geo_country_map
+
+    @property
+    def GEO_REGION_MAP(self):
+        return self.targeting_manager.geo_region_map
+
+    @property
+    def GEO_METRO_MAP(self):
+        return self.targeting_manager.geo_metro_map
+
+    @property
+    def DEVICE_TYPE_MAP(self):
+        return self.targeting_manager.DEVICE_TYPE_MAP
+
+    @property
+    def SUPPORTED_MEDIA_TYPES(self):
+        return self.targeting_manager.SUPPORTED_MEDIA_TYPES
 
     def create_media_buy(
         self,
@@ -486,14 +528,18 @@ class GoogleAdManager(AdServerAdapter):
                 self.log(f"[red]Error: {error_msg}[/red]")
                 raise AdCPProductUnavailableError()
 
-        # Translate each package's targeting before any workflow step or GAM order exists, so
-        # every targeting refusal reaches the buyer with nothing left behind. Translation
-        # makes no GAM call; the custom targeting values are resolved after the order.
-        translated_targeting = {
-            package.package_id: self.targeting_manager.translate_targeting(package.targeting_overlay)
-            for package in packages
-            if package.targeting_overlay
-        }
+        # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
+        unsupported_features = []
+        for package in packages:
+            if package.targeting_overlay:
+                features = self._validate_targeting(package.targeting_overlay)
+                if features:
+                    unsupported_features.extend(features)
+
+        if unsupported_features:
+            error_msg = f"Unsupported targeting features: {', '.join(unsupported_features)}"
+            self.log(f"[red]Error: {error_msg}[/red]")
+            raise AdCPCapabilityNotSupportedError()
 
         # Check if manual approval is required for media buy creation
         # Skip approval workflow if this media buy was already manually approved
@@ -584,10 +630,10 @@ class GoogleAdManager(AdServerAdapter):
         self.log(f"✓ Created GAM Order ID: {order_id}")
 
         # Build targeting for each package (per AdCP spec, targeting is at package level)
-        package_targeting = {
-            package_id: self.targeting_manager.build_targeting(translated)
-            for package_id, translated in translated_targeting.items()
-        }
+        package_targeting = {}
+        for package in packages:
+            if package.targeting_overlay:
+                package_targeting[package.package_id] = self._build_targeting(package.targeting_overlay)
 
         # Build placement_targeting_map from all products' impl_configs (adcp#208)
         # This maps placement_id → targeting_name for creative-level targeting

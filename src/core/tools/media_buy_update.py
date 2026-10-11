@@ -34,6 +34,7 @@ from src.core.exceptions import (
     AdCPContextNotFoundError,
     AdCPCreativeNotFoundError,
     AdCPGoneError,
+    AdCPInvalidRequestError,
     AdCPNotCancellableError,
     AdCPValidationError,
 )
@@ -88,7 +89,6 @@ from src.services.targeting_capabilities import (
     collect_targeting_violations,
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
-    raise_if_targeting_overlay_violations,
     validate_property_targeting_allowed,
 )
 
@@ -530,10 +530,14 @@ def _update_media_buy_impl(
                     if pkg_update.targeting_overlay is None:
                         continue
                     overlay_violations.update(collect_targeting_violations(pkg_update.targeting_overlay))
-                # Canonical code per the generated storyboard (UC-002 @ext-f and UC-003
-                # @*-targeting-overlay both grade targeting validation as INVALID_REQUEST);
-                # the raise is shared with the create path (#1417).
-                raise_if_targeting_overlay_violations(overlay_violations)
+                if overlay_violations:
+                    # Canonical code per the generated storyboard (UC-002 @ext-f and UC-003
+                    # @*-targeting-overlay both grade targeting validation as INVALID_REQUEST);
+                    # converges with the create path (#1417).
+                    raise AdCPInvalidRequestError(
+                        details=ValidationDetails(**overlay_violations),
+                        field="targeting_overlay",
+                    )
 
                 property_targeting_violations: list[str] = []
                 for pkg_update in req.packages:

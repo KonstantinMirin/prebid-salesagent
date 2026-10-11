@@ -16,9 +16,10 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from rich.console import Console
 
 from src.core.audit_logger import get_audit_logger
+from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
-from src.core.errors.details import CapabilityRefusalDetails, ErrorProblem
-from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPConfigurationError
+from src.core.errors.details import ErrorProblem
+from src.core.exceptions import AdCPConfigurationError
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AffectedPackage,
@@ -31,7 +32,6 @@ from src.core.schemas import (
     ReportingPeriod,
 )
 from src.core.validation_helpers import package_field_path
-from src.services.targeting_capabilities import extract_system_values
 
 # Return type of AdServerAdapter._require_config — preserves the caller's value type.
 _ConfigT = TypeVar("_ConfigT")
@@ -88,36 +88,45 @@ class TargetingCapabilities:
         "au_postcode",
     )
 
-    def validate_geo_systems(self, targeting: Targeting) -> None:
-        """Refuse every metro or postal system in *targeting* that this declaration does not set.
+    def validate_geo_systems(self, targeting: Targeting) -> list[str]:
+        """Validate that targeting geo systems are supported by this adapter.
 
-        Reads the include and exclude fields alike. The declaration is the one statement of
-        the systems an adapter books, so an adapter that calls this refuses exactly what it
-        does not declare (get_adcp_capabilities.mdx at v3.1.1, The Capability Contract). One
-        refusal per kind, metro first: ``capability="geo_system"``, the undeclared systems as
-        ``rejected_value`` and the declared systems of the same kind as ``accepted_values``.
-
-        Postal systems are compared by the legacy country-fused names (``us_zip``), which are
-        this class's field names. A native item (``country`` + ``system``, e.g. ``US`` +
-        ``zip``) is refused even when its system is declared. No native item reaches this
-        intact today, because the request's accepted shape strips ``country`` first (#2403); the fix
-        for #2403 must also map the native pair to its field through ``_POSTAL_AREA_TABLE``.
-
-        Raises:
-            AdCPCapabilityNotSupportedError: a metro or postal system is not declared.
+        Checks both include and exclude fields for geo_metros and geo_postal_areas.
+        Returns list of errors naming the unsupported system and supported alternatives.
         """
-        for kind, items in (
-            (self._METRO_FIELDS, [*(targeting.geo_metros or []), *(targeting.geo_metros_exclude or [])]),
-            (self._POSTAL_FIELDS, [*(targeting.geo_postal_areas or []), *(targeting.geo_postal_areas_exclude or [])]),
-        ):
-            declared = [system for system in kind if getattr(self, system)]
-            rejected = sorted(set(extract_system_values(items)) - set(declared))
-            if rejected:
-                raise AdCPCapabilityNotSupportedError(
-                    details=CapabilityRefusalDetails(
-                        capability="geo_system", rejected_value=rejected, accepted_values=declared
-                    )
-                )
+        errors: list[str] = []
+
+        # Collect all metro items from include + exclude
+        metros: list[Any] = []
+        if targeting.geo_metros:
+            metros.extend(targeting.geo_metros)
+        if targeting.geo_metros_exclude:
+            metros.extend(targeting.geo_metros_exclude)
+
+        if metros:
+            supported = [f for f in self._METRO_FIELDS if getattr(self, f)]
+            for metro in metros:
+                system = enum_value(metro.system)
+                if not getattr(self, system, False):
+                    alt = ", ".join(supported) if supported else "none"
+                    errors.append(f"Unsupported metro system '{system}'. This adapter supports: {alt}")
+
+        # Collect all postal items from include + exclude
+        postals: list[Any] = []
+        if targeting.geo_postal_areas:
+            postals.extend(targeting.geo_postal_areas)
+        if targeting.geo_postal_areas_exclude:
+            postals.extend(targeting.geo_postal_areas_exclude)
+
+        if postals:
+            supported = [f for f in self._POSTAL_FIELDS if getattr(self, f)]
+            for area in postals:
+                system = enum_value(area.system)
+                if not getattr(self, system, False):
+                    alt = ", ".join(supported) if supported else "none"
+                    errors.append(f"Unsupported postal system '{system}'. This adapter supports: {alt}")
+
+        return errors
 
 
 @dataclass

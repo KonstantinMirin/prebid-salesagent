@@ -24,7 +24,7 @@ from src.core.errors.details import (
     GeoInclusionField,
     ValidationDetails,
 )
-from src.core.exceptions import AdCPInvalidRequestError, AdCPValidationError
+from src.core.exceptions import AdCPValidationError
 from src.core.schemas import Error, Targeting, TargetingCapability
 from src.core.validation_helpers import PACKAGES_FIELD
 
@@ -285,18 +285,6 @@ def raise_if_property_targeting_violations(violations: list[str]) -> None:
         )
 
 
-def raise_if_targeting_overlay_violations(violations: dict[str, object]) -> None:
-    """Raise ``INVALID_REQUEST`` on ``targeting_overlay`` when *violations* holds any.
-
-    *violations* is what ``collect_targeting_violations`` returns, for one overlay or merged
-    across a request's packages. The one spelling of this refusal: create, update and the
-    geo cut an adapter books from (``geo_inclusion_cut``) all raise through it, so they emit
-    the same error (same code, same field, same details shape).
-    """
-    if violations:
-        raise AdCPInvalidRequestError(details=ValidationDetails(**violations), field="targeting_overlay")
-
-
 # Geo inclusion/exclusion field pairs for same-value overlap detection.
 # Per adcp PR #1010: sellers SHOULD reject when the same value appears in both
 # the inclusion and exclusion field at the same level.
@@ -412,14 +400,7 @@ def geo_disjoint_inclusions(targeting: Targeting) -> list[GeoDisjointInclusion]:
 
 
 def geo_inclusion_cut(targeting: Targeting) -> tuple[set[str], set[str]]:
-    """The regions and Nielsen DMAs the overlay's inclusion fields AND to, or the refusal.
-
-    Returns ``(regions, dmas)`` cut to the listed countries. First refuses the overlay as the
-    tools do (``collect_targeting_violations``, which includes ``geo_disjoint``: a field that
-    named places keeps none), so a caller that books from the cut never receives an empty set
-    for such a field, whatever ran before it.
-    """
-    raise_if_targeting_overlay_violations(collect_targeting_violations(targeting))
+    """The regions and Nielsen DMAs the overlay's inclusion fields AND to: ``(regions, dmas)`` cut to the listed countries."""
     inclusions = _geo_inclusions(targeting)
     return inclusions["geo_regions"][1], inclusions["geo_metros"][1]
 
@@ -433,7 +414,7 @@ def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
     and a new validator would have to be wired into both (DRY, CLAUDE.md). Neither call
     site read what it collected: both raised and discarded it.
 
-    Returns the mapping ``raise_if_targeting_overlay_violations`` raises from, carrying only
+    Returns a mapping suitable for ``AdCPInvalidRequestError(details=...)``, carrying only
     the keys that actually have content so the buyer can tell the reasons apart:
 
         geo_overlaps              {include, exclude, values} per conflicting field pair,

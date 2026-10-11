@@ -37,6 +37,7 @@ class GAMOperation(Enum):
     RESUME_ORDER = "resume_order"
     GET_REPORT = "get_report"
     QUERY_INVENTORY = "query_inventory"
+    VALIDATE_TARGETING = "validate_targeting"
 
 
 class GAMLogContext:
