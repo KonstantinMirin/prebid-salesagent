@@ -159,7 +159,6 @@ from tests.helpers.signing import (
     FAILED_METRIC,
     VERIFIED_METRIC,
     VERIFIER_RESULT,
-    counterparty_key,
     declared_posture,
     rejection_code,
     samples_with,
@@ -591,7 +590,6 @@ def _vector_case(vector_id: str) -> Iterator[tuple[BareIntegrationEnv, str | Non
         try:
             with (
                 declared_posture(tenant_id=_TENANT_ID, **vector["verifier_capability"]),
-                counterparty_key(_jwks_for(vector)),
                 _config_for(plan),
                 _frozen_verifier_clock(vector["reference_now"]),
                 verifier_spy() as calls,

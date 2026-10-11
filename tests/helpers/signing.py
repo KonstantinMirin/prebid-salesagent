@@ -40,7 +40,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from typing import Any, Literal, get_args
+from typing import Any, Literal
 from unittest.mock import patch
 
 from adcp import get_adcp_spec_version
@@ -1255,13 +1255,10 @@ MALFORMED_SIGNATURE_HEADERS = {
 #: ``True`` realization, then :func:`prepend_unverified_label`. security.mdx @ v3.1.1
 #: L1028 makes the verifier process exactly one label and ignore the rest, so the extra
 #: label must change nothing — including which counterparty the keyid selects.
-_NAMED_REALIZATIONS = Literal["malformed", "tampered", "extra_label"]
+SIGNATURE_REALIZATIONS: tuple[Any, ...] = (False, True, "malformed", "tampered", "extra_label")
 
 #: The type every seam that carries a realization is annotated with.
-SignatureRealization = bool | _NAMED_REALIZATIONS
-
-#: Every realization, derived from the type so a new one is one edit.
-SIGNATURE_REALIZATIONS: tuple[Any, ...] = (False, True, *get_args(_NAMED_REALIZATIONS))
+SignatureRealization = bool | Literal["malformed", "tampered", "extra_label"]
 
 #: The keyid of the label :func:`prepend_unverified_label` adds. No Given onboards it and
 #: no JWKS publishes it, so a verifier that took the counterparty from this label would
@@ -1312,7 +1309,7 @@ def realization(signed: Any) -> SignatureRealization:
     ``True``/``False`` but are not realizations, and a caller that produced an int
     where a realization belongs has a bug worth surfacing.
     """
-    if signed is True or signed is False or signed in get_args(_NAMED_REALIZATIONS):
+    if signed is True or signed is False or signed in ("malformed", "tampered", "extra_label"):
         return signed
     raise ValueError(
         f"signed={signed!r} is not a signature realization. Pass one of "
