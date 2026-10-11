@@ -22,7 +22,16 @@ class GAMDataFreshnessValidator:
 
     # Known GAM processing delays
     STANDARD_DELAY_HOURS = 4
-    DAILY_DATA_READY_HOUR_ET = 7  # 7 AM ET = 4 AM PT (1 hour after freeze)
+    READY_TIMEZONE = "America/New_York"
+    DAILY_DATA_READY_HOUR_ET = 7  # 7 AM ET = 4 AM PT (1 hour after freeze), read in READY_TIMEZONE
+
+    @classmethod
+    def before_ready_hour(cls, now: datetime) -> bool:
+        """Whether *now* (timezone-aware) falls before the daily ready hour in READY_TIMEZONE.
+
+        Before it, yesterday's figures may still change.
+        """
+        return now.astimezone(pytz.timezone(cls.READY_TIMEZONE)).hour < cls.DAILY_DATA_READY_HOUR_ET
 
     @classmethod
     def get_freshness_timestamp(cls, reporting_data) -> dict:
@@ -53,12 +62,11 @@ class GAMDataFreshnessValidator:
             timezone-aware time (US Eastern) it expects them complete, never earlier than
             *now*: a caller that polls should look again then.
         """
-        tz = pytz.timezone("America/New_York")
+        tz = pytz.timezone(cls.READY_TIMEZONE)
         now = now.astimezone(tz)
         ready = time(cls.DAILY_DATA_READY_HOUR_ET, 5)
-        # A day's figures are complete from DAILY_DATA_READY_HOUR_ET the next morning;
-        # GAMReportingService._calculate_data_validity reads the same constant. The target is read
-        # as a date in the data's time zone. If that time is already past and GAM is still behind,
+        # A day's figures are complete from DAILY_DATA_READY_HOUR_ET the next morning. The target is
+        # read as a date in READY_TIMEZONE. If that time is already past and GAM is still behind,
         # the next such morning (today's if the clock has not passed it) is the earliest the
         # heuristic can say the figures are complete.
         available_at = tz.localize(datetime.combine(target_date.astimezone(tz).date() + timedelta(days=1), ready))
@@ -68,7 +76,7 @@ class GAMDataFreshnessValidator:
 
         # Check 1: Is it too early in the day for yesterday's data? This also covers the previous
         # month's figures: GAM freezes them at 03:00 PT on the 1st, before DAILY_DATA_READY_HOUR_ET.
-        if now.hour < cls.DAILY_DATA_READY_HOUR_ET:
+        if cls.before_ready_hour(now):
             logger.debug("Too early for complete data (hour %s, need %s+)", now.hour, cls.DAILY_DATA_READY_HOUR_ET)
             return available_at
 

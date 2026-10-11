@@ -1021,7 +1021,7 @@ class GoogleAdManager(AdServerAdapter):
         reporting_data = reporting_service.get_reporting_data(
             date_range=cast("Literal['lifetime', 'this_month', 'today']", range_type),
             advertiser_id=self.advertiser_id,
-            requested_timezone="America/New_York",
+            requested_timezone=GAMDataFreshnessValidator.READY_TIMEZONE,
         )
 
         # The figures GAM has reported are the answer, whether or not GAM has finished the period

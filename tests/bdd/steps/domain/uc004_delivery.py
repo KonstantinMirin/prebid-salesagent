@@ -1956,6 +1956,18 @@ def then_aggregated_spend(ctx: dict) -> None:
     assert agg_spend == individual_sum, f"Aggregated spend {agg_spend} != sum {individual_sum}"
 
 
+def _wire_errors_for_buy(ctx: dict, mb_id: str) -> list[tuple[int, dict]]:
+    """The wire ``errors[]`` entries that name *mb_id* in ``details.media_buy_id``, with their index.
+
+    The one place the twin Thens below read how an advisory error names a buy.
+    """
+    return [
+        (i, err)
+        for i, err in enumerate(wire_advisory_errors(ctx))
+        if (err.get("details") or {}).get("media_buy_id") == mb_id
+    ]
+
+
 @then(parsers.parse('the response should not include an error for "{mb_id}"'))
 def then_no_error_for_mb(ctx: dict, mb_id: str) -> None:
     """No entry in the response's ``errors[]`` names *mb_id*.
@@ -1972,8 +1984,8 @@ def then_no_error_for_mb(ctx: dict, mb_id: str) -> None:
     ctx-presence check would report a failure for THIS id whenever another id in the
     same response had one.
     """
-    named = [err for err in wire_advisory_errors(ctx) if (err.get("details") or {}).get("media_buy_id") == mb_id]
-    assert not named, f"Response errors[] names media buy {mb_id!r}: {named}"
+    named = _wire_errors_for_buy(ctx, mb_id)
+    assert not named, f"Response errors[] names media buy {mb_id!r}: {[err for _, err in named]}"
 
 
 @then(parsers.re(r'the response errors include code "(?P<code>[^"]+)" for media buy "(?P<mb_id>[^"]+)"$'))
@@ -2006,18 +2018,10 @@ def then_response_errors_include_for_mb(ctx: dict, code: str, mb_id: str) -> Non
     the payload's entry at the matched index: those Thens read ``message`` and
     ``suggestion`` through ``_get_error_dict``, and the wire reader strips ``message``.
     """
-    errors = wire_advisory_errors(ctx)
-    index = next(
-        (
-            i
-            for i, err in enumerate(errors)
-            if err.get("code") == code and (err.get("details") or {}).get("media_buy_id") == mb_id
-        ),
-        None,
-    )
+    named = _wire_errors_for_buy(ctx, mb_id)
+    index = next((i for i, err in named if err.get("code") == code), None)
     assert index is not None, (
-        f"No errors[] entry with code {code!r} for media buy {mb_id!r}. Carried: "
-        f"{[(e.get('code'), (e.get('details') or {}).get('media_buy_id')) for e in errors]}"
+        f"No errors[] entry with code {code!r} for media buy {mb_id!r}. Carried: {wire_advisory_errors(ctx)}"
     )
     promoted = require_payload(ctx).errors[index]
     assert promoted.code == code, f"payload errors[{index}] is {promoted.code!r}, the wire's is {code!r}"

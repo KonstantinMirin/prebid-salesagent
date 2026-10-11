@@ -615,7 +615,7 @@ class GAMReportingService:
 
         # A day's figures are complete from the daily ready hour the next morning. Before it,
         # yesterday's figures may still change, so the data is valid through the day before.
-        days_back = 2 if now.hour < GAMDataFreshnessValidator.DAILY_DATA_READY_HOUR_ET else 1
+        days_back = 2 if GAMDataFreshnessValidator.before_ready_hour(now) else 1
         return (now - timedelta(days=days_back)).replace(hour=23, minute=59, second=59)
 
     def _calculate_metrics(self, data: list[dict[str, Any]]) -> dict[str, Any]:
