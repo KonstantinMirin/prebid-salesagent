@@ -1527,16 +1527,14 @@ def push_creative_to_existing_buy(
 
 
 def _validate_pricing_model_selection(
-    package: Package | PackageRequest | AdcpPackageRequest,
+    package: PackageRequest | AdcpPackageRequest,
     product: Any,  # ProductModel from database
-    campaign_currency: str | None,
 ) -> dict[str, Any]:
     """Validate pricing model selection for a package against product's pricing options.
 
     Args:
         package: Package naming a pricing_option_id, with an optional bid_price
         product: Product database model with pricing_options relationship
-        campaign_currency: Optional campaign-level currency
 
     Returns:
         Dict with validated pricing information:
@@ -1564,22 +1562,14 @@ def _validate_pricing_model_selection(
         raise AdCPConfigurationError(details=ConfigurationDetails(product_id=product.product_id))
 
     # Which pricing option to use. pricing_option_id is the pin's only selector
-    # (media-buy/package-request.json /required, AdCP 3.1.1); the legacy pricing_model
-    # alias that used to be consulted as a fallback is gone with the field.
+    # (media-buy/package-request.json /required, AdCP 3.1.1: "ID of the selected pricing
+    # option from the product's pricing_options array"). Nothing stands in for it: an id
+    # that names no option of the product, the empty string included, is refused below.
     pricing_option_id = package.pricing_option_id
 
     # Helper to unwrap RootModel - adcp 2.14.0+ uses RootModel wrapper
     def unwrap_option(opt: Any) -> Any:
         return getattr(opt, "root", opt)
-
-    # Not specified: use the product's first pricing option
-    if not pricing_option_id:
-        first_option = unwrap_option(product.pricing_options[0])
-        # The option's own terms, plus the one field it cannot supply: a currency-less
-        # option falls back to the campaign's, which is a property of this request.
-        return pricing_info_for(first_option, bid_price=float(package.bid_price) if package.bid_price else None) | {
-            "currency": first_option.currency or campaign_currency or "USD"
-        }
 
     # Find matching pricing option
     selected_option = None
@@ -1604,8 +1594,6 @@ def _validate_pricing_model_selection(
         # what the buyer needs, so they travel as structured detail instead. The sibling
         # below (bid_price/floor_price) already relocates the same way.
         raise AdCPValidationError(
-            # Reached only with a pricing_option_id in hand: an absent one returned the
-            # product's first option above, so the pointer names that field unconditionally.
             field="pricing_option_id",
             # The three conditional spreads named one fact three ways -- which
             # requested value was not found. `rejected_value` is that fact, and
@@ -2407,7 +2395,6 @@ async def _create_media_buy_impl(
                                 pricing_info = _validate_pricing_model_selection(
                                     package=package,
                                     product=product_map[product_id],
-                                    campaign_currency=request_currency,
                                 )
                                 # Store by index (package IDs aren't generated yet)
                                 package_pricing_info_by_index[idx] = pricing_info
