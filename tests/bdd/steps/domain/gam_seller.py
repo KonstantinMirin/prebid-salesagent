@@ -81,32 +81,30 @@ def given_seller_products_with_pricing_options(ctx: dict, delivery: str, datatab
     product. This step does not make the tenant a GAM seller: the seller Given that follows
     it does.
     """
-    from tests.factories import PricingOptionFactory, ProductFactory
-
     env = ctx["env"]
-    built: dict[str, tuple[Any, Any]] = {}
+    options_by_product: dict[str, list[dict[str, Any]]] = {}
     for row in table_rows(datatable):
         fixed_price = row["fixed_price"].strip()
-        if row["product_id"] not in built:
-            product = ProductFactory(
-                tenant=ctx["tenant"],
-                product_id=row["product_id"],
-                delivery_type=delivery.replace("-", "_"),
-                property_tags=["all_inventory"],
-            )
-            built[row["product_id"]] = (product, None)
-        product, first_option = built[row["product_id"]]
-        option = PricingOptionFactory(
-            product=product,
-            pricing_option_id=row["pricing_option_id"],
-            pricing_model=row["pricing_model"],
-            is_fixed=bool(fixed_price),
-            rate=Decimal(fixed_price) if fixed_price else None,
-            price_guidance=None if fixed_price else {"floor": float(row["floor_price"])},
+        options_by_product.setdefault(row["product_id"], []).append(
+            {
+                "pricing_option_id": row["pricing_option_id"],
+                "pricing_model": row["pricing_model"],
+                "is_fixed": bool(fixed_price),
+                "rate": Decimal(fixed_price) if fixed_price else None,
+                "price_guidance": None if fixed_price else {"floor": float(row["floor_price"])},
+            }
         )
-        built[row["product_id"]] = (product, first_option or option)
+    built = [
+        env.setup_product_chain(
+            ctx["tenant"],
+            product_id=product_id,
+            delivery_type=delivery.replace("-", "_"),
+            pricing_options=options,
+        )
+        for product_id, options in options_by_product.items()
+    ]
     env._commit_factory_data()
-    (ctx["default_product"], ctx["default_pricing_option"]), *extra = built.values()
+    (ctx["default_product"], ctx["default_pricing_option"]), *extra = built
     ctx["extra_products"] = extra
 
 
@@ -117,12 +115,11 @@ def given_buyer_packages_over_flight(ctx: dict, days: int, datatable: Any) -> No
     Columns: ``product_id | pricing_option_id | budget | bid_price``; an empty ``bid_price``
     sends none. Each package is the DTO-bound ``PackageRequestFactory`` shape.
     """
-    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults, _future
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults, _set_flight_days
     from tests.factories.request import PackageRequestFactory
 
     kwargs = _ensure_request_defaults(ctx)
-    kwargs["start_time"] = _future(1).isoformat()
-    kwargs["end_time"] = _future(1 + days).isoformat()
+    _set_flight_days(kwargs, days)
     kwargs["packages"] = [
         PackageRequestFactory.payload(
             product_id=row["product_id"],
@@ -132,6 +129,22 @@ def given_buyer_packages_over_flight(ctx: dict, days: int, datatable: Any) -> No
         )
         for row in table_rows(datatable)
     ]
+
+
+@given("a media buy awaits the seller's approval with one package on the product, stored without its pricing terms")
+def given_pending_buy_without_pricing_terms(ctx: dict) -> None:
+    """Persist a buy awaiting approval whose package row carries its budget but no ``pricing_info``.
+
+    The row a pending writer stored before it kept the selected pricing option's terms:
+    nothing on it says which option the package bought, so its volume cannot be planned.
+    """
+    product = ctx["default_product"]
+    ctx["env"].seed_media_buy_awaiting_approval(
+        ctx["tenant"],
+        ctx["principal"],
+        product,
+        package_config={"product_id": product.product_id, "budget": 420.0},
+    )
 
 
 @when("the seller approves the media buy")
@@ -248,19 +261,49 @@ def then_line_items_in_package_order(ctx: dict, datatable: Any) -> None:
     """The seller sent GAM exactly these line items, one per package in the request's order.
 
     Columns: ``lineItemType | priority | goalType | unitType | units``. The whole list is
-    compared, so a missing, extra or reordered line item fails it.
+    compared, so a missing, extra or reordered line item fails it. An integer column is
+    compared with its type, so a float goal (GAM's ``Goal.units`` is a long) fails it.
     """
     expected = [
-        {column: int(cell) if column in _INTEGER_COLUMNS else cell for column, cell in row.items()}
+        {column: (int, int(cell)) if column in _INTEGER_COLUMNS else cell for column, cell in row.items()}
         for row in table_rows(datatable)
     ]
     sent = [
-        {column: read(item) for column, read in _LINE_ITEM_GOAL_READERS.items()}
+        {
+            column: (type(value), value) if column in _INTEGER_COLUMNS else value
+            for column, value in ((column, read(item)) for column, read in _LINE_ITEM_GOAL_READERS.items())
+        }
         for item in ctx["env"].gam_objects_sent("LineItemService", "createLineItems")
     ]
     assert sent == expected, (
         f"expected GAM to receive line items {expected}; it received {sent} (approval: {ctx.get('approval_result')})"
     )
+
+
+@then("the seller's approval books the media buy")
+def then_approval_books_media_buy(ctx: dict) -> None:
+    """The approval ran the adapter to the end, and no buy of the tenant awaits approval any longer."""
+    result = ctx["approval_result"]
+    assert result.ok, f"expected the seller's approval to book the media buy; it returned {result}"
+    pending = ctx["env"].media_buys_awaiting_approval()
+    assert pending == [], f"expected no media buy to await approval; {len(pending)} still do"
+
+
+@then("the seller's approval is refused, and the media buy still awaits approval")
+def then_approval_refused_buy_still_pending(ctx: dict) -> None:
+    """The approval failed before the adapter wrote anything, and the buy is still ``pending_approval``.
+
+    A buy left awaiting approval is one an operator can approve again once the product's
+    configuration is repaired; one marked failed could not be.
+    """
+    from src.core.tools.media_buy_create import ApprovalOutcome
+
+    result = ctx["approval_result"]
+    assert result.outcome is ApprovalOutcome.FAILED, (
+        f"expected the seller's approval to be refused; it returned {result}"
+    )
+    pending = ctx["env"].media_buys_awaiting_approval()
+    assert len(pending) == 1, f"expected the media buy to still await approval; {len(pending)} buys do"
 
 
 @then("Google Ad Manager received no order and no line item")

@@ -67,6 +67,12 @@ def _future(days: int = 1) -> datetime:
     return mint(datetime.now(UTC) + timedelta(days=days))
 
 
+def _set_flight_days(kwargs: dict[str, Any], days: int) -> None:
+    """Set the request's flight to start tomorrow and run exactly ``days`` days."""
+    kwargs["start_time"] = _future(1).isoformat()
+    kwargs["end_time"] = _future(1 + days).isoformat()
+
+
 def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
     """Ensure ctx['request_kwargs'] has valid defaults for a create_media_buy request.
 
@@ -861,8 +867,7 @@ def given_high_daily_spend(ctx: dict, budget: int, days: int, daily: int) -> Non
     math to catch Gherkin typos.
     """
     kwargs = _ensure_request_defaults(ctx)
-    kwargs["start_time"] = _future(1).isoformat()
-    kwargs["end_time"] = _future(1 + days).isoformat()
+    _set_flight_days(kwargs, days)
     assert kwargs.get("packages"), (
         f"No packages in request — step claims 'a package has budget {budget} over a "
         f"{days}-day flight' but no package exists to set it on"
@@ -1583,9 +1588,7 @@ def _set_daily_spend_cap(ctx: dict, *, cap: float | None, budget: float, flight_
     env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
 
-    # Set flight duration via start_time / end_time
-    kwargs["start_time"] = _future(1).isoformat()
-    kwargs["end_time"] = _future(1 + flight_days).isoformat()
+    _set_flight_days(kwargs, flight_days)
 
     # Set package budget
     if kwargs.get("packages"):

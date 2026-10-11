@@ -133,6 +133,44 @@ class SeededBuy:
         return self.media_buy.media_buy_id
 
 
+def approvable_media_buy(
+    tenant: Any,
+    principal: Any,
+    product: Any,
+    *,
+    start_time: datetime,
+    end_time: datetime,
+    budget: float = 5000.0,
+    pricing_option_id: str = "cpm_usd_fixed",
+    **overrides: Any,
+) -> Any:
+    """A ``MediaBuyFactory`` row whose ``raw_request`` the approval can replay: one package on *product*.
+
+    ``MediaBuyFactory``'s default ``raw_request`` omits ``packages[].pricing_option_id``,
+    and the approval refuses that before it reaches anything under test. The flight is
+    written to the row's resolved columns and to the stored request alike. *overrides*
+    are further ``MediaBuyFactory`` keywords (``media_buy_id``, ``status``).
+    """
+    from tests.factories import MediaBuyFactory
+
+    return MediaBuyFactory(
+        tenant=tenant,
+        principal=principal,
+        start_date=start_time.date(),
+        end_date=end_time.date(),
+        start_time=start_time,
+        end_time=end_time,
+        raw_request={
+            "brand": {"domain": "testbrand.com"},
+            "start_time": start_time.isoformat(),
+            "end_time": end_time.isoformat(),
+            "idempotency_key": f"approval-{uuid.uuid4().hex[:8]}",
+            "packages": [{"product_id": product.product_id, "budget": budget, "pricing_option_id": pricing_option_id}],
+        },
+        **overrides,
+    )
+
+
 def seed_pending_buy(*, starts_in_days: int, status: str = "pending_approval") -> SeededBuy:
     """Seed a tenant + product + pending-approval buy + its approval step.
 
@@ -152,7 +190,6 @@ def seed_pending_buy(*, starts_in_days: int, status: str = "pending_approval") -
     """
     from src.core.context_manager import ContextManager
     from tests.factories import (
-        MediaBuyFactory,
         MediaPackageFactory,
         PricingOptionFactory,
         PrincipalFactory,
@@ -170,28 +207,8 @@ def seed_pending_buy(*, starts_in_days: int, status: str = "pending_approval") -
     PricingOptionFactory(product=product)
 
     media_buy_id = f"mb_appr_{suffix}"
-    media_buy = MediaBuyFactory(
-        tenant=tenant,
-        principal=principal,
-        media_buy_id=media_buy_id,
-        status=status,
-        start_date=start_time.date(),
-        end_date=end_time.date(),
-        start_time=start_time,
-        end_time=end_time,
-        raw_request={
-            "brand": {"domain": "testbrand.com"},
-            "start_time": start_time.isoformat(),
-            "end_time": end_time.isoformat(),
-            "idempotency_key": f"approval-{suffix}",
-            "packages": [
-                {
-                    "product_id": product.product_id,
-                    "budget": 5000.0,
-                    "pricing_option_id": "cpm_usd_fixed",
-                }
-            ],
-        },
+    media_buy = approvable_media_buy(
+        tenant, principal, product, start_time=start_time, end_time=end_time, media_buy_id=media_buy_id, status=status
     )
     # The row's budget and package_config (with the pricing_info the approval books from)
     # come from the raw_request package, as production's pending writer writes them.

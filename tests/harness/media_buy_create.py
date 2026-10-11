@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock
 
@@ -22,7 +23,6 @@ from src.core.schemas import CreateMediaBuyRequest
 from src.core.schemas._base import CreateMediaBuyResult
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv, json_safe
-from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.egress import EgressHatchMixin
 from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
 from tests.harness.transport import DeliverResult
@@ -171,12 +171,16 @@ class MediaBuyCreateEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
         currency: str = "USD",
         with_pricing: bool = True,
         format_ids: list[dict[str, str]] | None = None,
+        delivery_type: str = "non_guaranteed",
+        pricing_options: Sequence[Mapping[str, Any]] | None = None,
     ) -> tuple:
         """Seed a real PropertyTag ("all_inventory") + Product + PricingOption row set.
 
         The "all_inventory" tag is created once per env (idempotent across repeated
-        calls). Returns ``(product, pricing_option)``; ``pricing_option`` is ``None``
-        when ``with_pricing=False``.
+        calls). ``pricing_options`` lists ``PricingOptionFactory`` keywords, one option
+        each, in order; without it the product gets one fixed CPM option in ``currency``.
+        Returns ``(product, first pricing option)``; the option is ``None`` when
+        ``with_pricing=False``.
         """
         from tests.factories import PricingOptionFactory, ProductFactory
         from tests.factories.core import PropertyTagFactory
@@ -192,16 +196,17 @@ class MediaBuyCreateEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
         product = ProductFactory(
             tenant=tenant,
             product_id=product_id,
-            delivery_type="non_guaranteed",
+            delivery_type=delivery_type,
             format_ids=format_ids,
             property_tags=["all_inventory"],
         )
-        pricing_option = None
-        if with_pricing:
-            pricing_option = PricingOptionFactory(
-                product=product, pricing_model="cpm", currency=currency, is_fixed=True
-            )
-        return product, pricing_option
+        if not with_pricing:
+            return product, None
+        options = [
+            PricingOptionFactory(product=product, **option)
+            for option in pricing_options or [{"pricing_model": "cpm", "currency": currency, "is_fixed": True}]
+        ]
+        return product, options[0]
 
     def _build_mock_context_manager(self, tool_name: str) -> MagicMock:
         """Mock context manager that delegates create_context / create_workflow_step /
@@ -281,27 +286,55 @@ class MediaBuyCreateEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
             payload_hash=payload_hash,
         )
 
-    @realize_e2e(
-        e2e_unsupported(
-            "the seller's approval runs behind the Admin UI's authenticated routes, and the "
-            "harness holds no admin session on the live server"
+    def seed_media_buy_awaiting_approval(
+        self, tenant: Any, principal: Any, product: Any, *, package_config: Mapping[str, Any]
+    ) -> None:
+        """Persist a media buy of *principal* awaiting the seller's approval, with one package on *product*.
+
+        The flight starts tomorrow and runs 14 days. The package row stores
+        *package_config* as given, so a scenario states what a stored row carries, such as
+        a row the pending writer wrote before it stored ``pricing_info``.
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from tests.factories import MediaPackageFactory
+        from tests.helpers.media_buy_approval import approvable_media_buy
+
+        start_time = datetime.now(UTC) + timedelta(days=1)
+        media_buy = approvable_media_buy(
+            tenant,
+            principal,
+            product,
+            start_time=start_time,
+            end_time=start_time + timedelta(days=14),
+            budget=420.0,
+            pricing_option_id=product.pricing_options[0].pricing_option_id,
         )
-    )
+        MediaPackageFactory(media_buy=media_buy, package_config=dict(package_config))
+        self._commit_factory_data()
+
+    def media_buys_awaiting_approval(self) -> list[Any]:
+        """The media buys of this env's tenant whose status is ``pending_approval``.
+
+        Read on the env's own session, so no unit of work commits and closes beside it.
+        """
+        from src.core.database.models import PersistedMediaBuyStatus
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        return MediaBuyRepository(self.get_session(), self._tenant_id).list_by_statuses(
+            [PersistedMediaBuyStatus.PENDING_APPROVAL]
+        )
+
     def approve_pending_media_buy(self) -> ApprovalResult:
         """Approve the one media buy of this env's tenant that awaits approval, as an Admin UI route does.
 
         Every admin approval route calls ``execute_approved_media_buy``; ``run_approval`` is
-        the one spelling of that call in tests. The buy is found on the env's own session,
-        so no unit of work commits and closes beside it. Raises ``RuntimeError`` unless
-        exactly one buy awaits approval.
+        the one spelling of that call in tests. Raises ``RuntimeError`` unless exactly one
+        buy awaits approval.
         """
-        from src.core.database.models import PersistedMediaBuyStatus
-        from src.core.database.repositories.media_buy import MediaBuyRepository
         from tests.helpers.media_buy_approval import run_approval
 
-        pending = MediaBuyRepository(self.get_session(), self._tenant_id).list_by_statuses(
-            [PersistedMediaBuyStatus.PENDING_APPROVAL]
-        )
+        pending = self.media_buys_awaiting_approval()
         if len(pending) != 1:
             raise RuntimeError(f"expected exactly one media buy awaiting approval; found {len(pending)}")
         return run_approval(pending[0].media_buy_id, self._tenant_id)
