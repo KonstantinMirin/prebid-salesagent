@@ -76,7 +76,7 @@ Feature: UC-010 get_adcp_capabilities — capability declarations must be implem
     # cannot answer. Tracked by #1724.
 
   @T-UC-010-local-gam-postal @invariant
-  Scenario: a Google Ad Manager seller declares only the geo targeting it books
+  Scenario: a Google Ad Manager seller declares countries, regions and Nielsen DMAs, and no postal targeting
     Given a tenant is resolvable from the request context
     And the seller's ad server is Google Ad Manager
     When the Buyer Agent calls get_adcp_capabilities
@@ -87,4 +87,7 @@ Feature: UC-010 get_adcp_capabilities — capability declarations must be implem
     And media_buy.execution.targeting should not contain geo_postal_areas
     # The Capability Contract (get_adcp_capabilities.mdx): "If a capability is declared,
     # the seller MUST honor it", including geo_postal_areas.US containing zip. The GAM
-    # adapter refuses every postal code, so it declares no postal targeting.
+    # adapter refuses every postal code, so it declares no postal targeting. geo_regions and
+    # nielsen_dma are declared while the adapter still refuses a region outside its geo data
+    # and a DMA sent beside geo_regions; the 3.1.1 capability schema has no way to state
+    # either narrowing, so this scenario grades the declared levels, not every code.

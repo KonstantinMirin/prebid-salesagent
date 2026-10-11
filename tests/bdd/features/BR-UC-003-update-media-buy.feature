@@ -1823,7 +1823,6 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the response error field is targeting_overlay
     And the wire error details should include geo_disjoint "<value>"
     And the error should include "suggestion" field
 

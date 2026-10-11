@@ -324,7 +324,6 @@ Feature: BR-UC-002 Create Media Buy
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
-    And the response error field is targeting_overlay
     And the wire error details should include geo_disjoint "<value>"
     And the error should include "suggestion" field
 

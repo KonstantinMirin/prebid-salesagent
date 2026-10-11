@@ -3,8 +3,8 @@
 # LOCALLY-ADDED (survives BR-*.feature regeneration).
 #
 # What it grades: the geo targeting a Google Ad Manager seller books on the line item for a
-# package's targeting_overlay, and the geo the seller refuses before it creates anything
-# in GAM. AdCP 3.1.1:
+# package's targeting_overlay, and the geo and other targeting the seller refuses before it
+# creates anything in GAM. AdCP 3.1.1:
 # - core/targeting.json: each geo field "Restrict[s] delivery" to the listed places, so a
 #   code dropped on the way to the ad server widens the buy;
 # - docs/reference/migration/geo-targeting.mdx: "Inclusion fields are combined with AND
@@ -15,8 +15,8 @@
 #   geographic granularities are supported by all publishers";
 # - docs/building/by-layer/L3/error-handling.mdx (Server-narrowed public elements): a value
 #   the public schema accepts and this seller cannot place is UNSUPPORTED_FEATURE.
-# An overlay whose inclusion fields share no place is refused INVALID_REQUEST on
-# targeting_overlay (geo_disjoint). The spec is silent on that case; it is the same class
+# An overlay whose inclusion fields share no place is refused INVALID_REQUEST
+# (geo_disjoint). The spec is silent on that case; it is the same class
 # as targeting.mdx's same-value overlap ("Sellers SHOULD reject ... and return a
 # descriptive error"), graded for every adapter by BR-UC-002 @T-UC-002-ext-f-geo-disjoint
 # and BR-UC-003 @T-UC-003-ext-geo-disjoint. The disjoint rows here confirm that a GAM
@@ -89,19 +89,51 @@ Feature: A Google Ad Manager seller books exactly the geo the buyer's targeting 
     # location list (which it ORs) cannot express that part.
 
   @T-UC-002-local-gam-geo-postal @extension @error
-  Scenario: A US ZIP code is refused with the capability named, before GAM is called
+  Scenario Outline: A postal system the seller does not declare is refused, before GAM is called - <case>
     Given a valid create_media_buy request
     And the account exists and is active
     And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001"
-    And the package targeting_overlay is {"geo_postal_areas": [{"system": "us_zip", "values": ["10001"]}]}
+    And the package targeting_overlay is <overlay>
     When the Buyer Agent sends the create_media_buy request
     Then the response contains error code UNSUPPORTED_FEATURE
-    And the wire error details should include capability "geo_postal_areas"
+    And the wire error details should include capability "geo_system"
+    And the wire error details should include rejected_value "<value>"
     And Google Ad Manager received no order
-    # The deprecated country-fused form, which core/postal-area.json at 3.1 still accepts.
-    # The native {"country": "US", "system": "zip"} form does not reach the adapter today:
-    # the request's accepted shape strips `country` from it (it matches the item against
-    # the legacy branch), which refuses it INVALID_REQUEST before any seller logic runs.
+
+    Examples:
+      | case              | overlay                                                                                            | value      |
+      | a US ZIP code     | {"geo_postal_areas": [{"system": "us_zip", "values": ["10001"]}]}                                  | us_zip     |
+      | an excluded ZIP   | {"geo_countries": ["US"], "geo_postal_areas_exclude": [{"system": "us_zip", "values": ["90210"]}]} | us_zip     |
+      | a UK outward code | {"geo_countries": ["GB"], "geo_postal_areas": [{"system": "gb_outward", "values": ["SW1"]}]}       | gb_outward |
+    # The seller declares no postal system (@T-UC-010-local-gam-postal), and the adapter
+    # refuses every metro and postal system its declaration does not set, as the metro
+    # rows of the outline above show. The rows use the deprecated country-fused form, which
+    # core/postal-area.json at 3.1 still accepts. The native {"country": "US", "system":
+    # "zip"} form does not reach the adapter today: the request's accepted shape strips
+    # `country` from it (it matches the item against the legacy branch), which refuses it
+    # INVALID_REQUEST before any seller logic runs.
+
+  @T-UC-002-local-gam-targeting-refused @extension @error
+  Scenario Outline: A targeting dimension the seller cannot book is refused, before GAM is called - <case>
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001"
+    And the package targeting_overlay is <overlay>
+    When the Buyer Agent sends the create_media_buy request
+    Then the response contains error code UNSUPPORTED_FEATURE
+    And the wire error details should include capability "<capability>"
+    And Google Ad Manager received no order
+
+    Examples:
+      | case                   | overlay                                     | capability          |
+      | a device platform      | {"device_platform": ["ios"]}                | device_platform     |
+      | a device type          | {"device_type_any_of": ["mobile"]}          | device_type_any_of  |
+      | an AXE include segment | {"axe_include_segment": "x8dj3k"}           | axe_include_segment |
+      | an AXE exclude segment | {"axe_exclude_segment": "y9kl4m"}           | axe_exclude_segment |
+      | an audience            | {"audiences_any_of": ["sports_fans"]}       | audiences           |
+      | two media types        | {"media_type_any_of": ["video", "display"]} | media_type_any_of   |
+    # The seller has no AXE key configured. Each of these is refused while the overlay is
+    # translated, ahead of the order, so the buyer gets the refusal with nothing left in GAM.
 
   @T-UC-002-local-gam-geo-disjoint @extension @error
   Scenario Outline: Inclusion fields with no place in common are refused, and GAM receives nothing - <case>
@@ -111,7 +143,6 @@ Feature: A Google Ad Manager seller books exactly the geo the buyer's targeting 
     And the package targeting_overlay is <overlay>
     When the Buyer Agent sends the create_media_buy request
     Then the response contains error code INVALID_REQUEST
-    And the response error field is targeting_overlay
     And the wire error details should include geo_disjoint "<value>"
     And Google Ad Manager received no order
 

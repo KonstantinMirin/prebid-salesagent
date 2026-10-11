@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.adapters.gam.managers.targeting import GAMTargetingManager
-from src.core.exceptions import AdCPCapabilityNotSupportedError
 from src.core.schemas import Targeting
 
 
@@ -30,18 +29,6 @@ def mock_adapter_config_three_keys():
         "custom_key1": "22222",  # Custom key for test_axe_segments_combine_with_other_custom_targeting
         "custom_key2": "33333",  # Custom key for test_axe_segments_combine_with_other_custom_targeting
     }
-    return mock_config
-
-
-@pytest.fixture
-def mock_adapter_config_no_keys():
-    """Fixture for mocked adapter config with no AXE keys configured."""
-    mock_config = MagicMock()
-    mock_config.axe_include_key = None
-    mock_config.axe_exclude_key = None
-    mock_config.axe_macro_key = None
-    # Empty custom_targeting_keys (no keys synced from GAM)
-    mock_config.custom_targeting_keys = {}
     return mock_config
 
 
@@ -199,39 +186,3 @@ def test_axe_segments_optional(mock_adapter_config_three_keys):
 
         # Verify geo targeting is present but no custom targeting for AXE
         assert "geoTargeting" in result
-
-
-def test_axe_include_segment_fails_if_key_not_configured(mock_adapter_config_no_keys):
-    """Test that axe_include_segment fails with clear error if axe_include_key not configured."""
-    with patch("src.core.database.database_session.get_db_session") as mock_session:
-        mock_db = MagicMock()
-        mock_session.return_value.__enter__.return_value = mock_db
-        mock_db.scalars.return_value.first.return_value = mock_adapter_config_no_keys
-
-        manager = GAMTargetingManager("tenant_123")
-
-        targeting_overlay = Targeting(
-            geo_countries=["US"],
-            axe_include_segment="x8dj3k",
-        )
-
-        with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
-            manager.build_targeting(manager.translate_targeting(targeting_overlay))
-
-
-def test_axe_exclude_segment_fails_if_key_not_configured(mock_adapter_config_no_keys):
-    """Test that axe_exclude_segment fails with clear error if axe_exclude_key not configured."""
-    with patch("src.core.database.database_session.get_db_session") as mock_session:
-        mock_db = MagicMock()
-        mock_session.return_value.__enter__.return_value = mock_db
-        mock_db.scalars.return_value.first.return_value = mock_adapter_config_no_keys
-
-        manager = GAMTargetingManager("tenant_123")
-
-        targeting_overlay = Targeting(
-            geo_countries=["US"],
-            axe_exclude_segment="y9kl4m",
-        )
-
-        with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
-            manager.build_targeting(manager.translate_targeting(targeting_overlay))

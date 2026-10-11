@@ -304,20 +304,8 @@ class GoogleAdManager(AdServerAdapter):
 
     @staticmethod
     def get_targeting_capabilities() -> TargetingCapabilities:
-        """Return targeting capabilities GAM adapter supports.
-
-        Declares the geo targeting this adapter books: countries, regions and Nielsen
-        DMAs, for the codes in its geo data (src/adapters/gam/geo_codes.json); any other
-        code is refused. Postal codes are refused, so no postal system is declared.
-
-        Returns:
-            TargetingCapabilities describing GAM's targeting support
-        """
-        return TargetingCapabilities(
-            geo_countries=True,
-            geo_regions=True,
-            nielsen_dma=True,
-        )
+        """The targeting the GAM targeting manager books, which also refuses every system it omits."""
+        return GAMTargetingManager.targeting_capabilities()
 
     @property
     def DEVICE_TYPE_MAP(self):

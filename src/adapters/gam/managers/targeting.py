@@ -16,8 +16,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from adcp.types.generated_poc.enums.metro_system import MetroAreaSystem
-
+from src.adapters.base import TargetingCapabilities
 from src.core.errors.details import CapabilityRefusalDetails
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -27,8 +26,8 @@ from src.core.exceptions import (
 )
 from src.services.targeting_capabilities import (
     extract_simple_values,
-    extract_system_values,
     geo_inclusion_cut,
+    nielsen_dma_codes,
     region_country,
 )
 
@@ -138,19 +137,6 @@ class GAMPackageTargeting:
     custom_key_values: dict[str, Any]
 
 
-def _gam_dma_codes(metros: list | None) -> set[str]:
-    """The Nielsen DMA codes in a ``geo_metros`` field; any other metro system is refused."""
-    by_system = extract_system_values(metros or [])
-    others = sorted(set(by_system) - {MetroAreaSystem.nielsen_dma.value})
-    if others:
-        raise AdCPCapabilityNotSupportedError(
-            details=CapabilityRefusalDetails(
-                capability="geo_system", rejected_value=others, accepted_values=[MetroAreaSystem.nielsen_dma.value]
-            )
-        )
-    return by_system.get(MetroAreaSystem.nielsen_dma.value, set())
-
-
 def _location_ids(field: str, codes: set[str], ids: Mapping[str, str]) -> dict[str, str]:
     """Each code's GAM id; a code with none is refused, naming *field* and every such code."""
     unmapped = sorted(code for code in codes if code not in ids)
@@ -181,6 +167,17 @@ class GAMTargetingManager:
 
     # Supported media types
     SUPPORTED_MEDIA_TYPES = {"video", "display", "native"}
+
+    @staticmethod
+    def targeting_capabilities() -> TargetingCapabilities:
+        """The targeting this manager books, which ``GoogleAdManager`` declares in get_adcp_capabilities.
+
+        Countries, regions and Nielsen DMAs, for the codes in the geo data
+        (``geo_codes.json``); any other code is refused. No postal system. ``translate_targeting``
+        refuses every metro and postal system this does not set, so the declaration is the
+        one statement of the geo systems GAM books.
+        """
+        return TargetingCapabilities(geo_countries=True, geo_regions=True, nielsen_dma=True)
 
     def __init__(
         self,
@@ -715,15 +712,9 @@ class GAMTargetingManager:
         if not targeting_overlay:
             return GAMPackageTargeting(criteria=criteria, custom_key_values={})
 
-        # Postal code targeting is not bookable through GAM's geo targets - fail loudly.
-        # The capability NAME travels as structured detail; the buyer-facing sentence is
-        # the code's own.
-        if targeting_overlay.geo_postal_areas:
-            raise AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(capability="geo_postal_areas"))
-        if targeting_overlay.geo_postal_areas_exclude:
-            raise AdCPCapabilityNotSupportedError(
-                details=CapabilityRefusalDetails(capability="geo_postal_areas_exclude")
-            )
+        # Every metro and postal system the declaration does not set is refused, so what
+        # get_adcp_capabilities declares and what this refuses are one statement.
+        self.targeting_capabilities().validate_geo_systems(targeting_overlay)
 
         geo_targeting = self._translate_geo(targeting_overlay)
         if geo_targeting:
@@ -877,7 +868,7 @@ class GAMTargetingManager:
             "geo_countries", extract_simple_values(targeting_overlay.geo_countries or []), geo.countries
         )
         regions = _location_ids("geo_regions", extract_simple_values(targeting_overlay.geo_regions or []), geo.regions)
-        dmas = _location_ids("geo_metros", _gam_dma_codes(targeting_overlay.geo_metros), geo.dmas)
+        dmas = _location_ids("geo_metros", nielsen_dma_codes(targeting_overlay.geo_metros), geo.dmas)
         excluded = [
             _location_ids(
                 "geo_countries_exclude",
@@ -887,7 +878,7 @@ class GAMTargetingManager:
             _location_ids(
                 "geo_regions_exclude", extract_simple_values(targeting_overlay.geo_regions_exclude or []), geo.regions
             ),
-            _location_ids("geo_metros_exclude", _gam_dma_codes(targeting_overlay.geo_metros_exclude), geo.dmas),
+            _location_ids("geo_metros_exclude", nielsen_dma_codes(targeting_overlay.geo_metros_exclude), geo.dmas),
         ]
 
         # A state and a DMA overlap only in part, and GAM's OR list cannot express that part.
