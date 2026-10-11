@@ -388,15 +388,31 @@ def declare_signed_requests_grading(env: Any) -> None:
     record carries the env's JWKS. Only the record's accepted JWKS can then verify the
     env's signature.
     """
-    from src.core.database.models import Tenant
-    from src.core.signing.grading import SignedRequestsGrading
     from tests.helpers.signing import UNRESOLVABLE_AGENT_URL
 
     attach_agent_url(env, UNRESOLVABLE_AGENT_URL)
     onboard_signing_keyid(env)
-    tenant = env._session.get(Tenant, env._tenant_id)
-    tenant.signed_requests_grading = SignedRequestsGrading(jwks=env.signing.jwks)
-    env._session.commit()
+    _write_signed_requests_grading(env, env.signing.jwks)
+
+
+def declare_test_kit_grading_target(env: Any) -> None:
+    """Make the env's tenant a signed-requests grading target for the conformance test kit.
+
+    The record's JWKS is the kit's published keys (``storyboard_signing.counterparty_jwks``),
+    none of which is the env's key. The env principal is untouched, so a request signed with
+    the env's key is an ordinary counterparty's on a grading tenant: its keys come from its
+    own walk, and the record's relaxations do not apply to it.
+    """
+    from scripts.setup.storyboard_signing import counterparty_jwks
+
+    _write_signed_requests_grading(env, counterparty_jwks())
+
+
+def _write_signed_requests_grading(env: Any, jwks: dict[str, Any]) -> None:
+    """Write the tenant's ``signed_requests_grading`` record with *jwks* as its accepted JWKS."""
+    from src.core.signing.grading import SignedRequestsGrading
+
+    env.configure_tenant_field("signed_requests_grading", SignedRequestsGrading(jwks=jwks))
 
 
 def ensure_declarable_identity_host(env: Any) -> None:

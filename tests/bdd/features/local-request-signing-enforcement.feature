@@ -254,6 +254,25 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # verifier that used the accepted JWKS for a bearer caller would let anyone satisfy a
     # signature requirement on the grading tenant (L1462-1465).
 
+  @T-UC-006-local-signing-grading-target-other-counterparty @request-signing @invariant
+  Scenario: on a grading target an onboarded counterparty outside the test kit is verified against its own keys
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller onboarded the Buyer Agent's signing key
+    And the seller is a signed-requests grading target whose accepted JWKS holds only the test kit's keys
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer has no authentication credentials
+    And the Buyer Agent signs the request
+    When the Buyer Agent syncs the creative
+    Then the creative should be processed successfully
+    And the seller verified exactly 1 request under the Buyer Agent's published key
+    # ONE variable apart from "a request signed by an onboarded counterparty is served
+    # without a bearer": the seller is also a grading target. runner.yaml L55-60 and
+    # L108-126 scope the accepted JWKS and the replay relaxations to the test-kit
+    # counterparty's keyids. The Buyer's keyid is not one of them, so its keys come from its
+    # own agent URL (L1091-1092); a verifier that used the accepted JWKS for it would find
+    # no key and answer request_signature_key_unknown.
+
   @T-UC-006-local-signing-verified-label-identifies @request-signing @invariant
   Scenario: an onboarded counterparty is identified by the signature label the seller verifies
     Given a creative with a known format_id

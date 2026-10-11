@@ -164,6 +164,17 @@ def given_seller_is_grading_target(ctx: dict) -> None:
     ctx["env"].declare_signed_requests_grading()
 
 
+@given("the seller is a signed-requests grading target whose accepted JWKS holds only the test kit's keys")
+def given_seller_is_test_kit_grading_target(ctx: dict) -> None:
+    """Declare this seller a ``signed_requests`` grading target for the conformance test kit.
+
+    runner.yaml @ v3.1.1 L55-60 and L108-126: the accepted JWKS and the lower replay cap are
+    for the test-kit counterparty's keyids only. The Buyer Agent's keyid is not among them,
+    so the Buyer stays an ordinary counterparty whose keys come from its own origin.
+    """
+    ctx["env"].declare_test_kit_grading_target()
+
+
 @given("the Buyer Agent signs the request with an additional signature label ahead of it naming a key nobody onboarded")
 def given_buyer_signs_with_extra_label(ctx: dict) -> None:
     """Ask for the ``"extra_label"`` realization: a real ``sig1`` signature, one unverified label first.
