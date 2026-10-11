@@ -5969,6 +5969,17 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_build_media_buy_create_list_env,
         seed=_seed_media_buy_chain,
     ),
+    # A real create through the scenario's transport, then a read of that buy on the same
+    # env and identity: the initial status (get_media_buys) and a GAM buy's packages
+    # (get_media_buy_delivery). A factory-seeded buy cannot stand in, because it carries its
+    # package ids in raw_request and so cannot show what create persisted. Unscoped and
+    # ahead of the UC rows, so neither uc002-not-wired nor uc004-poll claims these tags.
+    EnvRoute(
+        tag="local-buy-readback",
+        when=lambda m: any(t.startswith(("T-UC-002-local-initial-status-", "T-UC-004-local-gam-readback-")) for t in m),
+        env_builder=_build_media_buy_create_list_env,
+        seed=_seed_media_buy_chain_create_dispatch,
+    ),
     # ── @tenantid (local tenant-identification-routes feature) ──────────────
     # An UNSCOPED `when` row for the same reason as the rows above and below: the
     # scenarios carry a @tenantid tag rather than a T-UC-<n> identity, so

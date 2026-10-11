@@ -26,13 +26,10 @@ from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AdapterPackageDelivery,
     DeliveryTotals,
-    GetMediaBuyDeliveryRequest,
-    GetMediaBuyDeliveryResponse,
     GetProductsResponse,
     ReportingPeriod,
 )
 from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
-from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.core.tools.products import _get_products_impl
 from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
 from src.services.webhook_delivery_service import (
@@ -799,6 +796,7 @@ class DeliveryPollMixin:
         packages: list[dict[str, Any]] | None,
         conversions: float | None = None,
         conversion_value: float | None = None,
+        breakdown: bool = True,
     ) -> AdapterGetMediaBuyDeliveryResponse:
         """Normalize set_adapter_response params into the delivery intent.
 
@@ -830,6 +828,8 @@ class DeliveryPollMixin:
                 )
             ]
             totals = DeliveryTotals(impressions=float(impressions), spend=spend)
+        if not breakdown:
+            by_package = []
 
         if clicks is not None:
             totals.clicks = float(clicks)
@@ -859,6 +859,7 @@ class DeliveryPollMixin:
         packages: list[dict[str, Any]] | None = None,
         conversions: float | None = None,
         conversion_value: float | None = None,
+        breakdown: bool = True,
     ) -> None:
         """Configure adapter to return specific delivery data for a media buy.
 
@@ -866,13 +867,15 @@ class DeliveryPollMixin:
         For multi-package responses, pass ``packages`` — a list of dicts with
         ``package_id``, ``impressions``, and ``spend`` keys. Totals are auto-computed
         as the sum of per-package values. ``conversions`` / ``conversion_value``
-        are totals-level (spec-optional metrics; omitted when None).
+        are totals-level (spec-optional metrics; omitted when None). ``breakdown=False``
+        reports the totals with an empty ``by_package``, the shape an ad server with no
+        per-package reporting returns (Kevel, Broadstreet).
 
         In-process: injects the response on the adapter MagicMock. E2E: persists
         a ``DeliverySimulationConfig`` row the live server's Mock adapter reads.
         """
         resp = self._build_adapter_delivery(
-            media_buy_id, impressions, spend, package_id, clicks, packages, conversions, conversion_value
+            media_buy_id, impressions, spend, package_id, clicks, packages, conversions, conversion_value, breakdown
         )
         self._realize_adapter_response(resp)
 
@@ -889,39 +892,6 @@ class DeliveryPollMixin:
     def set_adapter_error(self, exception: Exception) -> None:
         """Make the adapter raise the given exception on get_media_buy_delivery."""
         self.mock["adapter"].return_value.get_media_buy_delivery.side_effect = exception  # type: ignore[attr-defined]
-
-    def call_impl(
-        self,
-        media_buy_ids: list[str] | None = None,
-        start_date: str | None = None,
-        end_date: str | None = None,
-        status_filter: list[str] | None = None,
-        **extra: Any,
-    ) -> GetMediaBuyDeliveryResponse:
-        """Call _get_media_buy_delivery_impl with the given parameters."""
-        self._commit_factory_data()  # type: ignore[attr-defined]
-
-        # Pop identity — it's injected by call_via for transport dispatch
-        # but is not a GetMediaBuyDeliveryRequest field.
-        # Sentinel distinguishes "not provided" from "explicitly None".
-        from tests.harness.transport import NO_IDENTITY_OVERRIDE
-
-        raw_identity = extra.pop("identity", NO_IDENTITY_OVERRIDE)
-        identity = self.identity if raw_identity is NO_IDENTITY_OVERRIDE else raw_identity  # type: ignore[attr-defined]
-
-        kwargs: dict[str, Any] = {}
-        if media_buy_ids is not None:
-            kwargs["media_buy_ids"] = media_buy_ids
-        if start_date is not None:
-            kwargs["start_date"] = start_date
-        if end_date is not None:
-            kwargs["end_date"] = end_date
-        if status_filter is not None:
-            kwargs["status_filter"] = status_filter
-        kwargs.update(extra)
-
-        req = GetMediaBuyDeliveryRequest(**kwargs)
-        return _get_media_buy_delivery_impl(req, identity)
 
     @staticmethod
     def _make_default_adapter_response() -> AdapterGetMediaBuyDeliveryResponse:

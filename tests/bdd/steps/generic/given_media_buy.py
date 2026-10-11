@@ -2075,7 +2075,13 @@ def _create_approved_creative(
     return creative
 
 
-def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x250") -> None:
+def _add_inline_creatives(
+    ctx: dict,
+    count: int = 1,
+    fmt_id: str = "display_300x250",
+    agent_url: str = "https://creative.adcontextprotocol.org",
+    asset_id: str = "primary",
+) -> None:
     """Add inline creative dicts to the first package's 'creatives' field.
 
     Builds creative payloads matching the product's accepted format, through
@@ -2100,14 +2106,32 @@ def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x
                 CreativeAssetRequestFactory.payload(
                     creative_id=f"inline-cr-{i + 1:03d}",
                     name=f"Inline Creative {i + 1}",
-                    format_id={
-                        "agent_url": "https://creative.adcontextprotocol.org",
-                        "id": fmt_id,
-                    },
-                    assets=build_assets(image_spec("primary", url=f"https://example.com/banner-{i + 1}.png")),
+                    format_id={"agent_url": agent_url, "id": fmt_id},
+                    assets=build_assets(image_spec(asset_id, url=f"https://example.com/banner-{i + 1}.png")),
                 )
             )
         pkg["creatives"] = creatives
+
+
+@given("the request's package carries an inline image creative in its product's format")
+def given_package_carries_inline_creative_in_product_format(ctx: dict) -> None:
+    """The first package uploads one image creative, in the format its product row declares.
+
+    The format is read off the seeded product (``agent_url`` and ``id``), not named here, so
+    the creative is one the product accepts on every transport, the live server's
+    in-network creative agent included. The image goes under the format's own image asset
+    id, read off the reference catalog's definition of that format.
+    """
+    from adcp.utils import get_individual_assets
+
+    from src.core.format_cache import load_reference_formats
+
+    product_format = ctx["default_product"].format_ids[0]
+    definition = next(fmt for fmt in load_reference_formats() if fmt.format_id.id == product_format["id"])
+    image_asset_id = next(asset.asset_id for asset in get_individual_assets(definition) if asset.asset_type == "image")
+    _add_inline_creatives(
+        ctx, fmt_id=product_format["id"], agent_url=product_format["agent_url"], asset_id=image_asset_id
+    )
 
 
 @given(parsers.parse("the creative scenario is {partition}"))

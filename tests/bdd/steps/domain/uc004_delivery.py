@@ -21,6 +21,7 @@ from adcp.types import AuthenticationScheme
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import (
+    assert_by_package_exactly,
     error_envelope_or_none,
     payload_or_none,
     require_payload,
@@ -458,6 +459,55 @@ def given_adapter_package_metrics(ctx: dict, impressions: int, spend: float, pkg
         impressions=impressions,
         spend=spend,
         packages=[{"package_id": pkg_id, "impressions": impressions, "spend": spend}],
+    )
+
+
+@given(
+    parsers.parse(
+        'the ad server adapter reports {impressions:d} impressions and {spend:g} spend for "{mb_id}" '
+        "with no package breakdown"
+    )
+)
+def given_adapter_reports_no_breakdown(ctx: dict, impressions: int, spend: float, mb_id: str) -> None:
+    """The adapter reports the buy's totals and no per-package figures, as Kevel and Broadstreet do."""
+    ctx["env"].set_adapter_response(media_buy_id=mb_id, impressions=impressions, spend=spend, breakdown=False)
+
+
+@given(parsers.parse('the media buy "{mb_id}" has a second package "{pkg_id}"'))
+def given_media_buy_second_package(ctx: dict, mb_id: str, pkg_id: str) -> None:
+    """The seeded buy carries one more package row, on the same terms as its first."""
+    from tests.factories import MediaPackageFactory
+
+    MediaPackageFactory(media_buy=_seeded_media_buy(ctx, mb_id), package_id=pkg_id)
+
+
+@given(
+    parsers.parse(
+        "another of the seller's products has an option with package \"{pkg_id}\"'s pricing_option_id, "
+        "at {pricing_model} rate {rate:g}"
+    )
+)
+def given_other_product_shares_option_id(ctx: dict, pkg_id: str, pricing_model: str, rate: float) -> None:
+    """A second product of the tenant prices an option under the package's option id, at another rate.
+
+    ``pricing_option_id`` is unique only within its product (pricing-options/*.json), so
+    this is a catalog the seller may hold. The id is read off the package row the scenario
+    seeded, not restated.
+    """
+    from decimal import Decimal
+
+    from tests.factories import PricingOptionFactory, ProductFactory
+
+    mb_id = next(reversed(ctx.get("media_buys", {})), None)
+    assert mb_id, "the shared option id needs a seeded media buy"
+    package = next(row for row in _seeded_media_buy(ctx, mb_id).packages if row.package_id == pkg_id)
+    PricingOptionFactory(
+        product=ProductFactory(tenant=ctx["db_tenant"]),
+        pricing_option_id=package.package_config["pricing_option_id"],
+        pricing_model=pricing_model,
+        currency="USD",
+        is_fixed=True,
+        rate=Decimal(str(rate)),
     )
 
 
@@ -3578,6 +3628,17 @@ def _assert_wire_delivery_totals(ctx: dict, mb_id: str, *, impressions: int, spe
     )
 
 
+@then(parsers.parse('the delivery report for "{mb_id}" has exactly these packages:'))
+def then_delivery_report_has_packages(ctx: dict, mb_id: str, datatable: list[list[str]]) -> None:
+    """The buy's ``by_package`` is exactly the table's packages, each with the stated figures."""
+    header, *rows = datatable
+    expected = {}
+    for row in rows:
+        cells = dict(zip(header, (cell.strip() for cell in row), strict=True))
+        expected[cells.pop("package")] = cells
+    assert_by_package_exactly(wire_entry(ctx, "media_buy_deliveries", media_buy_id=mb_id), expected)
+
+
 @then("no real billing records should have been created")
 def then_no_billing(ctx: dict) -> None:
     """Assert sandbox mode — verify via response flag and absence of billing adapter calls."""
@@ -4021,10 +4082,10 @@ def _seed_package_terms(
 ) -> None:
     """Give the buy seeded by the preceding Given exactly one package on these terms.
 
-    Both halves of a package's identity move together, which is the whole point: the
-    persisted request names *pkg_id* and the option, and the ``MediaPackage`` row carries
-    the matching ``pricing_info``. The delivery path joins them by ``package_id``, so
-    seeding one without the other grades nothing.
+    Both halves of a package's identity move together: the persisted request names
+    *pkg_id* and the option, and the ``MediaPackage`` row carries the matching
+    ``pricing_info``. The buy's rows are its packages, so the factory's default package
+    is dropped (delete-orphan) and the named one is the only row the buy carries.
     """
     env = ctx["env"]
     if env is None or not hasattr(env, "_session"):
@@ -4032,10 +4093,8 @@ def _seed_package_terms(
 
     from decimal import Decimal
 
-    from sqlalchemy import select
     from sqlalchemy.orm import attributes
 
-    from src.core.database.models import MediaBuy
     from src.core.helpers.pricing_helpers import pricing_info_for
     from tests.factories import MediaPackageFactory, PricingOptionFactory
     from tests.factories.media_buy import request_package
@@ -4052,18 +4111,28 @@ def _seed_package_terms(
 
     mb_id = next(reversed(ctx.get("media_buys", {})), None)
     assert mb_id, "package terms need a media buy — the scenario must seed one first"
-    session = env._session
-    buy = session.scalars(select(MediaBuy).filter_by(media_buy_id=mb_id)).first()
-    assert buy is not None, f"media buy {mb_id!r} was not seeded into the database"
+    buy = _seeded_media_buy(ctx, mb_id)
 
     buy.raw_request = {**(buy.raw_request or {}), "packages": [package]}
     attributes.flag_modified(buy, "raw_request")
+    buy.packages[:] = [row for row in buy.packages if row.package_id == pkg_id]
     MediaPackageFactory(
         media_buy=buy,
         package_id=pkg_id,
         package_config={**package, "pricing_info": pricing_info_for(option, bid_price=bid_price)},
     )
-    session.commit()
+    env._session.commit()
+
+
+def _seeded_media_buy(ctx: dict, mb_id: str) -> Any:
+    """The ``MediaBuy`` row a preceding Given seeded under *mb_id*, read on the env's session."""
+    from sqlalchemy import select
+
+    from src.core.database.models import MediaBuy
+
+    buy = ctx["env"]._session.scalars(select(MediaBuy).filter_by(media_buy_id=mb_id)).first()
+    assert buy is not None, f"media buy {mb_id!r} was not seeded into the database"
+    return buy
 
 
 def _parse_request_params(params_str: str) -> dict[str, Any]:

@@ -1,6 +1,8 @@
 """MediaBuyCreateEnv — integration test environment for _create_media_buy_impl.
 
-Patches: adapter, audit logger, slack notifier, context manager, Google's GAM SOAP client.
+Patches: adapter, audit logger, slack notifier, context manager, Google's GAM SOAP client,
+and the creative agent registry's preview and build calls (format lookups stay the
+deployment's registry).
 Real: get_db_session, MediaBuyRepository, all validation (all hit real DB).
 ``GamSellerMixin.sell_through_gam`` (``tests/harness/gam.py``) turns the adapter patch into
 production's ``get_adapter``, so a GAM seller runs the real ``GoogleAdManager`` adapter over
@@ -18,6 +20,10 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 from src.adapters.base import AdapterCreateResult, ResponsePackage
+
+# The registry the deployment selected, bound before any patch starts, so the stand-in below
+# wraps the real one rather than a class chosen here.
+from src.core.creative_agent_registry import get_creative_agent_registry as deployment_creative_agent_registry
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.schemas._base import CreateMediaBuyResult
 from tests.factories.mint import mint
@@ -25,6 +31,7 @@ from tests.harness._base import IntegrationEnv, json_safe
 from tests.harness.egress import EgressHatchMixin
 from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
 from tests.harness.transport import DeliverResult
+from tests.helpers.creative_test_helpers import make_registry_mock
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
 # request with NO key (the schema rejects it as "Field required" — AdCP 3.0.1).
@@ -76,6 +83,10 @@ class MediaBuyCreateEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
         "slack": "src.core.tools.media_buy_create.get_slack_notifier",
         "context_mgr": "src.core.tools.media_buy_create.get_context_manager",
         "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
+        # Inline creatives are synced inside create_media_buy, and the sync asks the
+        # registry for a preview, which the deployment's registry answers by dialing the
+        # creative agent. CreativeSyncEnv's target, so both envs stand in the same seam.
+        "creative_registry": "src.core.creative_agent_registry.get_creative_agent_registry",
         **GAM_CLIENT_PATCH,
     }
     REST_ENDPOINT = "/api/v1/media-buys"
@@ -335,6 +346,11 @@ class MediaBuyCreateEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
         self.mock["context_mgr"].return_value = self._build_mock_context_manager(tool_name="create_media_buy")
 
         self._configure_gam_client()
+
+        # Creative agent: format lookups (and RealFormatResolverMediaBuyCreateEnv's real
+        # format_resolver chain) run the deployment's registry; a preview or build answers
+        # the inert no-result instead of dialing the agent.
+        self.mock["creative_registry"].return_value = make_registry_mock(base=deployment_creative_agent_registry())
 
         # Setup checklist: pass by default
 

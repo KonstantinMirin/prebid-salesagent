@@ -19,11 +19,11 @@ The client patch is inert for a tenant on the Mock adapter, which never construc
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from tests.harness._realize import e2e_unsupported, realize_e2e
-from tests.helpers.gam_client import GAM_CREATE_METHODS, GAM_SENT_METHODS, stub_gam_client
+from tests.helpers.gam_client import GAM_CREATE_METHODS, GAM_SENT_METHODS, serve_gam_report, stub_gam_client
 
 if TYPE_CHECKING:
     from unittest.mock import MagicMock
@@ -35,6 +35,10 @@ GAM_CLIENT_PATCH: dict[str, str] = {
     # stand-in. Inert until ``sell_through_gam`` makes the tenant a GAM seller: a tenant on
     # the Mock adapter never constructs one.
     "gam_client": "src.adapters.gam.client.ad_manager.AdManagerClient",
+    # The download of a finished GAM report from Google's report host, by the name
+    # gam_reporting_service calls it. Inert unless the tenant is a GAM seller. The egress
+    # gateway's own handling of this download is graded in test_vendor_egress.py.
+    "gam_report_download": "src.adapters.gam_reporting_service.send",
 }
 
 #: The trafficker and ad unit a GAM seller has when the scenario does not name them.
@@ -64,9 +68,20 @@ class GamSellerMixin:
         """Every ``AdManagerClient(...)`` built during the scenario is the same stand-in client.
 
         The adapter's, a health check's, the approval and sync services': one scenario has
-        one GAM network.
+        one GAM network. A seller whose scenario states no report reads a finished, empty one.
         """
         self.mock["gam_client"].return_value = stub_gam_client()
+        self.serve_gam_report_rows(())
+
+    def serve_gam_report_rows(self, rows: Iterable[Mapping[str, object]], *, job_status: str = "COMPLETED") -> None:
+        """GAM's report job ends in *job_status*, and the finished report holds *rows*.
+
+        Rows are keyed by GAM's own column names (``Dimension.*``, ``Column.*``), as
+        ``serve_gam_report`` writes them.
+        """
+        self.mock["gam_report_download"].return_value = serve_gam_report(
+            self.mock["gam_client"].return_value, rows=list(rows), job_status=job_status
+        )
 
     @realize_e2e(
         e2e_unsupported(

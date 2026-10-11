@@ -22,20 +22,21 @@ from datetime import date
 from typing import Any
 from unittest.mock import MagicMock
 
-from src.core.schemas import AdapterGetMediaBuyDeliveryResponse
+from src.core.schemas import AdapterGetMediaBuyDeliveryResponse, GetMediaBuyDeliveryResponse
 from tests.factories.media_buy import default_request_packages, pricing_options_for
 from tests.harness._base import BaseTestEnv
 from tests.harness._mixins import DeliveryPollMixin
 from tests.harness._mock_uow import make_mock_uow
+from tests.harness.delivery_poll import DeliveryDispatchMixin
 
 
-class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
+class DeliveryPollEnv(DeliveryDispatchMixin, DeliveryPollMixin, BaseTestEnv):
     """Unit test environment for _get_media_buy_delivery_impl.
 
     Fluent API (from DeliveryPollMixin):
         set_adapter_response(...)  -- configure adapter return for a media_buy_id
         set_adapter_error(exc)     -- make the adapter raise an exception
-        call_impl(...)             -- call _get_media_buy_delivery_impl
+        call_impl(...)             -- call _get_media_buy_delivery_impl (DeliveryDispatchMixin)
 
     Unit-only API:
         add_buy(...)               -- add a mock MediaBuy to the UoW repo
@@ -123,6 +124,9 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
             self._uow_instance.media_buys.get_by_principal.return_value = list(self._buys)
 
         return buy
+
+    def call_impl(self, **kwargs: Any) -> GetMediaBuyDeliveryResponse:
+        return self._call_delivery_impl(**kwargs)
 
     def set_circuit_open(self, is_open: bool) -> None:
         """Open or close the tenant's reporting circuit breaker for this env.
