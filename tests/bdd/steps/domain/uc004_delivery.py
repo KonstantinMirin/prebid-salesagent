@@ -1765,9 +1765,7 @@ def when_request_without_field(ctx: dict, mb_id: str, field: str) -> None:
 @then(parsers.re(r'the response should include delivery data for "(?P<mb_id1>[^"]+)" and "(?P<mb_id2>[^"]+)"'))
 def then_includes_delivery_data_both(ctx: dict, mb_id1: str, mb_id2: str) -> None:
     """Assert response includes delivery data for both media buys."""
-    resp = require_payload(ctx)
-    deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    mb_ids = [d.media_buy_id for d in deliveries]
+    mb_ids = _wire_delivery_ids(ctx)
     assert mb_id1 in mb_ids, f"Expected delivery data for '{mb_id1}', got: {mb_ids}"
     assert mb_id2 in mb_ids, f"Expected delivery data for '{mb_id2}', got: {mb_ids}"
 
@@ -1775,18 +1773,14 @@ def then_includes_delivery_data_both(ctx: dict, mb_id1: str, mb_id2: str) -> Non
 @then(parsers.re(r'the response should include delivery data for "(?P<mb_id>[^"]+)"$'))
 def then_includes_delivery_data(ctx: dict, mb_id: str) -> None:
     """Assert response includes delivery data for the given media buy."""
-    resp = require_payload(ctx)
-    deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    mb_ids = [d.media_buy_id for d in deliveries]
+    mb_ids = _wire_delivery_ids(ctx)
     assert mb_id in mb_ids, f"Expected delivery data for '{mb_id}', got: {mb_ids}"
 
 
 @then(parsers.parse('the response should include delivery data for "{mb_id}" only'))
 def then_includes_delivery_data_only(ctx: dict, mb_id: str) -> None:
     """Assert response includes delivery data for ONLY the given media buy."""
-    resp = require_payload(ctx)
-    deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    mb_ids = [d.media_buy_id for d in deliveries]
+    mb_ids = _wire_delivery_ids(ctx)
     assert mb_ids == [mb_id], f"Expected only '{mb_id}', got: {mb_ids}"
 
 
@@ -1808,7 +1802,7 @@ def then_excludes_delivery_data(ctx: dict, mb_id: str) -> None:
     sit here (``then_no_delivery_data``) competed for both of them, and which one
     ran was decided by plugin registration order.
     """
-    mb_ids = [d.get("media_buy_id") for d in wire_field(ctx, "media_buy_deliveries")]
+    mb_ids = _wire_delivery_ids(ctx)
     assert mb_id not in mb_ids, f"Expected no delivery data for '{mb_id}', got: {mb_ids}"
 
 
@@ -1904,10 +1898,9 @@ def then_legacy_status_alias(ctx: dict, legacy_status: str, status: str) -> None
     the new one as equivalent" to be meaningful at all) rather than silently
     also emitting the retired legacy value.
     """
-    resp = require_payload(ctx)
-    d = resp.media_buy_deliveries[0]
-    assert d.status == status, f"Expected canonical status {status!r}, got {d.status!r}"
-    assert d.status != legacy_status, (
+    actual = _wire_sole_delivery(ctx).get("status")
+    assert actual == status, f"Expected canonical status {status!r}, got {actual!r}"
+    assert actual != legacy_status, (
         f"response carries the retired legacy status {legacy_status!r} instead of canonical {status!r}"
     )
 
@@ -2055,28 +2048,30 @@ def then_response_errors_include_for_mb(ctx: dict, code: str, mb_id: str) -> Non
     is unreachable, so a per-delivery lookup (``the response should not include an error
     for``) would find nothing and pass vacuously.
 
+    The match is read off the wire (``wire_advisory_errors``), as the buyer received it.
+
     Sets ``ctx["error"]`` to the MATCHED error so the per-error Thens that follow grade
     that object. That is the same promotion ``then_operation_fails`` performs, made
-    explicit and narrowed to the error this step actually found.
+    explicit and narrowed to the error this step actually found. The promoted object is
+    the payload's entry at the matched index: those Thens read ``message`` and
+    ``suggestion`` through ``_get_error_dict``, and the wire reader strips ``message``.
     """
-    resp = payload_or_none(ctx)
-    assert resp is not None, (
-        f"No response payload to read errors[] from -- the dispatch produced nothing. ctx: {list(ctx)}"
+    errors = wire_advisory_errors(ctx)
+    index = next(
+        (
+            i
+            for i, err in enumerate(errors)
+            if err.get("code") == code and (err.get("details") or {}).get("media_buy_id") == mb_id
+        ),
+        None,
     )
-    errors = list(getattr(resp, "errors", None) or [])
-    assert errors, (
-        f"Response carries an EMPTY errors[], so it reports no task-level failure at all. "
-        f"Expected {code!r} for media buy {mb_id!r}."
-    )
-    for err in errors:
-        details = getattr(err, "details", None) or {}
-        if getattr(err, "code", None) == code and details.get("media_buy_id") == mb_id:
-            ctx["error"] = err
-            return
-    raise AssertionError(
+    assert index is not None, (
         f"No errors[] entry with code {code!r} for media buy {mb_id!r}. Carried: "
-        f"{[(getattr(e, 'code', None), (getattr(e, 'details', None) or {}).get('media_buy_id')) for e in errors]}"
+        f"{[(e.get('code'), (e.get('details') or {}).get('media_buy_id')) for e in errors]}"
     )
+    promoted = require_payload(ctx).errors[index]
+    assert promoted.code == code, f"payload errors[{index}] is {promoted.code!r}, the wire's is {code!r}"
+    ctx["error"] = promoted
 
 
 @then(parsers.parse('no error should be returned for "{mb_id}"'))
@@ -3213,6 +3208,15 @@ def then_packages_include_field(ctx: dict, field: str) -> None:
             assert value, f"Package {pkg.package_id!r} field {field!r} is empty list"
         checked += 1
     assert checked >= 1, "Response has no packages to check"
+
+
+def _wire_delivery_ids(ctx: dict) -> list[str]:
+    """The ``media_buy_id`` of every ``media_buy_deliveries`` entry, in wire order.
+
+    Sole reader for the include/exclude Thens, so "included" and "omitted" are graded
+    against the same representation of the response.
+    """
+    return [delivery.get("media_buy_id") for delivery in wire_field(ctx, "media_buy_deliveries")]
 
 
 def _wire_sole_delivery(ctx: dict) -> dict:

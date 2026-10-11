@@ -5,8 +5,12 @@ metadata, the target date and the clock passed in. The spec defines no value for
 (get-media-buy-delivery-response.json: ``expected_availability`` is "When delayed data is
 expected to be available"), and no wire carries it yet: the delivery webhook holds while
 the period is unfinished, and a buyer's pull carries no ``expected_availability``. When the
-``T-UC-004-delayed-*`` scenarios are bound and grade the time on the webhook, this test is
-deleted in favour of them.
+``T-UC-004-status-reporting-delayed``, ``T-UC-004-webhook-partial-data`` and
+``T-UC-004-boundary-delayed-data`` scenarios are bound and grade the time on the webhook, this
+test is deleted in favour of them.
+
+Each row named for a check is one where only that check fails, so deleting the check fails
+the row.
 """
 
 from __future__ import annotations
@@ -52,21 +56,21 @@ def _report(query_type: str, *, end: datetime, valid_until: datetime) -> Reporti
             _report("this_month", end=_et(2025, 1, 15, 12), valid_until=_et(2025, 1, 14, 23, 59, 59)),
             _utc(2025, 1, 15, 17),
             _et(2025, 1, 16, 7, 5),
-            id="buyer-pull-midday-check-3",
+            id="buyer-pull-midday-check-2",
         ),
         pytest.param(
             _utc(2025, 1, 16, 2),
             _report("this_month", end=_et(2025, 1, 15, 21), valid_until=_et(2025, 1, 14, 23, 59, 59)),
             _utc(2025, 1, 16, 2),
             _et(2025, 1, 16, 7, 5),
-            id="buyer-pull-evening-check-2",
+            id="buyer-pull-evening-target-date-read-in-et-check-2",
         ),
         pytest.param(
-            _utc(2025, 1, 1, 8),
-            _report("today", end=_et(2025, 1, 1, 3), valid_until=_et(2024, 12, 31, 23)),
-            _utc(2025, 1, 1, 0),
-            _et(2025, 1, 1, 7, 5),
-            id="webhook-early-morning-check-1",
+            _utc(2025, 1, 15, 8),
+            _report("today", end=_et(2025, 1, 15, 3), valid_until=_et(2025, 1, 14, 23)),
+            _et(2025, 1, 14, 23, 59),
+            _et(2025, 1, 15, 7, 5),
+            id="yesterday-before-ready-hour-check-1",
         ),
         pytest.param(
             _utc(2025, 1, 15, 17),

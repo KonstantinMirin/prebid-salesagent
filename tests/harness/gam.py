@@ -23,7 +23,13 @@ from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from tests.harness._realize import e2e_unsupported, realize_e2e
-from tests.helpers.gam_client import GAM_CREATE_METHODS, GAM_SENT_METHODS, serve_gam_report, stub_gam_client
+from tests.helpers.gam_client import (
+    GAM_CREATE_METHODS,
+    GAM_REPORT_DOWNLOAD_TARGET,
+    GAM_SENT_METHODS,
+    serve_gam_report,
+    stub_gam_client,
+)
 
 if TYPE_CHECKING:
     from unittest.mock import MagicMock
@@ -35,10 +41,10 @@ GAM_CLIENT_PATCH: dict[str, str] = {
     # stand-in. Inert until ``sell_through_gam`` makes the tenant a GAM seller: a tenant on
     # the Mock adapter never constructs one.
     "gam_client": "src.adapters.gam.client.ad_manager.AdManagerClient",
-    # The download of a finished GAM report from Google's report host, by the name
-    # gam_reporting_service calls it. Inert unless the tenant is a GAM seller. The egress
-    # gateway's own handling of this download is graded in test_vendor_egress.py.
-    "gam_report_download": "src.adapters.gam_reporting_service.send",
+    # The download of a finished GAM report from Google's report host. Inert unless the
+    # tenant is a GAM seller. The egress gateway's own handling of this download is graded
+    # in test_vendor_egress.py.
+    "gam_report_download": GAM_REPORT_DOWNLOAD_TARGET,
 }
 
 #: The trafficker and ad unit a GAM seller has when the scenario does not name them.
