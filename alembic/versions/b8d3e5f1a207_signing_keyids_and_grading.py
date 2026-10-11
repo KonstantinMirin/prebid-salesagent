@@ -1,10 +1,10 @@
-"""Onboarded request-signing keyids, and the signed-requests grading record
+"""Onboarded request-signing keyids, and the signed-requests test counterparty's record
 
-1. ``principal_signing_keyids`` maps a keyid to the counterparty whose ``agent_url`` is its
-   brand.json ``agents[]`` entry (security.mdx @ v3.1.1 L1088-1094). The foreign key targets
-   ``uq_principals_tenant_agent_url``; ``keyid`` uses ``collation="C"`` as ``adcp_replay`` does.
-2. ``tenants.signed_requests_grading`` holds the signed-requests test kit's relaxations for a
-   tenant declared a grading target.
+1. ``principal_signing_keyids`` maps a keyid to the counterparty principal whose
+   ``agent_url`` is its brand.json ``agents[]`` entry (security.mdx @ v3.1.1 L1088-1094).
+   ``keyid`` uses ``collation="C"`` as ``adcp_replay`` does.
+2. ``principals.signed_requests_grading`` holds the signed-requests test kit's relaxations
+   on the kit's test counterparty.
 
 Revision ID: b8d3e5f1a207
 Revises: 7f31c0ab94d2
@@ -28,32 +28,30 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.add_column(
-        "tenants",
+        "principals",
         sa.Column(
             "signed_requests_grading",
             postgresql.JSONB(),
             nullable=True,
-            comment="signed_requests grading target: the test kit's JWKS, replay cap and TTL; NULL = not a grading target",
+            comment="signed_requests test counterparty: the kit's JWKS, replay cap and TTL; NULL = an ordinary counterparty",
         ),
     )
     op.create_table(
         "principal_signing_keyids",
         sa.Column("tenant_id", sa.String(length=50), nullable=False),
         sa.Column("keyid", sa.Text(collation="C"), nullable=False),
-        sa.Column("agent_url", sa.String(length=500), nullable=False),
+        sa.Column("principal_id", sa.String(length=50), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.PrimaryKeyConstraint("tenant_id", "keyid"),
         sa.ForeignKeyConstraint(
-            ["tenant_id", "agent_url"],
-            ["principals.tenant_id", "principals.agent_url"],
+            ["tenant_id", "principal_id"],
+            ["principals.tenant_id", "principals.principal_id"],
             ondelete="CASCADE",
             name="fk_principal_signing_keyids_principal",
         ),
     )
-    op.create_index("idx_principal_signing_keyids_agent", "principal_signing_keyids", ["tenant_id", "agent_url"])
 
 
 def downgrade() -> None:
-    op.drop_index("idx_principal_signing_keyids_agent", table_name="principal_signing_keyids")
     op.drop_table("principal_signing_keyids")
-    op.drop_column("tenants", "signed_requests_grading")
+    op.drop_column("principals", "signed_requests_grading")

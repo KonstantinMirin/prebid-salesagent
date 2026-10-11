@@ -35,16 +35,16 @@ B3/salesagent-z6nr.14 inherits it): the signed-requests test-kit's vectors carry
 leave a row live ~360s — 6x the kit's ``window_seconds: 60``. Vector ``020-rate-abuse``
 drives that keyid to its overridden cap of 100, and those rows would then trip step 9a
 for every LATER vector, including ``016-replayed-nonce``'s first (must-be-accepted)
-submission. A grading tenant's ``signed_requests_grading`` record
-(:class:`~src.core.signing.grading.SignedRequestsGrading`) clamps the runner's keyids to
-~70s, which is above ``min_replay_ttl_seconds: 10`` and ``max_interval_seconds: 5`` (so
-016 still grades and cannot false-green) and above ``window_seconds: 60`` (so 020 still
+submission. The test counterparty's ``signed_requests_grading`` record
+(:class:`~src.core.signing.grading.SignedRequestsGrading`) clamps its rows to ~70s,
+which is above ``min_replay_ttl_seconds: 10`` and ``max_interval_seconds: 5`` (so 016
+still grades and cannot false-green) and above ``window_seconds: 60`` (so 020 still
 reaches the cap), while draining between vectors. The clamp is sound ONLY for the test
 kit's counterparty — it shortens replay protection below the signature's own validity
-window — which is why it exists only on that record and
+window — which is why it exists only on that counterparty's record and
 :class:`~src.core.config.SigningSettings` refuses a global cap below the floor. The
-verifier decides which keyids the record applies to, on the keyid of the label the
-checklist verifies, and hands the store its ``tuning``; the store applies it as given.
+verifier hands the store the record of the counterparty it resolved as its ``tuning``;
+the store applies it as given.
 
 Spec grounding: AdCP 3.1.1 via ``adcp==6.6.0``;
 ``dist/compliance/3.1.1/test-kits/signed-requests-runner.yaml``; graded at the wire by
@@ -80,8 +80,8 @@ class PostgresReplayStore:
     Args:
         repository: Statement layer, holding a short-lived caller-owned session.
         config: Agent-level replay posture (cap, claim TTL).
-        tuning: The test kit's cap and TTL clamp, when the verifier decided this request's
-            keyid is the kit's on a grading tenant; ``None`` otherwise.
+        tuning: The test kit's cap and TTL clamp, when the counterparty the verifier
+            resolved is the signed-requests test counterparty; ``None`` otherwise.
 
     Wiring (B1, salesagent-z6nr.12): construct this INSIDE one
     ``asyncio.to_thread`` hop around the whole synchronous
@@ -110,7 +110,7 @@ class PostgresReplayStore:
         return replayed
 
     def remember(self, keyid: str, nonce: str, ttl_seconds: float) -> None:
-        """Extend the claim to the signature's own TTL (clamped for the test kit's keyids)."""
+        """Extend the claim to the signature's own TTL (clamped for the test counterparty)."""
         self._repository.extend(keyid, nonce, self._clamped_ttl(ttl_seconds))
 
     def at_capacity(self, keyid: str) -> bool:
@@ -136,7 +136,7 @@ class PostgresReplayStore:
         return self._clamped_ttl(self._config.replay_claim_ttl_seconds)
 
     def _clamped_ttl(self, ttl_seconds: float) -> float:
-        """Apply the test kit's TTL clamp, when this request's keyid is the kit's.
+        """Apply the test kit's TTL clamp, when this request is the test counterparty's.
 
         Both the claim and ``remember()`` clamp, because clamping only one of them
         leaves the other free to set the row's real lifetime.

@@ -24,7 +24,7 @@ paths that can produce an `AgentResolution`:
 | path | how the location is established |
 |---|---|
 | the brand.json walk (`_resolution_for`) | the SDK resolves a `jwks_uri`; a resolution naming anything but the derived location is REFUSED with `request_signature_jwks_untrusted` and a cooldown, so the counterparty's operator gets a diagnosable answer rather than a key that never matches |
-| a grading tenant's accepted JWKS (`build_pinned_resolution`) | the location is DERIVED from the counterparty's `agent_url`, not declared, so the `signed_requests_grading` record cannot name one the walk would refuse |
+| the test counterparty's accepted JWKS (`build_pinned_resolution`) | the location is DERIVED from the counterparty's `agent_url`, not declared, so the `signed_requests_grading` record cannot name one the walk would refuse |
 
 The counterparty itself is chosen by the keyid of the `sig1` label, the one the checklist
 verifies (security.mdx L1028): the bearer's principal when a bearer resolved one, otherwise

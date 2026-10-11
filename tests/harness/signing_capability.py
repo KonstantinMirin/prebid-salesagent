@@ -355,8 +355,7 @@ def onboard_signing_keyid(env: Any) -> None:
 
     The harness's ONE spelling of the keyid mapping for the acting principal: the
     ``principal_signing_keyids`` row production's keyid lookup reads (security.mdx @ v3.1.1
-    L1090, "Discovery MAY come from prior onboarding"). The principal must already carry an
-    ``agent_url`` — the row's foreign key is the ``(tenant_id, agent_url)`` coordinate.
+    L1090, "Discovery MAY come from prior onboarding").
     """
     from tests.factories import PrincipalSigningKeyidFactory
 
@@ -379,41 +378,23 @@ def onboard_buyer_agent_key_for_another_counterparty(env: Any, tenant: Any) -> N
 
 
 def declare_signed_requests_grading(env: Any, *, replay_cap: int | None = None) -> None:
-    """Make the env's tenant a signed-requests grading target that accepts the env's keys.
+    """Make the env's principal the signed-requests test counterparty, accepting the env's keys.
 
-    The env principal becomes the test-kit counterparty: it moves to
-    :data:`~tests.helpers.signing.UNRESOLVABLE_AGENT_URL`, where nothing publishes keys (the
-    walk fails at the capabilities fetch, ``capabilities_unreachable``, on every leg), its
-    key's ``key_id`` is onboarded at that URL, and the tenant's ``signed_requests_grading``
-    record carries the env's JWKS and *replay_cap*. Only the record's accepted JWKS can then
-    verify the env's signature, and the record's cap is the one its keyid meets.
+    It moves to :data:`~tests.helpers.signing.UNRESOLVABLE_AGENT_URL`, where nothing
+    publishes keys (the walk fails at the capabilities fetch, ``capabilities_unreachable``,
+    on every leg), its key's ``key_id`` is onboarded for it, and its
+    ``signed_requests_grading`` record carries the env's JWKS and *replay_cap*. Only the
+    record's accepted JWKS can then verify the env's signature, and the record's cap is the
+    one its keyid meets. Written through ``env._session`` like :func:`attach_agent_url`.
     """
+    from src.core.signing.grading import SignedRequestsGrading
     from tests.helpers.signing import UNRESOLVABLE_AGENT_URL
 
     attach_agent_url(env, UNRESOLVABLE_AGENT_URL)
     onboard_signing_keyid(env)
-    _write_signed_requests_grading(env, env.signing.jwks, replay_cap=replay_cap)
-
-
-def declare_test_kit_grading_target(env: Any, *, replay_cap: int) -> None:
-    """Make the env's tenant a signed-requests grading target for the conformance test kit.
-
-    The record's JWKS is the kit's published keys (``storyboard_signing.counterparty_jwks``),
-    none of which is the env's key, and its ``replay_cap`` is *replay_cap*. The env principal
-    is untouched, so a request signed with the env's key is an ordinary counterparty's on a
-    grading tenant: its keys come from its own walk, and neither the record's JWKS nor its
-    replay cap applies to it.
-    """
-    from scripts.setup.storyboard_signing import counterparty_jwks
-
-    _write_signed_requests_grading(env, counterparty_jwks(), replay_cap=replay_cap)
-
-
-def _write_signed_requests_grading(env: Any, jwks: dict[str, Any], *, replay_cap: int | None = None) -> None:
-    """Write the tenant's ``signed_requests_grading`` record: *jwks* accepted, *replay_cap* for their keyids."""
-    from src.core.signing.grading import SignedRequestsGrading
-
-    env.configure_tenant_field("signed_requests_grading", SignedRequestsGrading(jwks=jwks, replay_cap=replay_cap))
+    _tenant, principal = env.setup_default_data()
+    principal.signed_requests_grading = SignedRequestsGrading(jwks=env.signing.jwks, replay_cap=replay_cap)
+    env._session.commit()
 
 
 def ensure_declarable_identity_host(env: Any) -> None:

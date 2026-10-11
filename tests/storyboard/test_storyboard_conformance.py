@@ -691,7 +691,7 @@ def _drain_grading_replay_rows() -> None:
 
     THE TWO PROTOCOL RUNS SHARE ONE DEPLOYMENT AND ONE REPLAY STORE, and vector
     ``020-rate-abuse`` deliberately drives ``test-ed25519-2026`` to its per-keyid cap. The
-    grading record's ``replay_ttl_seconds`` clamp drains those rows between VECTORS, which is what it was
+    test counterparty's ``replay_ttl_seconds`` clamp drains those rows between VECTORS, which is what it was
     sized for; it does not drain them between PROTOCOL RUNS, because the second run starts
     seconds after the first ends rather than a TTL later.
 

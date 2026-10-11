@@ -61,35 +61,35 @@ class PrincipalRepository:
         """The principal of this tenant that ``keyid`` is onboarded for, or ``None``.
 
         security.mdx @ v3.1.1 L1088-1094, checklist step 1: a keyid resolves to one
-        ``agents[]`` entry. ``principal_signing_keyids`` maps it to the ``(tenant_id,
-        agent_url)`` coordinate, and its primary key ``(tenant_id, keyid)`` makes this one
-        row. The keyid is unverified when this runs; the verifier establishes the principal.
+        ``agents[]`` entry. ``principal_signing_keyids`` maps it to one principal, and its
+        primary key ``(tenant_id, keyid)`` makes this one row. The keyid is unverified when
+        this runs; the verifier establishes the principal.
         """
         return self._session.scalars(
             select(Principal)
             .join(
                 PrincipalSigningKeyid,
                 (PrincipalSigningKeyid.tenant_id == Principal.tenant_id)
-                & (PrincipalSigningKeyid.agent_url == Principal.agent_url),
+                & (PrincipalSigningKeyid.principal_id == Principal.principal_id),
             )
             .filter(PrincipalSigningKeyid.tenant_id == self._tenant_id, PrincipalSigningKeyid.keyid == keyid)
         ).first()
 
-    def onboard_signing_keyids(self, agent_url: str, keyids: Iterable[str]) -> None:
-        """Onboard *keyids* at *agent_url* in this tenant: an idempotent add.
+    def onboard_signing_keyids(self, principal_id: str, keyids: Iterable[str]) -> None:
+        """Onboard *keyids* for *principal_id* in this tenant: an idempotent add.
 
-        Keyids already mapped to *agent_url* are left as they are; the missing ones are
-        added. The principal at *agent_url* must exist (the foreign key refuses otherwise),
-        and a keyid already onboarded at another counterparty of this tenant is refused by
-        the primary key. The caller commits.
+        Keyids already mapped to *principal_id* are left as they are; the missing ones are
+        added. The principal must exist (the foreign key refuses otherwise), and a keyid
+        already onboarded at another counterparty of this tenant is refused by the primary
+        key. The caller commits.
         """
         mapped = set(
             self._session.scalars(
-                select(PrincipalSigningKeyid.keyid).filter_by(tenant_id=self._tenant_id, agent_url=agent_url)
+                select(PrincipalSigningKeyid.keyid).filter_by(tenant_id=self._tenant_id, principal_id=principal_id)
             )
         )
         for keyid in sorted(set(keyids) - mapped):
-            self._session.add(PrincipalSigningKeyid(tenant_id=self._tenant_id, keyid=keyid, agent_url=agent_url))
+            self._session.add(PrincipalSigningKeyid(tenant_id=self._tenant_id, keyid=keyid, principal_id=principal_id))
 
     def list_all(self) -> list[Principal]:
         """Every principal in this tenant, ordered by display name."""

@@ -100,10 +100,10 @@ def _build_store(session: SASession, config, tuning=None):
     """Construct the production store over a caller-owned session.
 
     Matches the verifier's wiring: one short-lived session, one store, three calls.
-    *tuning* is the grading record the verifier hands the store when the request's keyid
-    is the test kit's (:func:`_tuning`), ``None`` otherwise. The store applies the tuning it
-    is given to every keyid it is asked about; which requests receive one is the verifier's
-    decision (``SignedRequestsGrading.for_keyid``), graded by the BDD signing scenarios.
+    *tuning* is the grading record the verifier hands the store when the counterparty it
+    resolved is the test counterparty (:func:`_tuning`), ``None`` otherwise. The store
+    applies the tuning it is given to every keyid it is asked about; which requests receive
+    one is the verifier's decision, graded by the BDD signing scenarios.
     """
     from src.core.database.repositories.replay_nonce import ReplayNonceRepository
     from src.core.signing.replay_store import PostgresReplayStore
@@ -522,7 +522,7 @@ class TestPerKeyidTtlOverride:
         """The config makes "lowered for the test counterparty only" mechanical.
 
         The test kit permits a lowered cap for the test-kit COUNTERPARTY only, which a
-        grading tenant's record carries. The ``field_validator`` refuses the global form at
+        test counterparty's record carries. The ``field_validator`` refuses the global form at
         load, so a misconfiguration fails at startup rather than at the first signature:
         a cap below the spec's ``production_min_per_keyid_cap_requests: 1000000`` floor.
 

@@ -12,8 +12,8 @@
 # It must run at BRING-UP, not with the other storyboard seeding in tox: this is a
 # setting the server process reads from its own environment at boot
 # (src/core/config.py SigningSettings), so a value produced after the container
-# started reaches nothing. The tenant half of the same contract (the grading record
-# and the onboarded keyids) IS seeded later, from [testenv:storyboard], because the
+# started reaches nothing. The database half of the same contract (the test
+# counterparty's grading record and its onboarded keyids) IS seeded later, from [testenv:storyboard], because the
 # database can be written at any time.
 #
 # The value is DERIVED by scripts/setup/storyboard_signing.py from the test kit.

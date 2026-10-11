@@ -235,7 +235,6 @@ def verify_inbound_signature(
         headers=headers,
         principal=principal,
         signer_by_keyid=signer_by_keyid,
-        grading=tenant.signed_requests_grading,
         config=config,
     )
 
@@ -301,24 +300,16 @@ def _verify_signed(
     headers: Mapping[str, str],
     principal: Principal | None,
     signer_by_keyid: Callable[[str], Principal | None],
-    grading: SignedRequestsGrading | None,
     config: SigningSettings,
 ) -> Principal | None:
     """At least one signature header present: run the pre-check, then the checklist.
 
-    Returns the counterparty the signature verified against. Outside the pre-check, each
-    input is decided once, from the keyid of the label the checklist verifies:
-
-    * the COUNTERPARTY is the bearer's principal when one resolved, and otherwise the one
-      this tenant onboarded the keyid for;
-    * ``kit`` is the tenant's grading record when the keyid is one of the test kit's
-      (:meth:`~src.core.signing.grading.SignedRequestsGrading.for_keyid`). Its accepted JWKS
-      is the key source only for a bearer-less counterparty: on the bearer path identity is
-      the bearer's (security.mdx @ v3.1.1 L1216), and the kit's private keys are published,
-      so pinned keys there would let any bearer caller on a grading tenant satisfy a
-      required signature (L1462-1465). Its replay cap and TTL follow the keyid whatever
-      the credential, because step 9a's cap is per keyid (L1240) and the kit defines its
-      counterparty by its keyids (runner.yaml L55-60).
+    Returns the counterparty the signature verified against. Outside the pre-check, the
+    COUNTERPARTY is the bearer's principal when one resolved, and otherwise the one this
+    tenant onboarded the keyid of the verified label for. Everything else is read off it:
+    its ``agent_url`` for the walk, and, when it is the signed-requests test counterparty,
+    its record's accepted JWKS in place of the walk and its replay cap and TTL
+    (:mod:`src.core.signing.grading`).
     """
     operation = subject.operation
 
@@ -374,18 +365,17 @@ def _verify_signed(
             # target-URI malformation, so hoisting it would make ``none`` refuse beyond the
             # requirement.
             reject_malformed_target(exchange.url)
-            keyid = _parse_keyid(headers)
-            kit = grading.for_keyid(keyid) if grading is not None else None
             if principal is not None:
-                counterparty, pinned = principal, None
+                counterparty = principal
             else:
+                keyid = _parse_keyid(headers)
                 counterparty = signer_by_keyid(keyid) if keyid else None
-                pinned = kit
-            tuning = kit
-            # The ONE derivation of the counterparty's agent URL: the walk keys its cache and
-            # its failure record on it, and the checklist's resolver reads that record by it.
-            agent_url = counterparty.agent_url if counterparty is not None else None
-            resolution = _resolution_for(agent_url, pinned=pinned, config=config)
+            if counterparty is not None:
+                # The ONE derivation of the counterparty's agent URL: the walk keys its cache and
+                # its failure record on it, and the checklist's resolver reads that record by it.
+                agent_url = counterparty.agent_url
+                tuning = counterparty.signed_requests_grading
+            resolution = _resolution_for(agent_url, pinned=tuning, config=config)
         signer = _run_verifier(
             exchange=exchange,
             headers=headers,
@@ -483,7 +473,7 @@ WELL_KNOWN_JWKS_PATH = "/.well-known/jwks.json"
 def build_pinned_resolution(agent_url: str, jwks: dict[str, Any]) -> AgentResolution:
     """The :class:`AgentResolution` for keys already in hand: *jwks*, at *agent_url*.
 
-    The grading record's accepted JWKS is the one production source of such keys
+    The test counterparty's accepted JWKS is the one production source of such keys
     (:mod:`src.core.signing.grading`).
 
     Both document locations are DERIVED from the agent URL rather than declared beside it.
@@ -552,8 +542,7 @@ def _parse_keyid(headers: Mapping[str, str]) -> str | None:
     one label and MUST ignore any other; a label other than the verified one is covered by
     no signature, so reading it would let an on-path party choose the counterparty.
 
-    The answer selects the counterparty, the test-kit decision and the replay tuning, and it
-    is the keyid the checklist resolves at step 7, so the SDK's ``VerifiedSigner.key_id``
+    The answer selects the bearer-less counterparty, and it is the keyid the checklist resolves at step 7, so the SDK's ``VerifiedSigner.key_id``
     equals it by construction. It is unverified when read; the signature must still verify
     against the keys it selects. A missing ``sig1`` or a non-string keyid answers ``None``,
     and the checklist then refuses the request on its own merits.
@@ -579,9 +568,9 @@ def _resolution_for(
     gets no keys: the checklist then answers ``request_signature_key_unknown`` at step 7
     (security.mdx @ v3.1.1 L1094).
 
-    *pinned* is the grading record when the caller decided the request is the test kit's
-    bearer-less counterparty (:func:`_verify_signed`). Its accepted JWKS is then the key
-    source, at the counterparty's own ``agent_url``. This function does not decide that.
+    *pinned* is the counterparty's grading record when it is the signed-requests test
+    counterparty. Its accepted JWKS is then the key source, at the counterparty's own
+    ``agent_url``.
 
     Otherwise the walk: ``agent_url -> capabilities -> identity.brand_json_url -> brand.json
     agents[] -> jwks_uri -> JWKS`` is a three-hop outbound walk, so it is done once per

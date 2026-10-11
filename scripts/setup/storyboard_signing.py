@@ -11,8 +11,8 @@ What the contract requires, and where each lands
    ``capability_declarations`` (:func:`declarations`).
 2. A counterparty JWKS holding ``test-ed25519-2026`` and ``test-es256-2026`` with
    ``adcp_use: "request-signing"``, trusted as a registered test counterparty -> the
-   tenant's ``signed_requests_grading`` record (its ``jwks``), the counterparty principal at
-   :data:`COUNTERPARTY_AGENT_URL`, and every kit keyid onboarded at that principal.
+   counterparty principal at :data:`COUNTERPARTY_AGENT_URL`, its ``signed_requests_grading``
+   record (its ``jwks``), and every kit keyid onboarded at that principal.
 3. ``test-revoked-2026`` pre-revoked before the negative phase ->
    ``ADCP_SIGNING_REVOKED_KEYIDS``, the one process setting grading needs. It can only add
    refusals, so it stays deployment configuration and applies to every tenant.
@@ -20,18 +20,13 @@ What the contract requires, and where each lands
 5. The per-keyid replay cache at its configured cap for vector 020 -> the record's
    ``replay_cap``.
 
-The record's kids and the onboarded keyids come from one :func:`counterparty_jwks` value, so
-they cannot disagree, and the kit's keyids are onboarded at the dedicated test counterparty
-and nowhere else: the kit's private keys are published, so mapping a kit keyid to any other
-principal would let anyone sign as that principal on this tenant.
-
 Why a grading record and not the brand.json walk
 ------------------------------------------------
 The conformance runner sends no bearer on a vector probe — the signature is the credential
 — so the verifier finds the counterparty by the request's keyid in this tenant's onboarding
 records. The runner publishes its keys at no origin, so the walk from the counterparty's
-``agent_url`` has nothing to fetch; the grading record's accepted JWKS is the key source for
-that bearer-less counterparty (``src/core/signing/grading.py``).
+``agent_url`` has nothing to fetch; the counterparty's record holds the accepted JWKS
+instead (``src/core/signing/grading.py``).
 """
 
 from __future__ import annotations
@@ -72,7 +67,7 @@ STORYBOARD_VIRTUAL_HOST = _SEEDED_STORYBOARD_VIRTUAL_HOST
 
 #: The conformance runner AS A COUNTERPARTY: the ``agent_url`` its keys resolve at.
 #:
-#: A name, not a destination. Nothing dials it — the grading record's accepted JWKS stands
+#: A name, not a destination. Nothing dials it — the counterparty's accepted JWKS stands
 #: in for the three-hop walk (``build_pinned_resolution``) — but it is the ``agents[]``
 #: coordinate the kit's keyids are onboarded at, and the origin the key location is derived
 #: from.
@@ -128,7 +123,7 @@ REVOKED_KEYID = "test-revoked-2026"
 #: Test-kit ``stateful_vector_contract.rate_abuse.grading_target_per_keyid_cap_requests``.
 #: The runner sends this many requests and expects the NEXT one refused. It is a GRADING
 #: target and explicitly not a production recommendation — ``SigningSettings`` refuses it
-#: as a global cap; the grading record applies it to the kit's keyids only.
+#: as a global cap; the test counterparty's record applies it to that counterparty only.
 GRADING_PER_KEYID_CAP = 100
 
 #: The replay-row lifetime for the runner's keyids, in seconds.
@@ -191,8 +186,8 @@ def counterparty_jwks() -> dict[str, Any]:
 def counterparty_kids(jwks: dict[str, Any] | None = None) -> list[str]:
     """The kit's keyids: the ``kid`` of every key in *jwks* (default :func:`counterparty_jwks`).
 
-    :func:`seed` passes the JWKS it writes into the grading record, so the record and the
-    onboarded keyids come from one value; the storyboard replay drain takes the default.
+    :func:`seed` passes the JWKS it writes into the counterparty's record, so the record and
+    the onboarded keyids come from one value; the storyboard replay drain takes the default.
     """
     return [key["kid"] for key in (jwks if jwks is not None else counterparty_jwks())["keys"]]
 
@@ -305,15 +300,10 @@ def seed() -> None:
         print(f"Storyboard tenant {tenant.tenant_id} answers to {STORYBOARD_VIRTUAL_HOST}")
         print(f"   posture: required_for={list(REQUIRED_FOR)} covers_content_digest={COVERS_CONTENT_DIGEST}")
 
-        jwks = counterparty_jwks()
-        tenant.signed_requests_grading = SignedRequestsGrading(
-            jwks=jwks, replay_cap=GRADING_PER_KEYID_CAP, replay_ttl_seconds=GRADING_REPLAY_TTL_SECONDS
-        )
-
         principals = PrincipalRepository(session, tenant.tenant_id)
         counterparty = principals.find_by_agent_url(COUNTERPARTY_AGENT_URL)
         if counterparty is None:
-            principals.create_with_token(
+            counterparty = principals.create_with_token(
                 COUNTERPARTY_PRINCIPAL_TOKEN,
                 principal_id=COUNTERPARTY_PRINCIPAL_ID,
                 name="Storyboard conformance runner",
@@ -324,8 +314,12 @@ def seed() -> None:
             print(f"   counterparty principal created at {COUNTERPARTY_AGENT_URL}")
         else:
             print(f"   counterparty principal already at {COUNTERPARTY_AGENT_URL}")
+        jwks = counterparty_jwks()
+        counterparty.signed_requests_grading = SignedRequestsGrading(
+            jwks=jwks, replay_cap=GRADING_PER_KEYID_CAP, replay_ttl_seconds=GRADING_REPLAY_TTL_SECONDS
+        )
         kids = counterparty_kids(jwks)
-        principals.onboard_signing_keyids(COUNTERPARTY_AGENT_URL, kids)
+        principals.onboard_signing_keyids(counterparty.principal_id, kids)
         print(f"   grading record written; keyids onboarded at the counterparty: {kids}")
 
         _seed_webhook_storyboard_account(session, tenant.tenant_id)

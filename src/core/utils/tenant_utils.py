@@ -56,5 +56,4 @@ def serialize_tenant_to_dict(tenant: Tenant) -> dict[str, Any]:
         "advertising_policy": safe_json_loads(tenant.advertising_policy, None),
         "product_ranking_prompt": tenant.product_ranking_prompt,
         "capability_declarations": safe_json_loads(tenant.capability_declarations, None),
-        "signed_requests_grading": tenant.signed_requests_grading,
     }

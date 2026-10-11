@@ -383,8 +383,9 @@ class SigningSettings(BaseSettings):
     Both directions land here because both are deployment facts: the inbound knobs are
     transport limits, a kill switch, the replay store's floor and the revocation posture;
     the outbound knobs say where this process is willing to READ its own private key
-    material from. The signed-requests test kit's relaxations are tenant state
-    (``tenants.signed_requests_grading``), never deployment settings.
+    material from. The signed-requests test kit's relaxations are on the test
+    counterparty's onboarding record (``principals.signed_requests_grading``), never
+    deployment settings.
 
     POSTURE is per-tenant in both directions and never here — inbound in the tenant's
     declaration (:class:`src.core.signing.posture.RequestSigningPosture`), outbound in
@@ -598,14 +599,14 @@ class SigningSettings(BaseSettings):
         """Refuse a GLOBAL cap below the spec floor.
 
         The test kit's ``grading_target_per_keyid_cap_requests: 100`` is permitted for the
-        test-kit COUNTERPARTY only, which is what a grading tenant's
+        test-kit COUNTERPARTY only, which is what that principal's
         ``signed_requests_grading`` record is for.
         """
         if v < _PRODUCTION_MIN_PER_KEYID_CAP:
             raise ValueError(
                 f"ADCP_SIGNING_PER_KEYID_CAP={v} is below the spec floor of "
                 f"{_PRODUCTION_MIN_PER_KEYID_CAP} live entries per keyid. Lower the cap for the "
-                "test kit's keyids on a grading tenant's signed_requests_grading record, never globally."
+                "test counterparty on its principal's signed_requests_grading record, never globally."
             )
         return v
 

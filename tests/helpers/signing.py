@@ -733,7 +733,7 @@ def counterparty_key(
     about the outcome is faked.
 
     Built via ``build_pinned_resolution`` — the SAME production constructor a
-    grading tenant's accepted JWKS uses — rather than a second inline
+    test counterparty's accepted JWKS uses — rather than a second inline
     ``AgentResolution(...)`` here, so this fixture and the pinned path can never
     drift into two different resolution shapes.
 

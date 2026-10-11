@@ -17,7 +17,6 @@ from typing import Any
 from pydantic import BaseModel, field_validator
 
 from src.core.config_loader import safe_json_loads
-from src.core.signing.grading import SignedRequestsGrading
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +58,6 @@ class TenantContext(BaseModel):
     # #1592 T1a: implementation-backed AdCP capability declaration blocks.
     # None = nothing declared = the pre-#1592 capabilities wire.
     capability_declarations: dict[str, Any] | None = None
-    # The signed-requests test kit's relaxations; None = not a grading target.
-    signed_requests_grading: SignedRequestsGrading | None = None
 
     @field_validator("virtual_host")
     @classmethod
@@ -154,7 +151,6 @@ class TenantContext(BaseModel):
             advertising_policy=safe_json_loads(tenant.advertising_policy, None),
             product_ranking_prompt=tenant.product_ranking_prompt,
             capability_declarations=safe_json_loads(tenant.capability_declarations, None),
-            signed_requests_grading=tenant.signed_requests_grading,
         )
 
     @classmethod

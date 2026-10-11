@@ -138,15 +138,6 @@ class Tenant(Base, JSONValidatorMixin):
         comment="Implementation-backed AdCP capability declaration blocks (#1592); NULL = nothing declared",
     )
 
-    # The signed-requests test kit's relaxations (accepted JWKS, replay cap, replay TTL) for
-    # the kit's keyids on THIS tenant. Its presence is what declares the tenant a grading
-    # target (src/core/signing/grading.py); NULL means no test-kit trust anywhere on it.
-    signed_requests_grading: Mapped[SignedRequestsGrading | None] = mapped_column(
-        JSONType(model=SignedRequestsGrading),
-        nullable=True,
-        comment="signed_requests grading target: the test kit's JWKS, replay cap and TTL; NULL = not a grading target",
-    )
-
     # Pydantic AI configuration for multi-model support
     # Structure: {"provider": "anthropic", "model": "claude-sonnet-4-20250514", "api_key": "encrypted:...", ...}
     ai_config: Mapped[dict | None] = mapped_column(
@@ -796,10 +787,16 @@ class Principal(Base, JSONValidatorMixin):
     # for this counterparty, not that it is trusted.
     #
     # Unique PER TENANT because ``(tenant_id, agent_url)`` is the counterparty's brand.json
-    # ``agents[]`` coordinate, and ``principal_signing_keyids`` maps each onboarded keyid to
-    # it by foreign key (security.mdx @ v3.1.1 L1090, L1094): a keyid resolves to one
-    # ``agents[]`` entry, so the coordinate it names must be one principal.
+    # ``agents[]`` coordinate: one entry is one principal.
     agent_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # The signed-requests test kit's relaxations (accepted JWKS, replay cap, replay TTL) when
+    # this principal is the kit's test counterparty (src/core/signing/grading.py). NULL for
+    # every other counterparty: its keys come from the walk and its replay cap is the floor.
+    signed_requests_grading: Mapped[SignedRequestsGrading | None] = mapped_column(
+        JSONType(model=SignedRequestsGrading),
+        nullable=True,
+        comment="signed_requests test counterparty: the kit's JWKS, replay cap and TTL; NULL = an ordinary counterparty",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -867,13 +864,11 @@ class PrincipalSigningKeyid(Base):
     security.mdx @ v3.1.1 L1088-1094, checklist step 1: given a keyid, the verifier resolves
     the signing agent to its brand.json ``agents[]`` entry, and "Discovery MAY come from prior
     onboarding". This row is that onboarding: the keyid maps to the counterparty principal
-    whose ``agent_url`` is the entry, and the keys still come from the agent's own origin.
+    whose ``agent_url`` is the entry, and the keys still come from the agent's own origin. A
+    principal with no ``agent_url`` has no entry, so its keyids resolve no key.
 
     The primary key ``(tenant_id, keyid)`` makes the entry specific (L1094: a verifier MUST
-    NOT accept a keyid it cannot resolve to a specific ``agents[]`` entry). The foreign key
-    targets ``uq_principals_tenant_agent_url``, so the coordinate exists exactly once and a
-    mapped principal always has an ``agent_url``; ``ON UPDATE`` stays the default, so a
-    principal's ``agent_url`` cannot move while keyids are onboarded at it.
+    NOT accept a keyid it cannot resolve to a specific ``agents[]`` entry).
 
     ``keyid`` compares byte for byte (``collation="C"``), as ``adcp_replay.keyid`` does.
     Repository-private like ``Principal``: ``PrincipalRepository`` reads and writes it.
@@ -883,17 +878,16 @@ class PrincipalSigningKeyid(Base):
 
     tenant_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     keyid: Mapped[str] = mapped_column(Text(collation="C"), primary_key=True)
-    agent_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    principal_id: Mapped[str] = mapped_column(String(50), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         ForeignKeyConstraint(
-            ["tenant_id", "agent_url"],
-            ["principals.tenant_id", "principals.agent_url"],
+            ["tenant_id", "principal_id"],
+            ["principals.tenant_id", "principals.principal_id"],
             ondelete="CASCADE",
             name="fk_principal_signing_keyids_principal",
         ),
-        Index("idx_principal_signing_keyids_agent", "tenant_id", "agent_url"),
     )
 
 

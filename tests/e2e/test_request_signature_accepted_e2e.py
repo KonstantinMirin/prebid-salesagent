@@ -88,8 +88,8 @@ graded by a POSITIVE observable rather than by the absence of a rejection.
         code and ``_FailedDiscoveryJwksResolver`` (:174) raises at checklist step 7.
         Tier 3 is the SECOND consumer of the same document and is simply not reached
         on this input — the walk fails first. The pinned branch cannot produce this
-        code at all: a grading tenant's accepted JWKS replaces the walk, and this tenant
-        carries no grading record. So a regression that resolved this key from pinned
+        code at all: the test counterparty's accepted JWKS replaces the walk, and this
+        principal carries no grading record. So a regression that resolved this key from pinned
         keys instead of from the published trust root —
         which would otherwise yield a byte-identical 2xx AND an identical metric
         increment — is visible here and nowhere else in this module.]
@@ -99,8 +99,8 @@ graded by a POSITIVE observable rather than by the absence of a rejection.
 
 **DOES NOT PROVE.**
 
-* The PINNED key-trust source (a grading tenant's ``signed_requests_grading`` record).
-  It applies only to a bearer-less test-kit counterparty, which walks no trust root and
+* The PINNED key-trust source (the test counterparty's ``signed_requests_grading`` record).
+  It applies only to the test-kit counterparty, which walks no trust root and
   reaches no Tier 3 — so it cannot satisfy this module's title and is not graded here
   (the request-signing BDD scenarios grade it).
 * The MCP and A2A naming surfaces for the accepted leg. The refused-leg sibling

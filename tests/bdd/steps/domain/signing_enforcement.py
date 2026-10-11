@@ -154,37 +154,20 @@ def given_buyer_onboarded_without_agent_url(ctx: dict) -> None:
 
 @given(
     parsers.re(
-        r"the seller is a signed-requests grading target that accepts the Buyer Agent's keys"
-        r"(?:, with a replay cap of (?P<cap>\d+) for their keyids)?$"
+        r"the Buyer is the signed-requests test counterparty, accepting the Buyer Agent's keys"
+        r"(?:, with a replay cap of (?P<cap>\d+))?$"
     )
 )
-def given_seller_is_grading_target(ctx: dict, cap: str | None) -> None:
-    """Declare this seller a ``signed_requests`` grading target whose accepted JWKS is the Buyer Agent's.
+def given_buyer_is_test_counterparty(ctx: dict, cap: str | None) -> None:
+    """Make the Buyer the ``signed_requests`` test counterparty, its accepted JWKS the Buyer Agent's.
 
     runner.yaml @ v3.1.1 L32-34, L55-60: the agent under test pre-configures an accepted
     JWKS for the test-kit counterparty only. The Buyer becomes that counterparty: its keyid
-    is onboarded at an agent URL where nothing publishes keys, so only the accepted JWKS can
-    verify its signature. With a replay cap named, the record carries it too: L108-126 allow
-    the lower per-keyid cap for the test-kit counterparty's keyids only.
+    is onboarded for it, its agent URL publishes no keys, so only the accepted JWKS on its
+    record can verify its signature. With a replay cap named, the record carries it too:
+    L108-126 allow the lower per-keyid cap for the test-kit counterparty only.
     """
     ctx["env"].declare_signed_requests_grading(replay_cap=int(cap) if cap is not None else None)
-
-
-@given(
-    parsers.parse(
-        "the seller is a signed-requests grading target whose accepted JWKS holds only the test kit's keys, "
-        "with a replay cap of {cap:d} for their keyids"
-    )
-)
-def given_seller_is_test_kit_grading_target(ctx: dict, cap: int) -> None:
-    """Declare this seller a ``signed_requests`` grading target for the conformance test kit.
-
-    runner.yaml @ v3.1.1 L55-60 and L108-126: the accepted JWKS and the lower replay cap are
-    for the test-kit counterparty's keyids only. The Buyer Agent's keyid is not among them,
-    so the Buyer stays an ordinary counterparty whose keys come from its own origin and whose
-    replay cap is the deployment's (L118-120: at least 1,000,000 entries per keyid).
-    """
-    ctx["env"].declare_test_kit_grading_target(replay_cap=cap)
 
 
 @given("the Buyer Agent signs the request with an additional signature label ahead of it naming a key nobody onboarded")

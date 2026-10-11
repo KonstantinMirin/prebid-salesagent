@@ -172,9 +172,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
 class PrincipalSigningKeyidFactory(factory.alchemy.SQLAlchemyModelFactory):
     """One request-signing keyid onboarded for *principal*.
 
-    ``tenant_id`` and ``agent_url`` are read off the principal, which is what the row's
-    foreign key to ``(tenant_id, agent_url)`` requires: the keyid maps to the principal's
-    ``agents[]`` coordinate, so a principal with no ``agent_url`` cannot be given one.
+    ``tenant_id`` and ``principal_id`` are read off the principal, the row's foreign key.
     """
 
     class Meta:
@@ -185,5 +183,5 @@ class PrincipalSigningKeyidFactory(factory.alchemy.SQLAlchemyModelFactory):
 
     principal = SubFactory(PrincipalFactory, agent_url=Sequence(lambda n: f"https://agent-{n:04d}.example.com/a2a"))
     tenant_id = LazyAttribute(lambda o: o.principal.tenant_id)
-    agent_url = LazyAttribute(lambda o: o.principal.agent_url)
+    principal_id = LazyAttribute(lambda o: o.principal.principal_id)
     keyid = Sequence(lambda n: f"keyid-{n:04d}")

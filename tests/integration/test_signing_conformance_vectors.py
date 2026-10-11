@@ -198,8 +198,8 @@ _TENANT_ID = "b3_conformance_tenant"
 _AGENT_HOST = "b3-conformance-seller.example.com"
 _PRINCIPAL_ID = "b3_conformance_principal"
 
-#: ``negative/020``'s cap, carried by this test tenant's grading record so it reaches
-#: no other tenant and no other xdist worker.
+#: ``negative/020``'s cap, carried by this test principal's grading record so it reaches
+#: no other counterparty and no other xdist worker.
 _RATE_ABUSE_CAP = 3
 
 _ED25519_KEYID = "test-ed25519-2026"
@@ -410,7 +410,7 @@ def conformance_app() -> Iterator[tuple[Any, Any]]:
         yield app, client.portal
 
 
-def _seed_tenant(plan: VectorPlan) -> Any:
+def _seed_tenant() -> Any:
     """The SELLER, which exists whether or not this vector's caller authenticated.
 
     Seeded for every vector since #1291 D1, because the posture is now a REAL stored
@@ -422,28 +422,11 @@ def _seed_tenant(plan: VectorPlan) -> Any:
     non-empty bucket obliges an ``identity.brand_json_url`` that the pin fixes to
     ``^https://``, so on a single-label host the declaration would be refused and every
     vector would grade the refusal path instead of the checklist.
-
-    The seller is a ``signed_requests`` grading target: its record carries the public half
-    of the runner's keys, the TTL clamp the kit's keyids need, and, for ``020``, the cap the
-    vector drives the keyid to. The verifier applies the cap and the clamp to the kit's
-    keyids whatever the credential, so they reach these bearer-authenticated vectors; the
-    keys themselves still come from the principal's own resolution
-    (:func:`tests.helpers.signing.counterparty_key`).
     """
-    from scripts.setup.storyboard_signing import GRADING_REPLAY_TTL_SECONDS, counterparty_jwks
-    from src.core.signing.grading import SignedRequestsGrading
-
-    grading = SignedRequestsGrading(
-        jwks=counterparty_jwks(),
-        replay_cap=_RATE_ABUSE_CAP if plan.harness_state is HarnessState.CAP_OVERRIDE else None,
-        replay_ttl_seconds=GRADING_REPLAY_TTL_SECONDS,
-    )
-    return TenantFactory(
-        tenant_id=_TENANT_ID, subdomain="seller", virtual_host=_AGENT_HOST, signed_requests_grading=grading
-    )
+    return TenantFactory(tenant_id=_TENANT_ID, subdomain="seller", virtual_host=_AGENT_HOST)
 
 
-def _seed_principal(tenant: Any) -> str:
+def _seed_principal(tenant: Any, plan: VectorPlan, vector: dict[str, Any]) -> str:
     """The counterparty's Principal, carrying the ``agent_url`` key resolution reads.
 
     ``_resolve_identity`` resolves this row from the Bearer value and hands
@@ -456,8 +439,22 @@ def _seed_principal(tenant: Any) -> str:
     plaintext, so ``plaintext_token_for`` is what both the factory and this caller
     compute — the same derivation ``tests/utils/database_helpers.py`` and the harness
     use, never a second one written here.
+
+    The principal is the ``signed_requests`` test counterparty: its record carries the
+    vector's JWKS, the TTL clamp the kit's keyids need, and, for ``020``, the cap the vector
+    drives the keyid to.
     """
-    PrincipalFactory(tenant=tenant, principal_id=_PRINCIPAL_ID, agent_url=COUNTERPARTY_AGENT_URL)
+    from scripts.setup.storyboard_signing import GRADING_REPLAY_TTL_SECONDS
+    from src.core.signing.grading import SignedRequestsGrading
+
+    grading = SignedRequestsGrading(
+        jwks=_jwks_for(vector),
+        replay_cap=_RATE_ABUSE_CAP if plan.harness_state is HarnessState.CAP_OVERRIDE else None,
+        replay_ttl_seconds=GRADING_REPLAY_TTL_SECONDS,
+    )
+    PrincipalFactory(
+        tenant=tenant, principal_id=_PRINCIPAL_ID, agent_url=COUNTERPARTY_AGENT_URL, signed_requests_grading=grading
+    )
     return plaintext_token_for(_PRINCIPAL_ID)
 
 
@@ -554,7 +551,7 @@ def _config_for(plan: VectorPlan) -> Iterator[None]:
     ``017``'s revocation is CONFIG on this deployment, not white-box injection:
     ``SigningSettings.revoked_keyids``'s own docstring says "Set to ``test-revoked-2026``
     on the conformance-grading deployment". ``020``'s cap is the grading record's
-    (:func:`_seed_tenant`).
+    (:func:`_seed_principal`).
 
     Through :func:`tests.helpers.signing.signing_config`, which substitutes the whole
     ``SigningSettings`` the verifier reads per request off ``get_settings().signing``
@@ -581,13 +578,13 @@ def _vector_case(vector_id: str) -> Iterator[tuple[BareIntegrationEnv, str | Non
         # with N placeholder entries"). The keyid stays ``test-ed25519-2026`` — renaming
         # it would mutate a graded ``Signature-Input`` byte and need the JWKS reseeded
         # under a new kid. These pairs are deleted by exact match afterwards, and the
-        # cap itself is this test tenant's grading record, so neither can leak to a
+        # cap itself is this test principal's grading record, so neither can leak to a
         # sibling module on another worker.
         pairs = pairs + [(_ED25519_KEYID, f"b3-cap-{index:02d}") for index in range(_RATE_ABUSE_CAP)]
 
     with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
-        tenant = _seed_tenant(plan)
-        token = _seed_principal(tenant) if plan.credential is Credential.PRINCIPAL_TOKEN else None
+        tenant = _seed_tenant()
+        token = _seed_principal(tenant, plan, vector) if plan.credential is Credential.PRINCIPAL_TOKEN else None
         _forget(env, pairs)
         if plan.harness_state is HarnessState.CAP_OVERRIDE:
             _claim(env, pairs[-_RATE_ABUSE_CAP:])

@@ -107,7 +107,7 @@ ladder invokes — which is what makes every assertion below non-vacuous.
 
 Covers: salesagent-z6nr.12 (Core Invariant + Refinement R-H1, R-H2, R-H3,
 R-L, and the shadow-mode ladder). How a bearer-less signer is identified (the
-onboarded keyid and a grading tenant's accepted JWKS) is graded by the BDD
+onboarded keyid and the test counterparty's accepted JWKS) is graded by the BDD
 scenarios in ``tests/bdd/features/local-request-signing-enforcement.feature``.
 """
 
@@ -215,11 +215,10 @@ from tests.helpers.signing import (
 #                                        before a resolution is admitted. Seeded
 #                                        by ``tests.helpers.signing.counterparty_key``
 #     ._resolution_for(agent_url, pinned=..., config=...)
-#                                        the counterparty's keys: a grading
-#                                        tenant's accepted JWKS when the verifier
-#                                        decided the request is the test kit's
-#                                        bearer-less counterparty, the walk
-#                                        otherwise
+#                                        the counterparty's keys: the accepted
+#                                        JWKS on its record when it is the
+#                                        signed-requests test counterparty, the
+#                                        walk otherwise
 #     .build_pinned_resolution           the ONE AgentResolution builder for keys
 #                                        in hand, shared by the grading record and
 #                                        the test kit. Its invariant: the key
@@ -253,8 +252,9 @@ from tests.helpers.signing import (
 #                                        deployment-level transport limits, the
 #                                        kill switch, the per-keyid cap floor and
 #                                        the revocation posture. The test kit's
-#                                        relaxations are tenant state
-#                                        (tenants.signed_requests_grading)
+#                                        relaxations are on the test
+#                                        counterparty's record
+#                                        (principals.signed_requests_grading)
 
 # --------------------------------------------------------------------------
 # Declaration seam
