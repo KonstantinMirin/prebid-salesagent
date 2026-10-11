@@ -65,6 +65,9 @@ class PackageAssignmentDict(TypedDict):
 
     package_id: str
     weight: int
+    # The package's line item in the ad server (package_config["platform_line_item_id"]),
+    # None for a package that has none.
+    platform_line_item_id: str | None
 
 
 logger = logging.getLogger(__name__)
@@ -183,8 +186,8 @@ def _merge_creative_enrichment(existing_data: dict | None, status: AssetStatus) 
       spec-defined field) is preserved and takes precedence over this fallback.
     """
     data = dict(existing_data or {})
-    if status.creative_id and not data.get("platform_creative_id"):
-        data["platform_creative_id"] = status.creative_id
+    if status.platform_creative_id and not data.get("platform_creative_id"):
+        data["platform_creative_id"] = status.platform_creative_id
     if status.concept_id and not data.get("concept_id"):
         data["concept_id"] = status.concept_id
         data["concept_name"] = status.concept_name
@@ -951,6 +954,18 @@ def execute_approved_media_buy(
                 logger.error(f"[APPROVAL] {error_msg}")
                 return ApprovalResult.failed(error_msg)
 
+            # The order the ad server already holds for this buy, when create booked it before
+            # the buy was held for its creatives (#1690). platform_order_id is per-buy, so any
+            # package carries it. Booking again would create a second order.
+            stored_order_id = next(
+                (
+                    p.package_config["platform_order_id"]
+                    for p in db_packages
+                    if (p.package_config or {}).get("platform_order_id")
+                ),
+                None,
+            )
+
             # Reconstruct MediaPackage objects (what adapters expect) from database
             # We need to load Products to get name, delivery_type, format_ids, etc.
             from sqlalchemy.orm import selectinload
@@ -1168,40 +1183,52 @@ def execute_approved_media_buy(
         # is separate from this line.
         identity = identity_of(tenant_id, buy_principal_id, buy_account_id)
 
-        # Execute adapter creation (outside session to avoid conflicts)
-        # Set BEFORE the call, not after: the condition is whether the ad server was
-        # ASKED, not whether it answered. A raising adapter may still have created a
-        # partial order, so that buy has failed — where a buy that never reached the
-        # boundary was simply never attempted.
-        adapter_ran = True
-        response = _execute_adapter_media_buy_creation(
-            request,
-            packages,
-            start_time,
-            end_time,
-            package_pricing_info,
-            identity,
-        )
-
-        logger.info(log_safe(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}: {response.media_buy_id}"))
-
-        # Persist adapter IDs to package_config.
-        # platform_order_id is per-buy — always write to all packages so retroactive creative
-        # push works regardless of whether the adapter also provides per-package line-item IDs.
-        # platform_line_item_id is per-package and only present when the adapter maps them.
-        platform_line_item_ids = response.platform_line_item_ids
-        if response.media_buy_id:
-            with MediaBuyUoW(tenant_id) as uow_plids:
-                assert uow_plids.media_buys is not None
-                _persist_adapter_package_ids(
-                    uow_plids.media_buys,
-                    media_buy_id=media_buy_id,
-                    platform_order_id=str(response.media_buy_id),
-                    platform_line_item_ids=platform_line_item_ids or None,
-                    log_label="APPROVAL",
-                )
+        if stored_order_id:
+            # Already booked: upload the creatives to that order and approve it (#1690).
+            order_id: str = stored_order_id
+            logger.info(log_safe(f"[APPROVAL] Media buy {media_buy_id} is already booked as order {order_id}"))
         else:
-            logger.info("[APPROVAL] Adapter returned no media_buy_id — skipping ID persistence")
+            # Execute adapter creation (outside session to avoid conflicts)
+            # Set BEFORE the call, not after: the condition is whether the ad server was
+            # ASKED, not whether it answered. A raising adapter may still have created a
+            # partial order, so that buy has failed — where a buy that never reached the
+            # boundary was simply never attempted.
+            adapter_ran = True
+            response = _execute_adapter_media_buy_creation(
+                request,
+                packages,
+                start_time,
+                end_time,
+                package_pricing_info,
+                identity,
+            )
+            order_id = response.media_buy_id
+
+            logger.info(log_safe(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}: {order_id}"))
+
+            # Persist adapter IDs to package_config.
+            # platform_order_id is per-buy — always write to all packages so retroactive creative
+            # push works regardless of whether the adapter also provides per-package line-item IDs.
+            # platform_line_item_id is per-package and only present when the adapter maps them.
+            if order_id:
+                with MediaBuyUoW(tenant_id) as uow_plids:
+                    assert uow_plids.media_buys is not None
+                    _persist_adapter_package_ids(
+                        uow_plids.media_buys,
+                        media_buy_id=media_buy_id,
+                        platform_order_id=str(order_id),
+                        platform_line_item_ids=response.platform_line_item_ids or None,
+                        log_label="APPROVAL",
+                    )
+            else:
+                logger.info("[APPROVAL] Adapter returned no media_buy_id — skipping ID persistence")
+
+        # Import adapter helper here (used for both creative upload and order approval)
+        from src.core.helpers.adapter_helpers import get_adapter
+
+        # Resolved before the unit opens: get_adapter reads the adapter config in a session of
+        # its own, which would close the unit's session and lose the enrichment written below.
+        adapter = get_adapter(identity)
 
         # Upload and associate inline creatives if any exist
         # This handles inline creatives that were uploaded during initial media buy creation
@@ -1211,15 +1238,19 @@ def execute_approved_media_buy(
             session = uow2.session
             from src.core.database.models import CreativeAssignment
 
-            # Import adapter helper here (used for both creative upload and order approval)
-            from src.core.helpers.adapter_helpers import get_adapter
-
             # Get all creative assignments for this media buy
             stmt_assignments = select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
             assignments = session.scalars(stmt_assignments).all()
 
             if assignments:
                 logger.info(f"[APPROVAL] Found {len(assignments)} creative assignments, uploading to adapter")
+
+                # Each package's line item, as the create (or the persistence above) recorded it.
+                assert uow2.media_buys is not None
+                line_item_by_package = {
+                    p.package_id: (p.package_config or {}).get("platform_line_item_id")
+                    for p in uow2.media_buys.get_packages(media_buy_id)
+                }
 
                 # Group packages by creative (REVERSED - key by creative_id, value is list of package assignments)
                 # This ensures each creative is uploaded ONCE with ALL its package assignments
@@ -1232,6 +1263,7 @@ def execute_approved_media_buy(
                         {
                             "package_id": assignment.package_id,
                             "weight": assignment.weight,  # From CreativeAssignment.weight (default 100)
+                            "platform_line_item_id": line_item_by_package.get(assignment.package_id),
                         }
                     )
 
@@ -1263,6 +1295,10 @@ def execute_approved_media_buy(
                         )
                         continue
 
+                    # On an order booked at create, a creative with an ad server id was placed then.
+                    if stored_order_id and (creative.data or {}).get("platform_creative_id"):
+                        continue
+
                     asset, err = _build_adapter_asset_from_creative(
                         creative, package_assignment_list, tenant_id=tenant_id
                     )
@@ -1287,17 +1323,12 @@ def execute_approved_media_buy(
                 if assets:
                     logger.info(f"[APPROVAL] Uploading {len(assets)} creatives to adapter")
 
-                    # Get adapter and upload creatives
-                    adapter = get_adapter(identity)
-
                     # Call adapter's add_creative_assets method
                     # For GAM, the media_buy_id is the GAM order ID
-                    gam_order_id: str = response.media_buy_id
-
                     try:
-                        if hasattr(adapter, "creatives_manager") and adapter.creatives_manager and gam_order_id:
+                        if hasattr(adapter, "creatives_manager") and adapter.creatives_manager and order_id:
                             asset_statuses = adapter.creatives_manager.add_creative_assets(
-                                gam_order_id, assets, datetime.now(UTC)
+                                order_id, assets, datetime.now(UTC)
                             )
                             logger.info(f"[APPROVAL] Creative upload completed: {len(asset_statuses)} assets processed")
 
@@ -1338,17 +1369,17 @@ def execute_approved_media_buy(
         # This is necessary because:
         # 1. GAM may still be processing inventory forecasts (NO_FORECAST_YET error)
         # 2. Creatives may have been uploaded after the initial approval attempt
-        logger.info(log_safe(f"[APPROVAL] Attempting to approve order {response.media_buy_id} in GAM"))
+        logger.info(log_safe(f"[APPROVAL] Attempting to approve order {order_id} in GAM"))
         try:
             adapter = get_adapter(identity)
             if hasattr(adapter, "orders_manager") and adapter.orders_manager:
-                approval_success = adapter.orders_manager.approve_order(response.media_buy_id)
+                approval_success = adapter.orders_manager.approve_order(order_id)
                 if approval_success:
-                    logger.info(log_safe(f"[APPROVAL] Successfully approved GAM order {response.media_buy_id}"))
+                    logger.info(log_safe(f"[APPROVAL] Successfully approved GAM order {order_id}"))
                 else:
                     # GAM approval failed - return failure so status can be updated
                     error_msg = (
-                        f"Failed to approve order {response.media_buy_id}, "
+                        f"Failed to approve order {order_id}, "
                         f"it will remain in DRAFT status. This may be due to missing creatives or "
                         f"GAM still processing inventory forecasts."
                     )
@@ -1358,7 +1389,7 @@ def execute_approved_media_buy(
                 logger.info("[APPROVAL] Adapter does not support order approval, skipping")
         except Exception as approval_error:
             # Approval exception - return failure
-            error_msg = f"Failed to approve order {response.media_buy_id}: {str(approval_error)}"
+            error_msg = f"Failed to approve order {order_id}: {str(approval_error)}"
             logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
             return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
 
@@ -1431,13 +1462,19 @@ def push_creative_to_existing_buy(
     creative_id: str,
     media_buy_id: str,
     tenant_id: str,
+    package_ids: list[str] | None = None,
 ) -> tuple[bool, str | None]:
     """Push a single approved creative to an already-active ad server line item.
 
     Called from approve_creative when the buy is already live but this creative
-    was in pending_review at buy-approval time and was held back (#1038).
+    was in pending_review at buy-approval time and was held back (#1038), and from
+    sync_creatives for an approved creative assigned to a booked package (#2381).
     Local approval has already committed — failures here are non-fatal and logged.
-    Re-approval is safe: skips the adapter when platform_creative_id is already set.
+    A creative the ad server already holds (platform_creative_id set) is associated
+    with the packages' line items, not created again.
+
+    ``package_ids`` limits the push to those of the creative's packages on the buy;
+    ``None`` pushes to every package the creative is assigned to there.
 
     Returns (success, error_message). error_message is non-None only on failure.
     """
@@ -1467,8 +1504,10 @@ def push_creative_to_existing_buy(
                 return False, f"Creative {creative_id} not found"
             owner_principal_id = owner_row.principal_id
 
-        # Nothing is open here. This is the whole point of the split.
+        # Nothing is open here. This is the whole point of the split. get_adapter reads the
+        # adapter config in a session of its own, so it is resolved here too.
         identity = identity_of(tenant_id, owner_principal_id)
+        adapter = get_adapter(identity)
 
         with AdminCreativeUoW(tenant_id) as uow:
             assert uow.creatives is not None
@@ -1486,37 +1525,51 @@ def push_creative_to_existing_buy(
             if creative.status not in {"approved", "active"}:
                 return False, f"Creative {creative_id} is not approved (status={creative.status})"
 
-            if (creative.data or {}).get("platform_creative_id"):
-                logger.info(
-                    log_safe(
-                        f"[GATE-PUSH] Creative {creative_id} already has platform_creative_id — "
-                        f"skipping adapter call (already uploaded)"
-                    )
-                )
-                return True, None
-
             all_assignments = uow.assignments.get_by_creative(creative_id)
-            matching = [a for a in all_assignments if a.media_buy_id == media_buy_id]
+            matching = [
+                a
+                for a in all_assignments
+                if a.media_buy_id == media_buy_id and (package_ids is None or a.package_id in package_ids)
+            ]
             if not matching:
                 return False, f"No assignment of creative {creative_id} to media buy {media_buy_id}"
 
             # Resolved above, outside every unit. See the comment at the top of the try.
-            adapter = get_adapter(identity)
             if not (hasattr(adapter, "creatives_manager") and adapter.creatives_manager):
                 return False, "Adapter does not support creative upload"
 
             # platform_order_id is per-buy — any package on this buy has the same value
-            media_package = uow.media_buys.get_package(media_buy_id, matching[0].package_id)
-            if not media_package:
+            package_configs = {p.package_id: p.package_config or {} for p in uow.media_buys.get_packages(media_buy_id)}
+            if matching[0].package_id not in package_configs:
                 return False, f"No package found for media buy {media_buy_id}"
 
-            platform_order_id = (media_package.package_config or {}).get("platform_order_id")
+            platform_order_id = package_configs[matching[0].package_id].get("platform_order_id")
             if not platform_order_id:
                 return False, f"Media buy {media_buy_id} has no platform_order_id — buy may not be live yet"
 
             package_assignments: list[PackageAssignmentDict] = [
-                {"package_id": a.package_id, "weight": a.weight or 100} for a in matching
+                {
+                    "package_id": a.package_id,
+                    "weight": a.weight or 100,
+                    "platform_line_item_id": package_configs.get(a.package_id, {}).get("platform_line_item_id"),
+                }
+                for a in matching
             ]
+
+            platform_creative_id = (creative.data or {}).get("platform_creative_id")
+            if platform_creative_id:
+                # Already in the ad server: place it on these packages' line items.
+                line_item_ids = [a["platform_line_item_id"] for a in package_assignments if a["platform_line_item_id"]]
+                if not line_item_ids:
+                    return False, f"No line item for creative {creative_id} on media buy {media_buy_id}"
+                refused = [
+                    r
+                    for r in adapter.associate_creatives(line_item_ids, [platform_creative_id])
+                    if r["status"] != "success"
+                ]
+                if refused:
+                    return False, refused[0].get("error") or "Adapter reported association failure"
+                return True, None
             asset, build_err = _build_adapter_asset_from_creative(creative, package_assignments, tenant_id=tenant_id)
             if build_err:
                 return False, build_err
@@ -3580,10 +3633,8 @@ async def _create_media_buy_impl(
                             logger.error(error_msg)
                             raise AdCPAdapterError()
 
-                        # Get platform_line_item_id from response if available
-                        platform_line_item_id = None
-                        if response.packages and i < len(response.packages):
-                            platform_line_item_id = getattr(response.packages[i], "platform_line_item_id", None)
+                        # The package's line item, as the adapter mapped it
+                        platform_line_item_id = (response.platform_line_item_ids or {}).get(response_package_id)
 
                         # Collect platform creative IDs for association
                         platform_creative_ids = []
@@ -3614,7 +3665,11 @@ async def _create_media_buy_impl(
                                 # Upload to GAM via shared asset helper
                                 try:
                                     pkg_assignments: list[PackageAssignmentDict] = [
-                                        {"package_id": response_package_id, "weight": 100}
+                                        {
+                                            "package_id": response_package_id,
+                                            "weight": 100,
+                                            "platform_line_item_id": platform_line_item_id,
+                                        }
                                     ]
                                     asset, build_err = _build_adapter_asset_from_creative(
                                         creative, pkg_assignments, tenant_id=tenant.tenant_id
@@ -3643,9 +3698,6 @@ async def _create_media_buy_impl(
                                             CreativeRepository(session, tenant.tenant_id).update_data(
                                                 creative, merged_data
                                             )
-                                        pcid = (creative.data or {}).get("platform_creative_id")
-                                        if pcid:
-                                            platform_creative_ids.append(pcid)
                                 except AdCPSalesAgentError:
                                     raise
                                 except Exception as upload_error:
