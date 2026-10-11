@@ -30,7 +30,7 @@ from unittest.mock import MagicMock
 
 from src.core.product_conversion import default_reporting_capabilities
 from src.core.schemas import Product
-from tests.factories.product import PricingOptionRequestFactory
+from tests.factories.product import PricingOptionRequestFactory, reference_format_ids
 from tests.harness._base import BaseTestEnv
 from tests.harness._mixins import ProductMixin
 
@@ -75,7 +75,7 @@ def _make_product(
         product_id=product_id,
         name=name,
         description=description,
-        format_ids=format_ids or [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
+        format_ids=format_ids or reference_format_ids("display_300x250"),
         property_tags=property_tags or ["all_inventory"],
         delivery_type=delivery_type,
         pricing_options=pricing_options or [_DEFAULT_PRICING_OPTION],
