@@ -6,7 +6,9 @@ The production surface these tests grade:
 * ``src.core.database.repositories.replay_nonce.ReplayNonceRepository``
 * ``src.core.signing.replay_store.PostgresReplayStore``
 * ``src.core.config.SigningSettings`` (the replay knobs: ``per_keyid_cap``,
-  ``per_keyid_cap_overrides``, ``replay_ttl_overrides``, ``replay_claim_ttl_seconds``)
+  ``replay_claim_ttl_seconds``)
+* ``src.core.signing.grading.SignedRequestsGrading`` (the test kit's ``replay_cap`` and
+  ``replay_ttl_seconds``, handed to the store as its ``tuning``)
 
 Spec grounding — AdCP 3.1.1 via ``adcp==6.6.0``:
 ``dist/compliance/3.1.1/test-kits/signed-requests-runner.yaml`` (stateful contract:
@@ -83,31 +85,35 @@ def _signing_config(**overrides):
     """Build a ``SigningSettings`` with A4's replay knobs explicit.
 
     Defaults are the spec floors: the 1,000,000-entry per-keyid cap from
-    ``security.mdx`` §per-keyid cap, no per-keyid overrides. Every knob this module
+    ``security.mdx`` §per-keyid cap. Every knob this module
     exercises is passed explicitly so an ``ADCP_SIGNING_*`` variable in the ambient
     environment cannot change what is being graded.
     """
     from src.core.config import SigningSettings
 
-    settings = {
-        "per_keyid_cap": 1_000_000,
-        "per_keyid_cap_overrides": {},
-        "replay_ttl_overrides": {},
-    }
+    settings = {"per_keyid_cap": 1_000_000}
     settings.update(overrides)
     return SigningSettings(**settings)
 
 
-def _build_store(session: SASession, config):
+def _build_store(session: SASession, config, tuning=None):
     """Construct the production store over a caller-owned session.
 
-    Matches the wiring B1 (salesagent-z6nr.12) will do inside its
-    ``asyncio.to_thread`` hop: one short-lived session, one store, three calls.
+    Matches the verifier's wiring: one short-lived session, one store, three calls.
+    *tuning* is the grading record the verifier hands the store when the request's keyid
+    is the test kit's (:func:`_grading`), ``None`` otherwise.
     """
     from src.core.database.repositories.replay_nonce import ReplayNonceRepository
     from src.core.signing.replay_store import PostgresReplayStore
 
-    return PostgresReplayStore(ReplayNonceRepository(session), config)
+    return PostgresReplayStore(ReplayNonceRepository(session), config, tuning)
+
+
+def _grading(keyid: str, **tuning):
+    """A grading record whose test-kit keyid is *keyid*, carrying *tuning*."""
+    from src.core.signing.grading import SignedRequestsGrading
+
+    return SignedRequestsGrading(jwks={"keys": [{"kid": keyid, "kty": "OKP", "crv": "Ed25519"}]}, **tuning)
 
 
 def _live_row_count(session: SASession, keyid: str, nonce: str | None = None) -> int:
@@ -309,8 +315,7 @@ class TestPerKeyidCap:
         counterparty; ``production_min_per_keyid_cap_requests: 1000000`` stays the
         global floor (see the config test below).
         """
-        config = _signing_config(per_keyid_cap_overrides={keyid: 2})
-        store = _build_store(replay_session, config)
+        store = _build_store(replay_session, _signing_config(), _grading(keyid, replay_cap=2))
 
         assert store.at_capacity(keyid) is False, "no live rows: not at capacity"
         store.seen(keyid, "cap-1")
@@ -334,8 +339,7 @@ class TestPerKeyidCap:
         would pass the test above while turning any busy signer into a global outage.
         """
         other_keyid = f"a4-{uuid.uuid4().hex[:16]}"
-        config = _signing_config(per_keyid_cap_overrides={keyid: 1})
-        store = _build_store(replay_session, config)
+        store = _build_store(replay_session, _signing_config(), _grading(keyid, replay_cap=1))
 
         store.seen(keyid, "cap-1")
         assert store.at_capacity(keyid) is True
@@ -423,7 +427,7 @@ class TestCapacityHappensBeforeCryptoVerify:
         _verify(filler_headers, honest_jwk, _build_store(replay_session, _signing_config()))
         assert _live_row_count(replay_session, keyid) == 1, "setup: the accepted request must occupy the cap"
 
-        store = _build_store(replay_session, _signing_config(per_keyid_cap_overrides={keyid: 1}))
+        store = _build_store(replay_session, _signing_config(), _grading(keyid, replay_cap=1))
         impostor_pem, _ = generate_ed25519(keyid)
         headers, _ = _sign(keyid, nonce="at-capacity", signing_jwk_pair=(impostor_pem, None))
 
@@ -483,13 +487,10 @@ class TestPerKeyidTtlOverride:
         enough that the cap drains between vectors.
         """
         unclamped_keyid = f"a4-{uuid.uuid4().hex[:16]}"
-        config = _signing_config(
-            replay_claim_ttl_seconds=360.0,
-            replay_ttl_overrides={keyid: 70.0},
-        )
+        config = _signing_config(replay_claim_ttl_seconds=360.0)
         nonce = "clamped"
 
-        store = _build_store(replay_session, config)
+        store = _build_store(replay_session, config, _grading(keyid, replay_ttl_seconds=70.0))
 
         assert store.seen(keyid, nonce) is False
         store.remember(keyid, nonce, 300.0)
@@ -500,8 +501,9 @@ class TestPerKeyidTtlOverride:
             "must still cover the test-kit's 60s window"
         )
 
-        assert store.seen(unclamped_keyid, nonce) is False
-        store.remember(unclamped_keyid, nonce, 300.0)
+        untuned = _build_store(replay_session, config)
+        assert untuned.seen(unclamped_keyid, nonce) is False
+        untuned.remember(unclamped_keyid, nonce, 300.0)
         unclamped = _seconds_until_expiry(replay_session, unclamped_keyid, nonce)
         assert unclamped > 70.0, (
             f"an unoverridden keyid's row lives {unclamped:.1f}s; clamping must "
@@ -509,16 +511,13 @@ class TestPerKeyidTtlOverride:
             "signature's own validity window"
         )
 
-    def test_config_refuses_a_global_cap_or_a_global_clamp(self):
+    def test_config_refuses_a_global_cap_below_the_floor(self):
         """The config makes "lowered for the test counterparty only" mechanical.
 
-        Both lowered values — the cap and the TTL clamp — are permitted by the
-        test-kit for the test-kit COUNTERPARTY only. The ``field_validator`` refuses
-        the global form of each at load, so a misconfiguration fails at startup rather
-        than at the first signature: the cap below the spec's
-        ``production_min_per_keyid_cap_requests: 1000000`` floor, and any override
-        entry that would apply to every keyid (a wildcard/prefix key — overrides name
-        explicit keyids, never patterns).
+        The test kit permits a lowered cap for the test-kit COUNTERPARTY only, which a
+        grading tenant's record carries. The ``field_validator`` refuses the global form at
+        load, so a misconfiguration fails at startup rather than at the first signature:
+        a cap below the spec's ``production_min_per_keyid_cap_requests: 1000000`` floor.
 
         This test needs no database; it lives here because it is the other half of the
         clamp mechanism asserted above, and splitting it would hide that.
@@ -527,16 +526,3 @@ class TestPerKeyidTtlOverride:
 
         with pytest.raises(ValidationError):
             _signing_config(per_keyid_cap=100)
-
-        with pytest.raises(ValidationError):
-            _signing_config(per_keyid_cap_overrides={"*": 100})
-
-        with pytest.raises(ValidationError):
-            _signing_config(replay_ttl_overrides={"*": 70.0})
-
-        explicit = _signing_config(
-            per_keyid_cap_overrides={"test-ed25519-2026": 100, "test-es256-2026": 100},
-            replay_ttl_overrides={"test-ed25519-2026": 70.0, "test-es256-2026": 70.0},
-        )
-        assert explicit.per_keyid_cap_overrides["test-ed25519-2026"] == 100
-        assert explicit.replay_ttl_overrides["test-es256-2026"] == 70.0

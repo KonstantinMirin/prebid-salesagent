@@ -50,10 +50,10 @@ sidestep: every transport hands the raw headers to ``serve()``, and
 ``src/core/tools/_boundary.py:invoke_tool``) is the ONE reader of both
 credentials — the bearer AND the RFC 9421 signature. It reads those headers
 itself and no parameter accepts a pre-parsed token, so an identity the harness
-hands the app has nothing to feed it. The Principal row is then read in BOTH
-directions: ``token -> Principal -> agent_url`` is the key-resolution input, and
-the reverse, ``verified agent_url -> Principal``, is how a signed request
-carrying no bearer identifies at all. One row answers both, which is why this
+hands the app has nothing to feed it. The Principal row is reached two ways:
+``token -> Principal -> agent_url`` is the key-resolution input, and
+``keyid -> principal_signing_keyids -> Principal`` (:func:`onboard_signing_keyid`)
+is how a signed request carrying no bearer identifies at all. One row answers both, which is why this
 capability writes to the env's OWN Principal row (:func:`attach_agent_url`)
 instead of relying on the env's mock identity — one acting identity, recorded
 where production reads it.

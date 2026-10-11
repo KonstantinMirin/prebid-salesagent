@@ -50,19 +50,29 @@ class PrincipalRepository:
     def find_by_agent_url(self, agent_url: str) -> Principal | None:
         """The principal of this tenant onboarded at ``agent_url``, or ``None``.
 
-        The reverse of the lookup the verifier does on the way in. A valid RFC 9421
-        signature establishes exactly one fact — "the request was issued by the agent whose
-        ``jwks_uri`` contains the ``keyid``" (security.mdx @ v3.1.1 § Agent identity) — and
-        the agent is named by the ``agents[]`` entry the verifier already used to fetch that
-        JWKS. So a signature that verifies IS a credential, and this is how it resolves to a
-        principal when the caller presented no bearer at all.
-
-        Scoped to the tenant, like every other read here, and unique within it
-        (``uq_principals_tenant_agent_url``): the constraint is what makes "the principal
-        this signature establishes" a single answer rather than whichever row sorted first.
+        For seeds that find or create a counterparty by its agent URL. Unique within the
+        tenant (``uq_principals_tenant_agent_url``), so the answer is one row.
         """
         return self._session.scalars(
             select(Principal).filter_by(tenant_id=self._tenant_id, agent_url=agent_url)
+        ).first()
+
+    def find_by_signing_keyid(self, keyid: str) -> Principal | None:
+        """The principal of this tenant that ``keyid`` is onboarded for, or ``None``.
+
+        security.mdx @ v3.1.1 L1088-1094, checklist step 1: a keyid resolves to one
+        ``agents[]`` entry. ``principal_signing_keyids`` maps it to the ``(tenant_id,
+        agent_url)`` coordinate, and its primary key ``(tenant_id, keyid)`` makes this one
+        row. The keyid is unverified when this runs; the verifier establishes the principal.
+        """
+        return self._session.scalars(
+            select(Principal)
+            .join(
+                PrincipalSigningKeyid,
+                (PrincipalSigningKeyid.tenant_id == Principal.tenant_id)
+                & (PrincipalSigningKeyid.agent_url == Principal.agent_url),
+            )
+            .filter(PrincipalSigningKeyid.tenant_id == self._tenant_id, PrincipalSigningKeyid.keyid == keyid)
         ).first()
 
     def onboard_signing_keyids(self, agent_url: str, keyids: Iterable[str]) -> None:
