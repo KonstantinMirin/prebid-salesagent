@@ -155,19 +155,6 @@ def _locations(location_ids: dict[str, str], codes: set[str]) -> list[dict[str, 
 class GAMTargetingManager:
     """Manages targeting operations for Google Ad Manager."""
 
-    # Supported device types and their GAM numeric device category IDs
-    # These are GAM's standard device category IDs that work across networks
-    DEVICE_TYPE_MAP = {
-        "mobile": 30000,  # Mobile devices
-        "desktop": 30001,  # Desktop computers
-        "tablet": 30002,  # Tablet devices
-        "ctv": 30003,  # Connected TV / Streaming devices
-        "dooh": 30004,  # Digital out-of-home / Set-top box
-    }
-
-    # Supported media types
-    SUPPORTED_MEDIA_TYPES = {"video", "display", "native"}
-
     @staticmethod
     def targeting_capabilities() -> TargetingCapabilities:
         """The targeting this manager books, which ``GoogleAdManager`` declares in get_adcp_capabilities.

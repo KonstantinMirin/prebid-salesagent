@@ -307,14 +307,6 @@ class GoogleAdManager(AdServerAdapter):
         """The targeting the GAM targeting manager books, which also refuses every system it omits."""
         return GAMTargetingManager.targeting_capabilities()
 
-    @property
-    def DEVICE_TYPE_MAP(self):
-        return self.targeting_manager.DEVICE_TYPE_MAP
-
-    @property
-    def SUPPORTED_MEDIA_TYPES(self):
-        return self.targeting_manager.SUPPORTED_MEDIA_TYPES
-
     def create_media_buy(
         self,
         request: AdapterCreateRequest,
