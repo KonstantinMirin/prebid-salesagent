@@ -881,12 +881,9 @@ def given_high_daily_spend(ctx: dict, budget: int, days: int, daily: int) -> Non
     kwargs["packages"][0]["budget"] = float(budget)
 
 
-@given(parsers.re(r'a package references pricing_option_id "(?P<po_id>[^"]*)" not found on the product'))
+@given(parsers.parse('a package references pricing_option_id "{po_id}" not found on the product'))
 def given_nonexistent_pricing_option(ctx: dict, po_id: str) -> None:
-    """Override first package pricing_option_id to a value that names no option of the product.
-
-    The empty string is one such value: the DTO accepts it (the pin sets no minimum length).
-    """
+    """Override first package pricing_option_id to a non-existent value."""
     kwargs = _ensure_request_defaults(ctx)
     assert kwargs.get("packages"), (
         f"No packages in request — step claims 'a package references pricing_option_id "

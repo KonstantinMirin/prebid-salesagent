@@ -55,7 +55,7 @@ VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
     # 2→1: the pricing-model capability gap is typed; the remaining ValueError
     # is the seller-config incompatible-override raise (deliberately untyped).
     "src/adapters/gam/pricing_compatibility.py": 0,
-    "src/adapters/gam_implementation_config_schema.py": 2,
+    "src/adapters/gam_implementation_config_schema.py": 4,
     "src/adapters/xandr.py": 0,
     "src/core/tools/media_buy_create.py": 2,  # null-session guard + agent_url HTTP(S) validation (internal contracts)
 }

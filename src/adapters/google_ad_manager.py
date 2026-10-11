@@ -14,15 +14,12 @@ __all__ = [
 
 import logging
 import uuid
-from collections.abc import Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import sqlalchemy.exc
 
 if TYPE_CHECKING:
-    from sqlalchemy.orm import Session
-
     from src.core.schemas import Snapshot
 
 from flask import Flask
@@ -34,7 +31,6 @@ from src.adapters.base import (
     AdapterUpdateResult,
     AdServerAdapter,
     TargetingCapabilities,
-    unsupported_targeting_features,
 )
 
 # Import modular components
@@ -93,15 +89,6 @@ from src.core.schemas import (
 
 # Set up logger
 logger = logging.getLogger(__name__)
-
-
-class PackageProduct(TypedDict):
-    """What the GAM adapter reads off a package's product (``GoogleAdManager._package_products``)."""
-
-    product_id: str
-    #: The product's GAM configuration; ``create_media_buy`` adds the product's mapped inventory ids.
-    implementation_config: dict[str, Any]
-    delivery_type: str
 
 
 class GoogleAdManager(AdServerAdapter):
@@ -364,77 +351,6 @@ class GoogleAdManager(AdServerAdapter):
     def SUPPORTED_MEDIA_TYPES(self):
         return self.targeting_manager.SUPPORTED_MEDIA_TYPES
 
-    def _package_products(self, session: "Session", packages: list[MediaPackage]) -> dict[str, PackageProduct]:
-        """Each package's product, as this adapter reads it, keyed by package_id.
-
-        The one read of the products a booking is planned from:
-        ``validate_media_buy_request`` and ``create_media_buy`` both call it. Each entry's
-        ``implementation_config`` is its own copy, so a caller may add to it.
-
-        Raises:
-            AdCPProductUnavailableError: a package whose product does not exist.
-        """
-        from src.core.database.repositories.product import ProductRepository
-
-        products = ProductRepository(session, self.tenant_id)
-        package_products: dict[str, PackageProduct] = {}
-        for package in packages:
-            product = products.get_by_id(package.product_id) if package.product_id else None
-            if product is None:
-                self.log(
-                    f"[red]Error: package '{package.package_id}' names product '{package.product_id}', "
-                    "which does not exist. A product must exist before a media buy is created on it.[/red]"
-                )
-                raise AdCPProductUnavailableError()
-            package_products[package.package_id] = PackageProduct(
-                product_id=product.product_id,
-                implementation_config=dict(product.implementation_config or {}),
-                delivery_type=product.delivery_type,
-            )
-        return package_products
-
-    @staticmethod
-    def _plan_line_items(
-        packages: list[MediaPackage],
-        package_pricing_info: dict[str, dict] | None,
-        package_products: Mapping[str, PackageProduct],
-    ) -> dict[str, LineItemPlan]:
-        """Each package's line item plan (``PricingCompatibility.plan_line_item``), keyed by package_id.
-
-        ``package_products`` is ``_package_products``' result. Raises the planner's
-        CONFIGURATION_ERROR for a configuration GAM does not accept.
-        """
-        return {
-            package.package_id: PricingCompatibility.plan_line_item(
-                (package_pricing_info or {})[package.package_id]["pricing_model"],
-                is_guaranteed=package_products[package.package_id]["delivery_type"] == "guaranteed",
-                implementation_config=package_products[package.package_id]["implementation_config"],
-                product_id=package_products[package.package_id]["product_id"],
-            )
-            for package in packages
-        }
-
-    def validate_media_buy_request(
-        self,
-        request: AdapterCreateRequest,
-        packages: list[MediaPackage],
-        start_time: datetime,
-        end_time: datetime,
-        package_pricing_info: dict[str, dict] | None = None,
-    ) -> list[ErrorProblem]:
-        """The base checks, after planning every package's line item from its product's GAM configuration.
-
-        The create path and the seller's approval both run this before the adapter is
-        asked to write anything, so a configuration GAM would refuse raises
-        CONFIGURATION_ERROR (``_plan_line_items``) while nothing exists in GAM.
-        """
-        from src.core.database.database_session import get_db_session
-
-        with get_db_session() as session:
-            package_products = self._package_products(session, packages)
-        self._plan_line_items(packages, package_pricing_info, package_products)
-        return super().validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
-
     def create_media_buy(
         self,
         request: AdapterCreateRequest,
@@ -494,83 +410,113 @@ class GoogleAdManager(AdServerAdapter):
             self.log(f"[red]Error: {error_msg}[/red]")
             raise AdCPConfigurationError(field=", ".join(missing))
 
-        # Each package's product (refused here if it does not exist), with the GAM ids of the
-        # inventory mapped to the product added to its implementation_config.
+        # Get products to access implementation_config
 
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import GAMInventory, ProductInventoryMapping
+        from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
 
+        products_map = {}
         with get_db_session() as db_session:
-            from sqlalchemy import select
-
-            products_map = self._package_products(db_session, packages)
             for package in packages:
-                product_id = products_map[package.package_id]["product_id"]
-                impl_config = products_map[package.package_id]["implementation_config"]
+                from sqlalchemy import select
 
-                # Load inventory mappings from ProductInventoryMapping table
-                inventory_stmt = select(ProductInventoryMapping).filter_by(
+                # Extract product_id from package (not package_id!)
+                # package.package_id is like "pkg_prod_610fbb8b_08dec6ae_1"
+                # package.product_id is like "prod_610fbb8b"
+                product_id = package.product_id
+                logger.info(f"Looking up product for package {package.package_id}: product_id={product_id}")
+
+                stmt = select(Product).filter_by(
+                    tenant_id=self.tenant_id,
                     product_id=product_id,
-                    tenant_id=self.tenant_id,  # Use product_id string, not integer id
                 )
-                inventory_mappings = db_session.scalars(inventory_stmt).all()
-                logger.info(f"Found {len(inventory_mappings)} inventory mappings for product {product_id}")
+                product = db_session.scalars(stmt).first()
+                if product:
+                    logger.info(f"Found product: {product.product_id} (name={product.name})")
+                    # Start with product's implementation_config
+                    impl_config = product.implementation_config.copy() if product.implementation_config else {}
+                    logger.info(f"Product implementation_config: {impl_config}")
 
-                if inventory_mappings:
-                    # Get GAM ad unit IDs from the mappings
-                    ad_unit_ids = []
-                    placement_ids = []
-                    for mapping in inventory_mappings:
-                        logger.info(
-                            f"Processing mapping: type={mapping.inventory_type}, inventory_id={mapping.inventory_id}"
-                        )
-                        if mapping.inventory_type == "ad_unit":
-                            # Load the actual GAM inventory record
-                            gam_inv_stmt = select(GAMInventory).filter_by(
-                                inventory_id=mapping.inventory_id,  # Match by inventory_id string
-                                inventory_type="ad_unit",
-                                tenant_id=self.tenant_id,
+                    # Load inventory mappings from ProductInventoryMapping table
+                    inventory_stmt = select(ProductInventoryMapping).filter_by(
+                        product_id=product.product_id,
+                        tenant_id=self.tenant_id,  # Use product_id string, not integer id
+                    )
+                    inventory_mappings = db_session.scalars(inventory_stmt).all()
+                    logger.info(f"Found {len(inventory_mappings)} inventory mappings for product {product.product_id}")
+
+                    if inventory_mappings:
+                        # Get GAM ad unit IDs from the mappings
+                        ad_unit_ids = []
+                        placement_ids = []
+                        for mapping in inventory_mappings:
+                            logger.info(
+                                f"Processing mapping: type={mapping.inventory_type}, inventory_id={mapping.inventory_id}"
                             )
-                            gam_inv = db_session.scalars(gam_inv_stmt).first()
-                            if gam_inv:
-                                logger.info(f"Found GAM ad unit: {gam_inv.inventory_id}")
-                                ad_unit_ids.append(str(gam_inv.inventory_id))
-                            else:
-                                logger.warning(f"GAM ad unit not found for inventory_id={mapping.inventory_id}")
-                        elif mapping.inventory_type == "placement":
-                            # Load the actual GAM placement record
-                            gam_inv_stmt = select(GAMInventory).filter_by(
-                                inventory_id=mapping.inventory_id,
-                                inventory_type="placement",
-                                tenant_id=self.tenant_id,
-                            )
-                            gam_inv = db_session.scalars(gam_inv_stmt).first()
-                            if gam_inv:
-                                logger.info(f"Found GAM placement: {gam_inv.inventory_id}")
-                                placement_ids.append(str(gam_inv.inventory_id))
-                            else:
-                                logger.warning(f"GAM placement not found for inventory_id={mapping.inventory_id}")
+                            if mapping.inventory_type == "ad_unit":
+                                # Load the actual GAM inventory record
+                                gam_inv_stmt = select(GAMInventory).filter_by(
+                                    inventory_id=mapping.inventory_id,  # Match by inventory_id string
+                                    inventory_type="ad_unit",
+                                    tenant_id=self.tenant_id,
+                                )
+                                gam_inv = db_session.scalars(gam_inv_stmt).first()
+                                if gam_inv:
+                                    logger.info(f"Found GAM ad unit: {gam_inv.inventory_id}")
+                                    ad_unit_ids.append(str(gam_inv.inventory_id))
+                                else:
+                                    logger.warning(f"GAM ad unit not found for inventory_id={mapping.inventory_id}")
+                            elif mapping.inventory_type == "placement":
+                                # Load the actual GAM placement record
+                                gam_inv_stmt = select(GAMInventory).filter_by(
+                                    inventory_id=mapping.inventory_id,
+                                    inventory_type="placement",
+                                    tenant_id=self.tenant_id,
+                                )
+                                gam_inv = db_session.scalars(gam_inv_stmt).first()
+                                if gam_inv:
+                                    logger.info(f"Found GAM placement: {gam_inv.inventory_id}")
+                                    placement_ids.append(str(gam_inv.inventory_id))
+                                else:
+                                    logger.warning(f"GAM placement not found for inventory_id={mapping.inventory_id}")
 
-                    # Merge inventory mappings into implementation_config
-                    if ad_unit_ids:
-                        impl_config["targeted_ad_unit_ids"] = ad_unit_ids
-                        logger.info(f"Set targeted_ad_unit_ids: {ad_unit_ids}")
-                    if placement_ids:
-                        impl_config["targeted_placement_ids"] = placement_ids
-                        logger.info(f"Set targeted_placement_ids: {placement_ids}")
+                        # Merge inventory mappings into implementation_config
+                        if ad_unit_ids:
+                            impl_config["targeted_ad_unit_ids"] = ad_unit_ids
+                            logger.info(f"Set targeted_ad_unit_ids: {ad_unit_ids}")
+                        if placement_ids:
+                            impl_config["targeted_placement_ids"] = placement_ids
+                            logger.info(f"Set targeted_placement_ids: {placement_ids}")
 
-                logger.info(f"Final impl_config for {package.package_id}: {impl_config}")
+                    logger.info(f"Final impl_config for {package.package_id}: {impl_config}")
+                    products_map[package.package_id] = {
+                        "product_id": product.product_id,
+                        "implementation_config": impl_config,
+                        "delivery_type": product.delivery_type,
+                    }
+                else:
+                    logger.error(f"Product NOT FOUND for package_id: {package.package_id}")
 
         # Validate products have required inventory targeting BEFORE creating order
         # This prevents the "hidden failure" where order is created but line items fail
+        line_item_plans: dict[str, LineItemPlan] = {}
         for package in packages:
-            product_config = products_map[package.package_id]
-            product_impl_config = product_config["implementation_config"]
+            product_config = products_map.get(package.package_id)
+            if not product_config:
+                error_msg = (
+                    f"Product configuration missing for package '{package.package_id}'. "
+                    f"Product must exist in database with valid configuration before media buy creation."
+                )
+                self.log(f"[red]Error: {error_msg}[/red]")
+                raise AdCPProductUnavailableError()
+
+            # Cast to dict to satisfy mypy (products_map values are dict[str, Any])
+            product_impl_config = cast(dict[str, Any], product_config.get("implementation_config", {}))
             has_ad_units = product_impl_config.get("targeted_ad_unit_ids")
             has_placements = product_impl_config.get("targeted_placement_ids")
 
             if not has_ad_units and not has_placements:
-                pkg_product_id = product_config["product_id"]
+                pkg_product_id = product_config.get("product_id", package.package_id)
                 error_msg = (
                     f"Product '{pkg_product_id}' (package '{package.package_id}') is not configured with inventory targeting. "
                     f"GAM requires all products to have either ad units or placements configured. "
@@ -585,11 +531,28 @@ class GoogleAdManager(AdServerAdapter):
                 self.log(f"[red]Error: {error_msg}[/red]")
                 raise AdCPProductUnavailableError()
 
-        # Plan each package's line item (type, priority, goal) before the order exists.
-        line_item_plans = self._plan_line_items(packages, package_pricing_info, products_map)
+            # Plan the package's line item (type, priority, goal) now, so a configuration
+            # GAM would refuse is refused before the order exists.
+            pricing_info = (package_pricing_info or {}).get(package.package_id)
+            if not pricing_info:
+                raise AdCPConfigurationError(
+                    details=ConfigurationDetails(product_id=cast(str, product_config["product_id"]))
+                )
+            line_item_plans[package.package_id] = PricingCompatibility.plan_line_item(
+                pricing_info["pricing_model"],
+                is_guaranteed=product_config["delivery_type"] == "guaranteed",
+                implementation_config=product_impl_config,
+                product_id=cast(str, product_config["product_id"]),
+            )
 
         # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
-        unsupported_features = unsupported_targeting_features(packages, self._validate_targeting)
+        unsupported_features = []
+        for package in packages:
+            if package.targeting_overlay:
+                features = self._validate_targeting(package.targeting_overlay)
+                if features:
+                    unsupported_features.extend(features)
+
         if unsupported_features:
             error_msg = f"Unsupported targeting features: {', '.join(unsupported_features)}"
             self.log(f"[red]Error: {error_msg}[/red]")

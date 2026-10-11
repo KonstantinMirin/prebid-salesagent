@@ -70,10 +70,6 @@ def test_products_map_includes_delivery_type():
     mock_adapter._order_name_template = None
     mock_adapter._line_item_name_template = None
     mock_adapter.targeting_manager = Mock()
-    # The real loader: products_map is what it returns, with the inventory ids added.
-    mock_adapter._package_products = lambda session, packages: GoogleAdManager._package_products(
-        mock_adapter, session, packages
-    )
 
     # Create a mock Product with delivery_type = "guaranteed"
     mock_product = Mock()

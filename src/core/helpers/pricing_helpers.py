@@ -7,6 +7,9 @@ and owns the ``pricing_info`` projection a package row stores.
 from collections.abc import Mapping
 from typing import Any
 
+from src.core.errors.details import ConfigurationDetails
+from src.core.exceptions import AdCPConfigurationError, AdCPValidationError
+
 
 def pricing_info_for(pricing_option: Any, *, bid_price: float | None = None) -> dict[str, Any]:
     """The ``pricing_info`` that ``MediaPackage.package_config`` stores for a package.
@@ -34,12 +37,24 @@ def pricing_info_for(pricing_option: Any, *, bid_price: float | None = None) -> 
 def unit_price(pricing_info: Mapping[str, Any]) -> float:
     """What one unit costs a package: the option's rate when fixed, the package's bid when auction.
 
-    The one reader of ``rate`` and ``bid_price`` in ``pricing_info``. It validates nothing:
-    ``_validate_pricing_model_selection`` (``media_buy_create.py``) writes every
-    ``pricing_info`` and is the one place a fixed option without a rate and an auction
-    package without a bid are refused.
+    The one reader of ``rate`` and ``bid_price`` in ``pricing_info``. Both refusals restate
+    ``_validate_pricing_model_selection`` (``media_buy_create.py``), which writes every
+    stored ``pricing_info`` and refuses a fixed option with no rate and an auction package
+    with no bid; they fire only on a row that validator did not write. The result is > 0.
+
+    Raises:
+        AdCPConfigurationError: a fixed option with no rate (the seller's option is incomplete).
+        AdCPValidationError: an auction package with no bid (the buyer must send ``bid_price``).
     """
-    return float(pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info["bid_price"])
+    if pricing_info["is_fixed"]:
+        rate = pricing_info["rate"]
+        if not rate:
+            raise AdCPConfigurationError(details=ConfigurationDetails(capability="pricing_option_rate"))
+        return float(rate)
+    bid_price = pricing_info["bid_price"]
+    if not bid_price:
+        raise AdCPValidationError(field="bid_price")
+    return float(bid_price)
 
 
 def impressions_for_budget(budget: float, price: float) -> int:

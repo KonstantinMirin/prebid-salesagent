@@ -58,6 +58,7 @@ Guaranteed products:
   "cost_type": "CPM",
   "line_item_type": "STANDARD",
   "primary_goal_type": "LIFETIME",
+  "primary_goal_unit_type": "IMPRESSIONS",
   "delivery_rate_type": "EVENLY",
   "creative_rotation_type": "EVEN",
   "non_guaranteed_automation": "manual",
@@ -73,6 +74,7 @@ Non-guaranteed products:
   "cost_type": "CPM",
   "line_item_type": "PRICE_PRIORITY",
   "primary_goal_type": "NONE",
+  "primary_goal_unit_type": "IMPRESSIONS",
   "delivery_rate_type": "AS_FAST_AS_POSSIBLE",
   "creative_rotation_type": "OPTIMIZED",
   "non_guaranteed_automation": "confirmation_required",
@@ -100,14 +102,15 @@ The UI provides the following features:
 
 - `creative_placeholders` is present.
 - Every creative placeholder has a `width` and a `height`.
+- `line_item_type`, if present, is one of the valid values.
 
 If no inventory targeting is set, validation passes but the adapter logs a warning and falls back to the network root ad unit.
 
-At media buy creation, a missing or invalid configuration fails with an explicit error message. The booking fields `line_item_type`, `priority` and `primary_goal_type` are not checked here. `PricingCompatibility.plan_line_item()` (in `src/adapters/gam/pricing_compatibility.py`) is their one reader and validator. The adapter runs it in `validate_media_buy_request()`, before it creates anything in GAM, both when a media buy is created and when the seller approves one. A value GAM does not accept is refused with `CONFIGURATION_ERROR`, whose details name the product (`product_id`), the setting (`capability`), the value (`rejected_value`) and what GAM accepts (`accepted_values`). On creation the buyer receives it. On approval the Admin UI shows the seller the same facts, nothing is written to GAM, and the media buy is not marked failed: its status stays `pending_approval`.
+At media buy creation, a missing or invalid configuration fails with an explicit error message. `priority` is optional and is not checked here: the adapter checks it against the range of the line item type it books (see [Priority](#priority)), before it creates anything in GAM.
 
 ## Line item type selection
 
-You can set `line_item_type` explicitly, but you don't have to. A value that is not one of GAM's six line item types (`STANDARD`, `SPONSORSHIP`, `NETWORK`, `BULK`, `PRICE_PRIORITY`, `HOUSE`) is refused with `CONFIGURATION_ERROR`. `PricingCompatibility.select_line_item_type()` (in `src/adapters/gam/pricing_compatibility.py`) uses a configured type when it can book the package: GAM supports the package's pricing model on it, and SPONSORSHIP, NETWORK and HOUSE are used only for flat-rate packages. Those three types take only a daily goal of a percentage of impressions, which cannot hold a CPM, vCPM or CPC package to its budget. Otherwise the type is picked from the pricing model and the delivery guarantee, as when no type is configured. A configured HOUSE is therefore never used: GAM allows only CPM on it.
+You can set `line_item_type` explicitly, but you don't have to. `PricingCompatibility.select_line_item_type()` (in `src/adapters/gam/pricing_compatibility.py`) uses a configured type when it can book the package: GAM supports the package's pricing model on it, and SPONSORSHIP, NETWORK and HOUSE are used only for flat-rate packages. Those three types take only a daily goal of a percentage of impressions, which cannot hold a CPM, vCPM or CPC package to its budget. Otherwise the type is picked from the pricing model and the delivery guarantee, as when no type is configured. A configured HOUSE is therefore never used: GAM allows only CPM on it.
 
 The following decision tree shows how the adapter selects the line item type:
 
@@ -130,7 +133,7 @@ CPD (cost per day) is a GAM cost type, not an AdCP pricing model — the adapter
 
 ## Field reference
 
-The booking fields (`line_item_type`, `priority`, `primary_goal_type`) are read and validated by `PricingCompatibility.plan_line_item()`, and GAM's rules for each line item type are the `LINE_ITEM_TYPE_RULES` table in `src/adapters/gam/pricing_compatibility.py`. `GAMProductConfigService.generate_default_config()` writes the defaults. The fields you set most often are described here.
+The authoritative field list is the `GAMImplementationConfig` schema in `src/adapters/gam_implementation_config_schema.py`. The fields you set most often are described here.
 
 ### Validated fields
 
@@ -180,10 +183,9 @@ The booking fields (`line_item_type`, `priority`, `primary_goal_type`) are read 
 
 #### Primary goal
 
-- **Field**: `primary_goal_type` (`DAILY`, `LIFETIME`, `NONE`)
-- **Defaults**: `LIFETIME` for guaranteed, `NONE` for non-guaranteed
-- **Behavior**: The goal type follows the line item type: `STANDARD` and `BULK` book `LIFETIME`; `SPONSORSHIP` and `NETWORK` (flat rate only) book a `DAILY` share of 100% of impressions. The configured `primary_goal_type` applies to `PRICE_PRIORITY`, where a value GAM does not accept is refused with `CONFIGURATION_ERROR`.
-- **Unit**: the unit the package is sold in, which is the unit its volume counts: `IMPRESSIONS` for CPM and flat rate, `VIEWABLE_IMPRESSIONS` for vCPM, `CLICKS` for CPC. It is not configurable, and a stored `primary_goal_unit_type` is not read.
+- **Fields**: `primary_goal_type` (`DAILY`, `LIFETIME`, `NONE`) and `primary_goal_unit_type` (`IMPRESSIONS`, `CLICKS`, `VIEWABLE_IMPRESSIONS`)
+- **Defaults**: `LIFETIME` for guaranteed, `NONE` for non-guaranteed; unit defaults to `IMPRESSIONS`
+- **Behavior**: The goal type follows the line item type: `STANDARD` and `BULK` book `LIFETIME`; `SPONSORSHIP` and `NETWORK` (flat rate only) book a `DAILY` share of 100% of impressions. The configured `primary_goal_type` applies to `PRICE_PRIORITY`, where a value GAM does not accept is refused with `CONFIGURATION_ERROR`. CPC packages book `CLICKS` and vCPM packages `VIEWABLE_IMPRESSIONS`.
 - **Units**: the package's volume, which is its budget at the price of the pricing option it selected (per thousand for CPM and vCPM). A `DAILY` goal spreads it over the flight's days.
 
 #### Inventory targeting
@@ -311,22 +313,11 @@ config = service.generate_default_config(
     formats=["display_300x250"],
 )
 
-# Validate a config (creative placeholders; the booking fields are plan_line_item's)
+# Validate a config
 is_valid, error_msg = service.validate_config(config)
-```
 
-### Line item planner
-
-```python
-from src.adapters.gam.pricing_compatibility import PricingCompatibility
-
-plan = PricingCompatibility.plan_line_item(
-    "cpm",
-    is_guaranteed=True,
-    implementation_config=config,
-    product_id="prod_example",
-)
-# plan.line_item_type, plan.priority, plan.goal_type, plan.unit_type
+# Parse GAM config form data
+impl_config = service.parse_form_config(request.form)
 ```
 
 ### Inventory list endpoint

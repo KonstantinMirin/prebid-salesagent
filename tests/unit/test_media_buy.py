@@ -657,6 +657,7 @@ class TestCreateMediaBuyValidation:
             _validate_pricing_model_selection(
                 package=package,
                 product=product,
+                campaign_currency="USD",
             )
 
     def test_bid_price_below_floor_rejected(self):
@@ -692,6 +693,7 @@ class TestCreateMediaBuyValidation:
             _validate_pricing_model_selection(
                 package=package,
                 product=product,
+                campaign_currency="USD",
             )
         # The identifier is STRUCTURED now: details/field, not prose.
 
@@ -724,6 +726,7 @@ class TestCreateMediaBuyValidation:
             _validate_pricing_model_selection(
                 package=package,
                 product=product,
+                campaign_currency="USD",
             )
         # The identifier is STRUCTURED now: details/field, not prose.
 

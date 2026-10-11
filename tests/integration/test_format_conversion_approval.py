@@ -148,7 +148,7 @@ def test_principal(integration_db, test_tenant):
 
     ``execute_approved_media_buy`` reads the buy's ``account_id`` off the persisted row
     and REFUSES a row that has none -- ``AdCPPersistedStateError``, reported as
-    "was not sent to the ad server" with the error's code and details -- because the account is what the
+    "cannot be acted on: Configuration error" -- because the account is what the
     boundary resolved and is never synthesised on the replay. So each MediaBuy here is
     seeded with ``account_id=ACCOUNT_ID``, which needs the Account row (media_buys
     carries a composite FK to accounts) and the principal's grant on it.

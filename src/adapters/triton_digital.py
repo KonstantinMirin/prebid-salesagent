@@ -10,7 +10,6 @@ from src.adapters.base import (
     AdapterUpdateResult,
     AdServerAdapter,
     CreativeEngineAdapter,
-    unsupported_targeting_features,
 )
 from src.adapters.constants import require_supported_update_action
 from src.adapters.utils.pricing import resolve_package_rate
@@ -21,7 +20,6 @@ from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPPackageNotFoundError,
 )
-from src.core.helpers.pricing_helpers import impressions_for_budget
 from src.core.schemas import *
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError, send
 
@@ -153,7 +151,13 @@ class TritonDigital(AdServerAdapter):
         )
 
         # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
-        unsupported_features = unsupported_targeting_features(packages, self._validate_targeting)
+        unsupported_features = []
+        for package in packages:
+            if package.targeting_overlay:
+                features = self._validate_targeting(package.targeting_overlay)
+                if features:
+                    unsupported_features.extend(features)
+
         if unsupported_features:
             error_msg = f"Unsupported targeting features for Triton Digital: {'; '.join(unsupported_features)}"
             self.log(f"[red]Error: {error_msg}[/red]")
@@ -469,7 +473,7 @@ class TritonDigital(AdServerAdapter):
                 if action == "update_package_budget":
                     # Get current CPM from flight
                     cpm = flight.get("rate", 25.0)  # Default to $25 CPM
-                    new_impressions = impressions_for_budget(budget, cpm)
+                    new_impressions = int((budget / cpm) * 1000)
                 else:  # update_package_impressions
                     new_impressions = budget  # budget param contains impressions
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -313,22 +313,6 @@ class CreativeEngineAdapter(ABC):
     @abstractmethod
     def process_assets(self, media_buy_id: str, assets: list[dict[str, Any]]) -> list[AssetStatus]:
         pass
-
-
-def unsupported_targeting_features(
-    packages: list[MediaPackage], validate_targeting: Callable[[Any], list[str]]
-) -> list[str]:
-    """Every feature the packages' targeting overlays ask for that an adapter cannot apply.
-
-    ``validate_targeting`` is the adapter's own check of one overlay (its
-    ``_validate_targeting``), returning the features it cannot apply.
-    """
-    return [
-        feature
-        for package in packages
-        if package.targeting_overlay
-        for feature in validate_targeting(package.targeting_overlay)
-    ]
 
 
 class AdServerAdapter(ABC):

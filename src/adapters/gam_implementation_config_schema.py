@@ -48,11 +48,8 @@ class PlacementTargeting(BaseModel):
 
 class GAMImplementationConfig(BaseModel):
     """
-    Configuration for creating GAM line items, stored in the products table
-    implementation_config field.
-
-    The booking fields (``line_item_type``, ``priority``, ``primary_goal_type``) are not
-    declared here: ``PricingCompatibility.plan_line_item`` is their one reader and validator.
+    Complete configuration for creating GAM line items.
+    This config is stored in the products table implementation_config field.
     """
 
     # Order-level settings
@@ -61,6 +58,12 @@ class GAMImplementationConfig(BaseModel):
         description="Template for order naming. Variables: {po_number}, {product_name}, {timestamp}, {principal_name}",
     )
     applied_team_ids: list[int] = Field(default_factory=list, description="GAM team IDs for access control")
+
+    # Line item basic settings
+    line_item_type: str = Field("STANDARD", description="Type: STANDARD, SPONSORSHIP, NETWORK, HOUSE, PRICE_PRIORITY")
+    priority: int = Field(
+        8, description="Priority level (1-16, lower number = higher priority). Standard is 8, Deals are 4-6"
+    )
 
     # Delivery settings
     creative_rotation_type: str = Field(
@@ -73,6 +76,11 @@ class GAMImplementationConfig(BaseModel):
     discount_type: str | None = Field(None, description="Discount type if applicable: PERCENTAGE, ABSOLUTE_VALUE")
     discount_value: float | None = Field(
         None, description="Discount value (percentage or absolute based on discount_type)"
+    )
+
+    primary_goal_type: str = Field("LIFETIME", description="Goal type: LIFETIME, DAILY, NONE")
+    primary_goal_unit_type: str = Field(
+        "IMPRESSIONS", description="Goal unit: IMPRESSIONS, CLICKS, VIEWABLE_IMPRESSIONS"
     )
 
     # Creative specifications
@@ -127,6 +135,19 @@ class GAMImplementationConfig(BaseModel):
         description="Automation mode for non-guaranteed line item types: 'automatic' (instant activation), 'confirmation_required' (human approval then auto-activation), 'manual' (human handles all steps)",
     )
 
+    @field_validator("line_item_type")
+    def validate_line_item_type(cls, v):
+        valid_types = {"STANDARD", "SPONSORSHIP", "NETWORK", "HOUSE", "PRICE_PRIORITY"}
+        if v not in valid_types:
+            raise ValueError(f"Invalid line_item_type. Must be one of: {valid_types}")
+        return v
+
+    @field_validator("priority")
+    def validate_priority(cls, v):
+        if not 1 <= v <= 16:
+            raise ValueError("Priority must be between 1 and 16")
+        return v
+
     @field_validator("cost_type")
     def validate_cost_type(cls, v):
         valid_types = {"CPM", "CPC", "CPD", "CPA"}
@@ -140,3 +161,41 @@ class GAMImplementationConfig(BaseModel):
         if v not in valid_modes:
             raise ValueError(f"Invalid non_guaranteed_automation. Must be one of: {valid_modes}")
         return v
+
+
+# Example configuration for a standard display product
+EXAMPLE_DISPLAY_CONFIG = {
+    "order_name_template": "AdCP-{po_number}-Display-{timestamp}",
+    "line_item_type": "STANDARD",
+    "priority": 8,
+    "creative_rotation_type": "EVEN",
+    "delivery_rate_type": "EVENLY",
+    "cost_type": "CPM",
+    "primary_goal_type": "LIFETIME",
+    "primary_goal_unit_type": "IMPRESSIONS",
+    "creative_placeholders": [
+        {"width": 300, "height": 250, "expected_creative_count": 1},
+        {"width": 728, "height": 90, "expected_creative_count": 1},
+        {"width": 320, "height": 50, "expected_creative_count": 1},
+    ],
+    "include_descendants": True,
+    "frequency_caps": [{"max_impressions": 3, "time_unit": "DAY", "time_range": 1}],
+}
+
+# Example configuration for a video product
+EXAMPLE_VIDEO_CONFIG = {
+    "order_name_template": "AdCP-{po_number}-Video-{timestamp}",
+    "line_item_type": "STANDARD",
+    "priority": 6,
+    "creative_rotation_type": "OPTIMIZED",
+    "delivery_rate_type": "EVENLY",
+    "cost_type": "CPM",
+    "primary_goal_type": "LIFETIME",
+    "primary_goal_unit_type": "IMPRESSIONS",
+    "creative_placeholders": [{"width": 640, "height": 480, "expected_creative_count": 1}],
+    "environment_type": "VIDEO_PLAYER",
+    "video_max_duration": 30000,  # 30 seconds
+    "skip_offset": 5000,  # Skip after 5 seconds
+    "companion_delivery_option": "OPTIONAL",
+    "include_descendants": True,
+}

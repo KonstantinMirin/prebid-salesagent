@@ -35,7 +35,6 @@ from rich.console import Console
 
 from src.core.database.integrity import is_constraint_violation
 from src.core.database.repositories.creative import CreativeRepository
-from src.core.errors.operator_text import operator_text
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthorizationError,
@@ -77,7 +76,7 @@ from enum import StrEnum
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.adapters.base import AdapterCreateRequest, AdapterCreateResult, AdServerAdapter
+from src.adapters.base import AdapterCreateRequest, AdapterCreateResult
 from src.core.audit_logger import get_audit_logger
 from src.core.context_manager import get_context_manager
 from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, PersistedMediaBuyStatus, Tenant
@@ -544,33 +543,6 @@ def _pre_validate_package_creatives(
         raise
 
 
-def _pre_validate_adapter_request(
-    adapter: AdServerAdapter,
-    request: AdapterCreateRequest,
-    packages: list[MediaPackage],
-    start_time: datetime,
-    end_time: datetime,
-    package_pricing_info: dict[str, dict[str, Any]],
-) -> None:
-    """Ask the adapter whether it can book the buy, before it is asked to write anything.
-
-    The auto-approval and manual approval flows both call this immediately before
-    ``_execute_adapter_media_buy_creation``, with the material that call receives.
-    ``validate_media_buy_request`` writes nothing to the ad server, so a refusal here
-    leaves nothing behind in it.
-
-    Raises:
-        AdCPSalesAgentError: the adapter's own typed refusal, or VALIDATION_ERROR
-            carrying the problems it returned.
-    """
-    problems = adapter.validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
-    if problems:
-        # Forwarded unchanged into `problems`: the adapter returns classified facts, and
-        # ValidationDetails.problems is typed list[ErrorProblem], so a sentence cannot
-        # arrive here.
-        raise AdCPValidationError(details=ValidationDetails(problems=problems))
-
-
 def _execute_adapter_media_buy_creation(
     request: AdapterCreateRequest,
     packages: list[MediaPackage],
@@ -784,11 +756,6 @@ class ApprovalResult:
 
     ``confirmed_at`` and ``revision`` are carried because the webhook envelope
     publishes both.
-
-    ``refusal`` is the typed error an approval was refused with, when there is one.
-    ``error_msg`` already states it in words (``operator_text``: its code, its cause and
-    the facts it names); the error itself is carried so a caller can read the facts
-    without parsing the sentence.
     """
 
     outcome: ApprovalOutcome
@@ -796,7 +763,6 @@ class ApprovalResult:
     revision: int | None = None
     confirmed_at: datetime | None = None
     error_msg: str | None = None
-    refusal: AdCPSalesAgentError[Any] | None = None
 
     @property
     def ok(self) -> bool:
@@ -804,20 +770,8 @@ class ApprovalResult:
         return self.outcome is ApprovalOutcome.EXECUTED
 
     @classmethod
-    def failed(cls, error_msg: str, *, refusal: AdCPSalesAgentError[Any] | None = None) -> "ApprovalResult":
-        return cls(outcome=ApprovalOutcome.FAILED, error_msg=error_msg, refusal=refusal)
-
-
-def _approval_failed(
-    error_msg: str, *, exc_info: bool = False, refusal: AdCPSalesAgentError[Any] | None = None
-) -> ApprovalResult:
-    """Log an approval that stopped before the ad server was asked to write, and report it.
-
-    Writes nothing: the buy keeps the status it had. ``_mark_approval_failed`` is the
-    branch for a buy the ad server was asked to create.
-    """
-    logger.error(f"[APPROVAL] {error_msg}", exc_info=exc_info)
-    return ApprovalResult.failed(error_msg, refusal=refusal)
+    def failed(cls, error_msg: str) -> "ApprovalResult":
+        return cls(outcome=ApprovalOutcome.FAILED, error_msg=error_msg)
 
 
 def _mark_approval_failed(
@@ -907,14 +861,18 @@ def execute_approved_media_buy(
             tenant_obj = session.scalars(stmt_tenant).first()
 
             if not tenant_obj:
-                return _approval_failed(f"Tenant {tenant_id} not found")
+                error_msg = f"Tenant {tenant_id} not found"
+                logger.error(f"[APPROVAL] {error_msg}")
+                return ApprovalResult.failed(error_msg)
 
             # Load media buy
             stmt = select(MediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
             media_buy = session.scalars(stmt).first()
 
             if not media_buy:
-                return _approval_failed(f"Media buy {media_buy_id} not found")
+                error_msg = f"Media buy {media_buy_id} not found"
+                logger.error(f"[APPROVAL] {error_msg}")
+                return ApprovalResult.failed(error_msg)
 
             # THE creative gate. One gate, before the adapter runs, tenant-scoped by
             # the repository's own tenant_id rather than by whatever predicate the
@@ -989,13 +947,14 @@ def execute_approved_media_buy(
             db_packages = session.scalars(stmt_packages).all()
 
             if not db_packages:
-                return _approval_failed(f"No packages found for media buy {media_buy_id}")
+                error_msg = f"No packages found for media buy {media_buy_id}"
+                logger.error(f"[APPROVAL] {error_msg}")
+                return ApprovalResult.failed(error_msg)
 
             # Reconstruct MediaPackage objects (what adapters expect) from database
             # We need to load Products to get name, delivery_type, format_ids, etc.
-            from src.core.database.repositories.product import ProductRepository
+            from src.core.database.models import Product as ProductModel
 
-            products = ProductRepository(session, tenant_id)
             packages: list[MediaPackage] = []
             package_pricing_info: dict[str, dict[str, Any]] = {}
 
@@ -1007,22 +966,34 @@ def execute_approved_media_buy(
                     product_id = package_config.get("product_id")
 
                     if not product_id:
-                        return _approval_failed(f"Package {package_id} missing product_id")
+                        error_msg = f"Package {package_id} missing product_id"
+                        logger.error(f"[APPROVAL] {error_msg}")
+                        return ApprovalResult.failed(error_msg)
 
                     # Load product to get name, delivery_type, format_ids
-                    product = products.get_by_id(product_id)
+                    stmt_product = select(ProductModel).filter_by(tenant_id=tenant_id, product_id=product_id)
+                    product = session.scalars(stmt_product).first()
 
                     if not product:
-                        return _approval_failed(f"Product {product_id} not found for package {package_id}")
+                        error_msg = f"Product {product_id} not found for package {package_id}"
+                        logger.error(f"[APPROVAL] {error_msg}")
+                        return ApprovalResult.failed(error_msg)
 
                     # The package's own budget (the typed column both package writers fill)
                     # at the unit price of the pricing option it selected (the pricing_info
                     # stored when the request was validated): the rule the create path
                     # applies, so an approved buy books what an auto-approved one would.
-                    pricing_info = package_config.get("pricing_info")
-                    if db_pkg.budget is None or not pricing_info:
-                        return _approval_failed(f"Package {package_id} has no stored budget or pricing_info")
+                    if db_pkg.budget is None:
+                        error_msg = f"Package {package_id} missing budget"
+                        logger.error(f"[APPROVAL] {error_msg}")
+                        return ApprovalResult.failed(error_msg)
                     budget = float(db_pkg.budget)
+
+                    pricing_info = package_config.get("pricing_info")
+                    if not pricing_info:
+                        error_msg = f"Package {package_id} missing pricing_info"
+                        logger.error(f"[APPROVAL] {error_msg}")
+                        return ApprovalResult.failed(error_msg)
                     cpm, impressions = package_volume(budget, pricing_info)
                     package_pricing_info[package_id] = pricing_info
 
@@ -1042,16 +1013,19 @@ def execute_approved_media_buy(
                         try:
                             targeting_overlay = Targeting(**targeting_raw)
                         except (TypeError, ValidationError) as exc:
-                            return _approval_failed(
+                            error_msg = (
                                 f"Failed to reconstruct package {package_id}: "
-                                f"targeting_overlay corrupt in package_config: {exc}",
-                                exc_info=True,
+                                f"targeting_overlay corrupt in package_config: {exc}"
                             )
+                            logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
+                            return ApprovalResult.failed(error_msg)
 
                     # Create MediaPackage object (what adapters expect)
                     # Note: Product model has 'formats' not 'format_ids'
                     if not package_id:
-                        return _approval_failed(f"Package ID missing for package in media buy {media_buy_id}")
+                        error_msg = f"Package ID missing for package in media buy {media_buy_id}"
+                        logger.error(f"[APPROVAL] {error_msg}")
+                        return ApprovalResult.failed(error_msg)
 
                     delivery_type_str = enum_value(product.delivery_type)
 
@@ -1073,17 +1047,21 @@ def execute_approved_media_buy(
                                 raise ValueError(f"agent_url must be HTTP(S), got: {url_str}")
                             format_ids_list.append(validated)
                         except (ValueError, ValidationError) as e:
-                            return _approval_failed(
+                            error_msg = (
                                 f"Failed to reconstruct package {package_id}: "
                                 f"Format validation failed at index {idx}: {e}"
                             )
+                            logger.error(f"[APPROVAL] {error_msg}")
+                            return ApprovalResult.failed(error_msg)
 
                     # Validate non-empty format_ids (required by AdCP spec)
                     if not format_ids_list:
-                        return _approval_failed(
+                        error_msg = (
                             f"Failed to reconstruct package {package_id}: "
                             f"Product {product_id} has no valid formats - cannot create media buy"
                         )
+                        logger.error(f"[APPROVAL] {error_msg}")
+                        return ApprovalResult.failed(error_msg)
 
                     # Log conversion results
                     logger.info(
@@ -1109,11 +1087,13 @@ def execute_approved_media_buy(
                     )
 
                 except ValidationError as ve:
-                    return _approval_failed(
-                        f"Failed to reconstruct package {db_pkg.package_id}: {format_validation_error(ve)}"
-                    )
+                    error_msg = f"Failed to reconstruct package {db_pkg.package_id}: {format_validation_error(ve)}"
+                    logger.error(f"[APPROVAL] {error_msg}")
+                    return ApprovalResult.failed(error_msg)
                 except Exception as e:
-                    return _approval_failed(f"Failed to reconstruct package {db_pkg.package_id}: {operator_text(e)}")
+                    error_msg = f"Failed to reconstruct package {db_pkg.package_id}: {str(e)}"
+                    logger.error(f"[APPROVAL] {error_msg}")
+                    return ApprovalResult.failed(error_msg)
 
             # Use start_time/end_time from media_buy (already resolved)
             start_time = media_buy.start_time
@@ -1121,7 +1101,9 @@ def execute_approved_media_buy(
 
             # Validate required datetime fields
             if not start_time or not end_time:
-                return _approval_failed(f"Media buy {media_buy_id} missing required start_time or end_time")
+                error_msg = f"Media buy {media_buy_id} missing required start_time or end_time"
+                logger.error(f"[APPROVAL] {error_msg}")
+                return ApprovalResult.failed(error_msg)
 
             # Captured while the session is open, because media_buy detaches when this
             # block commits. The RESOLUTION happens after the block closes — see below.
@@ -1146,14 +1128,6 @@ def execute_approved_media_buy(
         # (GH #1644). Only the two ids cross the boundary, which is why the capture above
         # is separate from this line.
         identity = identity_of(tenant_id, buy_principal_id, buy_account_id)
-
-        # The adapter's own pre-validation, as the auto-approval flow runs it before the
-        # same creation call. It asks the ad server to write nothing, so it comes before
-        # ``adapter_ran``: a refusal here (a product configuration the ad server would not
-        # accept, say) is answered by the ``not adapter_ran`` branch below.
-        _pre_validate_adapter_request(
-            get_adapter(identity), request, packages, start_time, end_time, package_pricing_info
-        )
 
         # Execute adapter creation (outside session to avoid conflicts)
         # Set BEFORE the call, not after: the condition is whether the ad server was
@@ -1197,6 +1171,9 @@ def execute_approved_media_buy(
             assert uow2.session is not None
             session = uow2.session
             from src.core.database.models import CreativeAssignment
+
+            # Import adapter helper here (used for both creative upload and order approval)
+            from src.core.helpers.adapter_helpers import get_adapter
 
             # Get all creative assignments for this media buy
             stmt_assignments = select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
@@ -1310,7 +1287,7 @@ def execute_approved_media_buy(
                             logger.warning("[APPROVAL] Adapter does not support creative upload, skipping")
                     except Exception as creative_error:
                         # Creative upload failed - this is critical for GAM orders
-                        error_msg = f"Failed to upload creatives to adapter: {operator_text(creative_error)}"
+                        error_msg = f"Failed to upload creatives to adapter: {str(creative_error)}"
                         logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
                         return _mark_approval_failed(tenant_id, media_buy_id, error_msg, uow=uow2)
             else:
@@ -1342,7 +1319,7 @@ def execute_approved_media_buy(
                 logger.info("[APPROVAL] Adapter does not support order approval, skipping")
         except Exception as approval_error:
             # Approval exception - return failure
-            error_msg = f"Failed to approve order {response.media_buy_id}: {operator_text(approval_error)}"
+            error_msg = f"Failed to approve order {response.media_buy_id}: {str(approval_error)}"
             logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
             return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
 
@@ -1388,21 +1365,25 @@ def execute_approved_media_buy(
                 confirmed_at=written.confirmed_at,
             )
 
-    except Exception as e:
-        reason = operator_text(e)
-        if not adapter_ran:
-            # The ad server was never asked to write: the persisted row refused
-            # reconstruction (a NULL account_id, above), the adapter's pre-validation
-            # refused the buy, or something failed before either. Nothing was created, so
-            # the buy has not failed — it was never attempted — and it keeps its status.
-            # The approval workflow step is the route's, not this function's (#2414).
-            return _approval_failed(
-                f"Media buy {media_buy_id} was not sent to the ad server: {reason}",
-                exc_info=True,
-                refusal=e if isinstance(e, AdCPSalesAgentError) else None,
-            )
-        error_msg = f"Adapter creation failed: {reason}"
+    except AdCPPersistedStateError as e:
+        # The persisted row refused reconstruction (a NULL account_id, above); no adapter
+        # ran, so this is a store defect and not an adapter failure. The buy stays
+        # pending_approval so an operator who repairs the row can retry.
+        error_msg = f"Persisted media buy {media_buy_id} cannot be acted on: {e}"
         logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
+        return ApprovalResult.failed(error_msg)
+    except Exception as e:
+        import traceback
+
+        error_traceback = traceback.format_exc()
+        error_msg = f"Adapter creation failed: {str(e)}"
+        logger.error(f"[APPROVAL] {error_msg}\n{error_traceback}")
+        if not adapter_ran:
+            # The adapter never ran, so nothing was created and the buy has not failed —
+            # it was never attempted. Persisting FAILED here would be a dead end: all
+            # three approval routes gate on status == "pending_approval", so an operator
+            # who fixed the underlying row could never retry.
+            return ApprovalResult.failed(error_msg)
         return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
 
 
@@ -1540,14 +1521,16 @@ def push_creative_to_existing_buy(
 
 
 def _validate_pricing_model_selection(
-    package: PackageRequest | AdcpPackageRequest,
+    package: Package | PackageRequest | AdcpPackageRequest,
     product: Any,  # ProductModel from database
+    campaign_currency: str | None,
 ) -> dict[str, Any]:
     """Validate pricing model selection for a package against product's pricing options.
 
     Args:
         package: Package naming a pricing_option_id, with an optional bid_price
         product: Product database model with pricing_options relationship
+        campaign_currency: Optional campaign-level currency
 
     Returns:
         Dict with validated pricing information:
@@ -1575,14 +1558,22 @@ def _validate_pricing_model_selection(
         raise AdCPConfigurationError(details=ConfigurationDetails(product_id=product.product_id))
 
     # Which pricing option to use. pricing_option_id is the pin's only selector
-    # (media-buy/package-request.json /required, AdCP 3.1.1: "ID of the selected pricing
-    # option from the product's pricing_options array"). Nothing stands in for it: an id
-    # that names no option of the product, the empty string included, is refused below.
+    # (media-buy/package-request.json /required, AdCP 3.1.1); the legacy pricing_model
+    # alias that used to be consulted as a fallback is gone with the field.
     pricing_option_id = package.pricing_option_id
 
     # Helper to unwrap RootModel - adcp 2.14.0+ uses RootModel wrapper
     def unwrap_option(opt: Any) -> Any:
         return getattr(opt, "root", opt)
+
+    # Not specified: use the product's first pricing option
+    if not pricing_option_id:
+        first_option = unwrap_option(product.pricing_options[0])
+        # The option's own terms, plus the one field it cannot supply: a currency-less
+        # option falls back to the campaign's, which is a property of this request.
+        return pricing_info_for(first_option, bid_price=float(package.bid_price) if package.bid_price else None) | {
+            "currency": first_option.currency or campaign_currency or "USD"
+        }
 
     # Find matching pricing option
     selected_option = None
@@ -1607,6 +1598,8 @@ def _validate_pricing_model_selection(
         # what the buyer needs, so they travel as structured detail instead. The sibling
         # below (bid_price/floor_price) already relocates the same way.
         raise AdCPValidationError(
+            # Reached only with a pricing_option_id in hand: an absent one returned the
+            # product's first option above, so the pointer names that field unconditionally.
             field="pricing_option_id",
             # The three conditional spreads named one fact three ways -- which
             # requested value was not found. `rejected_value` is that fact, and
@@ -2302,6 +2295,22 @@ async def _create_media_buy_impl(
                 ]
                 raise_if_property_targeting_violations(property_targeting_violations)
 
+            # Resolve legacy pricing_option_id values to actual product pricing_option_ids
+            # This happens when using the legacy product_ids parameter (auto-converted to packages)
+            if req.packages:
+                for package in req.packages:
+                    if package.pricing_option_id == "legacy_conversion" and package.product_id in product_map:
+                        product = product_map[package.product_id]
+                        # Use the first pricing option from the product
+                        if product.pricing_options and len(product.pricing_options) > 0:
+                            # Unwrap RootModel wrapper if present (adcp 2.14.0+ uses RootModel)
+                            first_option = product.pricing_options[0]
+                            first_option = getattr(first_option, "root", first_option)
+                            package.pricing_option_id = first_option.pricing_option_id
+                            logger.info(
+                                f"Resolved legacy pricing_option_id for product {package.product_id}: {package.pricing_option_id}"
+                            )
+
             # Get currency from product pricing options (per AdCP spec)
             request_currency: str | None = None
 
@@ -2392,6 +2401,7 @@ async def _create_media_buy_impl(
                                 pricing_info = _validate_pricing_model_selection(
                                     package=package,
                                     product=product_map[product_id],
+                                    campaign_currency=request_currency,
                                 )
                                 # Store by index (package IDs aren't generated yet)
                                 package_pricing_info_by_index[idx] = pricing_info
@@ -3321,11 +3331,22 @@ async def _create_media_buy_impl(
         # material.
         adapter_request = AdapterCreateRequest.from_buyer_request(req)
 
-        # Pre-validate adapter-specific constraints (pricing models, budget limits, the
-        # product's ad-server configuration). This runs regardless of dry_run so adapter
-        # restrictions are always enforced. A refusal propagates typed; the handler at the
-        # end of this function marks the workflow step failed with the error's envelope.
-        _pre_validate_adapter_request(adapter, adapter_request, packages, start_time, end_time, package_pricing_info)
+        # Pre-validate adapter-specific constraints (pricing models, budget limits)
+        # This runs regardless of dry_run so adapter restrictions are always enforced.
+        pre_creation_problems: list[ErrorProblem] = adapter.validate_media_buy_request(
+            adapter_request, packages, start_time, end_time, package_pricing_info
+        )
+        if pre_creation_problems:
+            logger.error(f"[PRE-VALIDATE] Adapter validation failed: {pre_creation_problems}")
+            if step:
+                ctx_manager.update_workflow_step(
+                    step.step_id, status="failed", error_message="Adapter validation failed"
+                )
+            # Forwarded unchanged into `problems`, not `reasons` (salesagent-rys3u.4).
+            # The adapter now returns classified facts rather than sentences, and
+            # ValidationDetails.problems is already typed list[ErrorProblem] -- so the
+            # type system, not a review, is what stops a string arriving here.
+            raise AdCPValidationError(details=ValidationDetails(problems=pre_creation_problems))
 
         # Call adapter using shared creation logic
         # Note: start_time variable already resolved from 'asap' to actual datetime if needed
