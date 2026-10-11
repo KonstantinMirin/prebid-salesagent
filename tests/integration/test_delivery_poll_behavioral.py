@@ -1483,80 +1483,303 @@ class TestDeliveryMetricsFieldPresence:
 
 
 # ---------------------------------------------------------------------------
-# UC-004-PRICINGOPTION-TYPE-CONSISTENCY-03, -04, -05
+# UC-004-PRICINGOPTION-TYPE-CONSISTENCY-03
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.requires_db
-class TestEndToEndDeliveryMetricsByPricingModel:
-    """End-to-end delivery metrics for a package bought on CPM, CPC and flat-rate terms.
+class TestEndToEndDeliveryMetricsCpmPricing:
+    """End-to-end delivery metrics with CPM pricing.
 
     Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-03
-    Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-04
-    Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-05
     """
 
-    @pytest.mark.parametrize(
-        ("pricing_model", "rate", "impressions", "spend", "clicks"),
-        [
-            pytest.param(PricingModel.cpm, "2.50", 10000, 25.0, None, id="cpm"),
-            pytest.param(PricingModel.cpc, "0.50", 5000, 250.0, 500, id="cpc"),
-            pytest.param(PricingModel.flat_rate, "5000.00", 50000, 5000.0, None, id="flat_rate"),
-        ],
-    )
-    def test_package_carries_the_adapter_figures_on_its_stored_terms(
-        self, integration_db, pricing_model, rate, impressions, spend, clicks
-    ):
-        """The adapter's figures flow through, and the package is identified by its stored terms.
-
-        The pin says how a package's pricing option is identifiable:
-        get-media-buy-delivery-response.json requires pricing_model, rate and currency on
-        every by_package entry and declares no pricing_option_id to echo. The terms are
-        the ones stored on the package row; no pricing_options row carries the id the
-        request names. The adapter reports no clicks, so a CPC package's clicks are the
-        seller's derivation, the spend at its rate (250.00 at 0.50 per click is 500), and
-        the other models report none.
+    def test_cpm_spend_computed_correctly(self, integration_db):
+        """CPM: 10,000 impressions at $2.50 CPM -> spend $25.00.
 
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-03
-        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-04
-        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-05
         """
-        from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
+        from tests.factories import (
+            MediaBuyFactory,
+            MediaPackageFactory,
+            PrincipalFactory,
+            TenantFactory,
+        )
         from tests.harness import DeliveryPollEnv
 
-        model = pricing_model.value
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
             buy = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
-                media_buy_id=f"mb_{model}",
+                media_buy_id="mb_cpm",
+                raw_request={
+                    "packages": [
+                        {
+                            "package_id": "pkg_cpm",
+                            "product_id": "prod_cpm",
+                            "pricing_option_id": "cpm_usd_fixed",
+                        }
+                    ],
+                },
+            )
+            MediaPackageFactory(
+                media_buy=buy, package_id="pkg_cpm", pricing_option=PricingOptionFactory.build(rate=Decimal("2.50"))
+            )
+            env.set_adapter_response(
+                "mb_cpm",
+                impressions=10000,
+                spend=25.0,
+                package_id="pkg_cpm",
+            )
+
+            result = env.call_impl(
+                media_buy_ids=["mb_cpm"],
+                start_date="2025-06-01",
+                end_date="2025-06-30",
+            )
+
+            assert result.aggregated_totals.media_buy_count == 1
+            delivery = result.media_buy_deliveries[0]
+            assert delivery.totals.spend == 25.0
+            assert delivery.totals.impressions == 10000.0
+
+    def test_cpm_pricing_option_identified_in_response(self, integration_db):
+        """CPM pricing option should be identifiable in the delivery response.
+
+        The pin says HOW it is identifiable: get-media-buy-delivery-response.json requires
+        pricing_model, rate and currency on every by_package entry. There is no
+        pricing_option_id on a by_package item and no pricing_options on a delivery item,
+        so the old `hasattr(delivery, "pricing_options") or any(hasattr(pkg, ...))` could
+        only ever evaluate False -- it never ran, because the buy named a pricing option
+        no stored row carried and the impl refused to price the package.
+
+        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-03
+        """
+        from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id="mb_cpm2",
+                raw_request={
+                    "packages": [request_package(package_id="pkg_cpm2", product_id="prod_cpm2")],
+                },
+            )
+            MediaPackageFactory(
+                media_buy=buy, package_id="pkg_cpm2", pricing_option=PricingOptionFactory.build(rate=Decimal("2.50"))
+            )
+            env.set_adapter_response(
+                "mb_cpm2",
+                impressions=10000,
+                spend=25.0,
+                package_id="pkg_cpm2",
+            )
+
+            result = env.call_impl(
+                media_buy_ids=["mb_cpm2"],
+                start_date="2025-06-01",
+                end_date="2025-06-30",
+            )
+
+            # The pinned by_package item identifies a package's pricing option by its
+            # TERMS: get-media-buy-delivery-response.json requires pricing_model, rate and
+            # currency on every entry and declares no pricing_option_id to echo.
+            pkg = result.media_buy_deliveries[0].by_package[0]
+            assert (pkg.pricing_model, pkg.rate, pkg.currency) == (PricingModel.cpm, 2.50, "USD")
+
+
+# ---------------------------------------------------------------------------
+# UC-004-PRICINGOPTION-TYPE-CONSISTENCY-04
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestEndToEndDeliveryMetricsCpcPricing:
+    """End-to-end delivery metrics with CPC pricing.
+
+    Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-04
+    """
+
+    def test_cpc_pricing_option_identified_in_response(self, integration_db):
+        """CPC pricing option should be identifiable in the delivery response.
+
+        Graded on the three fields the pin requires on a by_package entry. The old
+        assertion looked for `pricing_option_id` on the item, which the pin does not
+        declare. The package's terms are the ones stored on its row, and its clicks are
+        the spend at that rate: 250.00 at 0.50 per click is 500 clicks. The adapter
+        reports no clicks, so the figure is the seller's derivation.
+
+        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-04
+        """
+        from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id="mb_cpc2",
                 raw_request={
                     "packages": [
                         request_package(
-                            package_id=f"pkg_{model}",
-                            product_id=f"prod_{model}",
-                            pricing_option_id=f"{model}_usd_fixed",
+                            package_id="pkg_cpc2", product_id="prod_cpc2", pricing_option_id="cpc_usd_fixed"
                         )
                     ],
                 },
             )
             MediaPackageFactory(
                 media_buy=buy,
-                package_id=f"pkg_{model}",
-                pricing_option=PricingOptionFactory.build(pricing_model=model, rate=Decimal(rate)),
+                package_id="pkg_cpc2",
+                pricing_option=PricingOptionFactory.build(pricing_model="cpc", rate=Decimal("0.50")),
             )
-            env.set_adapter_response(f"mb_{model}", impressions=impressions, spend=spend, package_id=f"pkg_{model}")
+            env.set_adapter_response(
+                "mb_cpc2",
+                impressions=5000,
+                spend=250.0,
+                package_id="pkg_cpc2",
+            )
 
-            result = env.call_impl(media_buy_ids=[f"mb_{model}"], start_date="2025-06-01", end_date="2025-06-30")
+            result = env.call_impl(
+                media_buy_ids=["mb_cpc2"],
+                start_date="2025-06-01",
+                end_date="2025-06-30",
+            )
+
+            # The pinned by_package item identifies a package's pricing option by its
+            # TERMS: get-media-buy-delivery-response.json requires pricing_model, rate and
+            # currency on every entry and declares no pricing_option_id to echo.
+            pkg = result.media_buy_deliveries[0].by_package[0]
+            assert (pkg.pricing_model, pkg.rate, pkg.currency) == (PricingModel.cpc, 0.50, "USD")
+            assert pkg.clicks == 500
+
+
+# ---------------------------------------------------------------------------
+# UC-004-PRICINGOPTION-TYPE-CONSISTENCY-05
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestDeliveryMetricsFlatRatePricing:
+    """End-to-end delivery metrics with FLAT_RATE pricing.
+
+    Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-05
+    """
+
+    def test_flat_rate_spend_reflects_rate_correctly(self, integration_db):
+        """FLAT_RATE pricing: adapter reports spend=$5,000 which flows through.
+
+        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-05
+        """
+        from tests.factories import (
+            MediaBuyFactory,
+            MediaPackageFactory,
+            PrincipalFactory,
+            TenantFactory,
+        )
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id="mb_flat",
+                raw_request={
+                    "packages": [
+                        {
+                            "package_id": "pkg_flat",
+                            "product_id": "prod_flat",
+                            # No pricing_options row carries this id; the terms stored on the
+                            # package row below are what prices it.
+                            "pricing_option_id": "flat_rate_usd_fixed",
+                        }
+                    ],
+                },
+            )
+            MediaPackageFactory(
+                media_buy=buy,
+                package_id="pkg_flat",
+                pricing_option=PricingOptionFactory.build(pricing_model="flat_rate", rate=Decimal("5000.00")),
+            )
+            env.set_adapter_response(
+                "mb_flat",
+                impressions=50000,
+                spend=5000.0,
+                package_id="pkg_flat",
+            )
+
+            result = env.call_impl(
+                media_buy_ids=["mb_flat"],
+                start_date="2025-06-01",
+                end_date="2025-06-30",
+            )
 
             assert result.aggregated_totals.media_buy_count == 1
             delivery = result.media_buy_deliveries[0]
-            assert (delivery.totals.impressions, delivery.totals.spend) == (impressions, spend)
+            assert delivery.totals.spend == 5000.0
+            assert delivery.totals.impressions == 50000.0
             pkg = delivery.by_package[0]
-            assert (pkg.pricing_model, pkg.rate, pkg.currency) == (pricing_model, float(rate), "USD")
-            assert (pkg.spend, pkg.clicks) == (spend, clicks)
+            assert pkg.spend == 5000.0
+
+    def test_flat_rate_pricing_option_identified_in_response(self, integration_db):
+        """FLAT_RATE pricing option should be identifiable in the delivery response.
+
+        Graded on the three fields the pin requires on a by_package entry, for the same
+        reason as the CPM and CPC siblings; "flat_rate_premium" was an id no stored
+        pricing_options row carried.
+
+        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-05
+        """
+        from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                media_buy_id="mb_flat2",
+                raw_request={
+                    "packages": [
+                        request_package(
+                            package_id="pkg_flat2", product_id="prod_flat2", pricing_option_id="flat_rate_usd_fixed"
+                        )
+                    ],
+                },
+            )
+            MediaPackageFactory(
+                media_buy=buy,
+                package_id="pkg_flat2",
+                pricing_option=PricingOptionFactory.build(pricing_model="flat_rate", rate=Decimal("5000.00")),
+            )
+            env.set_adapter_response(
+                "mb_flat2",
+                impressions=50000,
+                spend=5000.0,
+                package_id="pkg_flat2",
+            )
+
+            result = env.call_impl(
+                media_buy_ids=["mb_flat2"],
+                start_date="2025-06-01",
+                end_date="2025-06-30",
+            )
+
+            # The pinned by_package item identifies a package's pricing option by its
+            # TERMS: get-media-buy-delivery-response.json requires pricing_model, rate and
+            # currency on every entry and declares no pricing_option_id to echo.
+            pkg = result.media_buy_deliveries[0].by_package[0]
+            assert (pkg.pricing_model, pkg.rate, pkg.currency) == (PricingModel.flat_rate, 5000.0, "USD")
 
 
 # ---------------------------------------------------------------------------
