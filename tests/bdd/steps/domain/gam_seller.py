@@ -1,4 +1,4 @@
-"""Steps for local-gam-seller.feature: what a Google Ad Manager seller sends GAM.
+"""Steps for local-gam-seller.feature and local-gam-geo-targeting.feature: what a Google Ad Manager seller sends GAM.
 
 The Given makes the env's tenant a GAM seller (``GamSellerMixin.sell_through_gam``):
 from then on the tool's adapter is production's ``GoogleAdManager``, built from the seeded
@@ -74,3 +74,40 @@ def then_one_line_item_on_ad_unit(ctx: dict, ad_unit_id: str) -> None:
     ]
     expected = [(str(orders[0]["id"]), [{"adUnitId": ad_unit_id, "includeDescendants": True}])]
     assert line_items == expected, f"expected GAM to receive line items {expected}; it received {line_items}"
+
+
+@then(
+    parsers.re(
+        r'^Google Ad Manager received one line item whose geo targeting includes "(?P<targeted>[^"]+)" '
+        r'and excludes "(?P<excluded>[^"]*)"$'
+    )
+)
+def then_one_line_item_geo_targeting(ctx: dict, targeted: str, excluded: str) -> None:
+    """The seller sent exactly one line item, whose geoTargeting holds exactly these GAM location ids.
+
+    *targeted* and *excluded* are comma-separated GAM geo target ids; an empty *excluded*
+    means the line item carries no excludedLocations. GAM ORs the ids of a location list,
+    so their order carries nothing and they are compared as sets: an extra location (a
+    union of inclusion fields) or a missing one fails.
+    """
+    line_items = [
+        {
+            key: {str(location["id"]) for location in locations}
+            # A line item with no geoTargeting reads as {}, which no expectation equals.
+            for key, locations in item["targeting"].get("geoTargeting", {}).items()
+        }
+        for item in ctx["env"].gam_objects_sent("LineItemService", "createLineItems")
+    ]
+    expected = {"targetedLocations": set(targeted.split(","))}
+    if excluded:
+        expected["excludedLocations"] = set(excluded.split(","))
+    assert line_items == [expected], (
+        f"expected GAM to receive one line item geo-targeted {expected}; it received {line_items}"
+    )
+
+
+@then("Google Ad Manager received no order")
+def then_gam_received_no_order(ctx: dict) -> None:
+    """The seller refused before it created anything in Google Ad Manager: GAM holds no order."""
+    orders = _orders_created(ctx)
+    assert orders == [], f"expected GAM to hold no order; it created {orders}"
