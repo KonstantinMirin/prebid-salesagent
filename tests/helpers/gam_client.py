@@ -7,8 +7,8 @@ Two stand-ins, one network:
   ``GAMClientManager.get_service`` calls ``client.GetService``, the adapter and its
   targeting manager call ``client.GetService`` directly, and every construction of a client
   (the adapter's, a health check's, the approval and sync services') ends in
-  ``ad_manager.AdManagerClient(...)``. ``MediaBuyCreateEnv`` patches the class on that
-  module.
+  ``ad_manager.AdManagerClient(...)``. ``GamSellerMixin`` (``tests/harness/gam.py``)
+  patches the class on that module.
 * ``stub_gam_client_manager`` stands in for this repo's ``GAMClientManager`` and serves the
   same client. It exists for tests that build the adapter from a config whose credentials
   could not be built (a key file path that does not exist), so the manager itself cannot
@@ -57,13 +57,24 @@ def gam_line_item(name: str, *, item_id: str = "1001", sizes: tuple[tuple[int, i
 
 
 #: The ``create*`` methods the stand-in network answers as GAM does: with each sent object,
-#: an id filled in.
-_CREATE_METHODS = (
-    ("OrderService", "createOrders"),
-    ("LineItemService", "createLineItems"),
-    ("CreativeService", "createCreatives"),
-    ("LineItemCreativeAssociationService", "createLineItemCreativeAssociations"),
+#: an id filled in. ``client.created_objects`` holds their answers, and nothing else.
+GAM_CREATE_METHODS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("OrderService", "createOrders"),
+        ("LineItemService", "createLineItems"),
+        ("CreativeService", "createCreatives"),
+        ("LineItemCreativeAssociationService", "createLineItemCreativeAssociations"),
+    }
 )
+
+#: Every ``(service, method)`` through which the adapter sends GAM an array of objects: the
+#: creates above, plus the ones the stand-in records without answering them. A reader of what
+#: was sent accepts these only, so a misspelled service or method raises instead of reading
+#: as nothing sent.
+GAM_SENT_METHODS: frozenset[tuple[str, str]] = GAM_CREATE_METHODS | {
+    ("LineItemService", "updateLineItems"),
+    ("CustomTargetingService", "createCustomTargetingValues"),
+}
 
 
 def stub_gam_client(*, line_items: tuple[SoapObject, ...] | list[SoapObject] = ()) -> MagicMock:
@@ -76,7 +87,7 @@ def stub_gam_client(*, line_items: tuple[SoapObject, ...] | list[SoapObject] = (
     * ``LineItemService.getLineItemsByStatement`` answers ``line_items``.
     * ``OrderService.performOrderAction`` answers ``numChanges: 1``, so the adapter's
       in-request approval takes its success branch (``approve_order``).
-    * The ``create*`` methods in ``_CREATE_METHODS`` answer each sent object with a copy
+    * The ``create*`` methods in ``GAM_CREATE_METHODS`` answer each sent object with a copy
       carrying a fresh NUMERIC id, and keep that answer in ``client.created_objects``, keyed
       by ``(service, method)``: what the network holds after the scenario. The ids are
       numeric because production reads them back and converts: ``create_order`` does
@@ -113,7 +124,7 @@ def stub_gam_client(*, line_items: tuple[SoapObject, ...] | list[SoapObject] = (
         ),
         "OrderService": MagicMock(performOrderAction=MagicMock(return_value=SoapObject(numChanges=1))),
     }
-    for service, method in _CREATE_METHODS:
+    for service, method in GAM_CREATE_METHODS:
         setattr(services.setdefault(service, MagicMock()), method, MagicMock(side_effect=_creates(service, method)))
 
     client = MagicMock()

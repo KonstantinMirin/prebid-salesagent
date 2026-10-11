@@ -13,7 +13,7 @@
 # GoogleAdManager adapter runs, and only Google's SOAP client is stood in.
 #
 # Transports: a2a, mcp and rest. The live server has no stand-in GAM network, so the
-# setup declares itself unrealizable on e2e (MediaBuyCreateEnv.sell_through_gam).
+# setup declares itself unrealizable on e2e (GamSellerMixin.sell_through_gam).
 #
 # @source repo=adcp ref=v3.1.1 path=docs/media-buy/task-reference/create_media_buy.mdx
 # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/specialisms/sales-non-guaranteed/index.yaml pointer=/phases/create_buy

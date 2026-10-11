@@ -2,7 +2,7 @@
 
 Grades the objects a GAM seller sends Google Ad Manager when a buyer's create_media_buy
 succeeds, with the real GoogleAdManager adapter and only Google's SOAP client stood in
-(``MediaBuyCreateEnv.sell_through_gam``). Graded on a2a, mcp and rest.
+(``GamSellerMixin.sell_through_gam``). Graded on a2a, mcp and rest.
 """
 
 from __future__ import annotations
