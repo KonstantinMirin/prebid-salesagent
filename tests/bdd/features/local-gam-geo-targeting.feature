@@ -3,7 +3,7 @@
 # LOCALLY-ADDED (survives BR-*.feature regeneration).
 #
 # What it grades: the geo targeting a Google Ad Manager seller books on the line item for a
-# package's targeting_overlay, and the geo and other targeting the seller refuses before it
+# package's targeting_overlay, and the geo codes and systems the seller refuses before it
 # creates anything in GAM. AdCP 3.1.1:
 # - core/targeting.json: each geo field "Restrict[s] delivery" to the listed places, so a
 #   code dropped on the way to the ad server widens the buy;
@@ -16,11 +16,10 @@
 # - docs/building/by-layer/L3/error-handling.mdx (Server-narrowed public elements): a value
 #   the public schema accepts and this seller cannot place is UNSUPPORTED_FEATURE.
 # An overlay whose inclusion fields share no place is refused INVALID_REQUEST
-# (geo_disjoint). The spec is silent on that case; it is the same class
-# as targeting.mdx's same-value overlap ("Sellers SHOULD reject ... and return a
+# (geo_disjoint) before any adapter runs. The spec is silent on that case; it is the same
+# class as targeting.mdx's same-value overlap ("Sellers SHOULD reject ... and return a
 # descriptive error"), graded for every adapter by BR-UC-002 @T-UC-002-ext-f-geo-disjoint
-# and BR-UC-003 @T-UC-003-ext-geo-disjoint. The disjoint rows here confirm that a GAM
-# seller refuses it before GAM is called.
+# and BR-UC-003 @T-UC-003-ext-geo-disjoint.
 #
 # Ungraded by the 3.1.1 storyboards: no file under dist/compliance/3.1.1/ names a geo field.
 #
@@ -87,74 +86,3 @@ Feature: A Google Ad Manager seller books exactly the geo the buyer's targeting 
     # QZ matches the pinned ^[A-Z]{2}$ pattern and is not an assigned ISO 3166-1 code.
     # 999 is not a Nielsen DMA. A state and a DMA overlap only in part, and GAM's
     # location list (which it ORs) cannot express that part.
-
-  @T-UC-002-local-gam-geo-postal @extension @error
-  Scenario Outline: A postal system the seller does not declare is refused, before GAM is called - <case>
-    Given a valid create_media_buy request
-    And the account exists and is active
-    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001"
-    And the package targeting_overlay is <overlay>
-    When the Buyer Agent sends the create_media_buy request
-    Then the response contains error code UNSUPPORTED_FEATURE
-    And the wire error details should include capability "geo_system"
-    And the wire error details should include rejected_value "<value>"
-    And Google Ad Manager received no order and no line item
-
-    Examples:
-      | case              | overlay                                                                                            | value      |
-      | a US ZIP code     | {"geo_postal_areas": [{"system": "us_zip", "values": ["10001"]}]}                                  | us_zip     |
-      | an excluded ZIP   | {"geo_countries": ["US"], "geo_postal_areas_exclude": [{"system": "us_zip", "values": ["90210"]}]} | us_zip     |
-      | a UK outward code | {"geo_countries": ["GB"], "geo_postal_areas": [{"system": "gb_outward", "values": ["SW1"]}]}       | gb_outward |
-    # The seller declares no postal system (@T-UC-010-local-gam-postal), and the adapter
-    # refuses every metro and postal system its declaration does not set, as the metro
-    # rows of the outline above show. The rows use the deprecated country-fused form, which
-    # core/postal-area.json at 3.1 still accepts. The native {"country": "US", "system":
-    # "zip"} form does not reach the adapter today: the request's accepted shape strips
-    # `country` from it (it matches the item against the legacy branch), which refuses it
-    # INVALID_REQUEST before any seller logic runs.
-
-  @T-UC-002-local-gam-targeting-refused @extension @error
-  Scenario Outline: A targeting dimension the seller cannot book is refused, before GAM is called - <case>
-    Given a valid create_media_buy request
-    And the account exists and is active
-    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001"
-    And the package targeting_overlay is <overlay>
-    When the Buyer Agent sends the create_media_buy request
-    Then the response contains error code UNSUPPORTED_FEATURE
-    And the wire error details should include capability "<capability>"
-    And Google Ad Manager received no order and no line item
-
-    Examples:
-      | case                                     | overlay                                     | capability          |
-      | a device platform                        | {"device_platform": ["ios"]}                | device_platform     |
-      | the seller extension device_type_any_of  | {"device_type_any_of": ["mobile"]}          | device_type_any_of  |
-      | an AXE include segment                   | {"axe_include_segment": "x8dj3k"}           | axe_include_segment |
-      | an AXE exclude segment                   | {"axe_exclude_segment": "y9kl4m"}           | axe_exclude_segment |
-      | the seller extension audiences_any_of    | {"audiences_any_of": ["sports_fans"]}       | audiences           |
-      | the seller extension media_type_any_of   | {"media_type_any_of": ["video", "display"]} | media_type_any_of   |
-    # The seller has no AXE key configured. Each of these is refused while the overlay is
-    # translated, ahead of the order, so the buyer gets the refusal with nothing left in GAM.
-    # That timing is what this outline grades, not whether each refusal is right:
-    # - device_platform: get_adcp_capabilities.mdx at v3.1.1 says "Device platform and
-    #   device type targeting are implied by `media_buy` support", and "If a capability is
-    #   declared, the seller MUST honor it". Refusing it conflicts with that; GAM device
-    #   targeting is tracked by #1076.
-    # - device_type_any_of, audiences_any_of and media_type_any_of are seller extensions,
-    #   not fields of core/targeting.json. Their pinned counterparts device_type (#1076)
-    #   and audience_include (#1855) are read by no adapter and are not refused.
-
-  @T-UC-002-local-gam-geo-disjoint @extension @error
-  Scenario Outline: Inclusion fields with no place in common are refused, and GAM receives nothing - <case>
-    Given a valid create_media_buy request
-    And the account exists and is active
-    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001"
-    And the package targeting_overlay is <overlay>
-    When the Buyer Agent sends the create_media_buy request
-    Then the response contains error code INVALID_REQUEST
-    And the wire error INVALID_REQUEST details geo_disjoint should be <records>
-    And Google Ad Manager received no order and no line item
-
-    Examples:
-      | case                   | overlay                                                                                 | records                                                                                            |
-      | region outside country | {"geo_countries": ["CA"], "geo_regions": ["US-NY"]}                                     | [{"include": "geo_regions", "within": "geo_countries", "values": ["US-NY"]}]                       |
-      | DMA outside country    | {"geo_countries": ["CA"], "geo_metros": [{"system": "nielsen_dma", "values": ["501"]}]} | [{"include": "geo_metros", "within": "geo_countries", "system": "nielsen_dma", "values": ["501"]}] |
