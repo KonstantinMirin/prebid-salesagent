@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
 from src.core.schemas import UpdateMediaBuyRequest
-from tests.harness._base import presented_bearer
 from tests.harness._mixins import make_adapter_update_side_effect
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY, MediaBuyCreateEnv
 from tests.harness.transport import DeliverResult
@@ -330,13 +329,12 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # principal, so signed and unsigned would differ by more than the
         # signature.
         #
-        # The bearer is read off the credential HEADERS (``presented_bearer``)
-        # because that is what "presented nothing" is under #1721 —
-        # ``credential={}`` and ``credential(token=None)`` both omit
-        # ``Authorization`` (tests/helpers/credentials.py) — and a rejected token
-        # is sent as presented. It is the only way an in-process leg reaches the
-        # verifier's refusal branch at all: security.mdx :1269 makes an unsigned
-        # request carrying a valid bearer a spec-correct 200.
+        # ``credentialed`` is read off the credential HEADERS because that is
+        # what "presented nothing" is under #1721 — ``credential={}`` and
+        # ``credential(token=None)`` both omit ``Authorization``
+        # (tests/helpers/credentials.py). It is the only way an in-process leg
+        # reaches the verifier's refusal branch at all: security.mdx :1269 makes
+        # an unsigned request carrying a valid bearer a spec-correct 200.
         if not self.can_sign:
             if signed:
                 self.signing  # raises, naming enable_request_signing()  # noqa: B018
@@ -345,7 +343,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
             path=endpoint,
             body=body,
             signed=signed,
-            bearer=presented_bearer(credential),
+            credentialed="Authorization" in credential,
             method="PUT",
         )
         return client.put(endpoint, content=raw, headers=wire_headers)

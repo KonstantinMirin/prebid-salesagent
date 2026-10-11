@@ -14,7 +14,6 @@ signature against that principal's keys and returns the principal only when it v
 """
 
 import logging
-from collections.abc import Callable
 
 from src.core.credentials import hash_token
 from src.core.database.database_session import execute_with_retry
@@ -22,20 +21,6 @@ from src.core.database.repositories.principal import PrincipalRepository
 from src.core.schemas import Principal
 
 logger = logging.getLogger(__name__)
-
-
-def _load_principal(tenant_id: str, find: Callable[[PrincipalRepository], object]) -> Principal | None:
-    """The principal *find* selects from *tenant_id*'s repository, as the schema model.
-
-    *find* returns the repository's ORM row or ``None``. The row type is repository-private
-    (``ruff-boundary.toml``), so it is not named here; ``Principal.from_row`` reads it.
-    """
-
-    def _lookup_principal(session):
-        row = find(PrincipalRepository(session, tenant_id))
-        return Principal.from_row(row) if row else None
-
-    return execute_with_retry(_lookup_principal)
 
 
 def get_principal_from_token(token: str, tenant_id: str) -> Principal | None:
@@ -46,8 +31,14 @@ def get_principal_from_token(token: str, tenant_id: str) -> Principal | None:
     acts on another. The row stores ``sha256(token)``, so the presented value is hashed
     here and compared by equality on the hash; the plaintext is never written anywhere.
     """
+
     token_hash = hash_token(token)
-    return _load_principal(tenant_id, lambda principals: principals.find_by_token_hash(token_hash))
+
+    def _lookup_principal(session):
+        row = PrincipalRepository(session, tenant_id).find_by_token_hash(token_hash)
+        return Principal.from_row(row) if row else None
+
+    return execute_with_retry(_lookup_principal)
 
 
 def get_principal_by_signing_keyid(keyid: str, tenant_id: str) -> Principal | None:
@@ -58,7 +49,12 @@ def get_principal_by_signing_keyid(keyid: str, tenant_id: str) -> Principal | No
     onboarding". The answer is a CANDIDATE: only the verifier, by verifying the signature
     against this principal's keys, establishes it as the caller.
     """
-    return _load_principal(tenant_id, lambda principals: principals.find_by_signing_keyid(keyid))
+
+    def _lookup_principal(session):
+        row = PrincipalRepository(session, tenant_id).find_by_signing_keyid(keyid)
+        return Principal.from_row(row) if row else None
+
+    return execute_with_retry(_lookup_principal)
 
 
 def get_principal_by_id(tenant_id: str, principal_id: str) -> Principal | None:
@@ -67,4 +63,9 @@ def get_principal_by_id(tenant_id: str, principal_id: str) -> Principal | None:
     For resolution from stored ids (``resolved_identity.identity_of``): the owner of a
     media buy or creative a server-initiated job acts on.
     """
-    return _load_principal(tenant_id, lambda principals: principals.get(principal_id))
+
+    def _lookup_principal(session):
+        row = PrincipalRepository(session, tenant_id).get(principal_id)
+        return Principal.from_row(row) if row else None
+
+    return execute_with_retry(_lookup_principal)

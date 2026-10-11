@@ -400,7 +400,6 @@ def _deliver_e2e_rest_signed(
     """
     import httpx
 
-    from tests.harness._base import presented_bearer
     from tests.harness.client import _presented
     from tests.helpers.signing import wire_origin
 
@@ -411,9 +410,9 @@ def _deliver_e2e_rest_signed(
         signed=signed,
         origin=wire_origin(base_url),
         # ``_presented`` is the one place an omitted credential falls back to
-        # env.credential(), shared with every other e2e delivery; its bearer is what
-        # the signed request carries, not the header set to send.
-        bearer=presented_bearer(_presented(env, credential)),
+        # env.credential(), shared with every other e2e delivery; the bearer is
+        # then the acceptable-credential bit, not the header set to send.
+        credentialed=bool(_presented(env, credential).get("Authorization")),
         method=method.upper(),
     )
     with httpx.Client(base_url=base_url, timeout=30) as client:
