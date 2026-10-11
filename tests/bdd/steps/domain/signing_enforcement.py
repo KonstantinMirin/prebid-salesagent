@@ -400,7 +400,6 @@ def then_seller_recorded_failure(ctx: dict, count: int, code: str) -> None:
 
 
 @then(parsers.parse("the seller verified exactly {count:d} request under the Buyer Agent's published key"))
-@then(parsers.parse("the seller verified exactly {count:d} requests under the Buyer Agent's published key"))
 def then_seller_verified_requests(ctx: dict, count: int) -> None:
     """Pin how many requests the seller's verifier ACCEPTED under THIS buyer's key.
 
