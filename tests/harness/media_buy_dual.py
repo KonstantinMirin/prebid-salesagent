@@ -304,6 +304,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # refused by the real resolver rather than let through by a test-mode override.
         credential = self._pop_credential(kwargs)
         self._commit_factory_data()
+        client = self.get_rest_client()
 
         body = self._build_update_rest_body(**kwargs)
         # Same rule as REST_ENDPOINT above: the id in the URL is the one the SCENARIO
@@ -316,10 +317,36 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         req = kwargs.get("req")
         media_buy_id = getattr(req, "media_buy_id", None) or kwargs.get("media_buy_id") or self._seeded_media_buy_id
         endpoint = f"/api/v1/media-buys/{media_buy_id}"
-        # The same signed/unsigned send as the base POST dispatch, with the update's PUT verb.
-        return self._send_frame(
-            self.get_rest_client(), endpoint, body, credential=credential, signed=signed, method="PUT"
+        # Same signed/unsigned fork as the base POST dispatch, with the update's
+        # PUT verb: an env that cannot sign must REFUSE a signed dispatch (a
+        # silent unsigned send would let a signing scenario pass with no
+        # signature), and once it can sign, ``wire_request`` OWNS the request —
+        # it serializes once so the bytes signed are the bytes sent, and it emits
+        # the single ``Authorization`` identity plus this env's tenant hint
+        # itself. That is why ``credential`` is deliberately NOT merged into the
+        # signed leg: a second bearer would win the precedence race in
+        # ``resolved_identity._extract_auth_token`` and swap the acting
+        # principal, so signed and unsigned would differ by more than the
+        # signature.
+        #
+        # ``credentialed`` is read off the credential HEADERS because that is
+        # what "presented nothing" is under #1721 — ``credential={}`` and
+        # ``credential(token=None)`` both omit ``Authorization``
+        # (tests/helpers/credentials.py). It is the only way an in-process leg
+        # reaches the verifier's refusal branch at all: security.mdx :1269 makes
+        # an unsigned request carrying a valid bearer a spec-correct 200.
+        if not self.can_sign:
+            if signed:
+                self.signing  # raises, naming enable_request_signing()  # noqa: B018
+            return client.put(endpoint, json=body, headers=credential)
+        raw, wire_headers = self.wire_request(
+            path=endpoint,
+            body=body,
+            signed=signed,
+            credentialed="Authorization" in credential,
+            method="PUT",
         )
+        return client.put(endpoint, content=raw, headers=wire_headers)
 
     def _parse_update_rest_response(self, data: dict[str, Any]) -> Any:
         """Rebuild an update_media_buy wire body as the branch the buyer received.
