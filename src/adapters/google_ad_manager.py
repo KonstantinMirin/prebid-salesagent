@@ -14,7 +14,7 @@ __all__ = [
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import sqlalchemy.exc
@@ -1021,23 +1021,12 @@ class GoogleAdManager(AdServerAdapter):
         reporting_data = reporting_service.get_reporting_data(
             date_range=cast("Literal['lifetime', 'this_month', 'today']", range_type),
             advertiser_id=self.advertiser_id,
-            requested_timezone=GAMDataFreshnessValidator.READY_TIMEZONE,
+            requested_timezone="America/New_York",
         )
 
-        # The figures GAM has reported are the answer, whether or not GAM has finished the period
-        # (get_media_buy_delivery.mdx: "zero or partial metrics"). A report GAM failed to produce
-        # raised out of get_reporting_data above. When the period is unfinished, say when its
-        # figures are expected complete; the caller decides what that means for it.
-        target_date = date_range.end
-        expected_availability = GAMDataFreshnessValidator.expected_availability(
-            reporting_data, target_date, now=datetime.now(UTC)
-        )
-        if expected_availability is not None:
-            logger.info(
-                "GAM has not finished reporting media buy %s; figures expected complete at %s",
-                media_buy_id,
-                expected_availability,
-            )
+        # The figures GAM has reported so far are the answer (get_media_buy_delivery.mdx: "zero or
+        # partial metrics"). When GAM has not finished the period, say when to expect it complete.
+        _, expected_availability = GAMDataFreshnessValidator.should_retry_later(reporting_data, date_range.end)
 
         # Aggregate totals across all packages
         total_impressions = reporting_data.metrics.get("total_impressions", 0)
