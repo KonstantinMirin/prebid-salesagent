@@ -16,7 +16,7 @@
 # - docs/building/by-layer/L3/error-handling.mdx (Server-narrowed public elements): a value
 #   the public schema accepts and this seller cannot place is UNSUPPORTED_FEATURE.
 # An overlay whose inclusion fields share no place is refused INVALID_REQUEST
-# (geo_disjoint) before any adapter runs. The spec is silent on that case; it is the same
+# (details.problems) before any adapter runs. The spec is silent on that case; it is the same
 # class as targeting.mdx's same-value overlap ("Sellers SHOULD reject ... and return a
 # descriptive error"), graded for every adapter by BR-UC-002 @T-UC-002-ext-f-geo-disjoint
 # and BR-UC-003 @T-UC-003-ext-geo-disjoint.

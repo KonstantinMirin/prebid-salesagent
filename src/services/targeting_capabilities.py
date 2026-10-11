@@ -18,12 +18,7 @@ from adcp.types.generated_poc.enums.metro_system import MetroAreaSystem
 
 from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
-from src.core.errors.details import (
-    CapabilityRefusalDetails,
-    GeoDisjointInclusion,
-    GeoInclusionField,
-    ValidationDetails,
-)
+from src.core.errors.details import CapabilityRefusalDetails, ErrorProblem, ValidationDetails
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import Error, Targeting, TargetingCapability
 from src.core.validation_helpers import PACKAGES_FIELD
@@ -357,7 +352,7 @@ def nielsen_dma_codes(metros: list | None) -> set[str]:
     return extract_system_values(metros or []).get(MetroAreaSystem.nielsen_dma.value, set())
 
 
-def _geo_inclusions(targeting: Targeting) -> dict[GeoInclusionField, tuple[set[str], set[str]]]:
+def _geo_inclusions(targeting: Targeting) -> dict[str, tuple[set[str], set[str]]]:
     """Per finer inclusion field, ``(named, kept)``: the codes the buyer named, and those inside a listed country.
 
     Inclusion fields combine with AND (docs/reference/migration/geo-targeting.mdx at
@@ -380,22 +375,19 @@ def _geo_inclusions(targeting: Targeting) -> dict[GeoInclusionField, tuple[set[s
     }
 
 
-def geo_disjoint_inclusions(targeting: Targeting) -> list[GeoDisjointInclusion]:
-    """One record per inclusion field whose codes all lie outside the listed countries.
+def geo_disjoint_inclusions(targeting: Targeting) -> list[ErrorProblem]:
+    """One problem per code of an inclusion field whose codes all lie outside the listed countries.
 
     Such an overlay names no place at all: its inclusion fields AND to nothing, so the buy
     could never deliver. The spec is silent on this case; it is refused like the same-value
-    overlap (docs/media-buy/advanced-topics/targeting.mdx, Exclusion Semantics), as data.
+    overlap (docs/media-buy/advanced-topics/targeting.mdx, Exclusion Semantics), as data:
+    the field and the code, under the pin's canonical ``rejected_value``.
     """
     return [
-        GeoDisjointInclusion(
-            include=field,
-            within="geo_countries",
-            system=MetroAreaSystem.nielsen_dma if field == "geo_metros" else None,
-            values=sorted(named),
-        )
+        ErrorProblem(field=field, rejected_value=code)
         for field, (named, kept) in _geo_inclusions(targeting).items()
         if named and not kept
+        for code in sorted(named)
     ]
 
 
@@ -419,9 +411,9 @@ def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
 
         geo_overlaps              {include, exclude, values} per conflicting field pair,
                                   plus `system` for metro/postal pairs
-        geo_disjoint              one GeoDisjointInclusion per inclusion field whose
-                                  codes all lie outside the listed countries
-                                  (geo_disjoint_inclusions)
+        problems                  {field, rejected_value} per code of an inclusion
+                                  field whose codes all lie outside the listed
+                                  countries (geo_disjoint_inclusions)
 
     Empty mapping means the overlay is clean, so the caller can branch on truthiness.
 
@@ -443,7 +435,7 @@ def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
     """
     candidates: dict[str, object] = {
         "geo_overlaps": geo_overlap_conflicts(targeting),
-        "geo_disjoint": geo_disjoint_inclusions(targeting),
+        "problems": geo_disjoint_inclusions(targeting),
     }
     return {key: value for key, value in candidates.items() if value}
 

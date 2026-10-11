@@ -1823,20 +1823,20 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the wire error INVALID_REQUEST details geo_disjoint should be <records>
+    And the wire error INVALID_REQUEST details problems should be <records>
     And the error should include "suggestion" field
 
     Examples:
-      | case                   | overlay                                                                                 | records                                                                                            |
-      | region outside country | {"geo_countries": ["CA"], "geo_regions": ["US-NY"]}                                     | [{"include": "geo_regions", "within": "geo_countries", "values": ["US-NY"]}]                       |
-      | DMA outside country    | {"geo_countries": ["CA"], "geo_metros": [{"system": "nielsen_dma", "values": ["501"]}]} | [{"include": "geo_metros", "within": "geo_countries", "system": "nielsen_dma", "values": ["501"]}] |
+      | case                   | overlay                                                                                 | records                                                |
+      | region outside country | {"geo_countries": ["CA"], "geo_regions": ["US-NY"]}                                     | [{"field": "geo_regions", "rejected_value": "US-NY"}] |
+      | DMA outside country    | {"geo_countries": ["CA"], "geo_metros": [{"system": "nielsen_dma", "values": ["501"]}]} | [{"field": "geo_metros", "rejected_value": "501"}]    |
     # LOCALLY-ADDED beside the generated targeting-overlay outlines, whose
     # `the result should be <outcome>` grades only the code and the suggestion.
     # Inclusion fields combine with AND (docs/reference/migration/geo-targeting.mdx at
     # v3.1.1); an overlay whose inclusion fields have no place in common can never
     # deliver, and it is refused on update as on create (BR-UC-002
-    # @T-UC-002-ext-f-geo-disjoint), with each field and its codes in
-    # details.geo_disjoint.
+    # @T-UC-002-ext-f-geo-disjoint), with each field and code in details.problems
+    # (field, rejected_value).
 
   @T-UC-003-partition-start-time @partition @start_time
   Scenario Outline: Start time partition validation - <partition>

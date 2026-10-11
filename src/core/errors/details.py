@@ -39,7 +39,6 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from adcp.types.generated_poc.enums.metro_system import MetroAreaSystem
 from pydantic import BaseModel, ConfigDict
 
 from src.core.config import get_pydantic_extra_mode
@@ -65,8 +64,6 @@ __all__ = [
     "EntityRefDetails",
     "ErrorDetails",
     "ErrorProblem",
-    "GeoDisjointInclusion",
-    "GeoInclusionField",
     "OutboundDeliveryDetails",
     "ProblemsDetails",
     "ProductRefDetails",
@@ -139,29 +136,6 @@ class ErrorProblem(BaseModel):
     field: str | None = None
     rejected_value: str | None = None
     accepted_values: list[str] | None = None
-
-
-GeoInclusionField = Literal["geo_regions", "geo_metros"]
-"""The finer geo inclusion fields a listed country can cut (``_geo_inclusions``)."""
-
-
-class GeoDisjointInclusion(BaseModel):
-    """One targeting-overlay inclusion field whose codes all lie outside the listed countries.
-
-    Inclusion fields combine with AND (docs/reference/migration/geo-targeting.mdx at
-    v3.1.1), so such a field names no place the buy may deliver. ``include`` is the field,
-    ``within`` the field it shares no place with, ``values`` the codes the buyer named, and
-    ``system`` the metro system when ``include`` is ``geo_metros``. Facts, never a sentence,
-    as ``ErrorProblem``. Produced by ``geo_disjoint_inclusions``
-    (src/services/targeting_capabilities.py).
-    """
-
-    model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-    include: GeoInclusionField
-    within: Literal["geo_countries"]
-    system: MetroAreaSystem | None = None
-    values: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -580,9 +554,6 @@ class ValidationDetails(EntityRefDetails, ValueRejectionDetails, ProblemsDetails
     # break, not a cleanup. (A `managed_only_dimensions` sibling went with the
     # non-spec field it reported, salesagent-3cs7o.22.)
     geo_overlaps: list[dict[str, Any]] | None = None
-    # Its sibling from the same composer: inclusion fields with no place in common.
-    # A declared record, so it is not part of the FIXME(#2099) residue above.
-    geo_disjoint: list[GeoDisjointInclusion] | None = None
 
 
 class TimeWindowDetails(ValidationDetails):
