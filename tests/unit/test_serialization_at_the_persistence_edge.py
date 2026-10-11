@@ -100,11 +100,7 @@ class TestMediaBuyRepositoryCreateFromRequest:
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=8),
             status="pending_approval",
-            packages=[
-                RequestedPackage(
-                    package_id="pkg_prod_1_abc123_1", request=req.packages[0], pricing_info=None, currency="USD"
-                )
-            ],
+            packages=[RequestedPackage(package_id="pkg_prod_1_abc123_1", request=req.packages[0], pricing_info=None)],
         )
 
         # Package ID should be injected into the serialized packages
