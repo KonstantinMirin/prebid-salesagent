@@ -2995,18 +2995,6 @@ def then_media_buys_include_created_buy(ctx: dict) -> None:
     )
 
 
-def _created_buy_on_wire(ctx: dict) -> dict[str, Any]:
-    """The one ``media_buys[]`` entry the wire carries for the buy the Given created."""
-    media_buy_id = ctx["created_media_buy_id"]
-    reported = wire_dict(ctx).get("media_buys", [])
-    matching = [buy for buy in reported if buy.get("media_buy_id") == media_buy_id]
-    assert len(matching) == 1, (
-        f"expected exactly one entry for the freshly-created buy {media_buy_id!r}, "
-        f"got {len(matching)} in {[buy.get('media_buy_id') for buy in reported]!r}"
-    )
-    return matching[0]
-
-
 @then(parsers.parse('the included entry should expose the same media_buy_id and status "{expected_status}"'))
 def then_included_entry_exposes_id_and_status(ctx: dict, expected_status: str) -> None:
     """Assert the polled entry IS the created buy and reports the expected initial status.
@@ -3025,7 +3013,7 @@ def then_included_entry_exposes_id_and_status(ctx: dict, expected_status: str) -
     with no assigned/approved creatives (priority 2, ahead of the future start_time
     that would otherwise make it pending_start).
     """
-    status = _created_buy_on_wire(ctx).get("status")
+    status = _wire_media_buy(ctx, ctx["created_media_buy_id"]).get("status")
     assert status == expected_status, (
         f"post-create poll: expected media_buys[0].status {expected_status!r} for a freshly-created buy, got {status!r}"
     )
@@ -3045,7 +3033,7 @@ def then_created_package_reports_request(ctx: dict, budget: int, country: str) -
     The product id is compared with the request the Given sent, the budget and country with
     the scenario's literals.
     """
-    packages = _created_buy_on_wire(ctx).get("packages") or []
+    packages = _wire_media_buy(ctx, ctx["created_media_buy_id"]).get("packages") or []
     assert len(packages) == 1, f"expected the buy's one package, got {packages!r}"
     reported = (
         packages[0].get("product_id"),
