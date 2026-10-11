@@ -83,6 +83,7 @@ class GAMReportingService:
                 self.network_timezone = current_network_time_zone(self.client)
             except Exception:
                 # Fallback to Eastern Time if we can't get network timezone
+                logger.exception("Could not read the GAM network time zone; reporting in America/New_York")
                 self.network_timezone = "America/New_York"
 
     def get_reporting_data(
