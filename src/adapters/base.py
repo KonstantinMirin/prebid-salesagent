@@ -97,6 +97,12 @@ class TargetingCapabilities:
         refusal per kind, metro first: ``capability="geo_system"``, the undeclared systems as
         ``rejected_value`` and the declared systems of the same kind as ``accepted_values``.
 
+        Postal systems are compared by the legacy country-fused names (``us_zip``), which are
+        this class's field names. A native item (``country`` + ``system``, e.g. ``US`` +
+        ``zip``) is refused even when its system is declared. No native item reaches this
+        intact today, because the request's accepted shape strips ``country`` first (#2403); the fix
+        for #2403 must also map the native pair to its field through ``_POSTAL_AREA_TABLE``.
+
         Raises:
             AdCPCapabilityNotSupportedError: a metro or postal system is not declared.
         """
