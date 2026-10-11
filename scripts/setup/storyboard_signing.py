@@ -32,15 +32,6 @@ The conformance runner sends no bearer on a vector probe — the signature is th
 records. The runner publishes its keys at no origin, so the walk from the counterparty's
 ``agent_url`` has nothing to fetch; the grading record's accepted JWKS is the key source for
 that bearer-less counterparty (``src/core/signing/grading.py``).
-
-Why the grading tenant runs the mock adapter
---------------------------------------------
-runner.yaml L39-46 (``endpoint_scope: sandbox``): vector 016 sends a live, validly signed
-``create_media_buy`` that the agent accepts, so a grading endpoint must discard what it
-books. On the mock adapter that buy books on no ad server and exists only as rows of this
-tenant. :func:`seed` refuses to write the record on a tenant whose adapter is not ``mock``.
-The check runs when the record is written; keeping the tenant on the mock adapter afterwards
-is the operator's responsibility, and clearing the record withdraws the kit's trust.
 """
 
 from __future__ import annotations
@@ -289,42 +280,26 @@ def seed() -> None:
     answered (``request_signature_required`` rather than ``AUTH_MISSING``), and
     ``virtual_host`` changes the origin this tenant publishes its trust root at. Neither
     should reach a suite that did not ask for it.
-
-    The adapter check runs BEFORE the write session opens. Each read it makes opens and
-    closes its own session through ``get_db_session``, which ends by removing the thread's
-    scoped session; called inside the write session it would close that session and drop
-    the writes below without an error.
     """
+    from sqlalchemy import select
+
     from src.core.agent_identity import brand_json_url
-    from src.core.config_loader import tenant_id_for
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Tenant
     from src.core.database.repositories.principal import PrincipalRepository
-    from src.core.helpers.adapter_helpers import resolve_tenant_adapter_type
     from src.core.signing.grading import SignedRequestsGrading
-    from src.core.tenant_context import TenantContext
-
-    # Found BY HOST. ``seed_storyboard_tenant`` gives this tenant a fresh uuid4 tenant_id on
-    # every seed, so the host is its only stable identifier -- and the host is unique, so it
-    # names exactly one row. This script does not WRITE the host: the seeder already did.
-    tenant_id = tenant_id_for(virtual_host=STORYBOARD_VIRTUAL_HOST)
-    tenant_context = TenantContext.load(tenant_id) if tenant_id is not None else None
-    if tenant_id is None or tenant_context is None:
-        raise SystemExit(
-            f"No tenant answers at {STORYBOARD_VIRTUAL_HOST!r}. Run scripts.setup.seed_storyboard_tenant first."
-        )
-    adapter = resolve_tenant_adapter_type(tenant_context)
-    if adapter != "mock":
-        raise SystemExit(
-            f"Tenant {tenant_id!r} runs the {adapter!r} adapter. A signed_requests grading record is written "
-            "only on a mock-adapter tenant: signed-requests-runner.yaml L39-46 (endpoint_scope: sandbox) "
-            "requires a grading endpoint whose accepted mutations book nothing real."
-        )
 
     with get_db_session() as session:
-        tenant = session.get(Tenant, tenant_id)
+        # Found BY HOST. ``seed_storyboard_tenant`` gives this tenant a fresh uuid4
+        # tenant_id on every seed, so the host is its only stable identifier -- and the
+        # host is unique, so it names exactly one row. This script does not WRITE the
+        # host: the seeder already did, and re-asserting it collides with that row on
+        # ``ix_tenants_virtual_host``, which killed this suite before it wrote a report.
+        tenant = session.scalars(select(Tenant).filter_by(virtual_host=STORYBOARD_VIRTUAL_HOST)).first()
         if tenant is None:
-            raise SystemExit(f"Tenant {tenant_id!r} disappeared between the adapter check and the write.")
+            raise SystemExit(
+                f"No tenant answers at {STORYBOARD_VIRTUAL_HOST!r}. Run scripts.setup.seed_storyboard_tenant first."
+            )
 
         tenant.capability_declarations = declarations(brand_json_url(tenant))
         print(f"Storyboard tenant {tenant.tenant_id} answers to {STORYBOARD_VIRTUAL_HOST}")

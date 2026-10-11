@@ -76,29 +76,19 @@ class PrincipalRepository:
         ).first()
 
     def onboard_signing_keyids(self, agent_url: str, keyids: Iterable[str]) -> None:
-        """Make *keyids* the request-signing keyids onboarded at *agent_url* in this tenant.
+        """Onboard *keyids* at *agent_url* in this tenant: an idempotent add.
 
-        The set is replaced, not merged: keyids mapped to *agent_url* and absent from
-        *keyids* are deleted, the missing ones are added. Idempotent, so a re-seed refreshes
-        the mapping. The principal at *agent_url* must exist (the foreign key refuses
-        otherwise), and a keyid already onboarded at another counterparty of this tenant is
-        refused by the primary key. The caller commits.
+        Keyids already mapped to *agent_url* are left as they are; the missing ones are
+        added. The principal at *agent_url* must exist (the foreign key refuses otherwise),
+        and a keyid already onboarded at another counterparty of this tenant is refused by
+        the primary key. The caller commits.
         """
-        wanted = set(keyids)
         mapped = set(
             self._session.scalars(
                 select(PrincipalSigningKeyid.keyid).filter_by(tenant_id=self._tenant_id, agent_url=agent_url)
             )
         )
-        stale = mapped - wanted
-        if stale:
-            self._session.execute(
-                delete(PrincipalSigningKeyid).where(
-                    PrincipalSigningKeyid.tenant_id == self._tenant_id,
-                    PrincipalSigningKeyid.keyid.in_(sorted(stale)),
-                )
-            )
-        for keyid in sorted(wanted - mapped):
+        for keyid in sorted(set(keyids) - mapped):
             self._session.add(PrincipalSigningKeyid(tenant_id=self._tenant_id, keyid=keyid, agent_url=agent_url))
 
     def list_all(self) -> list[Principal]:
