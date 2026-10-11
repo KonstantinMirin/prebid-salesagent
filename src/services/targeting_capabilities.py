@@ -353,7 +353,7 @@ def region_country(code: str) -> str:
 
 
 def nielsen_dma_codes(metros: list | None) -> set[str]:
-    """The Nielsen DMA codes in a ``geo_metros`` or ``geo_metros_exclude`` field; other systems' entries are not read."""
+    """The Nielsen DMA codes in a ``geo_metros`` field; other systems' entries are not read."""
     return extract_system_values(metros or []).get(MetroAreaSystem.nielsen_dma.value, set())
 
 

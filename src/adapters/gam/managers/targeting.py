@@ -8,8 +8,6 @@ and geo mapping operations for Google Ad Manager campaigns.
 import csv
 import json
 import logging
-import re
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +24,7 @@ from src.services.targeting_capabilities import (
     extract_simple_values,
     extract_system_values,
     geo_inclusion_cut,
+    nielsen_dma_codes,
     region_country,
 )
 
@@ -37,21 +36,6 @@ logger = logging.getLogger(__name__)
 #: computed from the accepted Nielsen codes rather than stored.
 GAM_DMA_ID_OFFSET = 200000
 
-_NIELSEN_DMA_CODE = re.compile(r"^[5-9][0-9]{2}$")
-
-
-@dataclass(frozen=True)
-class GAMGeoLocations:
-    """The GAM geo target id of every geo code this seller accepts, per code kind.
-
-    ``countries``: ISO 3166-1 code → id; ``regions``: full ISO 3166-2 code → id;
-    ``dmas``: Nielsen DMA code → id. Geo target ids are global, not per network.
-    """
-
-    countries: dict[str, str]
-    regions: dict[str, str]
-    dmas: dict[str, str]
-
 
 def _only(matches: list[dict[str, str]], what: str) -> dict[str, str]:
     """The one row in *matches*; ``LookupError`` naming *what* when there are none or several."""
@@ -60,8 +44,11 @@ def _only(matches: list[dict[str, str]], what: str) -> dict[str, str]:
     return matches[0]
 
 
-def _load_gam_geo_locations() -> GAMGeoLocations:
+def _load_gam_geo_locations() -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
     """Derive every accepted geo code's GAM id from ``geo_targets.csv`` and ``geo_codes.json``.
+
+    Returns ``(countries, regions, dmas)``: ISO 3166-1 code, full ISO 3166-2 code and Nielsen
+    DMA code, each mapped to its GAM geo target id. Geo target ids are global, not per network.
 
     Countries and regions are rows copied from Google's published geo target file; a region
     is the one row under its country whose name and target type ``geo_codes.json`` states.
@@ -95,13 +82,8 @@ def _load_gam_geo_locations() -> GAMGeoLocations:
         ]
         regions[code] = _only(matches, f"region {code} ({region['name']}, {region['type']})")["Criteria ID"]
 
-    dmas: dict[str, str] = {}
-    for code in codes["nielsen_dma"]:
-        if not _NIELSEN_DMA_CODE.match(code) or code in dmas:
-            raise LookupError(f"nielsen_dma {code!r}: not a three-digit Nielsen DMA code, or listed twice")
-        dmas[code] = str(GAM_DMA_ID_OFFSET + int(code))
-
-    return GAMGeoLocations(countries=countries, regions=regions, dmas=dmas)
+    dmas = {code: str(GAM_DMA_ID_OFFSET + int(code)) for code in codes["nielsen_dma"]}
+    return countries, regions, dmas
 
 
 def _gam_dma_codes(metros: list | None) -> set[str]:
@@ -114,7 +96,7 @@ def _gam_dma_codes(metros: list | None) -> set[str]:
                 capability="geo_system", rejected_value=others, accepted_values=[MetroAreaSystem.nielsen_dma.value]
             )
         )
-    return by_system.get(MetroAreaSystem.nielsen_dma.value, set())
+    return nielsen_dma_codes(metros)
 
 
 def _location_ids(field: str, codes: set[str], ids: dict[str, str]) -> dict[str, str]:
@@ -167,10 +149,7 @@ class GAMTargetingManager:
         self.gam_client = gam_client
         # Load and check the geo data now, so a broken data file refuses the adapter at
         # construction rather than at the first geo overlay.
-        geo = _load_gam_geo_locations()
-        self.geo_country_map: dict[str, str] = geo.countries
-        self.geo_region_map: dict[str, str] = geo.regions  # keyed by full ISO 3166-2 code
-        self.geo_metro_map: dict[str, str] = geo.dmas
+        self.geo_country_map, self.geo_region_map, self.geo_metro_map = _load_gam_geo_locations()
         self.axe_include_key: str | None = None
         self.axe_exclude_key: str | None = None
         self.axe_macro_key: str | None = None
