@@ -16,6 +16,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from decimal import Decimal
 
 import pytest
 
@@ -1524,17 +1525,7 @@ class TestEndToEndDeliveryMetricsCpmPricing:
                 },
             )
             MediaPackageFactory(
-                media_buy=buy,
-                package_id="pkg_cpm",
-                package_config={
-                    "package_id": "pkg_cpm",
-                    "product_id": "prod_cpm",
-                    "pricing_info": {
-                        "pricing_model": "cpm",
-                        "rate": 2.50,
-                        "currency": "USD",
-                    },
-                },
+                media_buy=buy, package_id="pkg_cpm", pricing_option=PricingOptionFactory.build(rate=Decimal("2.50"))
             )
             env.set_adapter_response(
                 "mb_cpm",
@@ -1581,13 +1572,7 @@ class TestEndToEndDeliveryMetricsCpmPricing:
                 },
             )
             MediaPackageFactory(
-                media_buy=buy,
-                package_id="pkg_cpm2",
-                package_config={
-                    "package_id": "pkg_cpm2",
-                    "product_id": "prod_cpm2",
-                    "pricing_info": {"pricing_model": "cpm", "rate": 2.50, "currency": "USD"},
-                },
+                media_buy=buy, package_id="pkg_cpm2", pricing_option=PricingOptionFactory.build(rate=Decimal("2.50"))
             )
             env.set_adapter_response(
                 "mb_cpm2",
@@ -1621,78 +1606,14 @@ class TestEndToEndDeliveryMetricsCpcPricing:
     Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-04
     """
 
-    @pytest.mark.xfail(
-        reason=(
-            "Production code does not compute clicks from CPC spend/rate. "
-            "Adapter returns clicks=None and production passes it through "
-            "without deriving clicks = floor(spend / rate)."
-        ),
-        strict=True,
-    )
-    def test_cpc_clicks_calculated_from_spend_and_rate(self, integration_db):
-        """CPC: $250.00 spend at $0.50 CPC -> 500 clicks (floor(spend/rate)).
-
-        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-04
-        """
-        from decimal import Decimal
-
-        from tests.factories import (
-            MediaBuyFactory,
-            PrincipalFactory,
-            ProductFactory,
-            TenantFactory,
-        )
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            product = ProductFactory(tenant=tenant)
-            po = PricingOptionFactory(
-                product=product,
-                pricing_model="cpc",
-                rate=Decimal("0.50"),
-            )
-            MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                media_buy_id="mb_cpc",
-                raw_request={
-                    "pricing_option_id": str(po.id),
-                    "packages": [
-                        {
-                            "package_id": "pkg_cpc",
-                            "product_id": product.product_id,
-                            "pricing_option_id": str(po.id),
-                        }
-                    ],
-                },
-            )
-            env.set_adapter_response(
-                "mb_cpc",
-                impressions=5000,
-                spend=250.0,
-                package_id="pkg_cpc",
-            )
-
-            result = env.call_impl(
-                media_buy_ids=["mb_cpc"],
-                start_date="2025-06-01",
-                end_date="2025-06-30",
-            )
-
-            assert result.aggregated_totals.media_buy_count == 1
-            delivery = result.media_buy_deliveries[0]
-            assert delivery.totals.spend == 250.0
-            # CPC click calculation: floor(spend / rate) = floor(250 / 0.50) = 500
-            assert delivery.by_package[0].clicks == 500
-
     def test_cpc_pricing_option_identified_in_response(self, integration_db):
         """CPC pricing option should be identifiable in the delivery response.
 
         Graded on the three fields the pin requires on a by_package entry. The old
         assertion looked for `pricing_option_id` on the item, which the pin does not
-        declare. The package's terms are the ones stored on its row.
+        declare. The package's terms are the ones stored on its row, and its clicks are
+        the spend at that rate: 250.00 at 0.50 per click is 500 clicks. The adapter
+        reports no clicks, so the figure is the seller's derivation.
 
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-04
         """
@@ -1717,11 +1638,7 @@ class TestEndToEndDeliveryMetricsCpcPricing:
             MediaPackageFactory(
                 media_buy=buy,
                 package_id="pkg_cpc2",
-                package_config={
-                    "package_id": "pkg_cpc2",
-                    "product_id": "prod_cpc2",
-                    "pricing_info": {"pricing_model": "cpc", "rate": 0.50, "currency": "USD"},
-                },
+                pricing_option=PricingOptionFactory.build(pricing_model="cpc", rate=Decimal("0.50")),
             )
             env.set_adapter_response(
                 "mb_cpc2",
@@ -1741,6 +1658,7 @@ class TestEndToEndDeliveryMetricsCpcPricing:
             # currency on every entry and declares no pricing_option_id to echo.
             pkg = result.media_buy_deliveries[0].by_package[0]
             assert (pkg.pricing_model, pkg.rate, pkg.currency) == (PricingModel.cpc, 0.50, "USD")
+            assert pkg.clicks == 500
 
 
 # ---------------------------------------------------------------------------
@@ -1780,9 +1698,8 @@ class TestDeliveryMetricsFlatRatePricing:
                         {
                             "package_id": "pkg_flat",
                             "product_id": "prod_flat",
-                            # No pricing_options row carries this id; the package's own
-                            # package_config["pricing_info"] below is what prices it, and
-                            # _package_pricing reads that source first.
+                            # No pricing_options row carries this id; the terms stored on the
+                            # package row below are what prices it.
                             "pricing_option_id": "flat_rate_usd_fixed",
                         }
                     ],
@@ -1791,15 +1708,7 @@ class TestDeliveryMetricsFlatRatePricing:
             MediaPackageFactory(
                 media_buy=buy,
                 package_id="pkg_flat",
-                package_config={
-                    "package_id": "pkg_flat",
-                    "product_id": "prod_flat",
-                    "pricing_info": {
-                        "pricing_model": "flat_rate",
-                        "rate": 5000.0,
-                        "currency": "USD",
-                    },
-                },
+                pricing_option=PricingOptionFactory.build(pricing_model="flat_rate", rate=Decimal("5000.00")),
             )
             env.set_adapter_response(
                 "mb_flat",
@@ -1851,11 +1760,7 @@ class TestDeliveryMetricsFlatRatePricing:
             MediaPackageFactory(
                 media_buy=buy,
                 package_id="pkg_flat2",
-                package_config={
-                    "package_id": "pkg_flat2",
-                    "product_id": "prod_flat2",
-                    "pricing_info": {"pricing_model": "flat_rate", "rate": 5000.0, "currency": "USD"},
-                },
+                pricing_option=PricingOptionFactory.build(pricing_model="flat_rate", rate=Decimal("5000.00")),
             )
             env.set_adapter_response(
                 "mb_flat2",
@@ -2177,79 +2082,6 @@ class TestPartialFailureTolerance:
             # the code must already be wire-compliant (normalized through
             # emitted as declared at response assembly).
             assert response.errors is not None
-
-
-# ---------------------------------------------------------------------------
-# Domain business rule: CPC package-level click derivation
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.requires_db
-class TestCpcPackageClicksDerivation:
-    """Domain business rule: for CPC pricing, package clicks = floor(spend / rate).
-
-    This is NOT mandated by the AdCP spec — delivery-metrics.json defines clicks
-    as optional. This is our product decision: when the adapter doesn't return
-    clicks but we know the CPC rate, we derive clicks to give buyers better data.
-
-    The formula: clicks = floor(total_spend / cpc_rate)
-
-    Covers: media_buy_delivery.py line 386
-    """
-
-    def test_cpc_package_clicks_derived_from_spend_and_rate(self, integration_db):
-        """CPC package with $250 spend at $0.50/click -> 500 clicks.
-
-        Business rule: package_clicks = floor(spend / cpc_rate)
-        """
-        from math import floor
-
-        from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            buy = MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                media_buy_id="mb_cpc",
-                raw_request={
-                    "packages": [
-                        request_package(package_id="pkg_cpc", product_id="prod_cpc", pricing_option_id="cpc_usd_fixed")
-                    ],
-                },
-            )
-            # The package's agreed terms, stored on its row as create stores them.
-            MediaPackageFactory(
-                media_buy=buy,
-                package_id="pkg_cpc",
-                package_config={
-                    "package_id": "pkg_cpc",
-                    "product_id": "prod_cpc",
-                    "pricing_info": {"pricing_model": "cpc", "rate": 0.50, "currency": "USD"},
-                },
-            )
-
-            env.set_adapter_response(
-                "mb_cpc",
-                impressions=5000,
-                spend=250.0,
-                package_id="pkg_cpc",
-            )
-
-            result = env.call_impl(
-                media_buy_ids=["mb_cpc"],
-                start_date="2025-06-01",
-                end_date="2025-06-30",
-            )
-
-            assert result.aggregated_totals.media_buy_count == 1
-            delivery = result.media_buy_deliveries[0]
-            pkg = delivery.by_package[0]
-            assert pkg.package_id == "pkg_cpc"
-            # Domain business rule: clicks = floor(spend / cpc_rate)
-            assert pkg.clicks == floor(250.0 / 0.50)  # 500
 
 
 # ---------------------------------------------------------------------------

@@ -41,11 +41,13 @@ def given_seller_sells_through_gam(ctx: dict, trafficker_id: str, ad_unit_id: st
     The products are the scenario's default product and any further products a Given built
     beside it (``ctx["extra_products"]``).
     """
+    from tests.bdd.steps.generic.given_media_buy import scenario_products
+
     ctx["env"].sell_through_gam(
         trafficker_id=trafficker_id,
         advertiser_id=advertiser_id,
         ad_unit_id=ad_unit_id,
-        products=[ctx["default_product"], *(product for product, _ in ctx.get("extra_products") or [])],
+        products=list(scenario_products(ctx).values()),
     )
 
 
@@ -100,12 +102,11 @@ def given_buyer_packages_over_flight(ctx: dict, days: int, datatable: Any) -> No
     Columns: ``product_id | pricing_option_id | budget | bid_price``; an empty ``bid_price``
     sends none. Built by ``build_request_packages``, the DTO-bound package builder.
     """
-    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults, _future
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults, _set_flight_days
     from tests.harness.create_request import build_request_packages
 
     kwargs = _ensure_request_defaults(ctx)
-    kwargs["start_time"] = _future(1).isoformat()
-    kwargs["end_time"] = _future(1 + days).isoformat()
+    _set_flight_days(kwargs, days)
     rows = table_rows(datatable)
     kwargs["packages"] = build_request_packages(
         [(row["product_id"], row["pricing_option_id"]) for row in rows],
@@ -136,26 +137,20 @@ def _line_item_for(ctx: dict, product_id: str) -> Any:
     ``costPerUnit`` is the product's fixed rate. Exactly one line item per package, and
     exactly one match.
     """
+    from tests.bdd.steps.generic.given_media_buy import seeded_product
+
     line_items = _line_items_created(ctx)
     packages = ctx["request_kwargs"]["packages"]
     assert len(line_items) == len(packages), (
         f"expected GAM to create one line item per package ({len(packages)}); it created {len(line_items)}"
     )
-    rate = _scenario_product(ctx, product_id).pricing_options[0].rate
+    rate = seeded_product(ctx, product_id).pricing_options[0].rate
     micros = round(float(rate) * 1_000_000)
     matching = [item for item in line_items if int(item["costPerUnit"]["microAmount"]) == micros]
     assert len(matching) == 1, (
         f"expected exactly one line item priced {rate} for the {product_id!r} package; "
         f"line items cost {[item['costPerUnit']['microAmount'] for item in line_items]}"
     )
-    return matching[0]
-
-
-def _scenario_product(ctx: dict, product_id: str) -> Any:
-    """The product the pricing-options Given built under *product_id*."""
-    products = [ctx["default_product"], *(product for product, _ in ctx.get("extra_products") or [])]
-    matching = [product for product in products if product.product_id == product_id]
-    assert matching, f"no product {product_id!r} was built; built {[p.product_id for p in products]}"
     return matching[0]
 
 

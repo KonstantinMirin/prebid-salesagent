@@ -68,6 +68,12 @@ def _future(days: int = 1) -> datetime:
     return mint(datetime.now(UTC) + timedelta(days=days))
 
 
+def _set_flight_days(kwargs: dict[str, Any], days: int) -> None:
+    """Set the request's flight to start tomorrow and run exactly ``days`` days."""
+    kwargs["start_time"] = _future(1).isoformat()
+    kwargs["end_time"] = _future(1 + days).isoformat()
+
+
 def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
     """Ensure ctx['request_kwargs'] has valid defaults for a create_media_buy request.
 
@@ -117,6 +123,24 @@ def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
     if "env" in ctx:
         ctx["request_kwargs"].setdefault("account", {"account_id": ctx["env"].setup_default_account().account_id})
     return ctx["request_kwargs"]
+
+
+def scenario_products(ctx: dict) -> dict[str, Any]:
+    """The products the scenario's Givens built, by ``product_id``.
+
+    The one reader of the two keys a Given records its products under:
+    ``ctx["default_product"]``, and ``ctx["extra_products"]`` for every further product,
+    a list of ``(product, pricing option)`` pairs. The default product comes first.
+    """
+    products = [ctx["default_product"], *(product for product, _ in ctx.get("extra_products") or [])]
+    return {product.product_id: product for product in products}
+
+
+def seeded_product(ctx: dict, product_id: str) -> Any:
+    """The product a Given of this scenario built under *product_id*; fails naming the built ids."""
+    products = scenario_products(ctx)
+    assert product_id in products, f"No Given seeded product {product_id!r}. Seeded: {sorted(products)}."
+    return products[product_id]
 
 
 def harness_create_request_kwargs(ctx: dict) -> dict[str, Any]:
@@ -613,15 +637,9 @@ def given_packages_same_currency(ctx: dict, currency: str) -> None:
     # not a design: the moment a product's option is minted with a publisher-chosen id,
     # the step names an id that product does not have. It is now correct by construction
     # instead of by that coincidence.
-    by_product = {ctx["default_product"].product_id: ctx["default_product"]}
-    by_product.update({product.product_id: product for product, _ in ctx.get("extra_products") or []})
-
     wanted = PricingOption.default_option_id("cpm", currency, True)
     for pkg in kwargs.get("packages", []):
-        product = by_product.get(pkg["product_id"])
-        assert product is not None, (
-            f"Package names product {pkg['product_id']!r}, which no Given seeded. Seeded: {sorted(by_product)}."
-        )
+        product = seeded_product(ctx, pkg["product_id"])
         existing = next(
             (po for po in getattr(product, "pricing_options", None) or [] if po.pricing_option_id == wanted),
             None,
@@ -862,8 +880,7 @@ def given_high_daily_spend(ctx: dict, budget: int, days: int, daily: int) -> Non
     math to catch Gherkin typos.
     """
     kwargs = _ensure_request_defaults(ctx)
-    kwargs["start_time"] = _future(1).isoformat()
-    kwargs["end_time"] = _future(1 + days).isoformat()
+    _set_flight_days(kwargs, days)
     assert kwargs.get("packages"), (
         f"No packages in request — step claims 'a package has budget {budget} over a "
         f"{days}-day flight' but no package exists to set it on"
@@ -1584,9 +1601,7 @@ def _set_daily_spend_cap(ctx: dict, *, cap: float | None, budget: float, flight_
     env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
 
-    # Set flight duration via start_time / end_time
-    kwargs["start_time"] = _future(1).isoformat()
-    kwargs["end_time"] = _future(1 + flight_days).isoformat()
+    _set_flight_days(kwargs, flight_days)
 
     # Set package budget
     if kwargs.get("packages"):

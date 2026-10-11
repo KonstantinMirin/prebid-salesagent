@@ -47,11 +47,10 @@ from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.webhook_delivery_service import CircuitBreaker, CircuitState, WebhookDeliveryService
 from tests.factories.media_buy import (
     default_request_packages,
-    package_rows_for,
     request_package,
 )
 from tests.factories.principal import PrincipalFactory
-from tests.harness._mock_uow import make_mock_uow, serve_package_rows
+from tests.harness._mock_uow import delivery_mock_uow
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
 # ---------------------------------------------------------------------------
@@ -166,11 +165,7 @@ def _standard_patches(
 
     # Mock UoW so _get_media_buy_delivery_impl doesn't hit real DB. The buys' packages are
     # their rows, each carrying the terms create stores with it.
-    _, mock_uow = make_mock_uow()
-    serve_package_rows(
-        mock_uow.media_buys,
-        {mb_id: package_rows_for(mb_id, buy.raw_request.get("packages", [])) for mb_id, buy in target_buys},
-    )
+    mock_uow = delivery_mock_uow(target_buys)
 
     return {
         "adapter": patch(

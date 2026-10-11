@@ -82,7 +82,7 @@ def pricing_option_for(pricing_option_id: str) -> PricingOption | None:
     return option if option.pricing_option_id == pricing_option_id else None
 
 
-def package_config_for(package: dict[str, Any]) -> dict[str, Any]:
+def package_config_for(package: dict[str, Any], *, option: PricingOption | None = None) -> dict[str, Any]:
     """The ``MediaPackage.package_config`` a persisted request *package* carries.
 
     ``pricing_info`` is built by ``pricing_info_for`` — the SAME projection
@@ -91,13 +91,18 @@ def package_config_for(package: dict[str, Any]) -> dict[str, Any]:
     package because it is what that package bid, and the GAM order manager reads a
     package's rate from it (``src/adapters/utils/pricing.py``).
 
+    The terms are *option*'s when the caller states the option the package was bought on
+    (a rate other than the fixture default); otherwise the option the package's
+    ``pricing_option_id`` selects (``pricing_option_for``).
+
     ``get_media_buy_delivery`` prices each ``by_package`` entry from this ``pricing_info``
     alone (the response REQUIRES ``pricing_model``/``rate``/``currency``). A row without it
     makes the delivery report unbuildable, which is what ``_package_pricing`` refuses to
     paper over.
     """
     option_id = package.get("pricing_option_id")
-    option = pricing_option_for(option_id) if option_id else None
+    if option is None and option_id:
+        option = pricing_option_for(option_id)
     if option is None:
         # A package with no ``pricing_option_id``, or one naming an id outside the
         # synthetic grammar, names no option any reader can resolve — so the row this
@@ -362,6 +367,9 @@ class MediaPackageFactory(factory.alchemy.SQLAlchemyModelFactory):
         #: ``raw_request`` by default; ``package_rows_for`` passes it for a row built
         #: without a buy row.
         source_package = LazyAttribute(_source_package)
+        #: The pricing option the package was bought on, when its terms are not the ones
+        #: its ``pricing_option_id`` selects by default (``package_config_for``).
+        pricing_option = None
 
     media_buy = SubFactory(MediaBuyFactory)
     media_buy_id = LazyAttribute(lambda o: o.media_buy.media_buy_id)
@@ -379,7 +387,8 @@ class MediaPackageFactory(factory.alchemy.SQLAlchemyModelFactory):
                 "package_id": o.package_id,
                 "product_id": o.source_package.get("product_id", FIXTURE_PRODUCT_ID),
                 "budget": float(o.budget),
-            }
+            },
+            option=o.pricing_option,
         )
     )
 

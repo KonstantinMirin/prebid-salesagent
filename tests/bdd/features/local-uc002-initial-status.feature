@@ -26,6 +26,14 @@
 # under review keeps `pending_creatives`; whether it should is #2399, and that scenario asserts
 # today's answer only to show the other principal's approved creative does not change it.
 #
+# The generated outline @T-UC-002-v31-success-status-values (BR-UC-002-create-media-buy.feature)
+# states the `pending_start` and `active` rows too, and does not execute: three of its steps
+# have no definition, and it reads the media buy status from the top-level `status`, which
+# media-buy/create-media-buy-response.json reserves for the task status and deprecates in
+# favour of `media_buy_status` (#2415). When that outline executes and reads
+# `media_buy_status`, the outline below is reduced to what it adds: the get_media_buys
+# read-back.
+#
 # Not graded here: a library creative attached to a package by id. The pinned request attaches
 # one through `packages[].creative_assignments`, which create does not read (#2392); the
 # `creative_ids` field create does read is not in the 3.1.1 package-request schema.

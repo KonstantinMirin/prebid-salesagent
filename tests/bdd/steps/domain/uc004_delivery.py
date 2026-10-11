@@ -499,9 +499,7 @@ def given_catalog_reprices_package_option(ctx: dict, pkg_id: str, pricing_model:
 
     from tests.factories.product import priced_product
 
-    package = next(
-        row for row in _seeded_media_buy(ctx, _latest_seeded_media_buy_id(ctx)).packages if row.package_id == pkg_id
-    )
+    package = _seeded_package(ctx, pkg_id)
     option = {
         "pricing_option_id": package.package_config["pricing_option_id"],
         "pricing_model": pricing_model,
@@ -511,6 +509,23 @@ def given_catalog_reprices_package_option(ctx: dict, pkg_id: str, pricing_model:
     }
     priced_product(ctx["db_tenant"], product_id=package.package_config["product_id"], pricing_options=[option])
     priced_product(ctx["db_tenant"], pricing_options=[option])
+
+
+@given(parsers.parse('package "{pkg_id}" was stored without its pricing terms'))
+def given_package_stored_without_terms(ctx: dict, pkg_id: str) -> None:
+    """The seeded buy's package row carries no ``pricing_info``.
+
+    The row of a package stored before create persisted a package's terms: everything
+    else on it, its ``pricing_option_id`` included, stays as seeded.
+    """
+    from tests.factories import MediaPackageFactory
+
+    package = _seeded_package(ctx, pkg_id)
+    MediaPackageFactory(
+        media_buy=package.media_buy,
+        package_id=pkg_id,
+        package_config={key: value for key, value in package.package_config.items() if key != "pricing_info"},
+    )
 
 
 @given("the ad server adapter has delivery data for both media buys")
@@ -4096,7 +4111,6 @@ def _seed_package_terms(
 
     from sqlalchemy.orm import attributes
 
-    from src.core.helpers.pricing_helpers import pricing_info_for
     from tests.factories import MediaPackageFactory, PricingOptionFactory
     from tests.factories.media_buy import request_package
 
@@ -4115,11 +4129,7 @@ def _seed_package_terms(
     buy.raw_request = {**(buy.raw_request or {}), "packages": [package]}
     attributes.flag_modified(buy, "raw_request")
     buy.packages[:] = [row for row in buy.packages if row.package_id == pkg_id]
-    MediaPackageFactory(
-        media_buy=buy,
-        package_id=pkg_id,
-        package_config={**package, "pricing_info": pricing_info_for(option, bid_price=bid_price)},
-    )
+    MediaPackageFactory(media_buy=buy, package_id=pkg_id, pricing_option=option)
     env._session.commit()
 
 
@@ -4139,6 +4149,16 @@ def _seeded_media_buy(ctx: dict, mb_id: str) -> Any:
     buy = ctx["env"]._session.scalars(select(MediaBuy).filter_by(media_buy_id=mb_id)).first()
     assert buy is not None, f"media buy {mb_id!r} was not seeded into the database"
     return buy
+
+
+def _seeded_package(ctx: dict, pkg_id: str) -> Any:
+    """The ``MediaPackage`` row *pkg_id* of the media buy the scenario's Givens seeded last."""
+    buy = _seeded_media_buy(ctx, _latest_seeded_media_buy_id(ctx))
+    rows = [row for row in buy.packages if row.package_id == pkg_id]
+    assert rows, (
+        f"media buy {buy.media_buy_id!r} has no package {pkg_id!r}; it has {[r.package_id for r in buy.packages]}"
+    )
+    return rows[0]
 
 
 def _parse_request_params(params_str: str) -> dict[str, Any]:

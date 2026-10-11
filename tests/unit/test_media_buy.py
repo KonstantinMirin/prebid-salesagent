@@ -62,6 +62,7 @@ from tests.factories.media_buy import (
 )
 from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory
+from tests.harness._mock_uow import delivery_mock_uow
 from tests.helpers.unit_identity import fabricated_account_identity
 
 # ---------------------------------------------------------------------------
@@ -2952,6 +2953,14 @@ class TestUpdateMediaBuyAdapterFailure:
 # ===========================================================================
 
 
+def _reported_packages(resp: GetMediaBuyDeliveryResponse) -> dict[str, list[tuple[str, float, float]]]:
+    """Each reported buy's packages as ``(package_id, impressions, spend)``."""
+    return {
+        delivery.media_buy_id: [(pkg.package_id, pkg.impressions, pkg.spend) for pkg in delivery.by_package]
+        for delivery in resp.media_buy_deliveries
+    }
+
+
 class TestDeliveryImplSingleBuy:
     """UC-004 main flow: single media buy delivery orchestration."""
 
@@ -2983,12 +2992,7 @@ class TestDeliveryImplSingleBuy:
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
-            # Mock UoW context manager
-            mock_uow_inst = MagicMock()
-            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
-            mock_uow_inst.__exit__ = MagicMock(return_value=False)
-            mock_uow_inst.media_buys = MagicMock()
-            mock_uow_cls.return_value = mock_uow_inst
+            mock_uow_cls.return_value = delivery_mock_uow([("mb_1", buy)])
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=["mb_1"],
@@ -3002,6 +3006,7 @@ class TestDeliveryImplSingleBuy:
             assert resp.currency == "USD"
             assert len(resp.media_buy_deliveries) == 1
             assert resp.aggregated_totals.impressions >= 0
+            assert _reported_packages(resp) == {"mb_1": [("pkg_1", 1000.0, 50.0)]}
 
     def test_fetch_by_media_buy_ids(self):
         """UC-004-D02: media_buy_ids resolution returns delivery data.
@@ -3032,11 +3037,7 @@ class TestDeliveryImplSingleBuy:
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
-            mock_uow_inst = MagicMock()
-            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
-            mock_uow_inst.__exit__ = MagicMock(return_value=False)
-            mock_uow_inst.media_buys = MagicMock()
-            mock_uow_cls.return_value = mock_uow_inst
+            mock_uow_cls.return_value = delivery_mock_uow([("mb_1", buy)])
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=["mb_1"],
@@ -3048,6 +3049,7 @@ class TestDeliveryImplSingleBuy:
             assert isinstance(resp, GetMediaBuyDeliveryResponse)
             assert len(resp.media_buy_deliveries) == 1
             assert resp.currency == "USD"
+            assert _reported_packages(resp) == {"mb_1": [("pkg_1", 500.0, 25.0)]}
 
     def test_multiple_buys_aggregate_totals(self):
         """UC-004-D03: aggregated_totals sums across multiple buys.
@@ -3091,11 +3093,7 @@ class TestDeliveryImplSingleBuy:
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
-            mock_uow_inst = MagicMock()
-            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
-            mock_uow_inst.__exit__ = MagicMock(return_value=False)
-            mock_uow_inst.media_buys = MagicMock()
-            mock_uow_cls.return_value = mock_uow_inst
+            mock_uow_cls.return_value = delivery_mock_uow([("mb_1", buy1), ("mb_2", buy2)])
 
             req = GetMediaBuyDeliveryRequest(
                 start_date="2025-01-01",
@@ -3109,6 +3107,10 @@ class TestDeliveryImplSingleBuy:
             assert resp.aggregated_totals.impressions >= 1500
             assert resp.aggregated_totals.spend >= 75.0
             assert resp.aggregated_totals.media_buy_count == 2
+            assert _reported_packages(resp) == {
+                "mb_1": [("pkg_1", 1000.0, 50.0)],
+                "mb_2": [("pkg_2", 500.0, 25.0)],
+            }
 
     def test_no_ids_fetches_all(self):
         """UC-004-D04: no identifiers = all buys for principal.
@@ -3152,11 +3154,7 @@ class TestDeliveryImplSingleBuy:
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
-            mock_uow_inst = MagicMock()
-            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
-            mock_uow_inst.__exit__ = MagicMock(return_value=False)
-            mock_uow_inst.media_buys = MagicMock()
-            mock_uow_cls.return_value = mock_uow_inst
+            mock_uow_cls.return_value = delivery_mock_uow([("mb_1", buy1), ("mb_2", buy2)])
 
             req = GetMediaBuyDeliveryRequest(
                 start_date="2025-01-01",
@@ -3166,6 +3164,10 @@ class TestDeliveryImplSingleBuy:
 
             assert isinstance(resp, GetMediaBuyDeliveryResponse)
             assert len(resp.media_buy_deliveries) == 2
+            assert _reported_packages(resp) == {
+                "mb_1": [("pkg_1", 1000.0, 50.0)],
+                "mb_2": [("pkg_2", 500.0, 25.0)],
+            }
 
 
 class TestDeliveryImplStatusFilter:
