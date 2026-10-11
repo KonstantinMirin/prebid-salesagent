@@ -89,8 +89,6 @@ class DeliveryPollEnv(GamSellerMixin, DeliveryPollMixin, IntegrationEnv):
     def _configure_mocks(self) -> None:
         self._configure_adapter_mock()
         self._configure_gam_client()
-        # A GAM seller that states no report reads a finished, empty one.
-        self.mock["gam_report_download"].return_value = serve_gam_report(self.mock["gam_client"].return_value)
 
     def report_through_gam(
         self,
