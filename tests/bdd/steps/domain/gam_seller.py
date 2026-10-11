@@ -15,12 +15,15 @@ sells through GAM.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
-from pytest_bdd import given, parsers, then
+from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import wire_field
+from tests.bdd.steps.generic._table import rows as table_rows
 
 
 @given(
@@ -28,24 +31,109 @@ from tests.bdd.steps._outcome_helpers import wire_field
         r'the seller sells through Google Ad Manager as trafficker "(?P<trafficker_id>[^"]+)" on ad unit '
         r'"(?P<ad_unit_id>[^"]+)", and the buyer is its advertiser "(?P<advertiser_id>[^"]+)"'
         r'(?:, on a network in time zone "(?P<network_time_zone>[^"]+)")?'
+        r"(?:, with product settings '(?P<product_settings>[^']*)')?"
     )
 )
 def given_seller_sells_through_gam(
-    ctx: dict, trafficker_id: str, ad_unit_id: str, advertiser_id: str, network_time_zone: str | None
+    ctx: dict,
+    trafficker_id: str,
+    ad_unit_id: str,
+    advertiser_id: str,
+    network_time_zone: str | None,
+    product_settings: str | None,
 ) -> None:
-    """Onboard the env's tenant to GAM and sell the scenario's product on one ad unit.
+    """Onboard the env's tenant to GAM and sell every product the scenario built on one ad unit.
 
-    The optional clause states the GAM network's own time zone; without it the stand-in
-    network keeps its default zone. A scenario that needs another seller fact adds a clause
-    to this sentence rather than a second seller Given.
+    The products are the scenario's default product and any further products a Given built
+    beside it (``ctx["extra_products"]``). The optional time-zone clause states the GAM
+    network's own time zone; without it the stand-in network keeps its default zone. The
+    optional product-settings clause is a JSON object of ``implementation_config`` keys the
+    seller wrote over the generated GAM configuration of each product it sells. A scenario
+    that needs another seller fact adds a clause to this sentence rather than a second
+    seller Given.
     """
     ctx["env"].sell_through_gam(
         trafficker_id=trafficker_id,
         advertiser_id=advertiser_id,
         ad_unit_id=ad_unit_id,
-        products=[ctx["default_product"]],
+        products=[ctx["default_product"], *(product for product, _ in ctx.get("extra_products") or [])],
         network_time_zone=network_time_zone,
+        implementation_config=json.loads(product_settings) if product_settings is not None else None,
     )
+
+
+@given(parsers.re(r"the seller's (?P<delivery>guaranteed|non-guaranteed) products? (?:has|have) pricing options:"))
+def given_seller_products_with_pricing_options(ctx: dict, delivery: str, datatable: Any) -> None:
+    """Build the scenario's products, one per ``product_id`` in the table, with the listed pricing options.
+
+    Columns: ``product_id | pricing_option_id | pricing_model | fixed_price | floor_price``.
+    A row with a ``fixed_price`` is a fixed option at that rate; a row without one is an
+    auction option with that ``floor_price``. Rows keep their order within each product, so
+    a product's first row is its first pricing option.
+
+    The first product becomes the scenario's default product and its first option the
+    default pricing option, the two keys the route's seed sets; every further product is
+    added to ``ctx["extra_products"]``, which the seller Given sells beside the default
+    product. This step does not make the tenant a GAM seller: the seller Given that follows
+    it does.
+    """
+    from tests.factories import PricingOptionFactory, ProductFactory
+
+    env = ctx["env"]
+    built: dict[str, tuple[Any, Any]] = {}
+    for row in table_rows(datatable):
+        fixed_price = row["fixed_price"].strip()
+        if row["product_id"] not in built:
+            product = ProductFactory(
+                tenant=ctx["tenant"],
+                product_id=row["product_id"],
+                delivery_type=delivery.replace("-", "_"),
+                property_tags=["all_inventory"],
+            )
+            built[row["product_id"]] = (product, None)
+        product, first_option = built[row["product_id"]]
+        option = PricingOptionFactory(
+            product=product,
+            pricing_option_id=row["pricing_option_id"],
+            pricing_model=row["pricing_model"],
+            is_fixed=bool(fixed_price),
+            rate=Decimal(fixed_price) if fixed_price else None,
+            price_guidance=None if fixed_price else {"floor": float(row["floor_price"])},
+        )
+        built[row["product_id"]] = (product, first_option or option)
+    env._commit_factory_data()
+    (ctx["default_product"], ctx["default_pricing_option"]), *extra = built.values()
+    ctx["extra_products"] = extra
+
+
+@given(parsers.parse("the buyer's packages, over a {days:d}-day flight, are:"))
+def given_buyer_packages_over_flight(ctx: dict, days: int, datatable: Any) -> None:
+    """Replace the request's packages with the table's, over a flight exactly ``days`` long.
+
+    Columns: ``product_id | pricing_option_id | budget | bid_price``; an empty ``bid_price``
+    sends none. Each package is the DTO-bound ``PackageRequestFactory`` shape.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults, _future
+    from tests.factories.request import PackageRequestFactory
+
+    kwargs = _ensure_request_defaults(ctx)
+    kwargs["start_time"] = _future(1).isoformat()
+    kwargs["end_time"] = _future(1 + days).isoformat()
+    kwargs["packages"] = [
+        PackageRequestFactory.payload(
+            product_id=row["product_id"],
+            pricing_option_id=row["pricing_option_id"],
+            budget=float(row["budget"]),
+            **({"bid_price": float(row["bid_price"])} if row["bid_price"].strip() else {}),
+        )
+        for row in table_rows(datatable)
+    ]
+
+
+@when("the seller approves the media buy")
+def when_seller_approves_media_buy(ctx: dict) -> None:
+    """The seller approves the one buy awaiting approval, as every Admin UI approval route does."""
+    ctx["approval_result"] = ctx["env"].approve_pending_media_buy()
 
 
 def _orders_created(ctx: dict) -> list[Any]:
@@ -136,3 +224,43 @@ def then_one_order_without_flight(ctx: dict) -> None:
     """GAM created exactly one order, and the seller sent it none of the flight keys GAM derives from its line items."""
     flights = _flights(ctx, "OrderService", "createOrders")
     assert flights == [{}], f"expected GAM to create one order carrying no flight dates; it created {flights}"
+
+
+#: The line item columns a goal Then compares, each read off the line item the seller sent.
+_LINE_ITEM_GOAL_READERS = {
+    "lineItemType": lambda item: item["lineItemType"],
+    "priority": lambda item: item["priority"],
+    "goalType": lambda item: item["primaryGoal"]["goalType"],
+    "unitType": lambda item: item["primaryGoal"]["unitType"],
+    "units": lambda item: item["primaryGoal"]["units"],
+}
+
+#: The columns whose cells are integers in GAM's line item.
+_INTEGER_COLUMNS = frozenset({"priority", "units"})
+
+
+@then("Google Ad Manager received these line items, in package order:")
+def then_line_items_in_package_order(ctx: dict, datatable: Any) -> None:
+    """The seller sent GAM exactly these line items, one per package in the request's order.
+
+    Columns: ``lineItemType | priority | goalType | unitType | units``. The whole list is
+    compared, so a missing, extra or reordered line item fails it.
+    """
+    expected = [
+        {column: int(cell) if column in _INTEGER_COLUMNS else cell for column, cell in row.items()}
+        for row in table_rows(datatable)
+    ]
+    sent = [
+        {column: read(item) for column, read in _LINE_ITEM_GOAL_READERS.items()}
+        for item in ctx["env"].gam_objects_sent("LineItemService", "createLineItems")
+    ]
+    assert sent == expected, (
+        f"expected GAM to receive line items {expected}; it received {sent} (approval: {ctx.get('approval_result')})"
+    )
+
+
+@then("Google Ad Manager received no order")
+def then_no_order(ctx: dict) -> None:
+    """The seller sent GAM no order, so the refusal left nothing behind in the network."""
+    orders = ctx["env"].gam_objects_sent("OrderService", "createOrders")
+    assert orders == [], f"expected GAM to receive no order; it received {orders}"

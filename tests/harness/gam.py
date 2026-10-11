@@ -19,7 +19,7 @@ The client patch is inert for a tenant on the Mock adapter, which never construc
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from tests.harness._realize import e2e_unsupported, realize_e2e
@@ -78,6 +78,7 @@ class GamSellerMixin:
         ad_unit_id: str,
         products: Iterable[Any],
         network_time_zone: str | None = None,
+        implementation_config: Mapping[str, Any] | None = None,
     ) -> None:
         """Make this env's tenant a Google Ad Manager seller selling *products* on one ad unit.
 
@@ -102,6 +103,9 @@ class GamSellerMixin:
         GAM client until this method makes the tenant a GAM seller. A later network answer a
         scenario needs is another keyword of this method passed to the same
         ``stub_gam_client(...)`` call, so one call carries every answer a scenario states.
+
+        ``implementation_config`` is what the seller wrote over each product's generated GAM
+        configuration (``_sell_product_through_gam``): its keys replace the generated ones.
         """
         from src.core.helpers.adapter_helpers import get_adapter
         from tests.factories import GAMInventoryFactory
@@ -117,11 +121,13 @@ class GamSellerMixin:
         }
         GAMInventoryFactory(tenant=tenant, inventory_id=ad_unit_id)
         for product in products:
-            self._sell_product_through_gam(product, ad_unit_id)
+            self._sell_product_through_gam(product, ad_unit_id, implementation_config or {})
         self._commit_factory_data()
         self.mock["adapter"].side_effect = get_adapter
 
-    def _sell_product_through_gam(self, product: Any, ad_unit_id: str) -> None:
+    def _sell_product_through_gam(
+        self, product: Any, ad_unit_id: str, implementation_config: Mapping[str, Any]
+    ) -> None:
         """Save *product* the way the Admin UI's add-product form saves a GAM product with one ad unit.
 
         * Its format is ``display_300x250_image`` from the reference catalog. The adapter
@@ -132,7 +138,8 @@ class GamSellerMixin:
           serve the format through the creative registry instead.
         * Its ``implementation_config`` is ``GAMProductConfigService.generate_default_config``
           for its delivery type and formats, the generator the form calls, plus the ad unit
-          the seller picks. The generator supplies ``include_descendants: True``, the form's
+          the seller picks, with *implementation_config* (the keys the seller wrote by hand)
+          over both. The generator supplies ``include_descendants: True``, the form's
           checked default.
         * Its primary inventory mapping names the same ad unit, which the form writes for the
           first picked ad unit. The adapter reads these rows before ``implementation_config``,
@@ -155,6 +162,7 @@ class GamSellerMixin:
         product.implementation_config = {
             **GAMProductConfigService.generate_default_config(product.delivery_type, format_ids),
             "targeted_ad_unit_ids": [ad_unit_id],
+            **implementation_config,
         }
         ProductInventoryMappingFactory(product=product, inventory_id=ad_unit_id, is_primary=True)
 

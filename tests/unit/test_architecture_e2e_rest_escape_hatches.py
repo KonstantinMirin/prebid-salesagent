@@ -789,6 +789,17 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "the live server has no stand-in Google Ad Manager network: a GAM tenant there would "
             "call Google, so its tenants run the Mock adapter",
         ),
+        # Added for scenarios that did not exist before it, and noted against this pin's
+        # shrink-only direction of travel like the entries above. Every scenario that reaches
+        # approve_pending_media_buy has already raised on e2e_rest at the sell_through_gam
+        # Given above, so this row removes no live grading. The declaration stops a later
+        # e2e-capable Given from running the approval in-process against the wrong database.
+        (
+            "tests/harness/media_buy_create.py",
+            "approve_pending_media_buy",
+            "the seller's approval runs behind the Admin UI's authenticated routes, and the "
+            "harness holds no admin session on the live server",
+        ),
     }
 )
 
