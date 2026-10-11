@@ -257,15 +257,14 @@ def get_media_buy_delivery(
                 # just because the dates line up.
                 status = resolve_canonical_status(buy, end_dt.date())
 
-                # When the reporting circuit breaker is open (reporting degraded), the
-                # adapter is not asked. "reporting_delayed" means "delivery data
-                # temporarily unavailable, will report later", so here it may only
-                # overwrite a buy that is actively serving and therefore genuinely
-                # awaiting fresh data. With no word from the ad server, a terminal/paused
-                # buy is taken to have no more data coming, and a pending buy
-                # (pending_creatives / pending_start) has never served — marking either
-                # "reporting_delayed" would promise a report that will never come and
-                # contradict the status_filter that selected it.
+                # Override status when circuit breaker is open (reporting
+                # degraded). "reporting_delayed" means "delivery data temporarily
+                # unavailable, will report later", so it may only overwrite a buy
+                # that is actively serving and therefore genuinely awaiting fresh
+                # data. A terminal/paused buy has no more data coming, and a
+                # pending buy (pending_creatives / pending_start) has never served
+                # — marking either "reporting_delayed" would promise a report that
+                # will never come and contradict the status_filter that selected it.
                 if status == "active" and reporting_circuit_open:
                     status = "reporting_delayed"
 

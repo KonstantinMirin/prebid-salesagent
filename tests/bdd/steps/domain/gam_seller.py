@@ -20,7 +20,6 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps._outcome_helpers import (
     assert_by_package_exactly,
     capture_created_media_buy,
-    wire_delivery_ids,
     wire_entry,
     wire_field,
 )
@@ -224,7 +223,7 @@ def then_delivery_covers_created_buy_packages(ctx: dict, datatable: Any) -> None
     returned for that product.
     """
     media_buy_id = ctx["created_media_buy_id"]
-    reported = wire_delivery_ids(ctx)
+    reported = [delivery.get("media_buy_id") for delivery in wire_field(ctx, "media_buy_deliveries")]
     assert reported == [media_buy_id], (
         f"expected a report of exactly the created buy {media_buy_id!r}; it reported {reported}"
     )

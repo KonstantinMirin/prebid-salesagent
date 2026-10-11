@@ -20,7 +20,6 @@ from urllib.parse import urlparse
 
 import pytz
 
-from src.adapters.gam_data_freshness import GAMDataFreshnessValidator
 from src.core.exceptions import AdCPAdapterError, AdCPSalesAgentError
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError, send
 
@@ -628,15 +627,29 @@ class GAMReportingService:
         tz = pytz.timezone(requested_tz)
         now = datetime.now(tz)
 
-        if date_range == "today":
-            # Hourly data lags by the standard delay; round down to the last completed hour.
-            delay = timedelta(hours=GAMDataFreshnessValidator.STANDARD_DELAY_HOURS)
-            return (now - delay).replace(minute=0, second=0, microsecond=0)
+        # GAM data typically has a 4-hour delay
+        four_hours_ago = now - timedelta(hours=4)
 
-        # A day's figures are complete from the daily ready hour the next morning. Before it,
-        # yesterday's figures may still change, so the data is valid through the day before.
-        days_back = 2 if now.hour < GAMDataFreshnessValidator.DAILY_DATA_READY_HOUR_ET else 1
-        return (now - timedelta(days=days_back)).replace(hour=23, minute=59, second=59)
+        if date_range == "today":
+            # For hourly data, be conservative and assume 4-hour delay
+            # Round down to the last completed hour
+            data_valid_until = four_hours_ago.replace(minute=0, second=0, microsecond=0)
+        elif date_range == "this_month":
+            # Daily data has the same 4-hour delay
+            # If we're early in the day, yesterday's data might not be complete
+            if now.hour < 7:  # Account for 4-hour delay + 3 AM PT freeze time
+                # Data is valid through 2 days ago
+                data_valid_until = (now - timedelta(days=2)).replace(hour=23, minute=59, second=59)
+            else:
+                # Yesterday's data should be complete
+                data_valid_until = (now - timedelta(days=1)).replace(hour=23, minute=59, second=59)
+        # Same as this_month for the most recent data
+        elif now.hour < 7:
+            data_valid_until = (now - timedelta(days=2)).replace(hour=23, minute=59, second=59)
+        else:
+            data_valid_until = (now - timedelta(days=1)).replace(hour=23, minute=59, second=59)
+
+        return data_valid_until
 
     def _calculate_metrics(self, data: list[dict[str, Any]]) -> dict[str, Any]:
         """Calculate summary metrics from the processed data"""

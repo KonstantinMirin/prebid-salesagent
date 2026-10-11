@@ -620,13 +620,7 @@ class AdServerAdapter(ABC):
     def get_media_buy_delivery(
         self, media_buy_id: str, date_range: ReportingPeriod, today: datetime
     ) -> AdapterGetMediaBuyDeliveryResponse:
-        """Gets delivery data for a media buy.
-
-        When the ad server has not finished reporting the period, return the figures it has
-        reported so far and set ``expected_availability`` to the time its figures for the
-        period are expected complete (a completion time, never a poll interval). Raise only
-        when the figures could not be obtained.
-        """
+        """Gets delivery data for a media buy."""
         pass
 
     def get_packages_snapshot(

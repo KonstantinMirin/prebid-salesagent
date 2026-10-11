@@ -172,15 +172,6 @@ def capture_created_media_buy(ctx: dict) -> str:
     return ctx["created_media_buy_id"]
 
 
-def wire_delivery_ids(ctx: dict) -> list[str]:
-    """The ``media_buy_id`` of every ``media_buy_deliveries`` entry, in wire order.
-
-    Sole reader for the Thens that say which buys a delivery report covers, so "included",
-    "only" and "omitted" are graded against the same representation of the response.
-    """
-    return [delivery.get("media_buy_id") for delivery in wire_field(ctx, "media_buy_deliveries")]
-
-
 def assert_by_package_exactly(
     delivery: dict,
     rows: list[dict[str, str]],
@@ -234,10 +225,7 @@ def _locate_entry(ctx: dict, collection: str, index: int | None, match: dict[str
     assert isinstance(entries, list), f"{collection!r} is not a JSON array on the wire: {entries!r}"
 
     def _present() -> list:
-        return [
-            {k: e.get(k) for k in ("account_id", "buyer_ref", "creative_id", "media_buy_id", "action") if k in e}
-            for e in entries
-        ]
+        return [{k: e.get(k) for k in ("account_id", "buyer_ref", "creative_id", "action") if k in e} for e in entries]
 
     if index is not None:
         assert 0 <= index < len(entries), (
