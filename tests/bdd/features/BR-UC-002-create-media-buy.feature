@@ -481,21 +481,27 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
 
-  @T-UC-002-ext-n-empty-id @extension @ext-n @error
-  Scenario: An empty pricing_option_id selects no pricing option
+  @T-UC-002-ext-n-id-names-no-option @extension @ext-n @error
+  Scenario Outline: A pricing_option_id that names no option of the product selects none - <case>
     # media-buy/package-request.json requires pricing_option_id, the "ID of the selected
     # pricing option from the product's pricing_options array", and sets no minimum length.
-    # The empty string is the id of no option, so it is refused like any other id the
-    # product does not offer; the product's first option is not booked in its place.
+    # The empty string is the id of no option, and no other string is a stand-in for one,
+    # so each is refused like any id the product does not offer; the product's first
+    # option is not booked in its place.
     Given a valid create_media_buy request
     And the account exists and is active
-    But a package references pricing_option_id "" not found on the product
+    But a package references pricing_option_id "<pricing_option_id>" not found on the product
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error recovery should be "correctable"
     And the error field should contain "pricing_option_id"
+
+    Examples:
+      | case                               | pricing_option_id |
+      | the empty string                   |                   |
+      | a word that is not an option's id  | legacy_conversion |
 
   @T-UC-002-ext-n-bid @extension @ext-n @error
   Scenario: Auction pricing without bid_price
