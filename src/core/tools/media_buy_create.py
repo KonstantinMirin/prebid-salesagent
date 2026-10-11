@@ -91,6 +91,7 @@ from src.core.helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.helpers.creative_helpers import (
     extract_click_url,
+    extract_html_markup,
     extract_impression_tracker_url,
     extract_media_url_and_dimensions,
     process_and_upload_package_creatives,
@@ -713,10 +714,11 @@ def _build_adapter_asset_from_creative(
             logger.warning(log_safe(f"[ASSET] Could not load format spec for {creative.creative_id}: {e}"))
 
     url, width, height = extract_media_url_and_dimensions(creative_data, format_spec)
+    markup = extract_html_markup(creative_data)
     click_url = extract_click_url(creative_data, format_spec)
     impression_tracker_url = extract_impression_tracker_url(creative_data, format_spec)
 
-    if not url or not width or not height:
+    if not (markup or url) or not width or not height:
         return None, (
             f"Creative {creative.creative_id} missing url/width/height "
             f"(width={width}, height={height}, url={'set' if url else 'missing'}, format={creative.format})"
@@ -727,11 +729,16 @@ def _build_adapter_asset_from_creative(
         "package_assignments": package_assignments,
         "width": width,
         "height": height,
-        "url": url,
         "click_url": click_url,
         "asset_type": creative_data.get("asset_type", "image"),
         "name": creative.name or f"Creative {creative.creative_id}",
     }
+    if markup:
+        # An html asset is delivered as its markup (AdCP 3.1.1 core/assets/html-asset.json,
+        # ``content``), never as the URL of a page that renders it.
+        asset.update(snippet=markup, snippet_type="html")
+    else:
+        asset["url"] = url
     if impression_tracker_url:
         asset["delivery_settings"] = {"tracking_urls": {"impression": [impression_tracker_url]}}
 
