@@ -214,7 +214,7 @@ from tests.helpers.signing import (
 #                                        checked against the agent's own origin
 #                                        before a resolution is admitted. Seeded
 #                                        by ``tests.helpers.signing.counterparty_key``
-#     ._resolution_for(counterparty, pinned=..., config=...)
+#     ._resolution_for(agent_url, pinned=..., config=...)
 #                                        the counterparty's keys: a grading
 #                                        tenant's accepted JWKS when the verifier
 #                                        decided the request is the test kit's

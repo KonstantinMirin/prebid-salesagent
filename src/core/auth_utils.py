@@ -18,15 +18,18 @@ from collections.abc import Callable
 
 from src.core.credentials import hash_token
 from src.core.database.database_session import execute_with_retry
-from src.core.database.models import Principal as PrincipalRow
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.schemas import Principal
 
 logger = logging.getLogger(__name__)
 
 
-def _load_principal(tenant_id: str, find: Callable[[PrincipalRepository], PrincipalRow | None]) -> Principal | None:
-    """The principal *find* selects from *tenant_id*'s repository, as the schema model."""
+def _load_principal(tenant_id: str, find: Callable[[PrincipalRepository], object]) -> Principal | None:
+    """The principal *find* selects from *tenant_id*'s repository, as the schema model.
+
+    *find* returns the repository's ORM row or ``None``. The row type is repository-private
+    (``ruff-boundary.toml``), so it is not named here; ``Principal.from_row`` reads it.
+    """
 
     def _lookup_principal(session):
         row = find(PrincipalRepository(session, tenant_id))

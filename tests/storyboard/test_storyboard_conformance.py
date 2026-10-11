@@ -707,14 +707,12 @@ def _drain_grading_replay_rows() -> None:
     """
     from sqlalchemy import delete
 
-    from scripts.setup.storyboard_signing import counterparty_jwks
+    from scripts.setup.storyboard_signing import counterparty_kids
     from src.core.database.database_session import get_db_session
     from src.core.database.models import ReplayNonce
 
     with get_db_session() as session:
-        session.execute(
-            delete(ReplayNonce).where(ReplayNonce.keyid.in_(sorted(key["kid"] for key in counterparty_jwks()["keys"])))
-        )
+        session.execute(delete(ReplayNonce).where(ReplayNonce.keyid.in_(counterparty_kids())))
         session.commit()
 
 

@@ -197,6 +197,15 @@ def counterparty_jwks() -> dict[str, Any]:
     }
 
 
+def counterparty_kids(jwks: dict[str, Any] | None = None) -> list[str]:
+    """The kit's keyids: the ``kid`` of every key in *jwks* (default :func:`counterparty_jwks`).
+
+    :func:`seed` passes the JWKS it writes into the grading record, so the record and the
+    onboarded keyids come from one value; the storyboard replay drain takes the default.
+    """
+    return [key["kid"] for key in (jwks if jwks is not None else counterparty_jwks())["keys"]]
+
+
 def signing_env() -> dict[str, str]:
     """The storyboard agent's signing environment, as ``NAME -> value``.
 
@@ -340,7 +349,7 @@ def seed() -> None:
             print(f"   counterparty principal created at {COUNTERPARTY_AGENT_URL}")
         else:
             print(f"   counterparty principal already at {COUNTERPARTY_AGENT_URL}")
-        kids = [key["kid"] for key in jwks["keys"]]
+        kids = counterparty_kids(jwks)
         principals.onboard_signing_keyids(COUNTERPARTY_AGENT_URL, kids)
         print(f"   grading record written; keyids onboarded at the counterparty: {kids}")
 

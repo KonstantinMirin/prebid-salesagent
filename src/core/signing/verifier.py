@@ -359,6 +359,7 @@ def _verify_signed(
         # counterparty a three-hop outbound walk on a request that cannot be accepted.
         _strict_header_precheck(exchange.raw_headers)
         counterparty: Principal | None = None
+        agent_url: str | None = None
         resolution: AgentResolution | None = None
         tuning: SignedRequestsGrading | None = None
         if not precheck_only:
@@ -381,7 +382,10 @@ def _verify_signed(
                 counterparty = signer_by_keyid(keyid) if keyid else None
                 pinned = kit
             tuning = kit
-            resolution = _resolution_for(counterparty, pinned=pinned, config=config)
+            # The ONE derivation of the counterparty's agent URL: the walk keys its cache and
+            # its failure record on it, and the checklist's resolver reads that record by it.
+            agent_url = counterparty.agent_url if counterparty is not None else None
+            resolution = _resolution_for(agent_url, pinned=pinned, config=config)
         signer = _run_verifier(
             exchange=exchange,
             headers=headers,
@@ -389,7 +393,7 @@ def _verify_signed(
             operation=operation,
             bucket=bucket,
             resolution=resolution,
-            agent_url=counterparty.agent_url if counterparty is not None else None,
+            agent_url=agent_url,
             tuning=tuning,
             config=config,
             precheck_only=precheck_only,
@@ -567,9 +571,9 @@ def _parse_keyid(headers: Mapping[str, str]) -> str | None:
 
 
 def _resolution_for(
-    counterparty: Principal | None, *, pinned: SignedRequestsGrading | None, config: SigningSettings
+    agent_url: str | None, *, pinned: SignedRequestsGrading | None, config: SigningSettings
 ) -> AgentResolution | None:
-    """The keys to verify *counterparty*'s signature against, resolving on a cold entry.
+    """The keys to verify a signature from the counterparty at *agent_url* against.
 
     No counterparty, or one onboarded with no ``agent_url``, has no ``agents[]`` entry and
     gets no keys: the checklist then answers ``request_signature_key_unknown`` at step 7
@@ -593,7 +597,6 @@ def _resolution_for(
     The SSRF pin stays at the SDK default: the walk follows a URL that ultimately came from a
     counterparty document, and ``allow_private_destinations`` is a test argument.
     """
-    agent_url = counterparty.agent_url if counterparty is not None else None
     if not agent_url:
         return None
     if pinned is not None:

@@ -41,7 +41,7 @@ def upgrade() -> None:
         sa.Column("tenant_id", sa.String(length=50), nullable=False),
         sa.Column("keyid", sa.Text(collation="C"), nullable=False),
         sa.Column("agent_url", sa.String(length=500), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.PrimaryKeyConstraint("tenant_id", "keyid"),
         sa.ForeignKeyConstraint(
             ["tenant_id", "agent_url"],
