@@ -1848,10 +1848,9 @@ def then_legacy_status_alias(ctx: dict, legacy_status: str, status: str) -> None
     the new one as equivalent" to be meaningful at all) rather than silently
     also emitting the retired legacy value.
     """
-    resp = require_payload(ctx)
-    d = resp.media_buy_deliveries[0]
-    assert d.status == status, f"Expected canonical status {status!r}, got {d.status!r}"
-    assert d.status != legacy_status, (
+    actual = _wire_sole_delivery(ctx).get("status")
+    assert actual == status, f"Expected canonical status {status!r}, got {actual!r}"
+    assert actual != legacy_status, (
         f"response carries the retired legacy status {legacy_status!r} instead of canonical {status!r}"
     )
 
