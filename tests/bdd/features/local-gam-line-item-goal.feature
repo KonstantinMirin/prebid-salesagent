@@ -20,9 +20,14 @@
 # BULK take a LIFETIME goal; SPONSORSHIP, NETWORK and HOUSE take a DAILY goal whose units are a
 # percentage of impressions; PRICE_PRIORITY takes LIFETIME, DAILY or NONE. The goal is in the
 # unit the package is sold in (Goal.unitType): IMPRESSIONS for CPM, VIEWABLE_IMPRESSIONS for
-# vCPM. A seller misconfiguration is refused with CONFIGURATION_ERROR (enums/error-code.json,
-# recovery terminal) before anything is written to GAM; on the seller's approval the buy stays
-# pending_approval, so it can be approved again once the configuration is repaired.
+# vCPM. The line item is billed at the selected option's unit price (LineItem.costType and
+# costPerUnit); a flat-rate price is billed per day (CPD) over the flight's days. A seller
+# misconfiguration is refused with CONFIGURATION_ERROR (enums/error-code.json, recovery
+# terminal) before anything is written to GAM. On the seller's approval the same refusal
+# tells the seller the product, the setting and the rejected value, nothing is written to
+# GAM, and the buy is not marked failed: its status stays pending_approval. Whether the
+# Admin UI then offers a second approval is decided by the approval workflow step, which
+# these scenarios do not drive (#2414).
 #
 # The sales-guaranteed storyboard's create_media_buy step sends two packages with different
 # budgets and validates only the response schema, so these scenarios grade the booking
@@ -54,9 +59,9 @@ Feature: A Google Ad Manager seller books each package's own volume, type, prior
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And Google Ad Manager received these line items, in package order:
-      | lineItemType | priority | goalType | unitType    | units |
-      | STANDARD     | 8        | LIFETIME | IMPRESSIONS | 30000 |
-      | STANDARD     | 8        | LIFETIME | IMPRESSIONS | 35000 |
+      | lineItemType | priority | costType | costPerUnitMicros | goalType | unitType    | units |
+      | STANDARD     | 8        | CPM      | 20000000          | LIFETIME | IMPRESSIONS | 30000 |
+      | STANDARD     | 8        | CPM      | 12000000          | LIFETIME | IMPRESSIONS | 35000 |
 
   @T-UC-002-local-gam-goal-approved @extension
   Scenario: A buy the seller approves books each package's budget at the price of the option it selected
@@ -78,9 +83,9 @@ Feature: A Google Ad Manager seller books each package's own volume, type, prior
     When the seller approves the media buy
     Then the seller's approval books the media buy
     And Google Ad Manager received these line items, in package order:
-      | lineItemType | priority | goalType | unitType    | units |
-      | STANDARD     | 8        | LIFETIME | IMPRESSIONS | 30000 |
-      | STANDARD     | 8        | LIFETIME | IMPRESSIONS | 35000 |
+      | lineItemType | priority | costType | costPerUnitMicros | goalType | unitType    | units |
+      | STANDARD     | 8        | CPM      | 20000000          | LIFETIME | IMPRESSIONS | 30000 |
+      | STANDARD     | 8        | CPM      | 12000000          | LIFETIME | IMPRESSIONS | 35000 |
 
   @T-UC-002-local-gam-goal-price-priority @extension
   Scenario Outline: A price-priority line item's goal units follow the goal type the product configures
@@ -96,17 +101,18 @@ Feature: A Google Ad Manager seller books each package's own volume, type, prior
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And Google Ad Manager received these line items, in package order:
-      | lineItemType   | priority | goalType   | unitType    | units   |
-      | PRICE_PRIORITY | 12       | <goalType> | IMPRESSIONS | <units> |
+      | lineItemType   | priority | costType | costPerUnitMicros | goalType   | unitType    | units   |
+      | PRICE_PRIORITY | 12       | CPM      | <micros>          | <goalType> | IMPRESSIONS | <units> |
 
+    # The line item is billed at the package's bid, not at the option's 1.00 floor.
     # 425 at 12.00 buys 35416.67 impressions: the volume is floored, so it never costs more
     # than the budget, and a DAILY goal floors the spread over 14 days (2529.76).
     Examples:
-      | configured | budget | bid   | goalType | units  |
-      | LIFETIME   | 560    | 4.00  | LIFETIME | 140000 |
-      | DAILY      | 560    | 4.00  | DAILY    | 10000  |
-      | NONE       | 425    | 12.00 | NONE     | 35416  |
-      | DAILY      | 425    | 12.00 | DAILY    | 2529   |
+      | configured | budget | bid   | micros   | goalType | units  |
+      | LIFETIME   | 560    | 4.00  | 4000000  | LIFETIME | 140000 |
+      | DAILY      | 560    | 4.00  | 4000000  | DAILY    | 10000  |
+      | NONE       | 425    | 12.00 | 12000000 | NONE     | 35416  |
+      | DAILY      | 425    | 12.00 | 12000000 | DAILY    | 2529   |
 
   @T-UC-002-local-gam-type-priority @extension
   Scenario Outline: A per-unit package books the product's configured priority, and a share-of-voice type only for flat rate
@@ -122,20 +128,20 @@ Feature: A Google Ad Manager seller books each package's own volume, type, prior
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And Google Ad Manager received these line items, in package order:
-      | lineItemType | priority   | goalType   | unitType   | units |
-      | <type>       | <priority> | <goalType> | <unitType> | 35000 |
+      | lineItemType | priority   | costType   | costPerUnitMicros | goalType   | unitType   | units |
+      | <type>       | <priority> | <costType> | 12000000          | <goalType> | <unitType> | 35000 |
 
     Examples:
-      | delivery       | option            | model | settings                                         | type           | priority | goalType | unitType             |
-      | guaranteed     | cpm_usd_standard  | cpm   | {}                                               | STANDARD       | 8        | LIFETIME | IMPRESSIONS          |
-      | guaranteed     | cpm_usd_standard  | cpm   | {"primary_goal_type": "DAILY"}                   | STANDARD       | 8        | LIFETIME | IMPRESSIONS          |
-      | guaranteed     | cpm_usd_standard  | cpm   | {"priority": 6}                                  | STANDARD       | 6        | LIFETIME | IMPRESSIONS          |
-      | guaranteed     | cpm_usd_standard  | cpm   | {"priority": 10}                                 | STANDARD       | 10       | LIFETIME | IMPRESSIONS          |
-      | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "NETWORK"}                    | STANDARD       | 8        | LIFETIME | IMPRESSIONS          |
-      | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "SPONSORSHIP", "priority": 5} | STANDARD       | 8        | LIFETIME | IMPRESSIONS          |
-      | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "HOUSE"}                      | STANDARD       | 8        | LIFETIME | IMPRESSIONS          |
-      | guaranteed     | vcpm_usd_standard | vcpm  | {}                                               | STANDARD       | 8        | LIFETIME | VIEWABLE_IMPRESSIONS |
-      | non-guaranteed | cpm_usd_standard  | cpm   | {"line_item_type": "NETWORK"}                    | PRICE_PRIORITY | 12       | NONE     | IMPRESSIONS          |
+      | delivery       | option            | model | settings                                         | type           | priority | costType | goalType | unitType             |
+      | guaranteed     | cpm_usd_standard  | cpm   | {}                                               | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          |
+      | guaranteed     | cpm_usd_standard  | cpm   | {"primary_goal_type": "DAILY"}                   | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          |
+      | guaranteed     | cpm_usd_standard  | cpm   | {"priority": 6}                                  | STANDARD       | 6        | CPM      | LIFETIME | IMPRESSIONS          |
+      | guaranteed     | cpm_usd_standard  | cpm   | {"priority": 10}                                 | STANDARD       | 10       | CPM      | LIFETIME | IMPRESSIONS          |
+      | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "NETWORK"}                    | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          |
+      | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "SPONSORSHIP", "priority": 5} | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          |
+      | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "HOUSE"}                      | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          |
+      | guaranteed     | vcpm_usd_standard | vcpm  | {}                                               | STANDARD       | 8        | VCPM     | LIFETIME | VIEWABLE_IMPRESSIONS |
+      | non-guaranteed | cpm_usd_standard  | cpm   | {"line_item_type": "NETWORK"}                    | PRICE_PRIORITY | 12       | CPM      | NONE     | IMPRESSIONS          |
 
   @T-UC-002-local-gam-type-flat-rate @extension
   Scenario Outline: A flat-rate package books the product's configured type when that type can sell it at a fixed price
@@ -151,9 +157,10 @@ Feature: A Google Ad Manager seller books each package's own volume, type, prior
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And Google Ad Manager received these line items, in package order:
-      | lineItemType | priority   | goalType | unitType    | units |
-      | <type>       | <priority> | DAILY    | IMPRESSIONS | 100   |
+      | lineItemType | priority   | costType | costPerUnitMicros | goalType | unitType    | units |
+      | <type>       | <priority> | CPD      | 500000000         | DAILY    | IMPRESSIONS | 100   |
 
+    # The 7000.00 flat price over the 14-day flight is billed at 500.00 a day.
     Examples:
       | settings                                      | type        | priority |
       | {"line_item_type": "STANDARD"}                | SPONSORSHIP | 4        |
@@ -202,13 +209,33 @@ Feature: A Google Ad Manager seller books each package's own volume, type, prior
     Then the response status should be "submitted"
     When the seller approves the media buy
     Then the seller's approval is refused, and the media buy still awaits approval
+    And the seller is told product "prod_a" is refused with "CONFIGURATION_ERROR" on setting "<capability>", rejecting "<rejected>"
     And Google Ad Manager received no order and no line item
 
     Examples:
-      | settings                                                           |
-      | {"priority": 17}                                                   |
-      | {"line_item_type": "BOGUS"}                                        |
-      | {"line_item_type": "PRICE_PRIORITY", "primary_goal_type": "WEEKLY"} |
+      | settings                                                           | capability                         | rejected |
+      | {"priority": 17}                                                   | line_item_priority:STANDARD        | 17       |
+      | {"line_item_type": "BOGUS"}                                        | line_item_type                     | BOGUS    |
+      | {"line_item_type": "PRICE_PRIORITY", "primary_goal_type": "WEEKLY"} | line_item_goal_type:PRICE_PRIORITY | WEEKLY   |
+
+  @T-UC-002-local-gam-approval-unsupported-pricing @extension
+  Scenario: The seller's approval refuses a package priced in a model GAM cannot bill, and the buy still awaits approval
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And the seller's non-guaranteed product has pricing options:
+      | product_id | pricing_option_id | pricing_model | fixed_price | floor_price |
+      | prod_a     | cpcv_usd_fixed    | cpcv          | 0.10        |             |
+    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001"
+    And the tenant requires manual approval
+    And the buyer's packages, over a 14-day flight, are:
+      | product_id | pricing_option_id | budget | bid_price |
+      | prod_a     | cpcv_usd_fixed    | 420    |           |
+    When the Buyer Agent sends the create_media_buy request
+    Then the response status should be "submitted"
+    When the seller approves the media buy
+    Then the seller's approval is refused, and the media buy still awaits approval
+    And the seller is told the approval is refused with "VALIDATION_ERROR", for one package whose pricing model "cpcv" is "UNSUPPORTED_FEATURE"
+    And Google Ad Manager received no order and no line item
 
   @T-UC-002-local-gam-approval-no-pricing-terms @extension
   Scenario: The seller's approval refuses a package stored without its pricing terms, and the buy still awaits approval
@@ -217,7 +244,8 @@ Feature: A Google Ad Manager seller books each package's own volume, type, prior
       | product_id | pricing_option_id | pricing_model | fixed_price | floor_price |
       | prod_a     | cpm_usd_standard  | cpm           | 12.00       |             |
     And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001"
-    And a media buy awaits the seller's approval with one package on the product, stored without its pricing terms
+    And a media buy awaits the seller's approval with one package "pkg_a" on the product, stored without its pricing terms
     When the seller approves the media buy
     Then the seller's approval is refused, and the media buy still awaits approval
+    And the seller is told "Package pkg_a has no stored budget or pricing_info"
     And Google Ad Manager received no order and no line item

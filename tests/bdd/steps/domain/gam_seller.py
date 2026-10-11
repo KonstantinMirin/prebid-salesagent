@@ -131,8 +131,13 @@ def given_buyer_packages_over_flight(ctx: dict, days: int, datatable: Any) -> No
     ]
 
 
-@given("a media buy awaits the seller's approval with one package on the product, stored without its pricing terms")
-def given_pending_buy_without_pricing_terms(ctx: dict) -> None:
+@given(
+    parsers.parse(
+        'a media buy awaits the seller\'s approval with one package "{package_id}" on the product, '
+        "stored without its pricing terms"
+    )
+)
+def given_pending_buy_without_pricing_terms(ctx: dict, package_id: str) -> None:
     """Persist a buy awaiting approval whose package row carries its budget but no ``pricing_info``.
 
     The row a pending writer stored before it kept the selected pricing option's terms:
@@ -143,6 +148,7 @@ def given_pending_buy_without_pricing_terms(ctx: dict) -> None:
         ctx["tenant"],
         ctx["principal"],
         product,
+        package_id=package_id,
         package_config={"product_id": product.product_id, "budget": 420.0},
     )
 
@@ -243,26 +249,30 @@ def then_one_order_without_flight(ctx: dict) -> None:
     assert flights == [{}], f"expected GAM to create one order carrying no flight dates; it created {flights}"
 
 
-#: The line item columns a goal Then compares, each read off the line item the seller sent.
-_LINE_ITEM_GOAL_READERS = {
+#: The line item columns the booking Then compares, each read off the line item the seller sent.
+_LINE_ITEM_READERS = {
     "lineItemType": lambda item: item["lineItemType"],
     "priority": lambda item: item["priority"],
+    "costType": lambda item: item["costType"],
+    "costPerUnitMicros": lambda item: item["costPerUnit"]["microAmount"],
     "goalType": lambda item: item["primaryGoal"]["goalType"],
     "unitType": lambda item: item["primaryGoal"]["unitType"],
     "units": lambda item: item["primaryGoal"]["units"],
 }
 
 #: The columns whose cells are integers in GAM's line item.
-_INTEGER_COLUMNS = frozenset({"priority", "units"})
+_INTEGER_COLUMNS = frozenset({"priority", "costPerUnitMicros", "units"})
 
 
 @then("Google Ad Manager received these line items, in package order:")
 def then_line_items_in_package_order(ctx: dict, datatable: Any) -> None:
     """The seller sent GAM exactly these line items, one per package in the request's order.
 
-    Columns: ``lineItemType | priority | goalType | unitType | units``. The whole list is
-    compared, so a missing, extra or reordered line item fails it. An integer column is
-    compared with its type, so a float goal (GAM's ``Goal.units`` is a long) fails it.
+    Columns: ``lineItemType | priority | costType | costPerUnitMicros | goalType | unitType |
+    units``; ``costPerUnitMicros`` is the ``microAmount`` of the line item's ``costPerUnit``,
+    the price GAM bills each unit (or, for CPD, each day) at. The whole list is compared, so
+    a missing, extra or reordered line item fails it. An integer column is compared with its
+    type, so a float goal (GAM's ``Goal.units`` is a long) fails it.
     """
     expected = [
         {column: (int, int(cell)) if column in _INTEGER_COLUMNS else cell for column, cell in row.items()}
@@ -271,7 +281,7 @@ def then_line_items_in_package_order(ctx: dict, datatable: Any) -> None:
     sent = [
         {
             column: (type(value), value) if column in _INTEGER_COLUMNS else value
-            for column, value in ((column, read(item)) for column, read in _LINE_ITEM_GOAL_READERS.items())
+            for column, value in ((column, read(item)) for column, read in _LINE_ITEM_READERS.items())
         }
         for item in ctx["env"].gam_objects_sent("LineItemService", "createLineItems")
     ]
@@ -291,10 +301,11 @@ def then_approval_books_media_buy(ctx: dict) -> None:
 
 @then("the seller's approval is refused, and the media buy still awaits approval")
 def then_approval_refused_buy_still_pending(ctx: dict) -> None:
-    """The approval failed before the adapter wrote anything, and the buy is still ``pending_approval``.
+    """The approval failed, and the buy's status is still ``pending_approval`` (it was not marked failed).
 
-    A buy left awaiting approval is one an operator can approve again once the product's
-    configuration is repaired; one marked failed could not be.
+    This reads the buy's status only. Which refusal it was is the next Then's subject, and
+    whether the Admin UI offers the seller a second approval is decided by the approval
+    workflow step, which the approval call neither reads nor writes (#2414).
     """
     from src.core.tools.media_buy_create import ApprovalOutcome
 
@@ -304,6 +315,63 @@ def then_approval_refused_buy_still_pending(ctx: dict) -> None:
     )
     pending = ctx["env"].media_buys_awaiting_approval()
     assert len(pending) == 1, f"expected the media buy to still await approval; {len(pending)} buys do"
+
+
+def _approval_refusal(ctx: dict, code: str) -> Any:
+    """The typed error the seller's approval was refused with, which must carry ``code`` and be named in the text the seller reads."""
+    result = ctx["approval_result"]
+    refusal = result.refusal
+    assert refusal is not None, f"expected the approval to be refused with a typed {code}; it returned {result}"
+    assert refusal.error_code == code, f"expected the approval to be refused with {code}; got {refusal.error_code}"
+    assert code in result.error_msg, f"expected the seller to be told {code}; they were told {result.error_msg!r}"
+    return refusal
+
+
+@then(
+    parsers.parse(
+        'the seller is told product "{product_id}" is refused with "{code}" on setting "{capability}", '
+        'rejecting "{rejected}"'
+    )
+)
+def then_seller_told_setting_refused(ctx: dict, product_id: str, code: str, capability: str, rejected: str) -> None:
+    """The approval result carries the refused product, setting and value, and its text states each.
+
+    The typed refusal is the planner's error with its details; ``error_msg`` is the sentence
+    the Admin UI shows the seller, who is the party that can repair the product.
+    """
+    details = _approval_refusal(ctx, code).details
+    told = (details.product_id, details.capability, details.rejected_value)
+    assert told == (product_id, capability, rejected), (
+        f"expected the refusal to name {(product_id, capability, rejected)}; it names {told}"
+    )
+    error_msg = ctx["approval_result"].error_msg
+    missing = [fact for fact in (product_id, capability, rejected, *details.accepted_values) if fact not in error_msg]
+    assert not missing, f"expected the seller to be told {missing}; they were told {error_msg!r}"
+
+
+@then(
+    parsers.parse(
+        'the seller is told the approval is refused with "{code}", for one package whose pricing model '
+        '"{pricing_model}" is "{problem_code}"'
+    )
+)
+def then_seller_told_package_problem(ctx: dict, code: str, pricing_model: str, problem_code: str) -> None:
+    """The approval result carries the one problem the adapter's pre-validation returned, and its text states it."""
+    problems = _approval_refusal(ctx, code).details.problems
+    told = [(problem.code, problem.subject_type, problem.rejected_value) for problem in problems]
+    assert told == [(problem_code, "package", pricing_model)], (
+        f"expected one package problem {problem_code} rejecting {pricing_model}; the refusal carries {told}"
+    )
+    error_msg = ctx["approval_result"].error_msg
+    missing = [fact for fact in (problem_code, problems[0].subject_id, pricing_model) if fact not in error_msg]
+    assert not missing, f"expected the seller to be told {missing}; they were told {error_msg!r}"
+
+
+@then(parsers.parse('the seller is told "{text}"'))
+def then_seller_told(ctx: dict, text: str) -> None:
+    """The sentence the Admin UI shows the seller for the refused approval states ``text``."""
+    error_msg = ctx["approval_result"].error_msg
+    assert text in error_msg, f"expected the seller to be told {text!r}; they were told {error_msg!r}"
 
 
 @then("Google Ad Manager received no order and no line item")

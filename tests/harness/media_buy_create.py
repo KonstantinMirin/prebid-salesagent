@@ -287,13 +287,13 @@ class MediaBuyCreateEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
         )
 
     def seed_media_buy_awaiting_approval(
-        self, tenant: Any, principal: Any, product: Any, *, package_config: Mapping[str, Any]
+        self, tenant: Any, principal: Any, product: Any, *, package_id: str, package_config: Mapping[str, Any]
     ) -> None:
         """Persist a media buy of *principal* awaiting the seller's approval, with one package on *product*.
 
-        The flight starts tomorrow and runs 14 days. The package row stores
-        *package_config* as given, so a scenario states what a stored row carries, such as
-        a row the pending writer wrote before it stored ``pricing_info``.
+        The flight starts tomorrow and runs 14 days. The package row is *package_id* and
+        stores *package_config* as given, so a scenario states what a stored row carries,
+        such as a row the pending writer wrote before it stored ``pricing_info``.
         """
         from datetime import UTC, datetime, timedelta
 
@@ -310,7 +310,7 @@ class MediaBuyCreateEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
             budget=420.0,
             pricing_option_id=product.pricing_options[0].pricing_option_id,
         )
-        MediaPackageFactory(media_buy=media_buy, package_config=dict(package_config))
+        MediaPackageFactory(media_buy=media_buy, package_id=package_id, package_config=dict(package_config))
         self._commit_factory_data()
 
     def media_buys_awaiting_approval(self) -> list[Any]:
