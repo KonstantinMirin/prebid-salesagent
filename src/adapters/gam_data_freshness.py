@@ -1,88 +1,30 @@
-"""
-GAM Data Freshness Validation
+"""When Google Ad Manager's reported figures for a period are expected complete.
 
-Provides utilities to determine if GAM reporting data is fresh enough for sending webhooks.
-Since GAM doesn't provide a real-time freshness API, we use heuristics based on:
+GAM has no "period finalised" signal, so this module uses a heuristic based on:
 1. Report metadata (date ranges in response)
 2. Known GAM processing delays (4 hours)
 3. Documented freeze times (3 AM PT for monthly data)
+
+The GAM adapter reports the answer as ``expected_availability`` beside the figures it has, and
+never refuses a read on it; each caller decides what an unfinished period means for it.
 """
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 
 import pytz
+from pytz.tzinfo import BaseTzInfo
 
 logger = logging.getLogger(__name__)
 
 
 class GAMDataFreshnessValidator:
-    """Validates whether GAM reporting data is fresh enough for webhook delivery."""
+    """When GAM's reported figures for a period are expected complete."""
 
     # Known GAM processing delays
     STANDARD_DELAY_HOURS = 4
     DAILY_DATA_READY_HOUR_ET = 7  # 7 AM ET = 4 AM PT (1 hour after freeze)
     MONTHLY_FREEZE_HOUR_PT = 3  # 3 AM PT on 1st of month
-
-    @classmethod
-    def is_data_fresh_for_webhook(
-        cls,
-        reporting_data,
-        target_date: datetime | None = None,
-        timezone: str = "America/New_York",
-    ) -> tuple[bool, str]:
-        """Determine if reporting data is fresh enough to send via webhook.
-
-        Args:
-            reporting_data: ReportingData from GAMReportingService
-            target_date: Date we want data for (defaults to yesterday)
-            timezone: Timezone for calculations
-
-        Returns:
-            Tuple of (is_fresh: bool, reason: str)
-        """
-        tz = pytz.timezone(timezone)
-        now = datetime.now(tz)
-
-        # Default to yesterday's data
-        if target_date is None:
-            target_date = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-
-        # Check 1: Is it too early in the day for yesterday's data?
-        if now.hour < cls.DAILY_DATA_READY_HOUR_ET:
-            message = f"Too early for fresh data (current hour: {now.hour}, need {cls.DAILY_DATA_READY_HOUR_ET}+)"
-            logger.error(message)
-
-            return (False, message)
-
-        # Check 2: Does the report actually include our target date?
-        report_end = reporting_data.end_date
-        if report_end.date() < target_date.date():
-            message = f"Report ends {report_end.date()}, but we need data through {target_date.date()}"
-            logger.error(message)
-
-            return (False, message)
-
-        # Check 3: Is the data valid until after our target date?
-        data_valid_until = reporting_data.data_valid_until
-        if data_valid_until.date() < target_date.date():
-            message = f"Data only valid until {data_valid_until.date()}, need {target_date.date()}"
-            logger.error(message)
-
-            return (False, message)
-
-        # Check 4: Is this month-end data that might still be processing?
-        if target_date.day == 1 and target_date.month != (target_date - timedelta(days=1)).month:
-            # First day of new month - previous month might still be processing
-            pt_tz = pytz.timezone("America/Los_Angeles")
-            now_pt = datetime.now(pt_tz)
-            if now_pt.hour < cls.MONTHLY_FREEZE_HOUR_PT:
-                return (
-                    False,
-                    f"Month-end data still processing (PT hour: {now_pt.hour}, freeze at {cls.MONTHLY_FREEZE_HOUR_PT})",
-                )
-
-        return (True, "Data is fresh")
 
     @classmethod
     def get_freshness_timestamp(cls, reporting_data) -> dict:
@@ -100,86 +42,70 @@ class GAMDataFreshnessValidator:
         }
 
     @classmethod
-    def should_retry_later(
+    def expected_availability(
         cls,
         reporting_data,
         target_date: datetime,
+        *,
+        now: datetime,
         timezone: str = "America/New_York",
-    ) -> tuple[bool, datetime | None]:
-        """Determine if we should retry fetching data later.
+    ) -> datetime | None:
+        """When the heuristic expects GAM's figures through *target_date* complete.
 
         Args:
             reporting_data: ReportingData from GAMReportingService
-            target_date: Date we want data for
+            target_date: The end of the period the figures are for (timezone-aware)
+            now: The current time (timezone-aware)
             timezone: Timezone for calculations
 
         Returns:
-            Tuple of (should_retry: bool, retry_at: datetime | None)
+            None when the heuristic holds the figures complete. Otherwise the
+            timezone-aware time it expects them complete, never earlier than *now*: a
+            caller that polls should look again then.
         """
-        is_fresh, reason = cls.is_data_fresh_for_webhook(reporting_data, target_date, timezone)
-
-        if is_fresh:
-            return (False, None)
-
-        # Calculate when to retry based on the reason
         tz = pytz.timezone(timezone)
-        now = datetime.now(tz)
+        now = now.astimezone(tz)
+        ready = time(cls.DAILY_DATA_READY_HOUR_ET, 5)
+        # A day's figures are complete from DAILY_DATA_READY_HOUR_ET the next morning, the rule
+        # GAMReportingService._calculate_data_validity applies. The target is read as a date in
+        # the data's time zone. If that time is already past and GAM is still behind, the next
+        # such morning is the earliest the heuristic can say the figures are complete.
+        available_at = tz.localize(datetime.combine(target_date.astimezone(tz).date() + timedelta(days=1), ready))
+        if available_at < now:
+            available_at = cls._next_wall_time(now, tz, ready)
 
-        if "Too early" in reason:
-            # Retry at the daily data ready hour
-            retry_at = now.replace(hour=cls.DAILY_DATA_READY_HOUR_ET, minute=5, second=0, microsecond=0)
-            if retry_at < now:
-                retry_at += timedelta(days=1)
-            return (True, retry_at)
+        # Check 1: Is it too early in the day for yesterday's data?
+        if now.hour < cls.DAILY_DATA_READY_HOUR_ET:
+            logger.debug("Too early for complete data (hour %s, need %s+)", now.hour, cls.DAILY_DATA_READY_HOUR_ET)
+            return available_at
 
-        if "Month-end" in reason:
-            # Retry 1 hour after monthly freeze time (in PT)
-            pt_tz = pytz.timezone("America/Los_Angeles")
-            retry_at_pt = datetime.now(pt_tz).replace(
-                hour=cls.MONTHLY_FREEZE_HOUR_PT + 1,
-                minute=5,
-                second=0,
-                microsecond=0,
+        # Check 2: Does the report actually include our target date?
+        if reporting_data.end_date.date() < target_date.date():
+            logger.debug(
+                "Report ends %s, figures needed through %s", reporting_data.end_date.date(), target_date.date()
             )
-            # Convert back to requested timezone
-            retry_at = retry_at_pt.astimezone(tz)
-            if retry_at < now:
-                retry_at += timedelta(days=1)
-            return (True, retry_at)
+            return available_at
 
-        # For other reasons, retry in 1 hour
-        return (True, now + timedelta(hours=1))
+        # Check 3: Is the data valid until after our target date?
+        if reporting_data.data_valid_until.date() < target_date.date():
+            logger.debug(
+                "Data only valid until %s, need %s", reporting_data.data_valid_until.date(), target_date.date()
+            )
+            return available_at
 
+        # Check 4: Is this month-end data that might still be processing?
+        if target_date.day == 1 and target_date.month != (target_date - timedelta(days=1)).month:
+            # First day of new month - previous month might still be processing
+            pt_tz = pytz.timezone("America/Los_Angeles")
+            if now.astimezone(pt_tz).hour < cls.MONTHLY_FREEZE_HOUR_PT:
+                logger.debug("Month-end data still processing (freeze at %s PT)", cls.MONTHLY_FREEZE_HOUR_PT)
+                return cls._next_wall_time(now, pt_tz, time(cls.MONTHLY_FREEZE_HOUR_PT + 1, 5)).astimezone(tz)
 
-def validate_and_log_freshness(
-    reporting_data,
-    media_buy_id: str,
-    target_date: datetime | None = None,
-) -> bool:
-    """Validate data freshness and log the result.
+        return None
 
-    Convenience function for use in webhook scheduler.
-
-    Args:
-        reporting_data: ReportingData from GAMReportingService
-        media_buy_id: Media buy ID for logging context
-        target_date: Date we want data for
-
-    Returns:
-        True if data is fresh enough to send
-    """
-    validator = GAMDataFreshnessValidator()
-    is_fresh, reason = validator.is_data_fresh_for_webhook(reporting_data, target_date)
-
-    if is_fresh:
-        logger.info(f"Data is fresh for media buy {media_buy_id}: {reason}")
-        return True
-    else:
-        logger.warning(f"Data not fresh for media buy {media_buy_id}: {reason}")
-
-        # Check if we should retry
-        should_retry, retry_at = validator.should_retry_later(reporting_data, target_date or datetime.now(UTC))
-        if should_retry and retry_at:
-            logger.info(f"Will retry media buy {media_buy_id} at {retry_at}")
-
-        return False
+    @staticmethod
+    def _next_wall_time(now: datetime, tz: BaseTzInfo, at: time) -> datetime:
+        """The first moment not before *now* at which the clock in *tz* reads *at*."""
+        local = now.astimezone(tz)
+        day = local.date() if local.time() <= at else local.date() + timedelta(days=1)
+        return tz.localize(datetime.combine(day, at))

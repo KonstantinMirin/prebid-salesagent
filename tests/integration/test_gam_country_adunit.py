@@ -11,23 +11,11 @@ import unittest.mock
 import pytest
 
 from src.adapters.gam_reporting_service import GAMReportingService
+from tests.helpers.gam_client import serve_gam_report, stub_gam_client
 
 
-def mock_requests_get(url, **kwargs):
-    """Stand in for the egress seam's send(), returning gzipped CSV data.
-
-    The report download goes through src.core.security.outbound_http.send now, so
-    this returns an OutboundResult-shaped double: the body is read off
-    ``result.content`` (salesagent-tbrk.5 closed OutboundResult over
-    content/text/headers directly -- no more ``.response`` reach-through),
-    and the seam raises on a non-2xx rather than handing back something to
-    call raise_for_status() on.
-    """
-    import csv
-    import gzip
-    import io
-
-    # Generate mock CSV data with country and ad unit info
+def _country_ad_unit_rows():
+    """One GAM report row per country and ad unit, keyed by GAM's CSV column names."""
     rows = []
     countries = ["United States", "Canada", "United Kingdom", "Germany", "France"]
     ad_units = ["Homepage_Top", "Article_Sidebar", "Video_Pre-Roll", "Mobile_Banner"]
@@ -51,63 +39,22 @@ def mock_requests_get(url, **kwargs):
                     "Column.AD_SERVER_CPM_AND_CPC_REVENUE": str(5000000 + hash(country + ad_unit) % 2000000),
                 }
             )
-
-    # Create gzipped CSV data
-    csv_buffer = io.StringIO()
-    writer = csv.DictWriter(csv_buffer, fieldnames=rows[0].keys())
-    writer.writeheader()
-    writer.writerows(rows)
-
-    # Gzip the CSV data
-    gz_buffer = io.BytesIO()
-    with gzip.open(gz_buffer, "wt", newline="") as gz_file:
-        gz_file.write(csv_buffer.getvalue())
-
-    # OutboundResult-shaped double: production reads result.content directly
-    mock_result = unittest.mock.Mock()
-    mock_result.content = gz_buffer.getvalue()
-    return mock_result
+    return rows
 
 
-def create_mock_gam_client():
-    """Create a mock GAM client for testing"""
-
-    class MockGAMClient:
-        def GetService(self, service_name):
-            if service_name == "ReportService":
-                return MockReportService()
-            elif service_name == "NetworkService":
-                return MockNetworkService()
-            return None
-
-    class MockNetworkService:
-        def getCurrentNetwork(self):
-            class Network:
-                timeZone = "America/New_York"
-
-            return Network()
-
-    class MockReportService:
-        def runReportJob(self, job):
-            return {"id": "test_report_123"}
-
-        def getReportJobStatus(self, job_id):
-            return "COMPLETED"
-
-        def getReportDownloadURL(self, job_id, format_type):
-            return "https://storage.googleapis.com/gam-reports/mock-report.csv.gz"
-
-    return MockGAMClient()
+def _gam_client_serving_country_ad_unit_report():
+    """A GAM client stand-in whose report job finishes, and the report body Google serves for it."""
+    client = stub_gam_client()
+    return client, serve_gam_report(client, rows=_country_ad_unit_rows())
 
 
 @pytest.mark.requires_db
 def test_country_breakdown():
     """Test the country breakdown functionality"""
-    # Create mock client and service
-    mock_client = create_mock_gam_client()
+    mock_client, downloaded = _gam_client_serving_country_ad_unit_report()
 
-    # Patch the seam entry point the report download now uses
-    with unittest.mock.patch("src.adapters.gam_reporting_service.send", side_effect=mock_requests_get):
+    # Patch the seam entry point the report download uses
+    with unittest.mock.patch("src.adapters.gam_reporting_service.send", return_value=downloaded):
         service = GAMReportingService(mock_client, "America/New_York")
 
         # Test get_country_breakdown
@@ -136,11 +83,10 @@ def test_country_breakdown():
 @pytest.mark.requires_db
 def test_ad_unit_breakdown():
     """Test the ad unit breakdown functionality"""
-    # Create mock client and service
-    mock_client = create_mock_gam_client()
+    mock_client, downloaded = _gam_client_serving_country_ad_unit_report()
 
-    # Patch the seam entry point the report download now uses
-    with unittest.mock.patch("src.adapters.gam_reporting_service.send", side_effect=mock_requests_get):
+    # Patch the seam entry point the report download uses
+    with unittest.mock.patch("src.adapters.gam_reporting_service.send", return_value=downloaded):
         service = GAMReportingService(mock_client, "America/New_York")
 
         # Test get_ad_unit_breakdown
@@ -177,11 +123,10 @@ def test_ad_unit_breakdown():
 @pytest.mark.requires_db
 def test_combined_reporting():
     """Test getting both country and ad unit data with the include flags"""
-    # Create mock client and service
-    mock_client = create_mock_gam_client()
+    mock_client, downloaded = _gam_client_serving_country_ad_unit_report()
 
-    # Patch the seam entry point the report download now uses
-    with unittest.mock.patch("src.adapters.gam_reporting_service.send", side_effect=mock_requests_get):
+    # Patch the seam entry point the report download uses
+    with unittest.mock.patch("src.adapters.gam_reporting_service.send", return_value=downloaded):
         service = GAMReportingService(mock_client, "America/New_York")
 
         # Get reporting data with both dimensions
@@ -218,11 +163,10 @@ def test_combined_reporting():
 @pytest.mark.requires_db
 def test_gam_reporting_integration():
     """Integration test that runs all GAM reporting functionality"""
-    # Create mock client and service for integration test
-    mock_client = create_mock_gam_client()
+    mock_client, downloaded = _gam_client_serving_country_ad_unit_report()
 
-    # Patch the seam entry point the report download now uses
-    with unittest.mock.patch("src.adapters.gam_reporting_service.send", side_effect=mock_requests_get):
+    # Patch the seam entry point the report download uses
+    with unittest.mock.patch("src.adapters.gam_reporting_service.send", return_value=downloaded):
         service = GAMReportingService(mock_client, "America/New_York")
 
         # Test country breakdown
@@ -247,33 +191,18 @@ def test_gam_reporting_integration():
 class TestGAMCountryAdUnitReporting:
     """Test class for GAM country and ad unit reporting functionality."""
 
-    def test_mock_client_creation(self):
-        """Test that mock GAM client can be created successfully"""
-        mock_client = create_mock_gam_client()
-        assert mock_client is not None
-
-        # Test that required services can be obtained
-        report_service = mock_client.GetService("ReportService")
-        network_service = mock_client.GetService("NetworkService")
-
-        assert report_service is not None
-        assert network_service is not None
-        assert hasattr(report_service, "getReportDownloadURL")
-
     def test_gam_service_initialization(self):
         """Test that GAM reporting service can be initialized"""
-        mock_client = create_mock_gam_client()
-        service = GAMReportingService(mock_client, "America/New_York")
+        service = GAMReportingService(stub_gam_client(), "America/New_York")
         assert service is not None
 
     @pytest.mark.requires_db
     def test_country_breakdown_detailed(self):
         """Detailed test of country breakdown functionality"""
-        # Create mock client and service
-        mock_client = create_mock_gam_client()
+        mock_client, downloaded = _gam_client_serving_country_ad_unit_report()
 
-        # Patch the seam entry point the report download now uses
-        with unittest.mock.patch("src.adapters.gam_reporting_service.send", side_effect=mock_requests_get):
+        # Patch the seam entry point the report download uses
+        with unittest.mock.patch("src.adapters.gam_reporting_service.send", return_value=downloaded):
             service = GAMReportingService(mock_client, "America/New_York")
 
             # Get country breakdown
@@ -289,11 +218,10 @@ class TestGAMCountryAdUnitReporting:
     @pytest.mark.requires_db
     def test_ad_unit_breakdown_detailed(self):
         """Detailed test of ad unit breakdown functionality"""
-        # Create mock client and service
-        mock_client = create_mock_gam_client()
+        mock_client, downloaded = _gam_client_serving_country_ad_unit_report()
 
-        # Patch the seam entry point the report download now uses
-        with unittest.mock.patch("src.adapters.gam_reporting_service.send", side_effect=mock_requests_get):
+        # Patch the seam entry point the report download uses
+        with unittest.mock.patch("src.adapters.gam_reporting_service.send", return_value=downloaded):
             service = GAMReportingService(mock_client, "America/New_York")
 
             # Get ad unit breakdown

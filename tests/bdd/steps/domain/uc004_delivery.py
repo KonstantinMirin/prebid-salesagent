@@ -1742,15 +1742,14 @@ def then_includes_delivery_data_only(ctx: dict, mb_id: str) -> None:
 
 @then(parsers.parse('the response should NOT include delivery data for "{mb_id}"'))
 def then_excludes_delivery_data(ctx: dict, mb_id: str) -> None:
-    """Assert the response arrived and carries no delivery row for *mb_id*.
+    """Assert the response arrived and its wire ``media_buy_deliveries`` has no row for *mb_id*.
 
-    ``require_payload``, not ``payload_or_none``: every scenario binding this
-    sentence asserts ``the response is compliant with the get_media_buy_delivery
-    spec`` first, so a dispatch that produced no payload is a failed request, not
-    an omission. The previous ``if resp is None: return`` graded that failure as
-    a pass — silent omission and total failure are the two outcomes this step
-    exists to tell apart (BR-RULE-030 INV-5: non-owned media buys are omitted
-    from a SUCCESSFUL partial result, never turned into a rejection).
+    ``wire_field`` raises when the wire carries no ``media_buy_deliveries``: every
+    scenario binding this sentence asserts ``the response is compliant with the
+    get_media_buy_delivery spec`` first, so a dispatch that produced no response is a
+    failed request, not an omission. Silent omission and total failure are the two
+    outcomes this step exists to tell apart (BR-RULE-030 INV-5: non-owned media buys
+    are omitted from a SUCCESSFUL partial result, never turned into a rejection).
 
     One definition, both spellings: ``parsers.parse`` matches case-insensitively,
     so this binds the "should NOT" sentence of
@@ -1759,8 +1758,7 @@ def then_excludes_delivery_data(ctx: dict, mb_id: str) -> None:
     sit here (``then_no_delivery_data``) competed for both of them, and which one
     ran was decided by plugin registration order.
     """
-    resp = require_payload(ctx)
-    mb_ids = [d.media_buy_id for d in (getattr(resp, "media_buy_deliveries", None) or [])]
+    mb_ids = [d.get("media_buy_id") for d in wire_field(ctx, "media_buy_deliveries")]
     assert mb_id not in mb_ids, f"Expected no delivery data for '{mb_id}', got: {mb_ids}"
 
 
@@ -1843,10 +1841,9 @@ def then_has_reporting_period(ctx: dict) -> None:
 
 @then(parsers.parse('the response should include the media buy status "{status}"'))
 def then_has_mb_status(ctx: dict, status: str) -> None:
-    """Assert response includes the expected media buy status."""
-    resp = require_payload(ctx)
-    d = resp.media_buy_deliveries[0]
-    assert d.status == status, f"Expected status '{status}', got '{d.status}'"
+    """The response's one delivery carries *status* on the wire."""
+    actual = _wire_sole_delivery(ctx).get("status")
+    assert actual == status, f"Expected status '{status}', got '{actual}'"
 
 
 @then(parsers.parse('buyers MAY treat the legacy alias "{legacy_status}" as equivalent to "{status}"'))
@@ -3168,18 +3165,26 @@ def then_packages_include_field(ctx: dict, field: str) -> None:
     assert checked >= 1, "Response has no packages to check"
 
 
+def _wire_sole_delivery(ctx: dict) -> dict:
+    """The response's one ``media_buy_deliveries`` entry, off the serialized wire body.
+
+    Located by the sanctioned ``wire_entry`` primitive with the count pinned, as its
+    docstring requires for an index-located entry.
+    """
+    deliveries = wire_field(ctx, "media_buy_deliveries")
+    assert len(deliveries) == 1, f"expected exactly one media_buy_deliveries entry, got {len(deliveries)}"
+    return wire_entry(ctx, "media_buy_deliveries", index=0)
+
+
 def _wire_package(ctx: dict, pkg_id: str) -> dict:
     """The ``by_package`` entry for *pkg_id*, off the serialized wire body.
 
     Two hops, because ``by_package`` sits inside a list element and ``wire_lookup``'s
-    dotted path deliberately does not index lists. The delivery is located by the
-    sanctioned ``wire_entry`` primitive with the count pinned, as its docstring requires
-    for an index-located entry; the package is then found by value within it. Sole
+    dotted path deliberately does not index lists. The delivery is the response's sole one
+    (``_wire_sole_delivery``); the package is then found by value within it. Sole
     implementation, so the three commercial-field Thens cannot drift apart.
     """
-    deliveries = wire_field(ctx, "media_buy_deliveries")
-    assert len(deliveries) == 1, f"expected one delivery to read {pkg_id!r} from, got {len(deliveries)}"
-    delivery = wire_entry(ctx, "media_buy_deliveries", index=0)
+    delivery = _wire_sole_delivery(ctx)
     packages = delivery.get("by_package") or []
     named = [pkg for pkg in packages if pkg.get("package_id") == pkg_id]
     assert named, f"no by_package entry for {pkg_id!r}; wire carried {[p.get('package_id') for p in packages]}"
@@ -3550,17 +3555,27 @@ def then_partial_data(ctx: dict, mb_id: str) -> None:
 
 @then(parsers.parse('the response should include "{mb_id}" with zero impressions and zero spend'))
 def then_zero_metrics(ctx: dict, mb_id: str) -> None:
-    """Assert the named media buy has exactly zero impressions and zero spend.
+    """The named media buy is delivered with exactly zero impressions and zero spend."""
+    _assert_wire_delivery_totals(ctx, mb_id, impressions=0, spend=0.0)
 
-    Verifies ID mapping (the requested media buy is found in deliveries)
-    and exact metric values (both must be zero, not just non-negative).
+
+@then(parsers.parse('the response should include "{mb_id}" with {impressions:d} impressions and {spend:g} spend'))
+def then_delivery_totals(ctx: dict, mb_id: str, impressions: int, spend: float) -> None:
+    """The named media buy is delivered with exactly *impressions* and *spend*."""
+    _assert_wire_delivery_totals(ctx, mb_id, impressions=impressions, spend=spend)
+
+
+def _assert_wire_delivery_totals(ctx: dict, mb_id: str, *, impressions: int, spend: float) -> None:
+    """The ``media_buy_deliveries`` entry for *mb_id* carries exactly these totals on the wire.
+
+    Locates the entry by its ``media_buy_id`` (the requested buy is present, not just some
+    delivery) and compares exact values, not lower bounds.
     """
-    resp = require_payload(ctx)
-    deliveries = resp.media_buy_deliveries
-    target = next((d for d in deliveries if d.media_buy_id == mb_id), None)
-    assert target is not None, f"No delivery found for '{mb_id}' in {[d.media_buy_id for d in deliveries]}"
-    assert target.totals.impressions == 0.0, f"Expected zero impressions for '{mb_id}', got {target.totals.impressions}"
-    assert target.totals.spend == 0.0, f"Expected zero spend for '{mb_id}', got {target.totals.spend}"
+    totals = wire_entry(ctx, "media_buy_deliveries", media_buy_id=mb_id).get("totals") or {}
+    actual = (totals.get("impressions"), totals.get("spend"))
+    assert actual == (impressions, spend), (
+        f"Expected {mb_id!r} with {impressions} impressions and {spend} spend, got {actual}"
+    )
 
 
 @then("no real billing records should have been created")
