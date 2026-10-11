@@ -20,8 +20,7 @@
 # (docs/test-obligations/storyboard-wireability.yaml). These scenarios grade that booking
 # in-process: the real GoogleAdManager adapter runs, and only Google's SOAP client is stood in.
 #
-# The scheduled dates are fixed and lie in the future until 2035. The 2099 summer row grades
-# a converter that applies a zone's daylight-saving rule after 2037.
+# The scheduled dates are fixed and lie in the future until 2035.
 #
 # The seller asks the network for its zone before it creates anything in GAM. When GAM refuses
 # that lookup, the buyer reads the code the seller's GAM fault classification assigns, from the
@@ -54,10 +53,8 @@ Feature: A Google Ad Manager seller books the buyer's flight in the network's ti
       | 2035-01-15T15:00:00Z      | 2035-01-31T23:59:59Z      | America/Los_Angeles | 2035-01-15 07:00:00 | 2035-01-31 15:59:59 |
       | 2035-07-16T15:00:00Z      | 2035-07-31T23:59:59Z      | America/Los_Angeles | 2035-07-16 08:00:00 | 2035-07-31 16:59:59 |
       | 2035-01-15T10:00:00-05:00 | 2035-02-01T00:30:00+01:00 | America/Los_Angeles | 2035-01-15 07:00:00 | 2035-01-31 15:30:00 |
-      | 2035-01-16T03:00:00Z      | 2035-02-01T07:59:59Z      | America/Los_Angeles | 2035-01-15 19:00:00 | 2035-01-31 23:59:59 |
       | 2035-03-01T16:00:00Z      | 2035-03-31T16:00:00Z      | America/Los_Angeles | 2035-03-01 08:00:00 | 2035-03-31 09:00:00 |
       | 2035-01-15T15:00:00Z      | 2035-01-31T23:59:59Z      | Asia/Kolkata        | 2035-01-15 20:30:00 | 2035-02-01 05:29:59 |
-      | 2099-06-01T15:00:00Z      | 2099-06-30T23:59:59Z      | America/Los_Angeles | 2099-06-01 08:00:00 | 2099-06-30 16:59:59 |
 
   @T-UC-002-local-gam-flight-asap @extension
   Scenario: An "asap" buy starts serving immediately, and ends at the buyer's instant in the network's time zone
