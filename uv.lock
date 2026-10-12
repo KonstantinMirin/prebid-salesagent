@@ -74,8 +74,8 @@ wheels = [
 
 [[package]]
 name = "adcp"
-version = "9.0.0b1+prs1435.1415.1456"
-source = { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b1-prs1435-1415-1456/adcp-9.0.0b1%2Bprs1435.1415.1456-py3-none-any.whl" }
+version = "9.0.0b3"
+source = { path = "../acp-wheel-8qela/dist/adcp-9.0.0b3-py3-none-any.whl" }
 dependencies = [
     { name = "a2a-sdk" },
     { name = "cryptography" },
@@ -89,13 +89,14 @@ dependencies = [
     { name = "mcp" },
     { name = "protobuf" },
     { name = "pydantic" },
+    { name = "rfc3986-validator" },
     { name = "rfc8785" },
     { name = "sse-starlette" },
     { name = "tldextract" },
     { name = "typing-extensions" },
 ]
 wheels = [
-    { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b1-prs1435-1415-1456/adcp-9.0.0b1%2Bprs1435.1415.1456-py3-none-any.whl", hash = "sha256:ffe0a9bc83abfb8cb6967a6de8fa35aa9c04ed9560e23ea5b54f0f650112b281" },
+    { filename = "adcp-9.0.0b3-py3-none-any.whl", hash = "sha256:3d2abf8a8c01fd24a5decb22e441027d2867e7587cb5d5d9fc775476592ef28f" },
 ]
 
 [package.metadata]
@@ -103,12 +104,18 @@ requires-dist = [
     { name = "a2a-sdk", specifier = ">=1.0.1,<1.0.2" },
     { name = "alembic", marker = "extra == 'dev'", specifier = ">=1.13.0" },
     { name = "asgi-lifespan", marker = "extra == 'dev'", specifier = ">=2.1.0" },
+    { name = "azure-storage-blob", marker = "extra == 'dev'", specifier = ">=12.20" },
+    { name = "azure-storage-blob", marker = "extra == 'reporting-azure'", specifier = ">=12.20" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
+    { name = "boto3", marker = "extra == 'dev'", specifier = ">=1.35" },
+    { name = "boto3", marker = "extra == 'reporting-s3'", specifier = ">=1.35" },
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2.1" },
     { name = "cryptography", specifier = ">=41.0.0" },
     { name = "datamodel-code-generator", extras = ["http"], marker = "extra == 'dev'", specifier = "==0.64.0" },
     { name = "email-validator", specifier = ">=2.0.0" },
     { name = "freezegun", marker = "extra == 'dev'", specifier = "==1.5.5" },
+    { name = "google-cloud-storage", marker = "extra == 'dev'", specifier = ">=2.18" },
+    { name = "google-cloud-storage", marker = "extra == 'reporting-gcs'", specifier = ">=2.18" },
     { name = "httpcore", specifier = ">=1.0.9,<2.0" },
     { name = "httpcore2", specifier = ">=2.5,<3.0" },
     { name = "httpx", specifier = ">=0.28.1,<1.0" },
@@ -116,6 +123,7 @@ requires-dist = [
     { name = "idna", specifier = ">=3.18,<4" },
     { name = "jsonschema", specifier = ">=4.20.0" },
     { name = "mcp", specifier = ">=2.0.0,<3.0" },
+    { name = "moto", extras = ["s3"], marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = "==1.20.2" },
     { name = "opentelemetry-api", marker = "extra == 'observability'", specifier = ">=1.25,<2" },
     { name = "opentelemetry-sdk", marker = "extra == 'dev'", specifier = ">=1.25,<2" },
@@ -124,13 +132,14 @@ requires-dist = [
     { name = "protobuf", specifier = ">=6.31.0,<8" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'pg'", specifier = ">=3.1.0" },
     { name = "psycopg-pool", marker = "extra == 'pg'", specifier = ">=3.2.0" },
-    { name = "pydantic", specifier = ">=2.13.0,<3" },
+    { name = "pydantic", specifier = ">=2.13.0,<2.14" },
     { name = "pyright", marker = "extra == 'dev'", specifier = "==1.1.414" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.8,<4" },
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.20.0" },
+    { name = "rfc3986-validator", specifier = ">=0.1.1,<0.2" },
     { name = "rfc8785", specifier = ">=0.1.4" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
     { name = "sse-starlette", specifier = ">=3.0.0" },
@@ -138,7 +147,7 @@ requires-dist = [
     { name = "types-protobuf", marker = "extra == 'dev'", specifier = ">=7.34.1.20260408" },
     { name = "typing-extensions", specifier = ">=4.14.1" },
 ]
-provides-extras = ["dev", "docs", "pg", "observability"]
+provides-extras = ["dev", "docs", "pg", "reporting-gcs", "reporting-s3", "reporting-azure", "observability"]
 
 [[package]]
 name = "adcp-sales-agent"
@@ -240,7 +249,7 @@ requires-dist = [
     { name = "a2a-cli", specifier = ">=0.2.0" },
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=1.0.1" },
     { name = "a2wsgi", specifier = ">=1.10.0" },
-    { name = "adcp", url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b1-prs1435-1415-1456/adcp-9.0.0b1%2Bprs1435.1415.1456-py3-none-any.whl" },
+    { name = "adcp", path = "../acp-wheel-8qela/dist/adcp-9.0.0b3-py3-none-any.whl" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "allure-pytest", marker = "extra == 'ui-tests'", specifier = "==2.16.0" },
     { name = "authlib", specifier = ">=1.6.12" },
@@ -3582,6 +3591,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f3/61/d7545dafb7ac2230c70d38d31cbfe4cc64f7144dc41f6e4e4b78ecd9f5bb/requests-toolbelt-1.0.0.tar.gz", hash = "sha256:7681a0a3d047012b5bdc0ee37d7f8f07ebe76ab08caeccfc3921ce23c88d5bc6", size = 206888, upload-time = "2023-05-01T04:11:33.229Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3f/51/d4db610ef29373b879047326cbf6fa98b6c1969d6f6dc423279de2b1be2c/requests_toolbelt-1.0.0-py2.py3-none-any.whl", hash = "sha256:cccfdd665f0a24fcf4726e690f65639d272bb0637b9b92dfd91a5568ccf6bd06", size = 54481, upload-time = "2023-05-01T04:11:28.427Z" },
+]
+
+[[package]]
+name = "rfc3986-validator"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/da/88/f270de456dd7d11dcc808abfa291ecdd3f45ff44e3b549ffa01b126464d0/rfc3986_validator-0.1.1.tar.gz", hash = "sha256:3d44bde7921b3b9ec3ae4e3adca370438eccebc676456449b145d533b240d055", size = 6760, upload-time = "2019-10-28T16:00:19.144Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9e/51/17023c0f8f1869d8806b979a2bffa3f861f26a3f1a66b094288323fba52f/rfc3986_validator-0.1.1-py2.py3-none-any.whl", hash = "sha256:2f235c432ef459970b4306369336b9d5dbdda31b510ca1e327636e01f528bfa9", size = 4242, upload-time = "2019-10-28T16:00:13.976Z" },
 ]
 
 [[package]]
