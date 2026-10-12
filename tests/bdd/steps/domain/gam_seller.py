@@ -16,7 +16,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import wire_field
-from tests.bdd.steps.domain.uc006_sync_creatives import when_sync_creative_with_assignments
+from tests.bdd.steps.domain.uc006_sync_creatives import _ask_assignment_terms, when_sync_creative_with_assignments
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 
 
@@ -57,19 +57,65 @@ def given_package_references_ready_and_held_creatives(
 ) -> None:
     """Two library creatives in the format the GAM product sells, both named in the package's creative_ids."""
     from tests.bdd.steps.generic.given_media_buy import _add_creative_ids_to_package
-    from tests.factories.creative import CreativeFactory
 
-    for creative_id, url, status in ((ready_id, ready_url, "approved"), (held_id, held_url, "pending_review")):
-        CreativeFactory(
-            creative_id=creative_id,
-            tenant=ctx["tenant"],
-            principal=ctx["principal"],
-            format="display_300x250_image",
-            status=status,
-            data={"assets": {"banner_image": {"url": url, "width": 300, "height": 250}}},
-        )
+    _library_image_creative(ctx, ready_id, ready_url)
+    _library_image_creative(ctx, held_id, held_url, status="pending_review")
     ctx["env"]._commit_factory_data()
     _add_creative_ids_to_package(ctx, [ready_id, held_id])
+
+
+def _library_image_creative(
+    ctx: dict, creative_id: str, url: str, *, status: str = "approved", principal: Any = None, **data: Any
+) -> None:
+    """A 300x250 image creative stored in the library, in the reference format the GAM product sells.
+
+    The buyer's own unless *principal* names another; *data* adds keys to its stored record.
+    """
+    from tests.factories.creative import CreativeFactory
+    from tests.factories.creative_asset import build_assets, image_spec
+
+    CreativeFactory(
+        creative_id=creative_id,
+        tenant=ctx["tenant"],
+        principal=principal or ctx["principal"],
+        format="display_300x250_image",
+        status=status,
+        data={"assets": build_assets(image_spec("banner_image", url=url)), **data},
+    )
+
+
+@given(
+    parsers.parse(
+        'another buyer of the seller holds an approved 300x250 image creative "{creative_id}" showing "{url}"'
+    )
+)
+def given_another_buyer_holds_creative(ctx: dict, creative_id: str, url: str) -> None:
+    """A second principal of the tenant, with a creative under an id the buyer also uses."""
+    from tests.factories import PrincipalFactory
+
+    _library_image_creative(ctx, creative_id, url, principal=PrincipalFactory(tenant=ctx["tenant"]))
+    ctx["env"]._commit_factory_data()
+
+
+@given(
+    parsers.parse(
+        'the buyer holds an approved 300x250 image creative "{creative_id}" showing "{url}", '
+        "recorded with its own id as the ad server's"
+    )
+)
+def given_buyer_holds_creative_recorded_with_own_id(ctx: dict, creative_id: str, url: str) -> None:
+    """A library creative whose record holds the buyer's id under ``platform_creative_id``, as #2247 wrote it."""
+    _library_image_creative(ctx, creative_id, url, platform_creative_id=creative_id)
+    ctx["env"]._commit_factory_data()
+
+
+@given(parsers.parse('the seller\'s ad server is now "{adapter_type}", which takes no creatives from the seller'))
+def given_seller_ad_server_takes_no_creatives(ctx: dict, adapter_type: str) -> None:
+    """The tenant's adapter becomes *adapter_type*; its packages keep the line item ids they store."""
+    tenant = ctx["tenant"]
+    tenant.ad_server = adapter_type
+    tenant.adapter_config.adapter_type = adapter_type
+    ctx["env"]._commit_factory_data()
 
 
 def _orders_created(ctx: dict) -> list[Any]:
@@ -175,7 +221,7 @@ def given_buyer_syncs_image_creative(
     ctx["creatives"] = [_image_creative(creative_id, url)]
     ctx["assignments"] = {creative_id: [package]}
     if weight is not None:
-        ctx["assignment_terms"] = {(creative_id, package): {"weight": int(weight)}}
+        _ask_assignment_terms(ctx, creative_id, package, weight=int(weight))
     if dry_run:
         ctx["dry_run"] = True
     if tense == "synced":

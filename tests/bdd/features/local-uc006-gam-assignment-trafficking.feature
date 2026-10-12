@@ -54,6 +54,46 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     Then creative "cr-banner" reports package "pkg-leader" in assignment_errors and not in assigned_to
     And Google Ad Manager created no creative
 
+  # The refused assignment is not kept, so sending it again asks GAM again: the creative GAM
+  # already holds from another package is not read as placed on this one.
+  @T-UC-006-local-gam-refused-assignment-resent
+  Scenario: A refused assignment of a creative GAM already holds is refused again when re-sent
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000003" whose package "pkg-leader" is line item "5000003" accepting 728x90
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
+    When the Buyer Agent references library creative "cr-banner", without resending it, assigned to package "pkg-leader"
+    Then creative "cr-banner" reports package "pkg-leader" in assignment_errors and not in assigned_to
+    When the Buyer Agent references library creative "cr-banner", without resending it, assigned to package "pkg-leader"
+    Then creative "cr-banner" reports package "pkg-leader" in assignment_errors and not in assigned_to
+    And Google Ad Manager associated that creative with line items "5000001"
+
+  # A creative id is the buyer's own choice, unique only among that buyer's creatives.
+  @T-UC-006-local-gam-other-buyers-creative-id
+  Scenario: Another buyer's creative under the same id is not the one sent to GAM
+    Given another buyer of the seller holds an approved 300x250 image creative "cr-banner" showing "https://example.com/other-buyer.png"
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
+    When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-banner" is assigned to package "pkg-banner-a"
+    And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
+    And Google Ad Manager associated that creative with line items "5000001"
+
+  # A record written before GAM's id had its own key holds the buyer's id as the ad server's
+  # (#2247). That id is not one GAM has, so the creative is created.
+  @T-UC-006-local-gam-buyer-id-not-read-as-gams
+  Scenario: A creative recorded with the buyer's own id as the ad server's is created in GAM
+    Given the buyer holds an approved 300x250 image creative "cr-banner" showing "https://example.com/banner.png", recorded with its own id as the ad server's
+    When the Buyer Agent references library creative "cr-banner", without resending it, assigned to package "pkg-banner-a"
+    Then creative "cr-banner" is assigned to package "pkg-banner-a"
+    And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
+    And Google Ad Manager associated that creative with line items "5000001"
+
+  # Broadstreet stores a line item id on each package too, and takes no creatives from the seller.
+  @T-UC-006-local-gam-other-ad-server-takes-no-creatives
+  Scenario: An ad server that takes no creatives from the seller leaves the assignment as reported
+    Given the seller's ad server is now "broadstreet", which takes no creatives from the seller
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
+    When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-banner" is assigned to package "pkg-banner-a"
+
   @T-UC-006-local-gam-creative-reused
   Scenario: A creative already in GAM is placed on a second package's line item, not created again
     Given the buyer holds a buy booked in Google Ad Manager as order "6000002" whose package "pkg-banner-b" is line item "5000002" accepting 300x250

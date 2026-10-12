@@ -125,8 +125,9 @@ def _process_assignments(
     not_found_creative_ids: set[str] = set()  # creative_ids whose library lookup returned None
     packages_not_found_by_creative: dict[str, set[str]] = {}  # creative_id -> package_ids that do not exist
     media_buys_with_new_assignments: dict[str, Any] = {}  # media_buy_id -> MediaBuy object
-    # (creative_id, media_buy_id) -> package_ids to traffic into the ad server once committed
-    ad_server_pushes: dict[tuple[str, str], list[str]] = {}
+    # (creative_id, media_buy_id) -> the packages to traffic into the ad server once committed,
+    # each with the id of the assignment row this sync created for it (None when the row existed)
+    ad_server_pushes: dict[tuple[str, str], dict[str, str | None]] = {}
 
     # AdCP v3 spec defines assignments as list[{creative_id, package_id, weight?,
     # placement_ids?}]; normalise to {creative_id: {package_id: (weight, placement_ids)}}
@@ -380,7 +381,9 @@ def _process_assignments(
                         and (db_package.package_config or {}).get("platform_line_item_id")
                         and not (existing_assignment and (creative_row.data or {}).get("ad_server_creative_id"))
                     ):
-                        ad_server_pushes.setdefault((creative_id, media_buy_id), []).append(actual_package_id)
+                        ad_server_pushes.setdefault((creative_id, media_buy_id), {})[actual_package_id] = (
+                            None if existing_assignment else assignment.assignment_id
+                        )
 
             # Update media buy status if needed (draft -> pending_creatives).
             assert uow.media_buys is not None
@@ -403,24 +406,36 @@ def _process_assignments(
 
                     if not get_adapter_class_for_tenant(tenant).capabilities.supports_creative_trafficking:
                         return
-                    for (creative_id, media_buy_id), package_ids in ad_server_pushes.items():
+                    refused_rows: list[str] = []
+                    for (creative_id, media_buy_id), created_rows in ad_server_pushes.items():
                         # structural-guard: nested-unit-of-work - after_commit runs this once BaseUoW.__exit__ has closed the unit
                         ok, err = push_creative_to_existing_buy(
                             creative_id=creative_id,
                             media_buy_id=media_buy_id,
                             tenant_id=tenant.tenant_id,
-                            package_ids=package_ids,
+                            package_ids=list(created_rows),
+                            principal_id=principal_id,
                         )
                         if ok:
                             continue
                         logger.error(
                             log_safe(f"Creative {creative_id} not trafficked to media buy {media_buy_id}: {err}")
                         )
-                        for package_id in package_ids:
+                        for package_id, created_row in created_rows.items():
                             assignments_by_creative[creative_id].remove(package_id)
                             assignment_errors_by_creative[creative_id][package_id] = (
                                 f"The ad server did not accept creative {creative_id} for package {package_id}"
                             )
+                            if created_row:
+                                refused_rows.append(created_row)
+                    if refused_rows:
+                        # A refused assignment this sync wrote is not kept: a stored row reads as
+                        # placed, to the next sync and to the approval of the buy.
+                        # structural-guard: nested-unit-of-work - after_commit runs this once BaseUoW.__exit__ has closed the unit
+                        with CreativeUoW(tenant.tenant_id) as refused:
+                            assert refused.assignments is not None
+                            for assignment_id in refused_rows:
+                                refused.assignments.delete(assignment_id)
 
                 assert uow.creatives is not None
                 uow.creatives.after_commit(_traffic_assignments, label="assignment_ad_server_push")

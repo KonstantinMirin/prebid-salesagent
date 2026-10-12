@@ -667,6 +667,14 @@ def _persist_adapter_package_ids(
     logger.info(f"{prefix}Saved platform_line_item_ids to database")
 
 
+def _stored_order_id(packages: Sequence["DBMediaPackage"]) -> str | None:
+    """The ad server order a buy is booked as. It is per-buy, so any package that has it carries it."""
+    return next(
+        (p.package_config["platform_order_id"] for p in packages if (p.package_config or {}).get("platform_order_id")),
+        None,
+    )
+
+
 def _build_adapter_asset_from_creative(
     creative: Any,
     package_assignments: list[PackageAssignmentDict],
@@ -741,6 +749,8 @@ def _build_adapter_asset_from_creative(
 
     asset: dict[str, Any] = {
         "creative_id": creative.creative_id,
+        # A creative the ad server already holds is placed on the line items, not created again
+        "platform_creative_id": creative_data.get("ad_server_creative_id"),
         "package_assignments": package_assignments,
         "width": width,
         "height": height,
@@ -972,16 +982,8 @@ def execute_approved_media_buy(
                 return ApprovalResult.failed(error_msg)
 
             # The order the ad server already holds for this buy, when create booked it before
-            # the buy was held for its creatives (#1690). platform_order_id is per-buy, so any
-            # package carries it. Booking again would create a second order.
-            stored_order_id = next(
-                (
-                    p.package_config["platform_order_id"]
-                    for p in db_packages
-                    if (p.package_config or {}).get("platform_order_id")
-                ),
-                None,
-            )
+            # the buy was held for its creatives (#1690). Booking again would create a second order.
+            stored_order_id = _stored_order_id(db_packages)
 
             # Reconstruct MediaPackage objects (what adapters expect) from database
             # We need to load Products to get name, delivery_type, format_ids, etc.
@@ -1298,7 +1300,9 @@ def execute_approved_media_buy(
                         )
                         continue
 
-                    # On an order booked at create, a creative with an ad server id was placed then.
+                    # On an order booked at create, a creative with an ad server id is taken as
+                    # placed then. Placement per line item is not stored, so an assignment
+                    # written since without a push (#1529) reads the same.
                     if stored_order_id and (creative.data or {}).get("ad_server_creative_id"):
                         continue
 
@@ -1466,6 +1470,7 @@ def push_creative_to_existing_buy(
     media_buy_id: str,
     tenant_id: str,
     package_ids: list[str] | None = None,
+    principal_id: str | None = None,
 ) -> tuple[bool, str | None]:
     """Push a single approved creative to an already-active ad server line item.
 
@@ -1478,6 +1483,11 @@ def push_creative_to_existing_buy(
 
     ``package_ids`` limits the push to those of the creative's packages on the buy;
     ``None`` pushes to every package the creative is assigned to there.
+
+    ``principal_id`` is the creative's owner. A creative id is unique only per principal, so
+    a caller that holds the owner (a buyer's sync) passes it and that principal's creative is
+    the one pushed. The Admin approve route has the creative id alone and passes none; the
+    owner is then read off the stored row.
 
     Returns (success, error_message). error_message is non-None only on failure.
     """
@@ -1500,12 +1510,14 @@ def push_creative_to_existing_buy(
         # rather than extracted: the admin lookup carries this function's sanctioned
         # allowlist entry in test_architecture_creative_lookup_principal_scoped, and a
         # helper would split one sanctioned violation into two.
-        with AdminCreativeUoW(tenant_id) as owner_uow:
-            assert owner_uow.creatives is not None
-            owner_row = owner_uow.creatives.admin_get_by_id(creative_id)
-            if owner_row is None:
-                return False, f"Creative {creative_id} not found"
-            owner_principal_id = owner_row.principal_id
+        owner_principal_id = principal_id
+        if owner_principal_id is None:
+            with AdminCreativeUoW(tenant_id) as owner_uow:
+                assert owner_uow.creatives is not None
+                owner_row = owner_uow.creatives.admin_get_by_id(creative_id)
+                if owner_row is None:
+                    return False, f"Creative {creative_id} not found"
+                owner_principal_id = owner_row.principal_id
 
         # Nothing is open here. This is the whole point of the split. get_adapter reads the
         # adapter config in a session of its own, so it is resolved here too.
@@ -1522,7 +1534,7 @@ def push_creative_to_existing_buy(
             if not tenant_obj:
                 return False, f"Tenant {tenant_id} not found"
 
-            creative = uow.creatives.admin_get_by_id(creative_id)
+            creative = uow.creatives.get_by_id(creative_id, owner_principal_id)
             if not creative:
                 return False, f"Creative {creative_id} not found"
             if creative.status not in CLEARED_TO_SERVE:
@@ -1532,7 +1544,9 @@ def push_creative_to_existing_buy(
             matching = [
                 a
                 for a in all_assignments
-                if a.media_buy_id == media_buy_id and (package_ids is None or a.package_id in package_ids)
+                if a.media_buy_id == media_buy_id
+                and a.principal_id == owner_principal_id
+                and (package_ids is None or a.package_id in package_ids)
             ]
             if not matching:
                 return False, f"No assignment of creative {creative_id} to media buy {media_buy_id}"
@@ -1541,24 +1555,16 @@ def push_creative_to_existing_buy(
             if not (hasattr(adapter, "creatives_manager") and adapter.creatives_manager):
                 return False, "Adapter does not support creative upload"
 
-            # platform_order_id is per-buy — any package on this buy has the same value
-            media_package = uow.media_buys.get_package(media_buy_id, matching[0].package_id)
-            if not media_package:
-                return False, f"No package found for media buy {media_buy_id}"
-
-            platform_order_id = (media_package.package_config or {}).get("platform_order_id")
+            packages = uow.media_buys.get_packages(media_buy_id)
+            platform_order_id = _stored_order_id(packages)
             if not platform_order_id:
                 return False, f"Media buy {media_buy_id} has no platform_order_id — buy may not be live yet"
 
-            package_assignments = _package_assignments_by_creative(matching, uow.media_buys.get_packages(media_buy_id))[
-                creative_id
-            ]
+            package_assignments = _package_assignments_by_creative(matching, packages)[creative_id]
             asset, build_err = _build_adapter_asset_from_creative(creative, package_assignments, tenant_id=tenant_id)
             if build_err:
                 return False, build_err
             assert asset is not None
-            # A creative the ad server already holds is placed on the line items, not created again
-            asset["platform_creative_id"] = (creative.data or {}).get("ad_server_creative_id")
 
             try:
                 asset_statuses = adapter.creatives_manager.add_creative_assets(
