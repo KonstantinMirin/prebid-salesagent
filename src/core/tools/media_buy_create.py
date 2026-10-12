@@ -149,6 +149,39 @@ from src.services.targeting_capabilities import (
 # See: adcp 2.12.0 changelog
 
 
+def _advertised_reporting_frequencies(products: Sequence[Any]) -> set[str]:
+    """The reporting cadences EVERY one of *products* advertises.
+
+    ``core/reporting-webhook.json`` scopes its ``reporting_frequency`` MUST to "all
+    products in the media buy", so the admissible set is the INTERSECTION rather than the
+    union: a cadence one product supports and another does not is not deliverable for the
+    buy as a whole.
+
+    Reads each row's advertised value through
+    :func:`~src.core.product_conversion.default_reporting_capabilities` when the row stores
+    NULL, because that is what ``get_products`` SERVES for such a row
+    (``products.reporting_capabilities`` is nullable, ``models.py:448``). Reading the raw
+    column instead would let the refusal name a different set from the one the buyer was
+    shown, which is the divergence class that produced salesagent-8qela.171 in the first
+    place.
+
+    An empty product list yields the empty set, so a buy naming no resolvable product
+    refuses every cadence -- but that case is already refused upstream by the
+    missing-product check, which runs first precisely so this cannot be the error a buyer
+    sees.
+    """
+    from src.core.product_conversion import default_reporting_capabilities
+
+    per_product: list[set[str]] = []
+    for product in products:
+        stored = getattr(product, "reporting_capabilities", None) or {}
+        advertised = stored.get("available_reporting_frequencies") or [
+            str(f) for f in default_reporting_capabilities().available_reporting_frequencies
+        ]
+        per_product.append({str(f) for f in advertised})
+    return set.intersection(*per_product) if per_product else set()
+
+
 def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package | MediaPackage) -> list[str] | None:
     """Safely get creative_ids from a package (backward compatibility).
 
@@ -2084,16 +2117,11 @@ async def _create_media_buy_impl(
     """
     request_start_time = time.time()
 
-    # Warn if unsupported reporting_webhook frequency is requested
-    if req.reporting_webhook:
-        raw_freq = str(getattr(req.reporting_webhook, "reporting_frequency", None) or "daily").lower()
-        if raw_freq != "daily":
-            logger.warning(
-                "CreateMediaBuy requested reporting webhook frequency '%s', "
-                "but only 'daily' frequency is currently supported. "
-                "Hourly and monthly reporting will be ignored until implemented.",
-                raw_freq,
-            )
+    # The reporting cadence is REFUSED, not warned about, and the refusal lives where
+    # product_map is in scope because the pin scopes the MUST to "all products in the media
+    # buy" (search _advertised_reporting_frequencies). A warning here told the buyer
+    # nothing, promised that non-daily "will be ignored", and the mechanism that would have
+    # ignored it could never fire -- salesagent-8qela.171.
 
     # The one principal this tool holds: the row the resolver loaded, non-optional on a
     # ResolvedIdentity. Its name is read off it below; nothing here loads a principal by id.
@@ -2361,6 +2389,48 @@ async def _create_media_buy_impl(
                     )
                 ]
                 raise_if_property_targeting_violations(property_targeting_violations)
+
+            # core/reporting-webhook.json makes ``reporting_frequency`` required, enumerates
+            # [hourly, daily, monthly], and says of it: "Must be supported by all products in
+            # the media buy." core/reporting-capabilities.json makes
+            # ``available_reporting_frequencies`` required on every product, so the buyer's
+            # value has to lie in the INTERSECTION of what this buy's products advertise.
+            #
+            # REFUSED HERE RATHER THAN IGNORED LATER. This site used to be a warning at the
+            # top of the function ("Hourly and monthly reporting will be ignored until
+            # implemented") that no buyer ever saw, while the scheduler's own skip could
+            # never fire -- it read ``reporting_webhook["frequency"]`` and the stored
+            # document carries ``reporting_frequency``, so a non-daily registration was
+            # DELIVERED DAILY instead of refused or honoured (salesagent-8qela.171). A
+            # refusal at registration tells the buyer at the only moment they can act, and
+            # it is the shape the pin supports: the MUST above is a constraint on the
+            # REGISTRATION's validity, so an unsupported value is a request fault.
+            #
+            # UNSUPPORTED_FEATURE, not a schema error. L3/error-handling.mdx :191 forbids
+            # returning VALIDATION_ERROR with ``keyword: "enum"`` when the seller narrows a
+            # public enum to its own subset -- "the public-spec replay would accept the
+            # value; the seller rejects on private state" -- and names POLICY_VIOLATION or
+            # UNSUPPORTED_FEATURE instead. The refusal is a capability gap, so
+            # ``accepted_values`` names what this buy's products do advertise.
+            if req.reporting_webhook is not None:
+                requested_cadence = getattr(req.reporting_webhook, "reporting_frequency", None)
+                if requested_cadence is not None:
+                    advertised = _advertised_reporting_frequencies(
+                        [
+                            product_map[package.product_id]
+                            for package in (req.packages or [])
+                            if package.product_id in product_map
+                        ]
+                    )
+                    if str(requested_cadence) not in advertised:
+                        raise AdCPCapabilityNotSupportedError(
+                            details=CapabilityRefusalDetails(
+                                capability="reporting_frequency",
+                                rejected_value=str(requested_cadence),
+                                accepted_values=sorted(advertised),
+                            ),
+                            field="reporting_webhook.reporting_frequency",
+                        )
 
             # Resolve legacy pricing_option_id values to actual product pricing_option_ids
             # This happens when using the legacy product_ids parameter (auto-converted to packages)

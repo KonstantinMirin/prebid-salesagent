@@ -6595,6 +6595,27 @@ ENV_ROUTES: list[EnvRoute] = [
         seed=_seed_egress_create,
     ),
     EnvRoute(
+        tag="reporting-cadence-create",
+        # local-reporting-cadence-refusal: a reporting_frequency the buy's products do
+        # not advertise is refused at create ingest, so this dispatches a real
+        # create_media_buy and takes the same env and dependency chain as its
+        # @egress_create sibling above. It does NOT take that row's seed: the
+        # non-signing-seller declaration there is an egress concern, and a cadence
+        # refusal is decided before any signing posture matters.
+        #
+        # Its own identity tag means detect_uc returns None for these scenarios, so
+        # WITHOUT this row all three auto-xfail at fixture setup with "No harness wired
+        # for None" and grade nothing while reading green. The row is therefore added in
+        # the same change as the feature AND pinned in
+        # tests/unit/test_architecture_measurement_floors.py's EXPECTED_WIRED_ROUTES in
+        # that same change -- salesagent-8qela.152 is that pin being forgotten for a
+        # sibling row, which left the only scenarios grading canonical format filtering
+        # deletable without anything reddening.
+        when=lambda m: "reporting_cadence" in m,
+        env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
+        seed=_seed_media_buy_chain,
+    ),
+    EnvRoute(
         tag="egress-get-products",
         # The remaining @egress scenarios dispatch get_products (and the A2A
         # message/send envelope pair). They share the UC-GET-PRODUCTS branch and

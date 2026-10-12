@@ -4778,3 +4778,81 @@ def _dispatch_resolution(ctx: dict, partition: str) -> None:
     else:
         # Fallback: pass through to generic dispatch
         _dispatch_partition(ctx, "resolution", partition)
+
+
+@when(parsers.parse('the buyer creates a media buy registering a reporting_webhook at "{cadence}"'))
+def when_create_media_buy_registering_reporting_cadence(ctx: dict, cadence: str) -> None:
+    """Dispatch create_media_buy whose reporting_webhook asks for *cadence*.
+
+    Everything except the cadence comes from the harness's minimal valid create
+    (``harness_create_request_kwargs``) and from
+    ``ReportingWebhookRequestFactory``, so a package, pricing or
+    schema rejection can never stand in for the cadence refusal under test. The
+    factory supplies the ``authentication`` block that
+    ``core/reporting-webhook.json`` REQUIRES, and the ``operation_id`` that the
+    AdCP 3.2 interim reporting-correlation agreement (``webhooks.mdx``
+    :656-673) asks for -- a field that schema does NOT declare, carried under
+    its ``additionalProperties: true``. Together they leave the cadence as the
+    only thing a scenario varies.
+
+    THE TWO AUTHORITIES ARE NAMED SEPARATELY ON PURPOSE. Folding them into one
+    citation is how a reader comes to grep ``core/reporting-webhook.json`` for
+    ``operation_id``, find nothing, and conclude the fixture is wrong or the
+    suppression gate is invented -- which is the investigation
+    salesagent-8qela.178 actually ran before the agreement's text was found on
+    main. Measured on the pinned wheel at
+    ``adcp/_schemas/3.2/core/reporting-webhook.json``: ``required`` is
+    ``[url, authentication, reporting_frequency]`` and ``properties`` carries no
+    ``operation_id``. ``ReportingWebhookRequestFactory``'s own docstring states
+    the same split, which is the attribution this sentence should have followed
+    in the first place.
+
+    PARAMETERISED rather than three near-identical steps: the only difference
+    between the accepted and refused legs is this one enum member, and three
+    copies of one dispatch is the shape the DRY invariant forbids and the way
+    they would drift into dispatching different creates.
+    """
+    from tests.bdd.steps.generic.given_media_buy import harness_create_request_kwargs
+
+    kwargs = harness_create_request_kwargs(ctx)
+    kwargs["reporting_webhook"] = ReportingWebhookRequestFactory.payload(reporting_frequency=cadence)
+    dispatch_request(ctx, **kwargs)
+
+
+@then(parsers.parse('the refusal names "{cadence}" as an available reporting cadence'))
+def then_refusal_names_available_cadence(ctx: dict, cadence: str) -> None:
+    """The refusal's details carry *cadence* in ``accepted_values``.
+
+    THE REFUSAL'S OWN MARKER, and the reason this step exists rather than the
+    scenario stopping at the code. ``UNSUPPORTED_FEATURE`` is classified
+    ``correctable`` precisely because the buyer holds a lever, and the lever is
+    only real if the response says WHICH cadence to resubmit with -- a refusal
+    naming nothing leaves the buyer to guess, and the pinned recovery text
+    ("check get_adcp_capabilities and remove unsupported fields") would be the
+    only hint.
+
+    Read off the WIRE envelope through the single guarded accessor
+    (``wire_error_dict``) and the one locator, not off a reconstructed exception
+    and not off ``result.wire_error_envelope`` by hand: the reconstruction is
+    lossy, so a detail asserted against it can pass while the buyer receives
+    nothing (tests/CLAUDE.md § Error Verification Policy), and
+    ``test_architecture_bdd_wire_discipline`` refuses the hand-rolled read —
+    which is how this step's first draft was caught.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_error_dict
+    from tests.helpers.envelope_assertions import locate_envelope_error
+
+    envelope = wire_error_dict(ctx)
+    error = locate_envelope_error(envelope)
+    assert error is not None, f"response carries no payload-layer error object: {envelope!r}"
+    details = error.get("details") or {}
+    accepted = details.get("accepted_values")
+    assert accepted, (
+        f"the refusal names no accepted_values, so the buyer cannot tell which cadence to "
+        f"resubmit with. details={details!r}"
+    )
+    assert cadence in accepted, (
+        f"the refusal offers {accepted!r}, which does not include {cadence!r} -- the cadence this "
+        f"buy's products advertise. A refusal that names the wrong set is worse than one that "
+        f"names none, because the buyer acts on it."
+    )
