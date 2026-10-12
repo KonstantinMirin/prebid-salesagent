@@ -224,14 +224,15 @@ def given_buyer_holds_booked_buy(
 
 
 @given(
-    parsers.parse(
-        "the buyer holds a buy awaiting the seller's approval, not booked in Google Ad Manager, "
-        'with package "{package}"'
+    parsers.re(
+        r"the buyer holds a buy (?P<held>awaiting the seller's approval|the seller approved and holds for its "
+        r'creatives), not booked in Google Ad Manager, with package "(?P<package>[^"]+)"$'
     )
 )
-def given_buyer_holds_unbooked_buy(ctx: dict, package: str) -> None:
-    """A buy the seller has not approved: its one package is no line item yet."""
-    ctx["env"].hold_buy_for_approval(package_id=package, product=ctx["default_product"])
+def given_buyer_holds_unbooked_buy(ctx: dict, held: str, package: str) -> None:
+    """A buy not booked yet, awaiting the seller or already approved: its one package is no line item yet."""
+    status = "pending_approval" if held == "awaiting the seller's approval" else "pending_creatives"
+    ctx["env"].hold_unbooked_buy(package_id=package, product=ctx["default_product"], status=status)
 
 
 def _image_creative(creative_id: str, url: str) -> dict[str, Any]:

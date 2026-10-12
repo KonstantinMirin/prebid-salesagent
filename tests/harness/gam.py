@@ -133,13 +133,13 @@ class GamSellerMixin:
         )
         return media_buy
 
-    def hold_buy_for_approval(self, *, package_id: str, product: Any) -> Any:
-        """A buy of the env's buyer that awaits the seller's approval: nothing of it is in GAM.
+    def hold_unbooked_buy(self, *, package_id: str, product: Any, status: str) -> Any:
+        """A buy of the env's buyer, in *status*, that the seller has not booked: nothing of it is in GAM.
 
         Its package stores no order id and no line item id, and the stand-in network holds
         no line item for it.
         """
-        media_buy = self._seed_buy(package_id=package_id, product=product, status="pending_approval")
+        media_buy = self._seed_buy(package_id=package_id, product=product, status=status)
         self._commit_factory_data()
         return media_buy
 

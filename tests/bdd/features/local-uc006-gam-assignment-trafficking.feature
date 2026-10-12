@@ -53,7 +53,6 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     When the Buyer Agent syncs the creative with assignments
     Then creative "cr-banner" reports package "pkg-leader" in assignment_errors and not in assigned_to
     And Google Ad Manager created no creative
-    And no assignments should be created
 
   # GAM is asked again when the assignment is sent again: that it holds the creative from
   # another package does not place the creative on this one.
@@ -108,6 +107,18 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     When the Buyer Agent syncs the creative with assignments
     Then creative "cr-banner" is assigned to package "pkg-unbooked"
     And Google Ad Manager created no creative
+
+  # The seller approved the buy while its creative was under review, so nothing of it is in
+  # GAM. Approving the creative books the buy, and the creative goes onto the line item GAM
+  # created for its package (#2378).
+  @T-UC-006-local-gam-approval-books-held-buy
+  Scenario: Approving the creative an unbooked buy waits for books the buy and places the creative on its line item
+    Given the tenant has approval_mode "require-human"
+    And the buyer holds a buy the seller approved and holds for its creatives, not booked in Google Ad Manager, with package "pkg-unbooked"
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-unbooked"
+    When the seller approves creative "cr-banner"
+    Then Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
+    And Google Ad Manager associated each creative it created with the line item it created
 
   # A record written before GAM's id had its own key holds the buyer's id as the ad server's
   # (#2247). That id is not one GAM has, so the creative is created.

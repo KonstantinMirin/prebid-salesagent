@@ -37,7 +37,7 @@ from rich.console import Console
 
 from src.core.database.integrity import is_constraint_violation
 from src.core.database.repositories.creative import CLEARED_TO_SERVE, CreativeRepository
-from src.core.database.repositories.media_buy import RequestedPackage
+from src.core.database.repositories.media_buy import RequestedPackage, stored_line_item_id
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthorizationError,
@@ -76,7 +76,7 @@ def _package_assignments_by_creative(
     assignments: Sequence["CreativeAssignment"], packages: Sequence["DBMediaPackage"]
 ) -> dict[str, list[PackageAssignmentDict]]:
     """Each creative's package assignments on a buy, with the line item each package's row stores."""
-    line_items = {p.package_id: (p.package_config or {}).get("platform_line_item_id") for p in packages}
+    line_items = {p.package_id: stored_line_item_id(p) for p in packages}
     by_creative: dict[str, list[PackageAssignmentDict]] = {}
     for a in assignments:
         by_creative.setdefault(a.creative_id, []).append(
