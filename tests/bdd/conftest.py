@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn
 import pytest
 
 from scripts.audit import storyboard_spec
+from tests.helpers.bdd_transport import NODEID_TRANSPORTS, transport_of
 from tests.helpers.ledger import load_ledger_nodeids
 from tests.helpers.marker_names import derive_marker_names
 
@@ -1602,19 +1603,14 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
 # `rest` (all three mutations verified to leave the guard green). What the
 # bracket discipline DOES buy is refusing a row id that merely contains a
 # transport name.
-_NODEID_TRANSPORTS = ("e2e_rest", "a2a", "mcp", "rest")
-_TRANSPORT_IN_NODEID = re.compile(r"\[(" + "|".join(_NODEID_TRANSPORTS) + r")[-\]]")
-
-
-def _transport_of(nodeid: str) -> str | None:
-    """The transport a parametrized BDD nodeid dispatches through, else None.
-
-    One derivation for the whole file. Previously this was spelled out as
-    `"[X]" in nodeid or "[X-" in nodeid` pairs in several places, which is how the
-    `e2e_rest`/`rest` overlap becomes a silent mis-route.
-    """
-    match = _TRANSPORT_IN_NODEID.search(nodeid)
-    return match.group(1) if match else None
+# IMPORTED, not declared here. It was "one derivation for the whole file" and needed to be
+# one for the whole SUITE: tests/bdd/scenario_liveness.py needs the same answer and cannot
+# import this conftest (2098 modules at plugin-load time), so it grew its own copy and the
+# copy split on the LAST bracket -- 433 corrupted transports in one run
+# (salesagent-8qela.159). The derivation now lives in a stdlib-only helper both can reach.
+# The aliases keep this file's fourteen call sites spelled as they were.
+_NODEID_TRANSPORTS = NODEID_TRANSPORTS
+_transport_of = transport_of
 
 
 #: Causes a typed xfail reason may declare. A reason whose ``cause=`` is not here is a

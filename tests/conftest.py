@@ -960,7 +960,7 @@ def _resolve_dotted(dotted: str) -> Any:
 # just lose its own module, it loses the whole leg.
 #
 # The multiplier is what makes it fatal rather than slow. That module's
-# `_collected_items` is `lru_cache(maxsize=1)`, i.e. per PROCESS, and its items
+# `collect_bdd_items_with_markers` is `lru_cache(maxsize=1)`, i.e. per PROCESS, and its items
 # spread across every worker -- so 16 workers paid 16 separate
 # `pytest tests/bdd --collect-only` runs of ~7.2k items, each loading the whole
 # app, concurrently, alongside the 16 workers that spawned them. Measured in
@@ -977,6 +977,9 @@ _NESTED_PYTEST_MODULES: frozenset[str] = frozenset(
         # `uv run pytest <one bdd module> --collect-only`, once per item, uncached.
         "test_architecture_bdd_xfail_reason_tokens",
         "test_architecture_ci_bdd_shard_manifest",
+        # Consumes `test_architecture_env_route_agreement`'s collection, so it spawns one
+        # too -- and its `lru_cache` is per PROCESS, not shared across xdist workers.
+        "test_architecture_route_xfail_census",
         # via `collect_bdd_node_ids_with_e2e_enabled` -- invisible to the grep above.
         "test_bdd_transport_collection_is_seed_independent",
         "test_collection_is_side_effect_free",

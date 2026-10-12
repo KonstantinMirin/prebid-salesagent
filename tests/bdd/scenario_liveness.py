@@ -65,6 +65,7 @@ from pytest_bdd.exceptions import StepDefinitionNotFoundError
 from pytest_bdd.scenario import get_step_function
 
 from scripts.audit import storyboard_spec
+from tests.helpers.bdd_transport import transport_of
 from tests.helpers.ledger import load_ledger_nodeids
 from tests.helpers.marker_names import derive_marker_names
 
@@ -267,12 +268,20 @@ def _classify_exception(excinfo: Any) -> str | None:
 
 
 def _transport_name(item: pytest.Item) -> str:
-    """Best-effort transport label from the parametrized nodeid, e.g. ``mcp``."""
-    nodeid = item.nodeid
-    if "[" not in nodeid:
-        return "default"
-    param = nodeid.rsplit("[", 1)[-1].rstrip("]")
-    return param.split("-", 1)[0] if param else "default"
+    """The transport label for *item*, e.g. ``mcp``, or ``default`` when it has none.
+
+    DELEGATES rather than derives. This used to split the nodeid on its LAST bracket,
+    which made any parametrize value containing ``[`` -- an IPv6 URL, a JSON payload, an
+    array -- the transport: ``[rest-https://[fc00::1]/hook]`` recorded
+    ``fc00::1]/hook``. 433 of 6095 observations in one full run, 94 distinct phantom
+    values, and it failed quietly with a plausible string (salesagent-8qela.159).
+    The anchored derivation already existed in ``tests/bdd/conftest.py``; this file could
+    not reach it, because importing that conftest pulls 2098 modules at plugin-load time,
+    so it grew a copy and the copy drifted. The derivation now lives in
+    ``tests/helpers/bdd_transport.py``, which imports stdlib only and which both sides
+    share -- so there is nowhere for a third copy to be needed.
+    """
+    return transport_of(item.nodeid) or "default"
 
 
 def pytest_bdd_before_scenario(request: FixtureRequest, feature: Feature, scenario: Scenario) -> None:
