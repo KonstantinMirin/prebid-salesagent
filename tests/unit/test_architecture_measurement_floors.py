@@ -108,6 +108,21 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # deleting the row makes it auto-xfail at fixture setup instead of grading the
         # (agent_url, id) comparison core/format-id.json makes a MUST.
         "get-products-format-id-filter",
+        # The fourth sibling, and it was wired without this pin -- which is the whole of
+        # salesagent-8qela.152. BR-UC-GET-PRODUCTS-canonical-format-filters grades the three
+        # scenarios that are the only ones grading canonical format filtering at all: a
+        # format_kinds filter, a format_option_refs filter selecting on the option's SCOPE
+        # rather than its id, and standard_formats_only excluding a canonical product that
+        # declares a custom format.
+        #
+        # MEASURED on the four states, because an unpinned row's risk is a claim until it is
+        # run. Deleting the row while the tag was UNPINNED turned this test from red to
+        # GREEN, and a probe over ENV_ROUTES then showed NO route claiming any of the three
+        # tag sets -- so they reach fixture setup unharnessed and auto-xfail with "No
+        # harness wired for None", grading nothing while reading green. Pinned, the same
+        # deletion reddens the `missing` assertion instead. The pin is what converts that
+        # silent dormancy into a failure.
+        "get-products-canonical-format-filters",
         "security-wire-error-safety",
         "security-tenant-isolation",
         "database-fail-fast",
