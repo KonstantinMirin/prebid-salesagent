@@ -458,9 +458,34 @@ def _attach_reporting_webhook(env: Any, media_buy: Any) -> None:
 
     The URL comes from :func:`_registered_webhook_url`, so what the media buy says and
     what the registration says can never diverge.
+
+    THROUGH THE FACTORY, never a literal, and that is what makes the stream deliverable
+    at all. The literal here was ``{"url": ..., "frequency": "daily"}``: it spelled the
+    cadence by a name ``core/reporting-webhook.json`` does not define (the field is
+    ``reporting_frequency``), omitted the ``authentication`` block that schema's
+    ``/required`` lists, and carried no ``operation_id`` — so
+    ``_send_report_for_media_buy`` suppressed the stream at its FIRST check
+    (``src/services/delivery_webhook_scheduler.py``, ``reporting_stream_id_missing``)
+    and returned ``False`` before querying an adapter or opening a socket. AdCP 3.2.1
+    ``L3/webhooks.mdx`` :666 is why production is right to do that — "a registration
+    without a buyer-supplied ID cannot enable this interim delivery path ... suppress
+    scheduled sends; do not fabricate an ID or extract one from the URL" — so the
+    document was the defect, not the gate. MEASURED, in process against a real origin
+    through this very function: 0 POSTs and a ``False`` verdict on the literal, 1 POST
+    and ``True`` on the factory payload. ``tests/integration/test_delivery_webhooks_integration.py``
+    seeds the same document through the same factory for the same reason.
+
+    The baseline's ``authentication`` block never overrides what a scenario registered:
+    the sender prefers a stored ``PushNotificationConfig`` row, and this document names
+    that row's own URL (:func:`_registered_webhook_url`), so the lookup on
+    (principal, tenant, url, is_active) finds it and reads the auth off the row. The
+    block here is consulted only when the scenario registered no row at all, which is
+    also the only case where no row can say otherwise.
     """
+    from tests.factories.webhook import ReportingWebhookRequestFactory
+
     raw_request = dict(media_buy.raw_request or {})
-    raw_request["reporting_webhook"] = {"url": _registered_webhook_url(env), "frequency": "daily"}
+    raw_request["reporting_webhook"] = ReportingWebhookRequestFactory.payload(url=_registered_webhook_url(env))
     media_buy.raw_request = raw_request
     env._commit_factory_data()
 
@@ -799,12 +824,23 @@ class DeliveryPollMixin:
         packages: list[dict[str, Any]] | None,
         conversions: float | None = None,
         conversion_value: float | None = None,
+        by_placement: list[dict[str, Any]] | None = None,
     ) -> AdapterGetMediaBuyDeliveryResponse:
         """Normalize set_adapter_response params into the delivery intent.
 
         Shared by both transports: the in-process branch injects this object on
         the MagicMock; the e2e branch persists its wire dump. Single source of
         the packages-list-vs-scalars + totals-auto-sum logic.
+
+        ``by_placement`` carries per-placement metrics the seller reports. It is
+        threaded here rather than injected by a step because the e2e branch gets
+        it for free: ``_persist_simulation_config`` dumps this whole response into
+        the ``delivery_simulation_configs`` row the live server's MockAdServer
+        reads back verbatim, so a scenario that names placement metrics grades the
+        same data on every transport. Without it ``_build_placement_breakdown``
+        synthesizes a split from ONE weight vector, which is rank-identical across
+        spend / impressions / clicks — so every sort_by request produces the same
+        order and no sort assertion can fail (GH #2059).
         """
         if packages is not None:
             by_package = [
@@ -812,6 +848,7 @@ class DeliveryPollMixin:
                     package_id=p["package_id"],
                     impressions=p.get("impressions", 0),
                     spend=p.get("spend", 0.0),
+                    by_placement=by_placement,
                 )
                 for p in packages
             ]
@@ -827,6 +864,7 @@ class DeliveryPollMixin:
                     spend=spend,
                     by_geo=simulated_geo,
                     by_device_type=simulated_device_type,
+                    by_placement=by_placement,
                 )
             ]
             totals = DeliveryTotals(impressions=float(impressions), spend=spend)
@@ -859,6 +897,7 @@ class DeliveryPollMixin:
         packages: list[dict[str, Any]] | None = None,
         conversions: float | None = None,
         conversion_value: float | None = None,
+        by_placement: list[dict[str, Any]] | None = None,
     ) -> None:
         """Configure adapter to return specific delivery data for a media buy.
 
@@ -867,12 +906,22 @@ class DeliveryPollMixin:
         ``package_id``, ``impressions``, and ``spend`` keys. Totals are auto-computed
         as the sum of per-package values. ``conversions`` / ``conversion_value``
         are totals-level (spec-optional metrics; omitted when None).
+        ``by_placement`` sets the per-placement metrics the seller reports, for a
+        scenario that grades which metric the breakdown was sorted by.
 
         In-process: injects the response on the adapter MagicMock. E2E: persists
         a ``DeliverySimulationConfig`` row the live server's Mock adapter reads.
         """
         resp = self._build_adapter_delivery(
-            media_buy_id, impressions, spend, package_id, clicks, packages, conversions, conversion_value
+            media_buy_id,
+            impressions,
+            spend,
+            package_id,
+            clicks,
+            packages,
+            conversions,
+            conversion_value,
+            by_placement,
         )
         self._realize_adapter_response(resp)
 

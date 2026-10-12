@@ -377,6 +377,7 @@ Feature: BR-UC-026 Package Media Buy
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the error field should contain "product_id"
     And the error should include "suggestion" field
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
@@ -394,6 +395,7 @@ Feature: BR-UC-026 Package Media Buy
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the error field should contain "format_ids"
     And the error should include "suggestion" field
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
@@ -411,6 +413,7 @@ Feature: BR-UC-026 Package Media Buy
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the error field should contain "pricing_option_id"
     And the error should include "suggestion" field
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
@@ -491,6 +494,7 @@ Feature: BR-UC-026 Package Media Buy
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the error field should contain "package_id"
     And the error should include "suggestion" field
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
@@ -566,8 +570,12 @@ Feature: BR-UC-026 Package Media Buy
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the error field should contain "format_ids"
     And the error should include "suggestion" field
-    # BR-RULE-197 INV-4: Empty array violates minItems: 1
+    And the error recovery should be "correctable"
+    # BR-RULE-197 INV-4: Empty array violates minItems: 1 — the refusal must name the
+    # offending field (core/error.json `field`) and classify recovery as correctable
+    # (3.2.1 enums/error-code.json INVALID_REQUEST metadata).
 
   @T-UC-026-inv-198-4 @invariant @BR-RULE-198
   Scenario: INV-4 holds -- update only mutable fields succeeds
@@ -877,6 +885,35 @@ Feature: BR-UC-026 Package Media Buy
       | update includes pricing_option_id             | error "INVALID_REQUEST" with suggestion    |
       | update includes all three immutable fields    | error "INVALID_REQUEST" with suggestion    |
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # REGROUNDING THAT APPLIES TO ALL TWELVE KEYWORD AND NEGATIVE-KEYWORD OUTLINES
+  # BELOW (partition and boundary, keyword_targets and negative_keywords, shared
+  # and unshared). Their valid rows used to assert success WITH AN EFFECT --
+  # "success with keyword added", "success with pairs removed". That is the
+  # obligation of a seller that SUPPORTS keyword targeting. This seller does not,
+  # and never advertised that it did, so those rows asserted something we do not
+  # hold and passed only because the outcome step did not read the effect.
+  #
+  # The obligation this seller DOES hold is a refusal:
+  #   core/targeting-overlay-support.json makes Product.overlay_support "the binding
+  #   selectable-targeting contract: presence means the seller can apply protocol-valid
+  #   values". It declares keyword_targets and negative_keywords. This seller declares
+  #   no overlay support at all, so non-support is already discoverable.
+  #   core/targeting.json then requires that "a fresh create/update request MUST be
+  #   applied exactly or rejected", and core/targeting-input.json that "sellers apply
+  #   all supplied dimensions atomically". A seller that cannot apply must therefore
+  #   REFUSE -- silently accepting and answering success is excluded by a MUST, and so
+  #   is declaring non-support and ignoring the request.
+  #   docs/media-buy/specification.mdx says the same for the analogous feature:
+  #   rejected "with UNSUPPORTED_FEATURE before any mutation; sellers MUST NOT silently
+  #   drop, soften, or clamp it".
+  #
+  # The INVALID rows of these outlines are UNCHANGED and still expect INVALID_REQUEST:
+  # measured, the DTO refuses every malformed keyword shape (unknown match_type, empty
+  # keyword, negative bid_price, missing match_type, empty array) at the transport
+  # boundary, so validation runs BEFORE the capability refusal and those rows grade a
+  # different obligation.
+  # ─────────────────────────────────────────────────────────────────────────────
   @T-UC-026-partition-keyword-add @partition @keyword_targets_add
   Scenario Outline: Keyword targets add partition validation -- <partition>
     Given a package update request with keyword_targets_add per <partition>
@@ -885,18 +922,18 @@ Feature: BR-UC-026 Package Media Buy
     And the outcome should be <outcome>
 
     Examples: Valid partitions
-      | partition                    | outcome                                    |
-      | new_keyword                  | success with keyword added                 |
-      | existing_keyword_update_bid  | success with bid_price updated             |
-      | mixed_new_and_update         | success with mixed operations              |
-      | same_keyword_different_match | success with distinct entries              |
+      | partition                    | outcome                                     |
+      | new_keyword                  | error "UNSUPPORTED_FEATURE" with suggestion |
+      | existing_keyword_update_bid  | error "UNSUPPORTED_FEATURE" with suggestion |
+      | mixed_new_and_update         | error "UNSUPPORTED_FEATURE" with suggestion |
+      | same_keyword_different_match | error "UNSUPPORTED_FEATURE" with suggestion |
 
     Examples: Invalid partitions
-      | partition           | outcome                                    |
-      | empty_keyword       | error "INVALID_REQUEST" with suggestion    |
-      | invalid_match_type  | error "INVALID_REQUEST" with suggestion    |
-      | negative_bid_price  | error "INVALID_REQUEST" with suggestion    |
-      | empty_array         | error "INVALID_REQUEST" with suggestion    |
+      | partition          | outcome                                 |
+      | empty_keyword      | error "INVALID_REQUEST" with suggestion |
+      | invalid_match_type | error "INVALID_REQUEST" with suggestion |
+      | negative_bid_price | error "INVALID_REQUEST" with suggestion |
+      | empty_array        | error "INVALID_REQUEST" with suggestion |
 
   @T-UC-026-boundary-keyword-add @boundary @keyword_targets_add
   Scenario Outline: Keyword targets add boundary validation -- <boundary_point>
@@ -906,15 +943,15 @@ Feature: BR-UC-026 Package Media Buy
     And the outcome should be <outcome>
 
     Examples: Boundary values
-      | boundary_point                                             | outcome                                    |
-      | single new keyword target with bid_price                   | success                                    |
-      | existing (keyword, match_type) pair with updated bid_price | success                                    |
-      | same keyword with broad and exact match_type (distinct)    | success                                    |
-      | empty keyword string                                       | error "INVALID_REQUEST" with suggestion    |
-      | unknown match_type value                                   | error "INVALID_REQUEST" with suggestion    |
-      | bid_price = 0 (minimum boundary)                           | success                                    |
-      | bid_price = -0.01 (below minimum)                          | error "INVALID_REQUEST" with suggestion    |
-      | empty array []                                             | error "INVALID_REQUEST" with suggestion    |
+      | boundary_point                                             | outcome                                     |
+      | single new keyword target with bid_price                   | error "UNSUPPORTED_FEATURE" with suggestion |
+      | existing (keyword, match_type) pair with updated bid_price | error "UNSUPPORTED_FEATURE" with suggestion |
+      | same keyword with broad and exact match_type (distinct)    | error "UNSUPPORTED_FEATURE" with suggestion |
+      | empty keyword string                                       | error "INVALID_REQUEST" with suggestion     |
+      | unknown match_type value                                   | error "INVALID_REQUEST" with suggestion     |
+      | bid_price = 0 (minimum boundary)                           | error "UNSUPPORTED_FEATURE" with suggestion |
+      | bid_price = -0.01 (below minimum)                          | error "INVALID_REQUEST" with suggestion     |
+      | empty array []                                             | error "INVALID_REQUEST" with suggestion     |
 
   @T-UC-026-partition-keyword-remove @partition @keyword_targets_remove
   Scenario Outline: Keyword targets remove partition validation -- <partition>
@@ -924,17 +961,17 @@ Feature: BR-UC-026 Package Media Buy
     And the outcome should be <outcome>
 
     Examples: Valid partitions
-      | partition                       | outcome                                    |
-      | remove_existing_pair            | success with pair removed                  |
-      | remove_nonexistent_pair         | success (no-op)                            |
-      | mixed_existing_and_nonexistent  | success with partial removal               |
-      | remove_all_keywords             | success with all keywords removed          |
+      | partition                      | outcome                                     |
+      | remove_existing_pair           | error "UNSUPPORTED_FEATURE" with suggestion |
+      | remove_nonexistent_pair        | error "UNSUPPORTED_FEATURE" with suggestion |
+      | mixed_existing_and_nonexistent | error "UNSUPPORTED_FEATURE" with suggestion |
+      | remove_all_keywords            | error "UNSUPPORTED_FEATURE" with suggestion |
 
     Examples: Invalid partitions
-      | partition           | outcome                                    |
-      | empty_keyword       | error "INVALID_REQUEST" with suggestion    |
-      | invalid_match_type  | error "INVALID_REQUEST" with suggestion    |
-      | empty_array         | error "INVALID_REQUEST" with suggestion    |
+      | partition          | outcome                                 |
+      | empty_keyword      | error "INVALID_REQUEST" with suggestion |
+      | invalid_match_type | error "INVALID_REQUEST" with suggestion |
+      | empty_array        | error "INVALID_REQUEST" with suggestion |
 
   @T-UC-026-boundary-keyword-remove @boundary @keyword_targets_remove
   Scenario Outline: Keyword targets remove boundary validation -- <boundary_point>
@@ -944,14 +981,14 @@ Feature: BR-UC-026 Package Media Buy
     And the outcome should be <outcome>
 
     Examples: Boundary values
-      | boundary_point                                 | outcome                                    |
-      | remove single existing (keyword, match_type) pair | success                                |
-      | remove non-existent pair (no-op)               | success                                    |
-      | mix of existing and non-existent pairs         | success                                    |
-      | remove all keyword targets                     | success                                    |
-      | empty keyword string                           | error "INVALID_REQUEST" with suggestion    |
-      | unknown match_type                             | error "INVALID_REQUEST" with suggestion    |
-      | empty array []                                 | error "INVALID_REQUEST" with suggestion    |
+      | boundary_point                                    | outcome                                     |
+      | remove single existing (keyword, match_type) pair | error "UNSUPPORTED_FEATURE" with suggestion |
+      | remove non-existent pair (no-op)                  | error "UNSUPPORTED_FEATURE" with suggestion |
+      | mix of existing and non-existent pairs            | error "UNSUPPORTED_FEATURE" with suggestion |
+      | remove all keyword targets                        | error "UNSUPPORTED_FEATURE" with suggestion |
+      | empty keyword string                              | error "INVALID_REQUEST" with suggestion     |
+      | unknown match_type                                | error "INVALID_REQUEST" with suggestion     |
+      | empty array []                                    | error "INVALID_REQUEST" with suggestion     |
 
   @T-UC-026-partition-kw-add-shared @partition @keyword_targets_add
   Scenario Outline: Keyword targets add shared partition validation -- <partition>
@@ -961,22 +998,22 @@ Feature: BR-UC-026 Package Media Buy
     And the outcome should be <outcome>
 
     Examples: Valid partitions
-      | partition                | outcome                                    |
-      | typical_add              | success with keywords added                |
-      | boundary_min_array       | success with single entry                  |
-      | boundary_min_keyword     | success with single-char keyword            |
-      | add_with_bid_price       | success with bid_price set                 |
-      | add_without_bid_price    | success inheriting package bid              |
-      | upsert_existing          | success with bid_price updated             |
-      | zero_bid_price           | success with bid_price 0                   |
-      | all_match_types          | success with three distinct entries         |
-      | cross_dimension_valid    | success with cross-dimension mix            |
+      | partition             | outcome                                     |
+      | typical_add           | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_array    | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_keyword  | error "UNSUPPORTED_FEATURE" with suggestion |
+      | add_with_bid_price    | error "UNSUPPORTED_FEATURE" with suggestion |
+      | add_without_bid_price | error "UNSUPPORTED_FEATURE" with suggestion |
+      | upsert_existing       | error "UNSUPPORTED_FEATURE" with suggestion |
+      | zero_bid_price        | error "UNSUPPORTED_FEATURE" with suggestion |
+      | all_match_types       | error "UNSUPPORTED_FEATURE" with suggestion |
+      | cross_dimension_valid | error "UNSUPPORTED_FEATURE" with suggestion |
 
     Examples: Invalid partitions
-      | partition              | outcome                                    |
-      | missing_keyword        | error "INVALID_REQUEST" with suggestion    |
-      | missing_match_type     | error "INVALID_REQUEST" with suggestion    |
-      | conflict_with_overlay  | error "INVALID_REQUEST" with suggestion    |
+      | partition             | outcome                                 |
+      | missing_keyword       | error "INVALID_REQUEST" with suggestion |
+      | missing_match_type    | error "INVALID_REQUEST" with suggestion |
+      | conflict_with_overlay | error "INVALID_REQUEST" with suggestion |
 
   @T-UC-026-partition-kw-remove-shared @partition @keyword_targets_remove
   Scenario Outline: Keyword targets remove shared partition validation -- <partition>
@@ -986,19 +1023,19 @@ Feature: BR-UC-026 Package Media Buy
     And the outcome should be <outcome>
 
     Examples: Valid partitions
-      | partition                | outcome                                    |
-      | typical_remove           | success with pairs removed                 |
-      | boundary_min_array       | success with single entry                  |
-      | boundary_min_keyword     | success with single-char keyword            |
-      | remove_nonexistent       | success (no-op)                            |
-      | all_match_types          | success with three match types removed     |
-      | cross_dimension_valid    | success with cross-dimension mix            |
+      | partition             | outcome                                     |
+      | typical_remove        | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_array    | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_keyword  | error "UNSUPPORTED_FEATURE" with suggestion |
+      | remove_nonexistent    | error "UNSUPPORTED_FEATURE" with suggestion |
+      | all_match_types       | error "UNSUPPORTED_FEATURE" with suggestion |
+      | cross_dimension_valid | error "UNSUPPORTED_FEATURE" with suggestion |
 
     Examples: Invalid partitions
-      | partition              | outcome                                    |
-      | missing_keyword        | error "INVALID_REQUEST" with suggestion    |
-      | missing_match_type     | error "INVALID_REQUEST" with suggestion    |
-      | conflict_with_overlay  | error "INVALID_REQUEST" with suggestion    |
+      | partition             | outcome                                 |
+      | missing_keyword       | error "INVALID_REQUEST" with suggestion |
+      | missing_match_type    | error "INVALID_REQUEST" with suggestion |
+      | conflict_with_overlay | error "INVALID_REQUEST" with suggestion |
 
   @T-UC-026-partition-neg-kw-add @partition @negative_keywords_add
   Scenario Outline: Negative keywords add shared partition validation -- <partition>
@@ -1008,19 +1045,19 @@ Feature: BR-UC-026 Package Media Buy
     And the outcome should be <outcome>
 
     Examples: Valid partitions
-      | partition                | outcome                                    |
-      | typical_add              | success with negative keywords added       |
-      | boundary_min_array       | success with single entry                  |
-      | boundary_min_keyword     | success with single-char keyword            |
-      | add_duplicate            | success (no-op for duplicate)              |
-      | all_match_types          | success with three distinct entries         |
-      | cross_dimension_valid    | success with cross-dimension mix            |
+      | partition             | outcome                                     |
+      | typical_add           | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_array    | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_keyword  | error "UNSUPPORTED_FEATURE" with suggestion |
+      | add_duplicate         | error "UNSUPPORTED_FEATURE" with suggestion |
+      | all_match_types       | error "UNSUPPORTED_FEATURE" with suggestion |
+      | cross_dimension_valid | error "UNSUPPORTED_FEATURE" with suggestion |
 
     Examples: Invalid partitions
-      | partition              | outcome                                    |
-      | missing_keyword        | error "INVALID_REQUEST" with suggestion    |
-      | missing_match_type     | error "INVALID_REQUEST" with suggestion    |
-      | conflict_with_overlay  | error "INVALID_REQUEST" with suggestion    |
+      | partition             | outcome                                 |
+      | missing_keyword       | error "INVALID_REQUEST" with suggestion |
+      | missing_match_type    | error "INVALID_REQUEST" with suggestion |
+      | conflict_with_overlay | error "INVALID_REQUEST" with suggestion |
 
   @T-UC-026-partition-neg-kw-remove @partition @negative_keywords_remove
   Scenario Outline: Negative keywords remove shared partition validation -- <partition>
@@ -1030,19 +1067,19 @@ Feature: BR-UC-026 Package Media Buy
     And the outcome should be <outcome>
 
     Examples: Valid partitions
-      | partition                | outcome                                    |
-      | typical_remove           | success with negative keywords removed     |
-      | boundary_min_array       | success with single entry                  |
-      | boundary_min_keyword     | success with single-char keyword            |
-      | remove_nonexistent       | success (no-op)                            |
-      | all_match_types          | success with three match types removed     |
-      | cross_dimension_valid    | success with cross-dimension mix            |
+      | partition             | outcome                                     |
+      | typical_remove        | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_array    | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_keyword  | error "UNSUPPORTED_FEATURE" with suggestion |
+      | remove_nonexistent    | error "UNSUPPORTED_FEATURE" with suggestion |
+      | all_match_types       | error "UNSUPPORTED_FEATURE" with suggestion |
+      | cross_dimension_valid | error "UNSUPPORTED_FEATURE" with suggestion |
 
     Examples: Invalid partitions
-      | partition              | outcome                                    |
-      | missing_keyword        | error "INVALID_REQUEST" with suggestion    |
-      | missing_match_type     | error "INVALID_REQUEST" with suggestion    |
-      | conflict_with_overlay  | error "INVALID_REQUEST" with suggestion    |
+      | partition             | outcome                                 |
+      | missing_keyword       | error "INVALID_REQUEST" with suggestion |
+      | missing_match_type    | error "INVALID_REQUEST" with suggestion |
+      | conflict_with_overlay | error "INVALID_REQUEST" with suggestion |
 
   @T-UC-026-boundary-kw-add-shared @boundary @keyword_targets_add
   Scenario Outline: Keyword targets add shared boundary validation -- <boundary_point>
@@ -1052,18 +1089,18 @@ Feature: BR-UC-026 Package Media Buy
     And the outcome should be <outcome>
 
     Examples: Boundary values
-      | boundary_point                                                       | outcome                                    |
-      | array length 0 (empty)                                               | error "INVALID_REQUEST" with suggestion    |
-      | array length 1 (minimum valid)                                       | success                                    |
-      | keyword length 0 (empty string)                                      | error "INVALID_REQUEST" with suggestion    |
-      | keyword length 1 (single char)                                       | success                                    |
-      | match_type = 'broad'                                                 | success                                    |
-      | match_type = 'phrase'                                                | success                                    |
-      | match_type = 'exact'                                                 | success                                    |
-      | match_type = 'unknown'                                               | error "INVALID_REQUEST" with suggestion    |
-      | keyword_targets_add WITH targeting_overlay.keyword_targets           | error "INVALID_REQUEST" with suggestion    |
-      | keyword_targets_add WITHOUT targeting_overlay.keyword_targets        | success                                    |
-      | keyword_targets_add WITH targeting_overlay.negative_keywords (cross-dimension) | success                          |
+      | boundary_point                                                                 | outcome                                     |
+      | array length 0 (empty)                                                         | error "INVALID_REQUEST" with suggestion     |
+      | array length 1 (minimum valid)                                                 | error "UNSUPPORTED_FEATURE" with suggestion |
+      | keyword length 0 (empty string)                                                | error "INVALID_REQUEST" with suggestion     |
+      | keyword length 1 (single char)                                                 | error "UNSUPPORTED_FEATURE" with suggestion |
+      | match_type = 'broad'                                                           | error "UNSUPPORTED_FEATURE" with suggestion |
+      | match_type = 'phrase'                                                          | error "UNSUPPORTED_FEATURE" with suggestion |
+      | match_type = 'exact'                                                           | error "UNSUPPORTED_FEATURE" with suggestion |
+      | match_type = 'unknown'                                                         | error "INVALID_REQUEST" with suggestion     |
+      | keyword_targets_add WITH targeting_overlay.keyword_targets                     | error "INVALID_REQUEST" with suggestion     |
+      | keyword_targets_add WITHOUT targeting_overlay.keyword_targets                  | error "UNSUPPORTED_FEATURE" with suggestion |
+      | keyword_targets_add WITH targeting_overlay.negative_keywords (cross-dimension) | error "UNSUPPORTED_FEATURE" with suggestion |
 
   @T-UC-026-boundary-kw-remove-shared @boundary @keyword_targets_remove
   Scenario Outline: Keyword targets remove shared boundary validation -- <boundary_point>
@@ -1073,19 +1110,19 @@ Feature: BR-UC-026 Package Media Buy
     And the outcome should be <outcome>
 
     Examples: Boundary values
-      | boundary_point                                                        | outcome                                    |
-      | array length 0 (empty)                                                | error "INVALID_REQUEST" with suggestion    |
-      | array length 1 (minimum valid)                                        | success                                    |
-      | keyword length 0 (empty string)                                       | error "INVALID_REQUEST" with suggestion    |
-      | keyword length 1 (single char)                                        | success                                    |
-      | match_type = 'broad'                                                  | success                                    |
-      | match_type = 'phrase'                                                 | success                                    |
-      | match_type = 'exact'                                                  | success                                    |
-      | match_type = 'unknown'                                                | error "INVALID_REQUEST" with suggestion    |
-      | keyword_targets_remove WITH targeting_overlay.keyword_targets         | error "INVALID_REQUEST" with suggestion    |
-      | keyword_targets_remove WITHOUT targeting_overlay.keyword_targets      | success                                    |
-      | remove pair that exists in current list                               | success                                    |
-      | remove pair that does NOT exist in current list (no-op)              | success                                    |
+      | boundary_point                                                   | outcome                                     |
+      | array length 0 (empty)                                           | error "INVALID_REQUEST" with suggestion     |
+      | array length 1 (minimum valid)                                   | error "UNSUPPORTED_FEATURE" with suggestion |
+      | keyword length 0 (empty string)                                  | error "INVALID_REQUEST" with suggestion     |
+      | keyword length 1 (single char)                                   | error "UNSUPPORTED_FEATURE" with suggestion |
+      | match_type = 'broad'                                             | error "UNSUPPORTED_FEATURE" with suggestion |
+      | match_type = 'phrase'                                            | error "UNSUPPORTED_FEATURE" with suggestion |
+      | match_type = 'exact'                                             | error "UNSUPPORTED_FEATURE" with suggestion |
+      | match_type = 'unknown'                                           | error "INVALID_REQUEST" with suggestion     |
+      | keyword_targets_remove WITH targeting_overlay.keyword_targets    | error "INVALID_REQUEST" with suggestion     |
+      | keyword_targets_remove WITHOUT targeting_overlay.keyword_targets | error "UNSUPPORTED_FEATURE" with suggestion |
+      | remove pair that exists in current list                          | error "UNSUPPORTED_FEATURE" with suggestion |
+      | remove pair that does NOT exist in current list (no-op)          | error "UNSUPPORTED_FEATURE" with suggestion |
 
   @T-UC-026-boundary-neg-kw-add @boundary @negative_keywords_add
   Scenario Outline: Negative keywords add boundary validation -- <boundary_point>
@@ -1095,19 +1132,19 @@ Feature: BR-UC-026 Package Media Buy
     And the outcome should be <outcome>
 
     Examples: Boundary values
-      | boundary_point                                                             | outcome                                    |
-      | array length 0 (empty)                                                     | error "INVALID_REQUEST" with suggestion    |
-      | array length 1 (minimum valid)                                             | success                                    |
-      | keyword length 0 (empty string)                                            | error "INVALID_REQUEST" with suggestion    |
-      | keyword length 1 (single char)                                             | success                                    |
-      | match_type = 'broad'                                                       | success                                    |
-      | match_type = 'phrase'                                                      | success                                    |
-      | match_type = 'exact'                                                       | success                                    |
-      | match_type = 'unknown'                                                     | error "INVALID_REQUEST" with suggestion    |
-      | negative_keywords_add WITH targeting_overlay.negative_keywords              | error "INVALID_REQUEST" with suggestion    |
-      | negative_keywords_add WITHOUT targeting_overlay.negative_keywords           | success                                    |
-      | add pair that already exists in list (duplicate no-op)                     | success                                    |
-      | negative_keywords_add WITH targeting_overlay.keyword_targets (cross-dimension) | success                                |
+      | boundary_point                                                                 | outcome                                     |
+      | array length 0 (empty)                                                         | error "INVALID_REQUEST" with suggestion     |
+      | array length 1 (minimum valid)                                                 | error "UNSUPPORTED_FEATURE" with suggestion |
+      | keyword length 0 (empty string)                                                | error "INVALID_REQUEST" with suggestion     |
+      | keyword length 1 (single char)                                                 | error "UNSUPPORTED_FEATURE" with suggestion |
+      | match_type = 'broad'                                                           | error "UNSUPPORTED_FEATURE" with suggestion |
+      | match_type = 'phrase'                                                          | error "UNSUPPORTED_FEATURE" with suggestion |
+      | match_type = 'exact'                                                           | error "UNSUPPORTED_FEATURE" with suggestion |
+      | match_type = 'unknown'                                                         | error "INVALID_REQUEST" with suggestion     |
+      | negative_keywords_add WITH targeting_overlay.negative_keywords                 | error "INVALID_REQUEST" with suggestion     |
+      | negative_keywords_add WITHOUT targeting_overlay.negative_keywords              | error "UNSUPPORTED_FEATURE" with suggestion |
+      | add pair that already exists in list (duplicate no-op)                         | error "UNSUPPORTED_FEATURE" with suggestion |
+      | negative_keywords_add WITH targeting_overlay.keyword_targets (cross-dimension) | error "UNSUPPORTED_FEATURE" with suggestion |
 
   @T-UC-026-boundary-neg-kw-remove @boundary @negative_keywords_remove
   Scenario Outline: Negative keywords remove boundary validation -- <boundary_point>
@@ -1117,19 +1154,19 @@ Feature: BR-UC-026 Package Media Buy
     And the outcome should be <outcome>
 
     Examples: Boundary values
-      | boundary_point                                                              | outcome                                    |
-      | array length 0 (empty)                                                      | error "INVALID_REQUEST" with suggestion    |
-      | array length 1 (minimum valid)                                              | success                                    |
-      | keyword length 0 (empty string)                                             | error "INVALID_REQUEST" with suggestion    |
-      | keyword length 1 (single char)                                              | success                                    |
-      | match_type = 'broad'                                                        | success                                    |
-      | match_type = 'phrase'                                                       | success                                    |
-      | match_type = 'exact'                                                        | success                                    |
-      | match_type = 'unknown'                                                      | error "INVALID_REQUEST" with suggestion    |
-      | negative_keywords_remove WITH targeting_overlay.negative_keywords            | error "INVALID_REQUEST" with suggestion    |
-      | negative_keywords_remove WITHOUT targeting_overlay.negative_keywords         | success                                    |
-      | remove pair that exists in current list                                     | success                                    |
-      | remove pair that does NOT exist in current list (no-op)                     | success                                    |
+      | boundary_point                                                       | outcome                                     |
+      | array length 0 (empty)                                               | error "INVALID_REQUEST" with suggestion     |
+      | array length 1 (minimum valid)                                       | error "UNSUPPORTED_FEATURE" with suggestion |
+      | keyword length 0 (empty string)                                      | error "INVALID_REQUEST" with suggestion     |
+      | keyword length 1 (single char)                                       | error "UNSUPPORTED_FEATURE" with suggestion |
+      | match_type = 'broad'                                                 | error "UNSUPPORTED_FEATURE" with suggestion |
+      | match_type = 'phrase'                                                | error "UNSUPPORTED_FEATURE" with suggestion |
+      | match_type = 'exact'                                                 | error "UNSUPPORTED_FEATURE" with suggestion |
+      | match_type = 'unknown'                                               | error "INVALID_REQUEST" with suggestion     |
+      | negative_keywords_remove WITH targeting_overlay.negative_keywords    | error "INVALID_REQUEST" with suggestion     |
+      | negative_keywords_remove WITHOUT targeting_overlay.negative_keywords | error "UNSUPPORTED_FEATURE" with suggestion |
+      | remove pair that exists in current list                              | error "UNSUPPORTED_FEATURE" with suggestion |
+      | remove pair that does NOT exist in current list (no-op)              | error "UNSUPPORTED_FEATURE" with suggestion |
 
   @T-UC-026-partition-paused @partition @paused
   Scenario Outline: Paused behavior partition validation -- <partition>

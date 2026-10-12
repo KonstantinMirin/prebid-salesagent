@@ -105,16 +105,6 @@ def given_registry_multi_categories(ctx: dict) -> None:
     _sync_registry(ctx)
 
 
-@given(parsers.parse('the creative agent registry has formats of types "{type_a}" and "{type_b}"'))
-def given_registry_two_types(ctx: dict, type_a: str, type_b: str) -> None:
-    """Registry has formats of exactly two specified types."""
-    ctx["registry_formats"] = [
-        FormatFactory.build(name=f"{type_a}-format", type=CATEGORY_MAP.get(type_a)),
-        FormatFactory.build(name=f"{type_b}-format", type=CATEGORY_MAP.get(type_b)),
-    ]
-    _sync_registry(ctx)
-
-
 @given("the seller has additional creative agents beyond the default")
 def given_additional_creative_agents(ctx: dict) -> None:
     """One extra creative agent, seeded as the operator ROW production reads.
@@ -158,15 +148,12 @@ def given_no_formats(ctx: dict) -> None:
 # ── Partition / boundary: seller-with-various-X stubs ────────────────
 
 
-@given("a seller with formats of various types")
-def given_seller_various_types(ctx: dict) -> None:
-    """Seller has formats across various type categories (partition/boundary)."""
-    ctx["registry_formats"] = [
-        FormatFactory.build(name="display-ad", type=CATEGORY_MAP["display"]),
-        FormatFactory.build(name="video-ad", type=CATEGORY_MAP["video"]),
-        FormatFactory.build(name="native-card", type=CATEGORY_MAP["native"]),
-    ]
-    _sync_registry(ctx)
+# Deleted with the two type-filter outlines they seeded: "a seller with formats of
+# various types" and 'the creative agent registry has formats of types "x" and "y"'.
+# Both seeded a registry distinguished ONLY by format type, which is not a filterable
+# parameter of this seller's request, so neither Given could set up a filter. Keeping
+# an unused step definition alive is what makes a regenerated scenario go quiet instead
+# of red (scripts/compile_bdd.py:1180), so they go with the sentences that used them.
 
 
 @given("a seller with known format IDs in the catalog")
@@ -287,36 +274,18 @@ def given_seller_various_input_formats(ctx: dict) -> None:
     _sync_registry(ctx)
 
 
-@given("a seller with creative agent formats of various types")
-def given_seller_creative_agent_various_types(ctx: dict) -> None:
-    """Seller has creative agent formats of various types (partition/boundary).
-
-    The catalog these scenarios query is the harness default reference set, and it
-    has to stay that way: T-UC-005-partition-agent-type and its boundary sibling
-    are ledgered against upstream adcp#7338 precisely because the REFERENCE
-    formats declare ``pixel_tracker``. Replacing the registry here would erase the
-    gap the ledger entry grades.
-
-    So what the sentence can establish is that the variety it claims is real --
-    every type it names must be one the pinned format vocabulary admits. The list
-    of raw dicts this replaced was written into a ctx key no step read (and raw
-    dicts in a registry Given are what ``test_architecture_bdd_no_dict_registry``
-    exists to refuse).
-    """
-    for creative_type in ("audio", "video", "display", "dooh"):
-        assert creative_type in CATEGORY_MAP, (
-            f"Step claims a seller catalog 'of various types', but {creative_type!r} is "
-            f"not a known creative format category: {sorted(CATEGORY_MAP)}"
-        )
-
-
 @given("a seller with creative agent formats containing various asset types")
 def given_seller_creative_agent_various_assets(ctx: dict) -> None:
     """Seller has creative agent formats with various asset types (partition/boundary).
 
-    Same reasoning as ``given_seller_creative_agent_various_types``: the served
-    catalog stays the reference set, so this checks the claimed variety against
-    the pinned asset vocabulary instead of recording it into a dead ctx key.
+    The served catalog stays the harness default reference set, so this checks the
+    claimed variety against the pinned asset vocabulary instead of recording it
+    into a dead ctx key -- raw dicts in a registry Given are what
+    ``test_architecture_bdd_no_dict_registry`` exists to refuse.
+
+    Its ``of various types`` sibling is gone with the two creative-agent TYPE
+    outlines: the media-buy variant this seller binds declares ``asset_types`` and
+    no ``type``, so only this half has a filter to grade.
     """
     for asset_type in ("image", "video", "text"):
         assert asset_type in ASSET_TYPES, (

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.adapters import AdServerAdapter
+    from src.core.database.models import AdapterConfig as DBAdapterConfig
     from src.core.database.models import Tenant as DBTenant
     from src.core.resolved_identity import ResolvedIdentity
     from src.core.tenant_context import TenantContext
@@ -299,12 +300,64 @@ def resolve_manual_approval_signal(tenant: IdentityTenant) -> bool:
     return bool(row and getattr(row, column, None) is True)
 
 
+def _simulating_adapter_config(config_row: DBAdapterConfig | None) -> dict[str, object]:
+    """The configuration the SIMULATING adapter runs under.
+
+    Two callers want this, so it has one spelling: the ``mock`` branch of
+    :func:`get_adapter`, where the tenant configured the simulating adapter
+    deliberately, and the sandbox short-circuit, where the account's flag
+    chose it. A second copy would be the duplication the DRY invariant
+    forbids, and the two copies would be free to disagree about the approval
+    default — which is the one decision in here.
+
+    ``manual_approval_required`` defaults to True (require approval) for
+    safety: a tenant that has not said otherwise gets the cautious answer.
+    """
+    return {
+        "enabled": True,
+        "manual_approval_required": (
+            config_row.mock_manual_approval_required
+            if config_row is not None and config_row.mock_manual_approval_required is not None
+            else True
+        ),
+    }
+
+
 def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdManager | Kevel | TritonDigital:
     """The ad-server adapter that acts for *identity*.
 
     The tenant decides which ad server answers and with what configuration; the
     principal is the buyer inside it. Both come off the one identity, resolved from a
     request or from stored ids, so they cannot be handed over as a mismatched pair.
+
+    THE ACCOUNT DECIDES TOO, and it decides FIRST. A request naming a SANDBOX
+    account is answered by the simulating adapter whatever ad server the tenant
+    configured, and the short-circuit sits above every live branch so a sandbox
+    account cannot reach a live ad server by construction rather than by a check
+    each adapter remembers to make. Pinned AdCP 3.1.1
+    ``docs/media-buy/advanced-topics/sandbox.mdx``:
+
+    * :11 "Sandbox is account-level, not per-request. Once a request references a
+      sandbox account, the entire request is treated as sandbox."
+    * :227 "agents MUST NOT persist production state or cause real-world side
+      effects"; :229 "MUST NOT make real ad platform API calls (no real orders,
+      line items, etc.)".
+    * :232 "MUST return realistic response shapes with simulated data" — which is
+      why this ROUTES rather than refuses: :3 and
+      ``L3/comply-test-controller.mdx``:10 both say the real production endpoint
+      accepts sandbox traffic and honours the flag, with no separate test-mode
+      endpoint.
+
+    ``accounts.sandbox`` is the ONLY input, per :221 "Sellers MUST NOT alter
+    behavior based on these headers. Sandbox mode is determined solely by the
+    account reference" — and per critical pattern #11, which forbids a production
+    path branching on ``adcp_testing``. The column is nullable with a FALSE
+    default and ``COALESCE(sandbox, false)`` is its natural-key spelling
+    (models.py), so NULL and False are one answer and the test is truthiness.
+
+    An identity carrying NO account is unchanged: the tenant's configured adapter
+    answers. That is the only honest reading — a sandbox account is a thing the
+    request named, and a request that named none made no such claim.
     """
     principal = identity.principal
     tenant = identity.tenant
@@ -320,17 +373,24 @@ def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdMan
 
     config_row = read_adapter_config(tenant_id)
 
+    # A SANDBOX account never reaches a live ad server. Returned HERE, before the
+    # live config assembly below reads a credential and before any live client is
+    # constructed, so the live branches are unreachable for it rather than guarded.
+    if identity.account is not None and identity.account.sandbox:
+        logger.info(
+            "[ADAPTER_SELECT] account %s is sandbox: answering with the simulating adapter "
+            "instead of the tenant's configured %r",
+            identity.account.account_id,
+            selected_adapter,
+        )
+        return MockAdServerAdapter(_simulating_adapter_config(config_row), principal, tenant_id=tenant_id)
+
     adapter_config: dict[str, object] = {"enabled": True}
     if config_row:
         adapter_type = config_row.adapter_type
         logger.info(f"[ADAPTER_SELECT] adapter_type from AdapterConfig: {adapter_type}")
         if adapter_type == "mock":
-            # Default to True (require approval) for safety
-            adapter_config["manual_approval_required"] = (
-                config_row.mock_manual_approval_required
-                if config_row.mock_manual_approval_required is not None
-                else True
-            )
+            adapter_config = _simulating_adapter_config(config_row)
         elif adapter_type == "google_ad_manager":
             adapter_config = AdapterConfigRepository.get_gam_config(config_row)
             targeting_config = AdapterConfigRepository.get_gam_targeting_config(config_row)

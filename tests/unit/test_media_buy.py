@@ -104,6 +104,20 @@ def _stub_media_buy_reads(repo, row, media_buy_id: str | None = None):
         repo.get_by_id_or_raise.return_value = row
 
 
+def _stub_package_reads(repo, package):
+    """Point BOTH package accessors at *package*.
+
+    The twin of ``_stub_media_buy_reads``, for the same reason: the update tool reads a
+    package through ``get_package`` (the post-update projection into
+    ``affected_packages``, and the product lookup) AND through ``get_package_or_raise``
+    (the budget path's existence pre-check). A stub wiring one leaves the other returning
+    a bare ``MagicMock``, whose ``package_config.get(...)`` is another MagicMock — which
+    the response model refuses, correctly.
+    """
+    repo.get_package.return_value = package
+    repo.get_package_or_raise.return_value = package
+
+
 def _future(days: int = 7) -> str:
     """Return an ISO 8601 datetime string N days in the future."""
     dt = datetime.now(UTC) + timedelta(days=days)
@@ -1566,7 +1580,13 @@ class TestUpdateMediaBuyMainFlow:
             mock_adapter.return_value = adapter
 
             _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
-            _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
+            # The package the update names exists — a budget update on a missing one is
+            # PACKAGE_NOT_FOUND. (The second, identical _stub_media_buy_reads call that
+            # stood here was a copy of the first; this is the stub that was missing.)
+            _mock_pkg = MagicMock()
+            _mock_pkg.budget = Decimal("1000")
+            _mock_pkg.package_config = {"paused": False, "product_id": "prod_1"}
+            _stub_package_reads(mock_uow.media_buys, _mock_pkg)
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -2042,7 +2062,7 @@ class TestUpdateMediaBuyCreativeIds:
 
             # Media buy and package via repo
             _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
-            mock_uow.media_buys.get_package.return_value = mock_package
+            _stub_package_reads(mock_uow.media_buys, mock_package)
 
             # Creative existence/status + product format via repositories.
             mock_uow.creatives.get_by_ids.return_value = [mock_c1, mock_c2]
@@ -2206,7 +2226,7 @@ class TestUpdateMediaBuyCreativeIds:
 
             # Media buy and package via repo
             _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
-            mock_uow.media_buys.get_package.return_value = mock_package
+            _stub_package_reads(mock_uow.media_buys, mock_package)
 
             # Creative existence/status + product format via repositories.
             mock_uow.creatives.get_by_ids.return_value = [mock_creative]
@@ -2292,7 +2312,7 @@ class TestUpdateMediaBuyCreativeIds:
 
             # Media buy and package via repo
             _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
-            mock_uow.media_buys.get_package.return_value = mock_package
+            _stub_package_reads(mock_uow.media_buys, mock_package)
 
             # Creative existence/status + product format via repositories.
             mock_uow.creatives.get_by_ids.return_value = [mock_creative]
@@ -2393,7 +2413,7 @@ class TestUpdateMediaBuyCreativeIds:
 
             # Media buy and package via repo
             _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
-            mock_uow.media_buys.get_package.return_value = mock_package
+            _stub_package_reads(mock_uow.media_buys, mock_package)
 
             # Creative existence/status + product format via repositories.
             mock_uow.creatives.get_by_ids.return_value = [mock_c2, mock_c4]

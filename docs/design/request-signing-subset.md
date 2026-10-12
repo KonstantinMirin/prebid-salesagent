@@ -185,20 +185,23 @@ coverage, and **all 11 of its positive vectors cover `content-digest`** while
 The corpus README is explicit: root `negative/018` has no 3.2 counterpart "because `forbidden`
 is a legacy-only posture a 3.2 verifier cannot advertise".
 
-What is still outstanding is runner-side, not ours. `compliance/universal/signed-requests.yaml`
-says of itself: "This storyboard's current black-box runner contract is 3.1-compatible. It
-does not claim 3.2 certification. The repository CI reference evaluator covers the 3.2
-body-integrity policy while runner-side profile selection is added." Until that selection
-lands, the signed-requests card grades fewer vectors than the numbers below — the runner's
-structural gate SKIPs the root vectors a `required` verifier cannot accept, it does not fail
-them.
+The runner-side half has landed. `compliance/universal/signed-requests.yaml` said of itself
+that "the repository CI reference evaluator covers the 3.2 body-integrity policy while
+runner-side profile selection is added"; `@adcp/sdk@14.4.0` adds that selection
+(`signingProfileForAdcpVersion` / `selectRequestSigningVectors`), so a run at a 3.2 pin now
+synthesizes its steps from `profile-3.2/` — 11 positives and 19 negatives — and the root
+corpus is not graded at all. That is why the structural gate no longer fires for us: every
+`profile-3.2` negative but `007` covers `content-digest`, and `007` is the vector the gate
+exempts.
 
-### What the runner's gate does with each digest vector
+### What the runner's gate did with each digest vector, on the root corpus
 
 The runner gates each vector against the agent's DECLARED policy, in two halves —
 `contentDigestDeclarationMismatch` and `contentDigestStructuralMismatch`
-(`@adcp/sdk@14.0.0-rc.42`, `lib/testing/storyboard/request-signing/grader.mjs`), reached
-through the `agentContentDigestPolicy` this repo's own bridge patch forwards:
+(`lib/testing/storyboard/request-signing/grader.mjs`). On the 14.4.0 storyboard path the
+policy reaches them from the agent's own capability block (`declaredContentDigestPolicy`,
+adcp-client#2993); on the rc.42 path it reached them from a bridge patch this repo carried,
+now deleted:
 
 | vector | declares | signs content-digest | under `either` | under `required` |
 |---|---|---|---|---|

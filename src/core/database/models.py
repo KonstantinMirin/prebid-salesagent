@@ -377,12 +377,17 @@ class Product(Base, JSONValidatorMixin):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     # THE TWO HALVES of a product's format declaration. core/product.json makes it a MUST
     # with three satisfying shapes -- "Products MUST carry format_ids, format_options, or
-    # BOTH" (a root anyOf) -- so neither column can be NOT NULL on the strength of the spec
-    # alone, and `format_ids` keeps the NOT NULL it already had rather than gaining one.
+    # BOTH" (a root anyOf) -- so NEITHER column can be NOT NULL on the strength of the spec.
+    # `format_ids` kept a NOT NULL it had only because it predated `format_options`, which
+    # made a canonically-authored product unrepresentable; migration 08cd415b3d91 drops it.
+    # Which arm is present is checked where the anyOf is readable as a whole -- in
+    # product_conversion, against the pair -- and not by a per-column NOT NULL that can only
+    # see one arm.
     #
     # Type hint: list of FormatId dicts with {agent_url: str, id: str}
-    # Validated at database level via CHECK constraint (see migration: rename_formats_to_format_ids)
-    format_ids: Mapped[list[dict[str, str]]] = mapped_column(JSONType, nullable=False)
+    # Validated at database level via CHECK constraint (see migration: rename_formats_to_format_ids).
+    # That CHECK tolerates NULL -- measured, with both controls, in 08cd415b3d91's docstring.
+    format_ids: Mapped[list[dict[str, str]] | None] = mapped_column(JSONType, nullable=True)
     # The canonical half: core/product-format-declaration.json documents, each requiring
     # `format_kind` + `params` and admitting fifteen more members. Stored as the document it
     # is -- the pinned type is a sixteen-branch discriminated union over `format_kind`, and
@@ -502,7 +507,7 @@ class Product(Base, JSONValidatorMixin):
 
     # Effective properties - auto-resolve from inventory profile if set
     @property
-    def effective_format_ids(self) -> list[dict[str, str]]:
+    def effective_format_ids(self) -> list[dict[str, str]] | None:
         """Get format_ids from inventory profile (if set) or product itself.
 
         Returns format_ids as list of FormatId dicts: [{"agent_url": str, "id": str}, ...]
@@ -510,6 +515,15 @@ class Product(Base, JSONValidatorMixin):
         When inventory_profile_id is null, returns product's own format_ids.
 
         Database validation ensures all format_ids match AdCP FormatId spec.
+
+        NULLABLE since migration 08cd415b3d91, and the union is deliberate rather than
+        smoothed to ``[]`` here. A canonically-authored product has no legacy arm at all,
+        and that is a different fact from "an empty legacy arm": the wire must OMIT
+        ``format_ids`` for such a product, not send it empty, because the schema's
+        deprecated anyOf branch is satisfied by the KEY's presence. Returning ``None``
+        makes a caller decide; returning ``[]`` would let one emit the wrong shape without
+        noticing. The inventory-profile branch is still non-nullable, so only the
+        product's own arm can be None.
         """
         if self.inventory_profile_id and self.inventory_profile:
             return self.inventory_profile.format_ids

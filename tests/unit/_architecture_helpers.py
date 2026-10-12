@@ -87,7 +87,7 @@ def iter_module_trees(scan_dirs: list[Path]) -> Iterator[tuple[ast.Module, str]]
         if not scan_dir.exists():
             continue
         for py_file in sorted(scan_dir.rglob("*.py")):
-            if "__pycache__" in str(py_file):
+            if is_untracked_repo_file(py_file):
                 continue
             try:
                 tree = parse_module(py_file)
@@ -407,7 +407,7 @@ def read_source_roots(roots: Iterable[str]) -> dict[str, str]:
     sources: dict[str, str] = {}
     for root in roots:
         for path in sorted((REPO_ROOT / root).rglob("*.py")):
-            if "__pycache__" in str(path):
+            if is_untracked_repo_file(path):
                 continue
             sources[str(path.relative_to(REPO_ROOT))] = path.read_text(encoding="utf-8")
     return sources
@@ -848,6 +848,43 @@ def iter_workflow_files(repo: Path) -> Iterator[Path]:
 # that ``git ls-files`` never reports. In a clean checkout this mirrors the ignored
 # set closely enough that the fallback matches the tracked set. ``.github`` is
 # intentionally NOT excluded: the version-anchor guards scan ``.github/workflows/``.
+@functools.lru_cache(maxsize=1)
+def _tracked_repo_files() -> frozenset[Path]:
+    """Every tracked file in the repo. Cached: ~150 guards ask, each ask is a subprocess."""
+    return frozenset(iter_git_tracked_files(REPO_ROOT))
+
+
+def is_untracked_repo_file(path: Path) -> bool:
+    """Is *path* inside this repo but not tracked by git?
+
+    This is the question every filesystem walk here needs, and "our source" has exactly
+    one correct definition: what git tracks. The walks used to ``rglob`` and prune
+    ``__pycache__``, so their population was whatever happened to be ON DISK -- which is
+    not the same set on a developer's machine and on the CI box. The gap was not
+    theoretical: the storyboard tox env runs ``npm ci`` inside
+    ``tests/storyboard/runner/``, that directory is not gitignored, and npm ships Python
+    inside it. A guard scanning ``tests/`` therefore read third-party sources on the box
+    and none locally -- passing where it was written and failing where it was graded, for
+    a reason in neither the guard nor the code it grades.
+
+    Deciding by tracked-ness rather than by a denylist of build directories is the point.
+    A denylist only approximates the answer and goes stale the first time a tool invents a
+    new cache dir; nothing untracked can enter the tracked set, so ``node_modules``,
+    ``.tox``, ``.venv`` and a CI runner's dropped artifacts are all excluded by
+    construction. :data:`_FALLBACK_PRUNE_DIRS` keeps its one legitimate caller, the
+    git-unreachable fallback inside :func:`iter_git_tracked_files`, which warns when it
+    degrades.
+
+    A path OUTSIDE the repo is never "untracked" by this rule: the helpers here take
+    arbitrary ``scan_dirs``, and the contract suite exercises them against synthetic trees
+    under ``tmp_path``, which is what makes the detectors falsifiable at all. For those the
+    caller's directory is the whole universe and git has no opinion.
+    """
+    if not path.is_relative_to(REPO_ROOT):
+        return False
+    return path not in _tracked_repo_files()
+
+
 _FALLBACK_PRUNE_DIRS = frozenset(
     {
         ".claude",

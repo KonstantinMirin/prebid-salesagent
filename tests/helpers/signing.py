@@ -689,7 +689,7 @@ async def walk_discovery_to_jwks(client: Any, identity: dict[str, Any]) -> tuple
 
 
 def json_seeded_client_factory(body: dict[str, Any]):
-    """An ``httpx.AsyncClient`` factory that answers EVERY request with *body*.
+    """An ``httpx.AsyncClient`` factory that serves *body* for EVERY request.
 
     The SDK resolvers take a ``_client_factory``/``factory`` seam and use the
     result as an async context manager, so a ``MockTransport`` client is a drop-in
@@ -700,11 +700,36 @@ def json_seeded_client_factory(body: dict[str, Any]):
 
     One implementation for both the integration and e2e sides: these were
     byte-identical closures in two files (salesagent-og9k.10).
+
+    A POST is answered over MCP rather than with the bare document. The two
+    resolvers this seeds read their hop differently: ``BrandJsonAuthorizationResolver``
+    fetches brand.json with a ``GET``, while ``async_resolve_agent``'s hop 1 opens
+    an MCP ``ClientSession`` and calls ``get_adcp_capabilities`` (AdCP 3.1.1
+    ``L1/security.mdx``:1142 — the declared transport, never a raw ``GET``). Handing
+    the capabilities document straight back to the JSON-RPC parser fails it with
+    ``Failed to parse JSON response`` and the walk reports
+    ``capabilities_unreachable`` — a transport verdict for a seed that arrived
+    intact. ``mcp_capabilities_post`` answers the handshake and wraps *body* as the
+    tool result; the GET branch is unchanged, so the brand.json seam is untouched.
     """
     import httpx
 
+    # Backwards from the usual direction, deliberately: the other caller of this
+    # framing is the ``counterparty-origin`` compose service, which runs on a bare
+    # python image and CANNOT import ``tests.helpers``. So the shared code lives on
+    # the stdlib-only side of that wall and this side reaches across.
+    from tests.e2e._stdlib_json_http import mcp_capabilities_post
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method != "POST":
+            return httpx.Response(200, json=body)
+        status, payload = mcp_capabilities_post(request.content, {"get_adcp_capabilities": body})
+        if payload is None:
+            return httpx.Response(status)
+        return httpx.Response(status, json=payload)
+
     def factory(_url: str) -> httpx.AsyncClient:
-        return httpx.AsyncClient(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=body)))
+        return httpx.AsyncClient(transport=httpx.MockTransport(respond))
 
     return factory
 

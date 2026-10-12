@@ -29,6 +29,7 @@ def seeded_format_identity(
     format_id: str = "display_300x250",
     format_params: dict[str, Any] | None = None,
     canonical_kind: str | None = None,
+    format_option_ref: dict[str, Any] | None = None,
 ) -> CreativeFormatIdentity:
     """The format identity a seeded creative carries, through the PRODUCTION accessor.
 
@@ -56,9 +57,17 @@ def seeded_format_identity(
     caller keeping those reads defensive in production. The canonical branch also used to
     return a hand-built identity, skipping the accessor and with it the seller's vocabulary
     check, so a scenario could seed a kind production would refuse.
+
+    ``format_option_ref`` narrows the canonical arm to one of the enclosing product's
+    concrete options, exactly as ``core/format-option-ref.json`` declares it -- a
+    discriminated reference, so a scenario passes the document verbatim and the DTO picks
+    its branch. It belongs to the canonical arm only: ``core/creative-asset.json`` is a
+    oneOf on the identifier, so a legacy reference has no option to narrow.
     """
+    if format_option_ref is not None and canonical_kind is None:
+        raise TypeError("format_option_ref narrows a canonical_kind; a legacy format_id has no option to narrow")
     identity_arm: dict[str, Any] = (
-        {"format_kind": canonical_kind}
+        {"format_kind": canonical_kind, "format_option_ref": format_option_ref}
         if canonical_kind is not None
         else {"format_id": FormatId(agent_url=agent_url, id=format_id, **(format_params or {}))}
     )
@@ -79,6 +88,7 @@ def _seeded_identity(obj) -> CreativeFormatIdentity:
         format_id=obj.format,
         format_params=obj.format_params,
         canonical_kind=obj.canonical_kind,
+        format_option_ref=obj.format_option_ref_document,
     )
 
 
@@ -120,7 +130,15 @@ class CreativeFactory(SQLAlchemyModelFactory):
         sqlalchemy_session_persistence = "commit"
         # The identity knobs are inputs, not columns: `_seeded_identity` turns them into the
         # four columns that exist.
-        exclude = ("principal", "agent_url", "format", "format_params", "canonical_kind", "identity")
+        exclude = (
+            "principal",
+            "agent_url",
+            "format",
+            "format_params",
+            "canonical_kind",
+            "format_option_ref_document",
+            "identity",
+        )
 
     # Composite PK fields
     creative_id = factory.Sequence(lambda n: f"creative_{n:04d}")
@@ -136,11 +154,15 @@ class CreativeFactory(SQLAlchemyModelFactory):
     # `agent_url` + `format` name the legacy reference a creative asserts (the default, and
     # what most scenarios exercise), `format_params` parameterizes it (width, height,
     # duration_ms, pixel_ratio -- the reference's own members); `canonical_kind` instead
-    # builds a creative identified by its canonical kind, which asserts no reference at all.
+    # builds a creative identified by its canonical kind, which asserts no reference at all,
+    # and `format_option_ref_document` narrows that kind to one concrete product option.
+    # That knob is named for the DOCUMENT it takes because `format_option_ref` is already a
+    # COLUMN on this model below -- one factory field cannot be both the input and the output.
     agent_url = DEFAULT_CREATIVE_AGENT_URL
     format = "display_300x250"
     format_params = None
     canonical_kind = None
+    format_option_ref_document = None
     identity = factory.LazyAttribute(_seeded_identity)
     # Each column read off the ONE production mapping by its own name, so a column added to
     # the identity is a line here and nothing else -- never a second copy of the mapping.

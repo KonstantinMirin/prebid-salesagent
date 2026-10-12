@@ -403,16 +403,19 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
     product_data["description"] = product_model.description
     product_data["delivery_type"] = product_model.delivery_type
 
-    # format_ids: Use effective_format_ids which auto-resolves from profile if set
-    # Products must have at least one format_id to be valid for media buys
+    # format_ids: the LEGACY half of core/product.json's root anyOf, resolved through
+    # effective_format_ids so an inventory profile still supplies it. CARRIED when the
+    # product authors it and OMITTED when it does not.
+    #
+    # Omitted rather than emitted empty, deliberately. The field is "Deprecated in AdCP 3.2;
+    # removed in AdCP 4.0" and is absent from the schema's root `required` list, so a
+    # canonically-authored product satisfies the "Canonical-format product" branch without
+    # it. An empty array would be worse than absence: the deprecated branch requires only
+    # the KEY, so `format_ids: []` satisfies that branch by presence while declaring no
+    # format at all.
     effective_formats = product_model.effective_format_ids or []
-    if not effective_formats:
-        raise ValueError(
-            f"Product {product_model.product_id} has no format_ids configured. "
-            f"Products must specify supported creative formats to be available for purchase. "
-            f"Configure format_ids on the product or its inventory profile."
-        )
-    product_data["format_ids"] = effective_formats
+    if effective_formats:
+        product_data["format_ids"] = effective_formats
 
     # format_options: the CANONICAL half of the same MUST. core/product.json's root anyOf
     # accepts format_ids, format_options, or both, so this is carried when the product
@@ -425,6 +428,20 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
     # the document into the right branch and nothing here reshapes it.
     if product_model.format_options:
         product_data["format_options"] = product_model.format_options
+
+    # The anyOf itself, refused once rather than per-arm. "Products MUST carry `format_ids`,
+    # `format_options`, or both during the 3.x migration window" -- so the error case is
+    # NEITHER arm, not a missing legacy arm. This check used to fire on an absent
+    # `format_ids` alone, which made a canonically-authored product unservable: the very
+    # shape the 3.2 spec tells new products to use was rejected for lacking the field it
+    # tells them to stop using.
+    if "format_ids" not in product_data and "format_options" not in product_data:
+        raise ValueError(
+            f"Product {product_model.product_id} declares no creative format. "
+            f"core/product.json requires format_ids, format_options, or both; configure "
+            f"canonical format_options on the product, or format_ids on it or its "
+            f"inventory profile."
+        )
 
     # publisher_properties: Use effective_properties which returns AdCP 2.0.0 discriminated union format
     effective_props = product_model.effective_properties

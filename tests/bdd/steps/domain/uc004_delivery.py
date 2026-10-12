@@ -3348,6 +3348,36 @@ def then_placement_sorted_fallback(ctx: dict, metric: str) -> None:
     _assert_placements_sorted_by(packages, metric, fallback=True)
 
 
+@then(parsers.re(r"the response placement breakdown should be ordered (?P<order>.+)"))
+def then_placement_ordered(ctx: dict, order: str) -> None:
+    """Assert the placement_ids come back in exactly the order the scenario names.
+
+    The discriminating half of a sort assertion. "sorted by X descending" is
+    satisfied by any metric whenever the reported placements happen to rank
+    identically on all of them, which is what the seller's synthesized split does
+    (one weight vector) — so a scenario that names its own non-rank-correlated
+    metrics and then pins the resulting SEQUENCE is the only form that fails when
+    the seller sorts by the wrong metric (GH #2059).
+    """
+    expected = [segment.strip().strip('"') for segment in order.split(",")]
+    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
+    resp = require_payload(ctx)
+    checked = False
+    for pkg in _collect_all_packages(resp):
+        placements = getattr(pkg, "by_placement", None) or []
+        if not placements:
+            continue
+        actual = [
+            p.get("placement_id") if isinstance(p, dict) else getattr(p, "placement_id", None) for p in placements
+        ]
+        assert actual == expected, f"placement breakdown order {actual} is not the expected {expected}"
+        checked = True
+    assert checked, (
+        "no package carried by_placement data, so the ordering claim graded nothing. A seller "
+        "that stopped emitting placement breakdowns entirely would reach this line."
+    )
+
+
 @then(parsers.parse('the response placement breakdown should be sorted by "{metric}"'))
 def then_placement_sorted(ctx: dict, metric: str) -> None:
     """Assert placement breakdown is sorted by the given metric descending.
@@ -4497,34 +4527,37 @@ def _call_webhook_service(
     return env.deliver_webhook(media_buy_id=mb_id, notification_type=report_type)
 
 
-_DEFAULT_PLACEMENT_DATA: list[dict[str, Any]] = [
-    {"placement_id": "pl-A", "impressions": 3000.0, "spend": 150.0, "clicks": 30.0},
-    {"placement_id": "pl-B", "impressions": 1500.0, "spend": 200.0, "clicks": 10.0},
-    {"placement_id": "pl-C", "impressions": 500.0, "spend": 50.0, "clicks": 50.0},
-]
+@given(
+    parsers.parse(
+        'the seller reports placement "{placement_id}" with {impressions:g} impressions, '
+        "{spend:g} spend and {clicks:g} clicks"
+    )
+)
+def given_seller_reports_placement(
+    ctx: dict, placement_id: str, impressions: float, spend: float, clicks: float
+) -> None:
+    """The seller reports these per-placement metrics for the seeded buy.
 
+    Accumulating: each call adds one row and re-registers the adapter response, so
+    a scenario names its placements one line at a time and the values live in the
+    scenario rather than in a module constant. ``set_adapter_response`` carries
+    them to BOTH branches — in-process onto the adapter mock, and over e2e into the
+    ``delivery_simulation_configs`` row the live server reads back — so every
+    transport sorts the same numbers.
 
-def _inject_placement_data(ctx: dict) -> None:
-    """Ensure adapter responses include placement breakdown data.
+    All three metrics are required, not a convenience: ``PlacementBreakdown``
+    inherits the pinned ``by_placement`` item, whose ``impressions`` is required, so
+    a row omitting it makes production refuse the breakdown and answer with an empty
+    delivery list. Measured — that is what the first version of this step did.
 
-    If responses already exist, mutate them. Otherwise, register a default
-    response for each media buy known in ctx. This must be called from Given
-    steps that declare placement support, before the When step dispatches.
+    This replaces ``_inject_placement_data``, which was dead code (zero callers)
+    and passed a ``by_placement`` keyword ``set_adapter_response`` did not accept.
     """
-    env = ctx["env"]
-    if env._adapter_responses:
-        for resp in env._adapter_responses.values():
-            for pkg in resp.by_package:
-                if pkg.by_placement is None:
-                    pkg.by_placement = _DEFAULT_PLACEMENT_DATA
-    else:
-        media_buys = ctx.get("media_buys", {})
-        for label in media_buys:
-            real_id = _resolve_media_buy_id(ctx, label)
-            env.set_adapter_response(
-                media_buy_id=real_id,
-                by_placement=_DEFAULT_PLACEMENT_DATA,
-            )
+    placements: list[dict[str, Any]] = ctx.setdefault("placement_metrics", [])
+    placements.append({"placement_id": placement_id, "impressions": impressions, "spend": spend, "clicks": clicks})
+    label = next(iter(ctx.get("media_buys", {})), None)
+    assert label, "placement metrics need a media buy — the scenario must seed one first"
+    ctx["env"].set_adapter_response(media_buy_id=_resolve_media_buy_id(ctx, label), by_placement=placements)
 
 
 @when(parsers.parse('the Buyer Agent requests delivery metrics at status_filter boundary "{boundary_value}"'))

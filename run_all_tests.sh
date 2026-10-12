@@ -80,6 +80,27 @@ export DELIVERY_WEBHOOK_INTERVAL="${DELIVERY_WEBHOOK_INTERVAL:-5}"
 # workers plus the per-worker server stacks -- which is why each knob cannot be
 # chosen in isolation. Tiers are keyed on the Docker VM's MemTotal, with the
 # CI-box tier matching what is measured green in-network (16/16/8 at 86-196GB).
+#
+# THE CI-BOX FLOOR IS THE BOTTOM OF THAT MEASURED RANGE, and it is a literal
+# below, not a round number: _CI_BOX_FLOOR_GB. It read 64 for a long time, 22 GB
+# under the range this comment declares, so a box between 64 and 85 GB silently
+# received the parallelism measured green at 86-196 GB. hetzner2-vm sat in that
+# gap when its Docker MemTotal fell from 86 GB to 74 GB, and its unit leg
+# truncated 20 of 30 retained in-network runs (exitcode 3, a dead master) while
+# the SAME box at 86 GB truncated 0 of 45 and a 196 GB box 0 of 92 -- with the
+# worker allocation byte-identical across all three, so the worker counts were
+# never the variable. salesagent-8qela.157 carries the measurement and
+# salesagent-8qela.158 the ruling.
+#
+# A box in the gap now drops to the tier below rather than running a
+# configuration nobody measured. That is slower on such a box and deliberately
+# so: a slow leg has a verdict and a truncated one does not.
+#
+# tests/unit/test_run_all_tests_memory_tiers.py reads both numbers out of this
+# file and fails if the floor stops matching the range the comment states, so
+# the comment is a check rather than a claim. Moving the floor means moving the
+# declared range in the same edit, which is the review this gap needed.
+_CI_BOX_FLOOR_GB=86
 _docker_mem_gb="$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)"
 # `{{.MemTotal}}` renders the literal string `<no value>` when the daemon does
 # not report it. Under `set -euo pipefail` the arithmetic below then aborts the
@@ -91,7 +112,7 @@ _docker_mem_gb="$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)"
 _docker_mem_gb=$(( _docker_mem_gb / 1073741824 ))
 _cores="$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) )"
 
-if [ "$_docker_mem_gb" -ge 64 ]; then
+if [ "$_docker_mem_gb" -ge "$_CI_BOX_FLOOR_GB" ]; then
     # CI box. Per-worker e2e stacks are affordable; cores are the ceiling again.
     _unit=$(( _cores > 16 ? 16 : _cores )); _integration=8; _e2e_workers=8
 elif [ "$_docker_mem_gb" -ge 32 ]; then

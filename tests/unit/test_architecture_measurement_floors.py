@@ -101,12 +101,38 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # auto-xfails in under a second) because a scenario carrying its own identity tag is
         # claimed by no coarse uc bucket. Deleting this row returns them to exactly that.
         "get-products-format-options",
+        # The third sibling: BR-UC-GET-PRODUCTS-format-id-filter stores two products whose
+        # formats share one id under two declaring agents and reads which ones get_products
+        # announces. Pinned on the same reasoning and with the same dormancy risk -- its
+        # scenario carries its own identity tag, so no coarse uc bucket claims it and
+        # deleting the row makes it auto-xfail at fixture setup instead of grading the
+        # (agent_url, id) comparison core/format-id.json makes a MUST.
+        "get-products-format-id-filter",
+        # The fourth sibling, and it was wired without this pin -- which is the whole of
+        # salesagent-8qela.152. BR-UC-GET-PRODUCTS-canonical-format-filters grades the three
+        # scenarios that are the only ones grading canonical format filtering at all: a
+        # format_kinds filter, a format_option_refs filter selecting on the option's SCOPE
+        # rather than its id, and standard_formats_only excluding a canonical product that
+        # declares a custom format.
+        #
+        # MEASURED on the four states, because an unpinned row's risk is a claim until it is
+        # run. Deleting the row while the tag was UNPINNED turned this test from red to
+        # GREEN, and a probe over ENV_ROUTES then showed NO route claiming any of the three
+        # tag sets -- so they reach fixture setup unharnessed and auto-xfail with "No
+        # harness wired for None", grading nothing while reading green. Pinned, the same
+        # deletion reddens the `missing` assertion instead. The pin is what converts that
+        # silent dormancy into a failure.
+        "get-products-canonical-format-filters",
         "security-wire-error-safety",
         "security-tenant-isolation",
         "database-fail-fast",
         "uc002-account",
         "uc002-ext",
         "uc002-idempotency",
+        # The sandbox-isolation pair, wired out of the uc002-not-wired catch-all so that
+        # BR-RULE-209 INV-2 ("real ad platform calls suppressed") is graded rather than
+        # xfailed at fixture setup (salesagent-kf5mn).
+        "uc002-live-ad-server",
         "uc002-manual-approval",
         "uc003-ext",
         "uc003-manual-approval",

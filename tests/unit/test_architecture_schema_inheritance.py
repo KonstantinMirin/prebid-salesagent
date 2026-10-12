@@ -563,6 +563,34 @@ class TestSchemaInheritance:
             # with three precedents, not an allowlistable exception.
             # Pattern #4: ListAccountsResponse.accounts uses local Account subclass
             ("ListAccountsResponse", "accounts"),
+            # WEAKENED AXIS: the value domain. ``core/notification-config.json`` types
+            # ``event_types`` with an inline account-anchored enum (18 members); this
+            # declares the wide ``enums/notification-type.json`` (26), so it admits the
+            # eight the account surface does not.
+            #
+            # The pin asks for that in the same sentence that states the enum. The eight
+            # "are schema-invalid on this surface AND sellers MUST reject those entries as
+            # PER-ACCOUNT validation failures with INVALID_REQUEST or VALIDATION_ERROR and
+            # error.field pointing at the invalid event_types entry RATHER THAN SILENTLY
+            # DROPPING THEM" (``#/properties/event_types``, AdCP 3.2.1);
+            # ``account/sync-accounts-request.json`` repeats the MUST independently at
+            # ``#/properties/accounts/items/properties/notification_configs``; and
+            # ``account/sync-accounts-response.json`` declares the channel, ``accounts[].errors[]``
+            # under the ``SyncAccountsSuccess`` branch. A seller that refuses the DOCUMENT
+            # reports no entry at all -- measured: it also lost the OTHER entries' results,
+            # including a duplicate-subscriber rejection this seller already implements (#2353).
+            #
+            # So the enum is still enforced, by the layer that can report it per entry:
+            # ``_check_notification_configs`` refuses exactly ``NotificationType - EventType``.
+            # That makes this row's widening and that gate complementary BY CONSTRUCTION --
+            # admitted minus refused IS the parent's enum, member for member -- which is the
+            # property that keeps the weakening from being a hole. It is pinned as such by
+            # the event-scope scenario rather than left to this comment.
+            #
+            # DO NOT resolve this row by relaxing ``_is_admissible``: a rule that admitted a
+            # widened enum would admit every one of them, and the whole point here is that
+            # this particular widening is the one the pinned field asks for.
+            ("NotificationConfig", "event_types"),
             # Pattern #4, and NEW AT adcp 9: AdCP 3.2 splits the targeting overlay into
             # core/targeting.json (readback) and core/targeting_input.json (request), and
             # the two are different models -- nine of the thirty-seven fields differ in

@@ -26,18 +26,12 @@ Usage::
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import get_args
 
 import factory
-from adcp.types import (
-    AudioFormatAsset,
-    HtmlFormatAsset,
-    ImageFormatAsset,
-    MarkdownFormatAsset,
-    Responsive,
-    TextFormatAsset,
-    VideoFormatAsset,
-)
+from adcp.types import FormatAssetUnion, RepeatableAssetGroup, Responsive
 from adcp.types.domains.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
+from pydantic import BaseModel
 
 from src.core.schemas import Format, FormatId
 
@@ -45,67 +39,110 @@ AGENT_URL = "https://creative.adcontextprotocol.org"
 
 # ── Asset class mapping ──────────────────────────────────────────────
 
-_ASSET_CLASS_MAP = {
-    "image": ImageFormatAsset,
-    "video": VideoFormatAsset,
-    "audio": AudioFormatAsset,
-    "text": TextFormatAsset,
-    "markdown": MarkdownFormatAsset,
-    "html": HtmlFormatAsset,
-}
+
+def _asset_classes_by_type(model: type[BaseModel], field: str = "assets") -> dict[str, type[BaseModel]]:
+    """``asset_type`` -> concrete asset class, read off a pinned discriminated union.
+
+    One derivation serves both asset unions — the top-level ``Format.assets`` one and
+    the narrower one inside a ``repeatable_group``. Reading the model rather than
+    restating it is not a stylistic choice here: the generated classes are NUMBERED
+    (``Assets``, ``Assets9``, ``Assets31``, ...), the numbers shift on SDK
+    regeneration, and the group's inner classes carry no ``*FormatAsset`` alias at
+    all, so there is nothing stable to hand-write them against.
+
+    The walk is shape-insensitive on purpose: it recurses the whole annotation
+    instead of assuming a nesting depth. ``creative_agent_registry._known_asset_types``
+    is the cautionary case — it hand-unwraps ``list[Union[...]] | None``, the SDK
+    added a ``Discriminator`` layer around the union, and it has returned an EMPTY
+    frozenset ever since, silently. Hence the emptiness check below: a derivation
+    that matches nothing is green.
+    """
+    found: dict[str, type[BaseModel]] = {}
+
+    def walk(tp: object) -> None:
+        if isinstance(tp, type) and issubclass(tp, BaseModel):
+            default = getattr(tp.model_fields.get("asset_type"), "default", None)
+            if isinstance(default, str):
+                found.setdefault(default, tp)
+        for arg in get_args(tp):
+            walk(arg)
+
+    walk(model.model_fields[field].annotation)
+    if not found:
+        raise RuntimeError(
+            f"{model.__name__}.{field} yielded no asset classes. The pinned union's shape "
+            "changed and this walk no longer finds it — fix the walk rather than letting "
+            "the factory build assets out of an empty vocabulary."
+        )
+    return found
+
+
+#: Every asset type the generated ``Format.assets`` union models — 14 at adcp
+#: 9.0.0b2. This was a hand-written 6 of 14, with ``make_asset`` falling back to the
+#: image class for the other 8 (salesagent-xwhsk).
+#:
+#: The SDK union is NARROWER than the schema it ships beside:
+#: ``_schemas/3.2/core/format.json`` admits 21 individual asset types (the 14 plus
+#: zip, display_tag, published_post, card, pixel_tracker, vast_tracker,
+#: daast_tracker), and ``enums/asset-content-type.json`` lists 16. The factory
+#: builds SDK objects that have to validate, so the SDK union is its ceiling —
+#: a scenario needing one of the other 7 is blocked on SDK generation, not on this
+#: map. Do not widen this by hand to close that gap; a hand-written entry has no
+#: class to point at.
+_ASSET_CLASS_MAP = _asset_classes_by_type(Format)
+
+#: Every asset type the generated in-group union models — 12, omitting brief and
+#: catalog. That omission is the SDK's, not the schema's: format.json declares
+#: GroupBriefAsset and GroupCatalogAsset alongside the other 19.
+_GROUP_ASSET_CLASS_MAP = _asset_classes_by_type(RepeatableAssetGroup)
 
 # The asset-type vocabulary this factory can build, for steps that need to check
 # a claimed asset type is real rather than build one. Derived, not restated.
 ASSET_TYPES = frozenset(_ASSET_CLASS_MAP)
 
 
-def make_asset(asset_type: str, asset_id: str | None = None) -> ImageFormatAsset:
+def make_asset(asset_type: str, asset_id: str | None = None) -> FormatAssetUnion:
     """Create a typed asset object from an asset type string.
+
+    Refuses an asset type it cannot build. This used to resolve the class with
+    ``.get(asset_type, ImageFormatAsset)``, so a Given asking for a video, audio
+    or html asset was handed an IMAGE asset and every assertion downstream graded
+    the image path — a wrong-object pass, not a visible gap. A factory that
+    substitutes an object for the one asked for cannot fail.
 
     >>> a = make_asset("video")
     >>> a.asset_type
     'video'
     """
-    cls = _ASSET_CLASS_MAP.get(asset_type, ImageFormatAsset)
+    try:
+        cls = _ASSET_CLASS_MAP[asset_type]
+    except KeyError:
+        raise ValueError(
+            f"make_asset cannot build asset type {asset_type!r}. The generated "
+            f"Format.assets union models: {sorted(_ASSET_CLASS_MAP)}. A type outside "
+            "that list has no SDK class to instantiate, so there is nothing to seed — "
+            "check core/format.json: if the schema declares it, this is an SDK "
+            "generation gap; if not, the scenario is asking for an asset that does not "
+            "exist at this spec version."
+        ) from None
     return cls(asset_id=asset_id or f"{asset_type}_asset", required=True)
 
 
-def _find_repeatable_group_class():
-    """Return the RepeatableAssetGroup class (stable alias)."""
-    from adcp.types import RepeatableAssetGroup
+def _find_inner_asset_class(asset_type: str) -> type[BaseModel]:
+    """The inner asset class a repeatable group holds for *asset_type*, or raise.
 
-    return RepeatableAssetGroup
-
-
-def _find_inner_asset_class(asset_type: str):
-    """Find the inner asset class for a repeatable group by asset_type.
-
-    Inner assets within a repeatable_group use different classes than
-    top-level assets. We find them dynamically to survive SDK regeneration.
-
-    The ``assets`` field annotation is nested:
-        list[Annotated[Union[Annotated[AssetX, Tag], ...], Discriminator]]
-    so we unwrap the list element (Annotated), then the discriminated Union,
-    then each member (Annotated) down to the concrete asset model.
+    The generated in-group union is narrower than the top-level one (no brief, no
+    catalog), so a type can be buildable at the top level and not inside a group.
+    This used to fall back to the union's FIRST member (an image asset), so a group
+    asked for two types could come back holding two of the wrong kind.
     """
-    from typing import Annotated, get_args, get_origin
-
-    def _unwrap_annotated(tp):
-        return get_args(tp)[0] if get_origin(tp) is Annotated else tp
-
-    _RepeatableGroupCls = _find_repeatable_group_class()
-    assets_field = _RepeatableGroupCls.model_fields["assets"]
-    # list[...] -> element type (Annotated[Union[...], Discriminator])
-    element = _unwrap_annotated(get_args(assets_field.annotation)[0])
-    # Union[Annotated[AssetX, Tag], ...] -> concrete member classes
-    members = [_unwrap_annotated(m) for m in get_args(element)]
-    members = [m for m in members if hasattr(m, "model_fields")]
-    for cls in members:
-        field = cls.model_fields.get("asset_type")
-        if field is not None and field.default == asset_type:
-            return cls
-    # Fallback: first concrete member
-    return members[0] if members else None
+    try:
+        return _GROUP_ASSET_CLASS_MAP[asset_type]
+    except KeyError:
+        raise ValueError(
+            f"a repeatable asset group cannot hold asset type {asset_type!r}. The "
+            f"generated in-group union models: {sorted(_GROUP_ASSET_CLASS_MAP)}."
+        ) from None
 
 
 def make_asset_group(
@@ -116,16 +153,14 @@ def make_asset_group(
 ):
     """Create a repeatable asset group containing typed inner assets.
 
-    All class lookups are dynamic to survive SDK regeneration where
-    numbered class names (Assets18→Assets94, etc.) shift.
+    The inner classes are looked up by asset_type in a map derived from the pinned
+    group union, which is what survives SDK regeneration renumbering the generated
+    class names (Assets18→Assets94, etc.).
     """
-    _RepeatableGroupCls = _find_repeatable_group_class()
-    inner_assets = []
-    for at in asset_types:
-        inner_cls = _find_inner_asset_class(at)
-        if inner_cls:
-            inner_assets.append(inner_cls(asset_id=f"{at}_asset", required=True))
-    return _RepeatableGroupCls(
+    # No `if inner_cls` guard: _find_inner_asset_class raises rather than returning
+    # None, so a group never comes back holding fewer assets than it was asked for.
+    inner_assets = [_find_inner_asset_class(at)(asset_id=f"{at}_asset", required=True) for at in asset_types]
+    return RepeatableAssetGroup(
         item_type="repeatable_group",
         asset_group_id=group_id,
         required=True,

@@ -357,6 +357,26 @@ class WebhookDeliveryService:
             if not is_final and next_expected_interval_seconds:
                 next_expected_at = (datetime.now(UTC) + timedelta(seconds=next_expected_interval_seconds)).isoformat()
 
+            # The per-buy entry is composed FIRST, and completely, so nothing has to index
+            # back into the report below to finish it. A heterogeneous dict literal gives
+            # mypy a joined value type, which is why reaching back in for
+            # ``["media_buy_deliveries"][0]["totals"]`` could not be typed at all.
+            totals: dict[str, Any] = {
+                "impressions": impressions,
+                "spend": round(spend, 2),
+            }
+            if clicks is not None:
+                totals["clicks"] = clicks
+            if ctr is not None:
+                totals["ctr"] = ctr
+
+            media_buy_delivery: dict[str, Any] = {
+                "media_buy_id": media_buy_id,
+                "status": status,
+                "totals": totals,
+                "by_package": by_package or [],
+            }
+
             # The delivery REPORT -- the inner ``result``, shaped by
             # media-buy-delivery-webhook-result.json. It is not the POST body: the envelope
             # below is (AdCP 3.1.1 L3/webhooks.mdx :217, ":254 is the counter-example").
@@ -370,31 +390,12 @@ class WebhookDeliveryService:
                     "end": reporting_period_end.isoformat(),
                 },
                 "currency": currency,
-                "media_buy_deliveries": [
-                    {
-                        "media_buy_id": media_buy_id,
-                        "status": status,
-                        "totals": {
-                            "impressions": impressions,
-                            "spend": round(spend, 2),
-                        },
-                        "by_package": by_package or [],
-                    }
-                ],
+                "media_buy_deliveries": [media_buy_delivery],
             }
 
             # Add optional fields
             if next_expected_at:
                 delivery_result["next_expected_at"] = next_expected_at
-
-            # Add optional metrics to totals dict
-            # We know structure is valid as we just created it above
-            media_buy_delivery = delivery_result["media_buy_deliveries"][0]  # type: ignore[index]
-            totals: dict[str, Any] = media_buy_delivery["totals"]
-            if clicks is not None:
-                totals["clicks"] = clicks
-            if ctr is not None:
-                totals["ctr"] = ctr
 
             logger.info(
                 f"📤 Delivery webhook #{sequence_number} for {media_buy_id}: "

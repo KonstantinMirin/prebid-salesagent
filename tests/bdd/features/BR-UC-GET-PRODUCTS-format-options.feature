@@ -51,6 +51,32 @@ Feature: Canonical format options a seller stores are announced to buyers on the
     # The second outcome is what stops this from passing vacuously: a response that dropped
     # BOTH halves would satisfy the first and leave the product undescribed.
 
+  @T-UC-GET-PRODUCTS-format-options-canonical-only @format_option_announcement @requires_db
+  Scenario: a canonically-authored product is announced with its declarations and no format_ids
+    Given the seller stores a canonically-authored product for "image" with no format_ids
+    When the buyer requests products
+    Then the announced format option declares format_kind "image" and params the seller stored
+    And the announced product carries no format_ids key at all
+    # The exact MIRROR of the scenario above, and the shape 3.2 tells new products to use:
+    # core/product.json's root anyOf has a "Canonical-format product" branch, format_ids is
+    # "Deprecated in AdCP 3.2; removed in AdCP 4.0", and it is absent from the root
+    # `required` list. So a product declaring only format_options is legal and must not be
+    # answered with format_ids at all.
+    #
+    # Omission is the whole point, and an EMPTY array would be worse than absence: the
+    # deprecated anyOf branch requires only the KEY, so `format_ids: []` satisfies that
+    # branch by presence while declaring no format whatever. That is the bug this grades.
+    #
+    # The first outcome is what stops it passing vacuously. A response that dropped BOTH
+    # halves would satisfy "no format_ids key" and leave the product undescribed -- the
+    # same trap the sibling scenario above guards with its second outcome, in the other
+    # direction.
+    #
+    # Two things had to change for this to be representable at all: products.format_ids
+    # was NOT NULL until migration 08cd415b3d91, and product_conversion REFUSED a product
+    # whose legacy arm was absent -- so the canonical shape was unstorable and then
+    # unservable.
+
   @T-UC-GET-PRODUCTS-format-options-unannounceable @format_option_announcement @requires_db
   Scenario Outline: a stored declaration the seller cannot announce is refused, not half-announced
     # core/product-format-declaration.json puts format_kind and params in `required`. A

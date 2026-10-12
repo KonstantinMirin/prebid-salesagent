@@ -19,6 +19,7 @@ from src.core.schemas import CreateMediaBuyRequest
 from src.core.schemas._base import CreateMediaBuyResult
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv, json_safe
+from tests.harness._realize import realize_e2e
 from tests.harness.egress import EgressHatchMixin
 from tests.harness.transport import DeliverResult
 
@@ -36,6 +37,23 @@ OMIT_IDEMPOTENCY_KEY: Any = object()
 # kwarg -- omission is what every scenario that simply does not care about accounts also
 # looks like, and those get the seeded default. Same shape, same reason, as the key above.
 OMIT_ACCOUNT: Any = object()
+
+
+def _live_ad_server_on_the_live_stack(self: MediaBuyCreateEnv, adapter_type: str) -> None:
+    """Realize ``run_ad_server`` on the live e2e stack: the row, and only the row.
+
+    The live server runs with no patches, so the half of the in-process method that
+    hands the adapter decision back to production has nothing to undo there — the
+    decision was never taken away. The ``adapter_config`` row is written through the
+    same factory, against the shared database the live server reads, so the tenant
+    this env minted genuinely runs *adapter_type* on both sides.
+
+    Declared rather than left to the in-process branch: without it the in-process
+    ``self.mock[...]`` lookup would raise over e2e_rest (there is no mock registry),
+    and claiming to have set something in a process that is not the server's is the
+    silent lie :func:`realize_e2e` exists to prevent.
+    """
+    self._write_adapter_config(adapter_type)
 
 
 def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> None:
@@ -293,6 +311,14 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             too, one response package per requested package, which is what keeps
             the tool's positional ``req.packages[i] -> response.packages[i]`` walk
             lined up.
+
+            ``paused`` is read off the CARRIER for the same reason, and that is what
+            makes it gradeable. ``Package.SELLER_DECIDED`` names ``paused``, so the tool
+            does not echo the request — it reports what the ad server answered. A real
+            adapter answers from ``MediaPackage.paused`` (every one of them through
+            ``AdServerAdapter._build_package_responses``), so this answers from the same
+            place. A seller that fails to put the buyer's ask on the carrier gets
+            ``False`` back here, exactly as it would from a real ad server.
             """
             # The tool calls adapter.create_media_buy(request, packages, ...)
             # positionally, so the MediaPackage list arrives as args[1].
@@ -300,7 +326,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
 
             return AdapterCreateResult(
                 media_buy_id=mint(f"mb_{uuid.uuid4().hex[:8]}"),
-                packages=[ResponsePackage(package_id=pkg.package_id, paused=False) for pkg in media_packages],
+                packages=[ResponsePackage(package_id=pkg.package_id, paused=pkg.paused) for pkg in media_packages],
             )
 
         mock_adapter.create_media_buy.side_effect = _adapter_create_response
@@ -394,6 +420,58 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             # names a MISSING account still missing it.
             self._seed_named_account_ref(kwargs["account"])
         return kwargs
+
+    @realize_e2e(_live_ad_server_on_the_live_stack)
+    def run_ad_server(self, adapter_type: str) -> None:
+        """Give the tenant a REAL ad-server configuration of *adapter_type*.
+
+        Two halves, and the second is the reason this is not just a factory call.
+
+        1. The ``adapter_config`` row, so ``resolve_tenant_adapter_type`` answers
+           *adapter_type* instead of the ``tenant.ad_server`` default. For
+           ``google_ad_manager`` a network code goes with it: without one,
+           selection refuses at its own ``network_code is required`` check and the
+           scenario would grade a half-configured tenant rather than a reachable
+           ad server. No credential is seeded, and that is the point — the one
+           thing a deployment with no GAM credential can honestly do with a live
+           GAM selection is refuse it:
+           ``GoogleAdManager.__init__`` raises
+           ``AdCPConfigurationError(field="authentication")``
+           (google_ad_manager.py:176) before it builds a client manager, so the
+           refusal reaches the wire as CONFIGURATION_ERROR and costs no network
+           call at all.
+
+        2. The fake adapter STOPS answering. ``EXTERNAL_PATCHES`` replaces
+           ``media_buy_create.get_adapter`` wholesale, so by default no scenario in
+           this env can see which adapter production would have chosen — the
+           decision is the thing being faked. Pointing the patched name's
+           ``side_effect`` at the real :func:`get_adapter` hands the decision back
+           to production while leaving the patch in place for the rest of the env.
+           A scenario that says the tenant runs google_ad_manager and is then
+           served by a MagicMock is not running that ad server, so the two halves
+           have to move together.
+
+        The e2e branch does only half 1: the live server patches nothing, so the
+        decision is already production's there.
+        """
+        from src.core.helpers.adapter_helpers import get_adapter
+
+        self._write_adapter_config(adapter_type)
+        self.mock["adapter"].side_effect = get_adapter
+
+    def _write_adapter_config(self, adapter_type: str) -> None:
+        """The ``adapter_config`` row naming *adapter_type*, committed."""
+        from tests.factories import AdapterConfigFactory
+
+        tenant, _principal = self.setup_default_data()
+        AdapterConfigFactory(
+            tenant=tenant,
+            adapter_type=adapter_type,
+            # Only read on the GAM branch; harmless on the others, and spelling it
+            # unconditionally keeps one call site rather than a per-adapter kwargs dict.
+            gam_network_code="123456789",
+        )
+        self._commit_factory_data()
 
     def _default_account_id(self) -> str:
         """The seeded account's id, or a literal when there is no DB bound.
