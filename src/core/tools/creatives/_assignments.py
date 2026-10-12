@@ -373,15 +373,17 @@ def _process_assignments(
                         assignments_by_creative[creative_id].append(actual_package_id)
 
                     # An approved creative assigned to a package booked as a line item is
-                    # trafficked now (#2381), unless this assignment exists and the ad server
-                    # already holds the creative. A creative under review is trafficked when it
-                    # is approved; a buy not yet booked, when it is executed. Another
-                    # principal's package is assigned (#2417) and never trafficked.
+                    # trafficked now (#2381); the ad server answers whether it is already on
+                    # that line item. A creative under review is trafficked when the seller
+                    # approves it, on a buy in a status the approve route acts on (#1713); a
+                    # buy not yet booked, when it is executed. The buy-owner condition is
+                    # reporting only: the push refuses another principal's buy by itself, and
+                    # this keeps such an assignment in assigned_to (#2417's current behavior)
+                    # instead of assignment_errors. It goes when #2417 scopes the package lookup.
                     if (
                         creative_row.status in CLEARED_TO_SERVE
                         and db_media_buy.principal_id == principal_id
                         and (db_package.package_config or {}).get("platform_line_item_id")
-                        and not (existing_assignment and (creative_row.data or {}).get("ad_server_creative_id"))
                     ):
                         ad_server_pushes.setdefault((creative_id, media_buy_id), {})[actual_package_id] = (
                             None if existing_assignment else assignment.assignment_id
@@ -410,13 +412,14 @@ def _process_assignments(
                         return
                     refused_rows: list[str] = []
                     for (creative_id, media_buy_id), created_rows in ad_server_pushes.items():
-                        # structural-guard: nested-unit-of-work - after_commit runs this once BaseUoW.__exit__ has closed the unit
+                        # When update_media_buy is the caller (inline creatives), its own unit is
+                        # still open here (media_buy_update.py, #1644).
+                        # structural-guard: nested-unit-of-work - after_commit runs this once the unit _process_assignments owns has closed
                         ok, err = push_creative_to_existing_buy(
                             creative_id=creative_id,
                             media_buy_id=media_buy_id,
                             tenant_id=tenant.tenant_id,
                             package_ids=list(created_rows),
-                            principal_id=principal_id,
                         )
                         if ok:
                             continue
@@ -431,9 +434,10 @@ def _process_assignments(
                             if created_row:
                                 refused_rows.append(created_row)
                     if refused_rows:
-                        # A refused assignment this sync wrote is not kept: a stored row reads as
-                        # placed, to the next sync and to the approval of the buy.
-                        # structural-guard: nested-unit-of-work - after_commit runs this once BaseUoW.__exit__ has closed the unit
+                        # A refused assignment this sync wrote is not kept: the response says the
+                        # assignment failed, so no row is stored for it. As above, an
+                        # update_media_buy caller's own unit is still open here (#1644).
+                        # structural-guard: nested-unit-of-work - after_commit runs this once the unit _process_assignments owns has closed
                         with CreativeUoW(tenant.tenant_id) as refused:
                             assert refused.assignments is not None
                             for assignment_id in refused_rows:

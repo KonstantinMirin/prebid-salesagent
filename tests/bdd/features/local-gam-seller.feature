@@ -53,9 +53,11 @@ Feature: A Google Ad Manager seller books the buyer's media buy in Google Ad Man
     And Google Ad Manager was asked to approve the order it created, on booking and on the creative's approval
 
   # A creative GAM holds from an earlier buy is placed on the new line item, not created
-  # again. A re-sync can put such a creative back under review; it is then held like any other.
+  # again. A re-sync can put such a creative back under review; it is then held like any
+  # other, and placed when the seller approves it. Approving one that is already on the line
+  # item sends no second association.
   @T-UC-002-local-gam-held-creative-on-create @extension
-  Scenario Outline: A creative GAM already holds is placed on the new line item at create only when it is approved
+  Scenario Outline: A creative GAM already holds is placed on the new line item once: at create when approved, else on its approval
     Given a valid create_media_buy request
     And the account exists and is active
     And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001"
@@ -64,6 +66,9 @@ Feature: A Google Ad Manager seller books the buyer's media buy in Google Ad Man
     Then the response should succeed
     And Google Ad Manager created no creative
     And Google Ad Manager associated <associated> with the line item it created
+    When the seller approves creative "cr-placed"
+    Then Google Ad Manager created no creative
+    And Google Ad Manager associated creative "7000001" with the line item it created
 
     Examples:
       | status                       | associated         |

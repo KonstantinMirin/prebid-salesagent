@@ -116,24 +116,10 @@ class GamSellerMixin:
         """
         from datetime import UTC, datetime
 
-        from tests.factories import MediaBuyFactory
-        from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
-        from tests.factories.media_buy import request_package
         from tests.helpers.gam_client import gam_line_item
 
-        tenant, buyer = self.setup_default_data()
-        media_buy = MediaBuyFactory(
-            tenant=tenant,
-            principal=principal or buyer,
-            status=status,
-            confirmed_at=datetime.now(UTC),
-            # The flight a create resolves and stores, on the factory's own flight dates.
-            start_time=datetime(2025, 1, 1, tzinfo=UTC),
-            end_time=datetime(2027, 12, 31, 23, 59, 59, tzinfo=UTC),
-            raw_request={
-                "packages": [request_package(product_id=product.product_id, package_id=package_id)],
-                "account": {"account_id": DEFAULT_TEST_ACCOUNT_ID},
-            },
+        media_buy = self._seed_buy(
+            package_id=package_id, product=product, principal=principal, status=status, confirmed_at=datetime.now(UTC)
         )
         (package,) = media_buy.packages
         package.package_config = {
@@ -146,6 +132,38 @@ class GamSellerMixin:
             gam_line_item(package_id, item_id=line_item_id, sizes=(size,))
         )
         return media_buy
+
+    def hold_buy_for_approval(self, *, package_id: str, product: Any) -> Any:
+        """A buy of the env's buyer that awaits the seller's approval: nothing of it is in GAM.
+
+        Its package stores no order id and no line item id, and the stand-in network holds
+        no line item for it.
+        """
+        media_buy = self._seed_buy(package_id=package_id, product=product, status="pending_approval")
+        self._commit_factory_data()
+        return media_buy
+
+    def _seed_buy(self, *, package_id: str, product: Any, principal: Any = None, **buy: Any) -> Any:
+        """The rows a create stores for a buy with one package on *product*, the env's buyer's or *principal*'s."""
+        from datetime import UTC, datetime
+
+        from tests.factories import MediaBuyFactory
+        from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
+        from tests.factories.media_buy import request_package
+
+        tenant, buyer = self.setup_default_data()
+        return MediaBuyFactory(
+            tenant=tenant,
+            principal=principal or buyer,
+            # The flight a create resolves and stores, on the factory's own flight dates.
+            start_time=datetime(2025, 1, 1, tzinfo=UTC),
+            end_time=datetime(2027, 12, 31, 23, 59, 59, tzinfo=UTC),
+            raw_request={
+                "packages": [request_package(product_id=product.product_id, package_id=package_id)],
+                "account": {"account_id": DEFAULT_TEST_ACCOUNT_ID},
+            },
+            **buy,
+        )
 
     def approve_creative_as_seller(self, creative_id: str) -> None:
         """The seller approves *creative_id* in the Admin UI's creative review queue, in this process."""

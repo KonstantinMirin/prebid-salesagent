@@ -203,11 +203,17 @@ def given_creative_agent_serves_reference_formats(ctx: dict) -> None:
 def given_buyer_holds_booked_buy(
     ctx: dict, owner: str, order_id: str, status: str | None, package: str, line_item: str, width: str, height: str
 ) -> None:
-    """A buy booked in GAM, the buyer's or a second principal's: its one package is the stated line item."""
+    """A buy booked in GAM, the buyer's or a second GAM advertiser's: its one package is the stated line item."""
     from tests.factories import PrincipalFactory
 
+    principal = None
+    if owner != "the buyer":
+        # A buy booked in GAM implies a GAM advertiser.
+        principal = PrincipalFactory(
+            tenant=ctx["tenant"], platform_mappings={"google_ad_manager": {"advertiser_id": "3000002"}}
+        )
     ctx["env"].book_in_gam(
-        principal=None if owner == "the buyer" else PrincipalFactory(tenant=ctx["tenant"]),
+        principal=principal,
         package_id=package,
         line_item_id=line_item,
         size=(int(width), int(height)),
@@ -215,6 +221,17 @@ def given_buyer_holds_booked_buy(
         product=ctx["default_product"],
         status=status or "pending_creatives",
     )
+
+
+@given(
+    parsers.parse(
+        "the buyer holds a buy awaiting the seller's approval, not booked in Google Ad Manager, "
+        'with package "{package}"'
+    )
+)
+def given_buyer_holds_unbooked_buy(ctx: dict, package: str) -> None:
+    """A buy the seller has not approved: its one package is no line item yet."""
+    ctx["env"].hold_buy_for_approval(package_id=package, product=ctx["default_product"])
 
 
 def _image_creative(creative_id: str, url: str) -> dict[str, Any]:
@@ -289,6 +306,13 @@ def _creatives_created(ctx: dict) -> list[Any]:
     return ctx["env"].gam_objects_created("CreativeService", "createCreatives")
 
 
+def _line_item_created(ctx: dict) -> Any:
+    """The one line item the stand-in GAM network created, carrying the id it assigned."""
+    line_items = ctx["env"].gam_objects_created("LineItemService", "createLineItems")
+    assert len(line_items) == 1, f"'the line item it created' names one line item; GAM created {len(line_items)}"
+    return line_items[0]
+
+
 @then(
     parsers.re(
         r"Google Ad Manager created (?:one image creative|image creatives) for advertiser "
@@ -357,18 +381,15 @@ def then_gam_changed_no_line_item(ctx: dict) -> None:
 )
 def then_gam_associated_held_creative_with_created_line_item(ctx: dict, gam_id: str | None) -> None:
     """GAM holds the stated creative on the one line item it created, once, and nothing else; or nothing at all."""
-    line_items = ctx["env"].gam_objects_created("LineItemService", "createLineItems")
-    assert len(line_items) == 1, f"'the line item it created' names one line item; GAM created {len(line_items)}"
-    expected = [(gam_id, str(line_items[0]["id"]))] if gam_id else []
+    expected = [(gam_id, str(_line_item_created(ctx)["id"]))] if gam_id else []
     assert _associations(ctx) == expected, f"expected GAM to hold {expected}; it holds {_associations(ctx)}"
 
 
 @then("Google Ad Manager associated each creative it created with the line item it created")
 def then_gam_associated_each_creative_with_created_line_item(ctx: dict) -> None:
     """Each creative GAM created is on the one line item GAM created, once, in creation order."""
-    line_items = ctx["env"].gam_objects_created("LineItemService", "createLineItems")
-    assert len(line_items) == 1, f"'the line item it created' names one line item; GAM created {len(line_items)}"
-    expected = [(str(c["id"]), str(line_items[0]["id"])) for c in _creatives_created(ctx)]
+    line_item_id = str(_line_item_created(ctx)["id"])
+    expected = [(str(c["id"]), line_item_id) for c in _creatives_created(ctx)]
     assert _associations(ctx) == expected, f"expected GAM to hold {expected}; it holds {_associations(ctx)}"
 
 

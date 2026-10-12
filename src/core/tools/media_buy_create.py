@@ -1300,12 +1300,6 @@ def execute_approved_media_buy(
                         )
                         continue
 
-                    # On an order booked at create, a creative with an ad server id is taken as
-                    # placed then. Placement per line item is not stored, so an assignment
-                    # written since without a push (#1529) reads the same.
-                    if stored_order_id and (creative.data or {}).get("ad_server_creative_id"):
-                        continue
-
                     asset, err = _build_adapter_asset_from_creative(
                         creative, package_assignment_list, tenant_id=tenant_id
                     )
@@ -1346,6 +1340,7 @@ def execute_approved_media_buy(
                             creatives_repo = CreativeRepository(session, tenant_id)
                             for status in asset_statuses:
                                 if status.status == "failed":
+                                    # FIXME(#1566): logged only; the order is still approved and the buy goes active.
                                     logger.error(
                                         log_safe(
                                             f"[APPROVAL] Failed to upload creative {status.creative_id}: {status.message}"
@@ -1470,7 +1465,6 @@ def push_creative_to_existing_buy(
     media_buy_id: str,
     tenant_id: str,
     package_ids: list[str] | None = None,
-    principal_id: str | None = None,
 ) -> tuple[bool, str | None]:
     """Push a single approved creative to an already-active ad server line item.
 
@@ -1478,16 +1472,14 @@ def push_creative_to_existing_buy(
     was in pending_review at buy-approval time and was held back (#1038), and from
     sync_creatives for an approved creative assigned to a booked package (#2381).
     Local approval has already committed — failures here are non-fatal and logged.
-    A creative the ad server already holds (``ad_server_creative_id`` set) is associated
-    with the packages' line items, not created again.
+    A creative the ad server already holds (``ad_server_creative_id`` set) is not created
+    again: it is associated with those of the packages' line items it is not on yet.
 
     ``package_ids`` limits the push to those of the creative's packages on the buy;
     ``None`` pushes to every package the creative is assigned to there.
 
-    ``principal_id`` is the creative's owner. A creative id is unique only per principal, so
-    a caller that holds the owner (a buyer's sync) passes it and that principal's creative is
-    the one pushed. The Admin approve route has the creative id alone and passes none; the
-    owner is then read off the stored row.
+    The push acts as the buy's owner: it pushes that principal's creative, through that
+    principal's assignment rows.
 
     Returns (success, error_message). error_message is non-None only on failure.
     """
@@ -1505,23 +1497,18 @@ def push_creative_to_existing_buy(
         # the push returned success while the enrichment was silently never persisted
         # (GH #1644, graded by tests/integration/test_push_creative_to_existing_buy.py).
         #
-        # The owner is a fact of the stored row, so phase one reads it and CLOSES, phase
-        # two resolves with nothing open, and the work block opens afterwards. Inline
-        # rather than extracted: the admin lookup carries this function's sanctioned
-        # allowlist entry in test_architecture_creative_lookup_principal_scoped, and a
-        # helper would split one sanctioned violation into two.
-        owner_principal_id = principal_id
-        if owner_principal_id is None:
-            with AdminCreativeUoW(tenant_id) as owner_uow:
-                assert owner_uow.creatives is not None
-                owner_row = owner_uow.creatives.admin_get_by_id(creative_id)
-                if owner_row is None:
-                    return False, f"Creative {creative_id} not found"
-                owner_principal_id = owner_row.principal_id
+        # The buy's owner is a fact of the stored buy, so phase one reads it and CLOSES,
+        # phase two resolves with nothing open, and the work block opens afterwards.
+        with AdminCreativeUoW(tenant_id) as buy_uow:
+            assert buy_uow.media_buys is not None
+            buy = buy_uow.media_buys.get_by_id(media_buy_id)
+            if buy is None:
+                return False, f"Media buy {media_buy_id} not found"
+            buy_principal_id = buy.principal_id
 
         # Nothing is open here. This is the whole point of the split. get_adapter reads the
         # adapter config in a session of its own, so it is resolved here too.
-        identity = identity_of(tenant_id, owner_principal_id)
+        identity = identity_of(tenant_id, buy_principal_id)
         adapter = get_adapter(identity)
 
         with AdminCreativeUoW(tenant_id) as uow:
@@ -1534,7 +1521,7 @@ def push_creative_to_existing_buy(
             if not tenant_obj:
                 return False, f"Tenant {tenant_id} not found"
 
-            creative = uow.creatives.get_by_id(creative_id, owner_principal_id)
+            creative = uow.creatives.get_by_id(creative_id, buy_principal_id)
             if not creative:
                 return False, f"Creative {creative_id} not found"
             if creative.status not in CLEARED_TO_SERVE:
@@ -1545,7 +1532,7 @@ def push_creative_to_existing_buy(
                 a
                 for a in all_assignments
                 if a.media_buy_id == media_buy_id
-                and a.principal_id == owner_principal_id
+                and a.principal_id == buy_principal_id
                 and (package_ids is None or a.package_id in package_ids)
             ]
             if not matching:
@@ -3626,9 +3613,6 @@ async def _create_media_buy_impl(
                         # The package's line item, as the adapter mapped it
                         platform_line_item_id = (response.platform_line_item_ids or {}).get(response_package_id)
 
-                        # Collect platform creative IDs for association
-                        platform_creative_ids = []
-
                         for creative_id in pkg_cids:
                             # Get creative from batch-loaded map
                             creative = creatives_by_id.get(creative_id)
@@ -3640,17 +3624,12 @@ async def _create_media_buy_impl(
                                 )
                                 continue
 
-                            # The ad server's own id for the creative, when it already holds it
-                            platform_creative_id = creative.data.get("ad_server_creative_id") if creative.data else None
                             if creative.status == "pending_review":
                                 # Hold back until the creative is approved; the DB assignment below
                                 # ensures approve_creative can find it for retroactive push
                                 logger.info(
                                     log_safe(f"[AUTO-APPROVAL] Holding back creative {creative_id} (pending_review)")
                                 )
-                            elif platform_creative_id:
-                                # Already in GAM — add to association list
-                                platform_creative_ids.append(platform_creative_id)
                             else:
                                 # Upload to GAM via shared asset helper
                                 try:
@@ -3681,6 +3660,8 @@ async def _create_media_buy_impl(
                                         )
                                     )
 
+                                    # FIXME(#1566): the status is not read, so a creative the ad server
+                                    # reports failed is dropped and the response carries no signal.
                                     if upload_result and len(upload_result) > 0:
                                         uploaded_status = upload_result[0]
                                         merged_data = _apply_creative_enrichment(creative, uploaded_status)
@@ -3704,41 +3685,7 @@ async def _create_media_buy_impl(
                                 principal_id=principal_id,
                             )
 
-                        session.flush()  # Flush assignments before adapter call
-
-                        # Associate creatives with line items in ad server immediately
-                        if platform_line_item_id and platform_creative_ids:
-                            try:
-                                logger.info(
-                                    f"[cyan]Associating {len(platform_creative_ids)} pre-synced creatives with line item {platform_line_item_id}[/cyan]"
-                                )
-                                association_results = adapter.associate_creatives(
-                                    [platform_line_item_id], platform_creative_ids
-                                )
-
-                                # Log results
-                                for result in association_results:
-                                    if result.get("status") == "success":
-                                        logger.info(
-                                            f"  ✓ Associated creative {result['creative_id']} with line item {result['line_item_id']}"
-                                        )
-                                    else:
-                                        logger.info(
-                                            f"  ✗ Failed to associate creative {result['creative_id']}: {result.get('error', 'Unknown error')}"
-                                        )
-                            except Exception as e:
-                                # FIXME(#1566): silent per-item failure — association failure
-                                # is logged only; the response carries no signal that creatives
-                                # were not attached. Allowlisted in
-                                # test_architecture_no_silent_loop_failures.py.
-                                logger.error(
-                                    f"Failed to associate creatives with line item {platform_line_item_id}: {e}"
-                                )
-                        elif platform_creative_ids:
-                            logger.warning(
-                                f"Package {response_package_id} has {len(platform_creative_ids)} creatives but no platform_line_item_id from adapter. "
-                                f"Creatives will need to be associated via sync_creatives."
-                            )
+                        session.flush()
 
         # Per AdCP 3.1.1 (media-buy/package-request.json) creatives live on each PackageRequest, not at
         # request level. Inline creative submission to the adapter happens via the
