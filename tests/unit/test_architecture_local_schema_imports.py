@@ -96,8 +96,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     # schema class. The allowlist shrinks; it is never grown.
     # FIXME(#1388): core modules import SDK types directly
     ("src/core/creative_agent_registry.py", "ListCreativeFormatsRequest"),
-    # FIXME(#1388): tools import SDK types directly
-    ("src/core/tools/products.py", "FormatId"),
     # FIXME(#1388): services import SDK types directly
     ("src/services/dynamic_pricing_service.py", "FormatId"),
 }
