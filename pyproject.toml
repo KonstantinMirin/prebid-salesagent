@@ -154,51 +154,32 @@ dev = [
 # editable tree's code. An editable SDK has to be declared here to survive.
 
 [tool.uv.sources]
-# TEMPORARY LOCAL PIN. The rebuilt SDK (the whole point of salesagent-8qela) is not
-# released yet — cutting the release is the owner's call — so this points at a wheel built
-# from the SDK worktree instead of a URL. It is a LOCAL source and must not be merged
-# anywhere that builds in Docker or runs on cassini; see the limitation below.
+# THE PIN IS A PUBLISHED RELEASE URL. It was a temporary LOCAL path for part of
+# salesagent-8qela, and the 43 lines that used to stand here described that state, including
+# an operational prohibition — "must not be merged anywhere that builds in Docker or runs on
+# cassini" — which a reader met twelve lines ABOVE the url= that contradicted it. Every clause
+# of it was false by then. Recorded as salesagent-8qela.165, and the general shape is the one
+# 1b72d8306 produced twice over: one change, correct, with its surrounding record left
+# describing the old world. No guard reads prose for agreement with the line it annotates, so
+# this kind of staleness is caught by nothing and has to be removed by hand when the line moves.
 #
-# WHICH BUILD: adcp 9.0.0b3, built from the SDK fork at `integrate/8qela` 1c1e49b61 by
-# `scripts/bundle_schemas.py` then `uv build --wheel`, in a sibling checkout of that
-# revision. Verified in the built wheel: 3735 `adcp/_schemas` entries (1625 of them under
-# 3.2), `adcp/ADCP_VERSION` == 3.2.1, and 171 entries under `adcp/_compliance/3.2.1`.
-# The path below is a SIBLING path, not an absolute one, because
-# `.pre-commit-hooks/` refuses a developer path and is right to.
+# THREE FACTS ABOUT THIS PIN THAT ARE EASY TO GET WRONG, each measured:
 #
-# THIS WHEEL IS PAYLOAD-IDENTICAL TO THE STAGED RELEASE, checked rather than assumed
-# because the filenames differ (the release carries the `+sa.8qela.1c1e49b61` local
-# segment): 5505 payload entries each, code identical with `.dist-info` excluded, both
-# built from 1c1e49b61 with clean trees. So a green measurement against this path pin
-# transfers to the artifact that will publish, which a wheel built from any other tree
-# would not have.
-#
-# WHEN THE OWNER PUBLISHES, the swap is mechanical. Replace the `path` below with the
-# release's `url` and `uv lock`. Nothing else changes, and all three reasons are measured:
-#
-#   adcp = { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-1c1e49b61/adcp-9.0.0b3%2Bsa.8qela.1c1e49b61-py3-none-any.whl" }
-#
-#   * `%2B`, NOT a literal `+`. The release's local version segment is `+sa.8qela.1c1e49b61`
-#     and it must be percent-encoded in the URL; a literal `+` has bitten this series before.
-#   * THE SPECIFIER DOES NOT MOVE. `adcp==9.0.0b3` in [project.dependencies] already matches
-#     `9.0.0b3+sa.8qela.1c1e49b61`, because a bare `==` ignores a local segment (verified:
-#     SpecifierSet('==9.0.0b3') contains 9.0.0b3+sa.8qela.1c1e49b61, and does NOT contain
-#     9.0.0b4, so the check discriminates). The corollary matters more than the convenience:
-#     it ALSO matches `9.0.0b3+anything`, so the specifier cannot say WHICH local build is
-#     installed. The source line below is the only thing that identifies the build; treat it
-#     as the pin, not the `==`.
-#   * NO GUARD BREAKS ON THE SWAP. The pin-drift guard
+#   * `%2B`, NOT a literal `+`. The local version segment is `+sa.8qela.2aeef29c2` and must be
+#     percent-encoded in the URL path, while staying literal in the filename. The URL below was
+#     read off the GitHub API rather than composed, and verified resolving (302 -> 200,
+#     content-length 53567411, byte-size identical to the locally built wheel).
+#   * THE SOURCE LINE IS THE PIN, NOT THE SPECIFIER. `adcp==9.0.0b3` in [project.dependencies]
+#     matches this build because a bare `==` ignores a local segment — and it therefore also
+#     matches `9.0.0b3+anything`, so the specifier cannot say WHICH build is installed. It does
+#     not match `9.0.0b4`, so it still discriminates a real version bump.
+#   * NO GUARD READS THE DISTRIBUTION VERSION. The pin-drift guard
 #     (tests/unit/test_adcp_spec_version.py) asserts `adcp.get_adcp_spec_version()` against
-#     EXPECTED_SPEC_VERSION, i.e. the ADCP_VERSION file packaged in the wheel — 3.2.1 in
-#     both this build and the staged release — never the distribution version. Nothing under
-#     tests/, src/ or scripts/ reads the resolved package version at all
-#     (`get_adcp_sdk_version`, `adcp.__version__`, `metadata.version("adcp")`: zero hits, on
-#     a grep calibrated to find `get_adcp_spec_version` in 6 files over the same paths), and
-#     nothing reads `[tool.uv.sources]`. Independently of that enumeration: the url form
-#     passed on _collapse because it WAS the pin, and the path form passes now, so every
-#     guard that exists accepts both spellings.
+#     EXPECTED_SPEC_VERSION — the ADCP_VERSION file packaged inside the wheel, 3.2.1 here — so
+#     the url/path spelling is invisible to it. Nothing under tests/, src/ or scripts/ reads
+#     the resolved package version at all, and nothing reads [tool.uv.sources].
 #
-# THE LIMITATION THAT FORCED THE PATH FORM IS NOW GONE, which is why this is a url again. A
+# A PATH SOURCE COULD NOT BE GRADED, which is why this is a url. A
 # path source does not survive the Docker build or a cassini run: the build context is
 # `COPY pyproject.toml uv.lock` only, so a path outside the repo resolves to nothing, and the
 # e2e / admin / ui / storyboard / bdd_e2e legs and every cassini run were blind to it
@@ -211,11 +192,14 @@ dev = [
 #
 # THE BUILD THIS NAMES: cut from integrate/8qela 2aeef29c2, the graded tree with ZERO failing
 # SDK tests (16712 passed, 0 failed, 2594 skipped, 1 xfailed, reconciling against 19328
-# collected). Payload digest 45ef86ca, which is NOT the 795c9fb6 payload the earlier
-# path-pinned legs were measured against — this build carries five further commits, so those
-# results do not transfer and the application is RE-measured here, not re-confirmed.
-# `+` is %2B in the URL path and literal in the filename. URL read off the GitHub API and
-# verified resolving (302 -> 200, content-length 53567411, identical to the local wheel).
+# collected). It carries five commits beyond the earlier path-pinned wheel, so measurements
+# against that one do not transfer and the application was RE-measured against this.
+#
+# THE PUBLISHED WHEEL AND AN INDEPENDENT LOCAL BUILD OF 2aeef29c2 HAVE IDENTICAL PAYLOADS —
+# 5505 entries each, 0 added, 0 removed, 0 changed with `.dist-info` excluded. Two builds from
+# one commit by two parties agreeing entry-for-entry is the fact worth recording; the digest
+# itself is not, because the two measurements computed it over different scopes and reported
+# different values for the same agreeing comparison. Cite the comparison, not the hash.
 adcp = { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-2aeef29c2/adcp-9.0.0b3%2Bsa.8qela.2aeef29c2-py3-none-any.whl" }
 
 [tool.ruff]
