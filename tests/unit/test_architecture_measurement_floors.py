@@ -101,6 +101,12 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # auto-xfails in under a second) because a scenario carrying its own identity tag is
         # claimed by no coarse uc bucket. Deleting this row returns them to exactly that.
         "get-products-format-options",
+        # local-reporting-cadence-refusal's three scenarios, which dispatch a real
+        # create_media_buy and carry their own @reporting_cadence identity tag — so
+        # detect_uc claims none of them and deleting the row would auto-xfail all three
+        # at fixture setup, leaving the ONLY grading of the cadence refusal
+        # (salesagent-8qela.171) silently dormant. Pinned in the same change as the row.
+        "reporting-cadence-create",
         "security-wire-error-safety",
         "security-tenant-isolation",
         "database-fail-fast",

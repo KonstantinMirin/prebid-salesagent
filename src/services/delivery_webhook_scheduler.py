@@ -210,7 +210,9 @@ class DeliveryWebhookScheduler:
             media_buy: MediaBuy database model
             reporting_webhook: Webhook configuration dict
             session: Database session
-            force: If True, bypass frequency checks and duplicate checks
+            force: If True, bypass the duplicate-send check. It no longer bypasses a
+                cadence check, because there is none here to bypass -- see the note
+                below where one used to stand (salesagent-8qela.171).
 
         Returns:
             bool: True only if the sender reported the delivery as made.
@@ -255,17 +257,25 @@ class DeliveryWebhookScheduler:
                 )
                 return False
 
-            # Determine reporting frequency from AdCP config (hourly, daily, monthly)
-            raw_freq = str(reporting_webhook.get("frequency") or "daily").lower()
-
-            if not force and raw_freq != "daily":
-                logger.warning(
-                    "Skipping reporting webhook with frequency '%s' for media buy %s – "
-                    "only 'daily' frequency is supported for delivery webhooks at this time",
-                    raw_freq,
-                    media_buy.media_buy_id,
-                )
-                return False
+            # NO CADENCE CHECK HERE, deliberately. One stood here and was DEAD: it read
+            # ``reporting_webhook["frequency"]`` while the stored document carries
+            # ``reporting_frequency`` -- the key the pinned type declares, written by
+            # ``req.model_dump(mode="json")`` at
+            # ``MediaBuyRepository.create_from_request`` -- so ``raw_freq`` was
+            # unconditionally "daily" and the skip could never fire. A non-daily
+            # registration was therefore DELIVERED DAILY rather than refused or honoured
+            # (salesagent-8qela.171). After that was measured, nothing anywhere wrote
+            # "frequency": not this repo's source, not its fixtures.
+            #
+            # DELETED rather than repaired. ``create_media_buy`` now REFUSES a cadence the
+            # buy's products do not advertise, so a non-daily registration cannot reach
+            # this scheduler at all and a repaired skip here would guard nothing -- two
+            # mechanisms for one obligation, the second at a layer where the buyer cannot
+            # be told. Repairing it would also have converted an existing buyer's daily
+            # reports into silence, which is a delivered -> never-delivered change this
+            # repo requires an owner sign-off for; the refusal is prospective and takes
+            # nothing from anyone. Pre-existing non-daily rows keep their current daily
+            # delivery, which salesagent-8qela.177 records.
 
             # Calculate reporting period for daily frequency: yesterday (full day)
             start_date_obj = datetime.now(UTC).date() - timedelta(days=1)
