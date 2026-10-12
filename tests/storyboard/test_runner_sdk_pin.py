@@ -36,35 +36,41 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts.audit import storyboard_spec  # noqa: E402
 
-#: The one divergence this repo accepts, and why. Keyed ``(sdk version, sdk adcp_version,
-#: repo pin)`` so a move on ANY of the three fails and asks for a decision, rather than the
-#: divergence widening quietly.
+#: RETIRED. There is no accepted divergence any more: the runner declares this repo's pin
+#: exactly, so the assertion below is the whole check and `None` can never equal an observed
+#: triple.
 #:
-#: THE REPO'S PIN IS NOT WHAT IS WRONG. 3.1.1 is the contract this seller implements. The
-#: runner's ``adcp_version`` is fixed by its npm release, so the client's contract and the
-#: vectors it grades against are one choice upstream rather than two. This repo already passes
-#: ``--compliance-version`` with the pinned version, and it does not move the client -- the
-#: assertion message below says as much itself.
+#: THE RETIREMENT CONDITION WAS WRITTEN HERE AND IS NOW MET. The previous record ended
+#: "retire the pin when a line both declares this repo's pin and carries the A2A signing
+#: dispatch". ``@adcp/sdk@14.4.0`` does both:
 #:
-#: 14.0.0-rc.42 is not a free choice. Grading both protocol surfaces requires the 14 line:
-#: it is the only line carrying the A2A request-signing dispatch (adcp-client#2967, merged
-#: 2026-09-20), without which every ``signed_requests`` vector on the A2A card is ungradable.
-#: The 14 line declares 3.2.0-rc.4.
+#:   * it declares ``adcp_version: 3.2.1``, which is this repo's pin (verified:
+#:     ``npm view @adcp/sdk@14.4.0 adcp_version`` -> ``3.2.1``);
+#:   * it is on the 14 line, so it carries the A2A request-signing dispatch
+#:     (adcp-client#2967, merged 2026-09-20) that 14.0.0-rc.42 was pinned for. Without that
+#:     dispatch every ``signed_requests`` vector on the A2A card is ungradable, which is why
+#:     the 14 line was never a free choice. 14.4.0 > 14.0.0-rc.42, so the dispatch is in.
 #:
-#: THE DIVERGENCE WIDENED AT THIS BUMP, from 3.2.0-rc.1 to 3.2.0-rc.4, and that is recorded
-#: rather than smoothed over: the runner line we need moved further from our pin, we did not
-#: choose to move away from it. The measured conformance score did not change across the bump
-#: (see below), which is what makes the wider divergence acceptable rather than merely tolerated.
+#: WHAT THE OLD RECORD GOT WRONG BY STANDING TOO LONG, worth keeping because the mistake was
+#: not in its reasoning: it said "3.1.1 is the contract this seller implements", which was
+#: true when written and false by the time it fired. salesagent-8qela moved the repo to
+#: 3.2.1, and the record's third element still named 3.1.1 -- so the guard was comparing the
+#: installed runner against a pin the repo had left behind, and its failure message read as
+#: though the runner had moved. Nothing had: the repo had. The same staleness disease as the
+#: pyproject pin comment (salesagent-8qela.165) and the stranded allowlist row (.163): one
+#: change, correct, with its surrounding record left describing the old world.
 #:
-#: adcontextprotocol/adcp-client#2950 -- "``--compliance-version`` does not move the client
-#: contract, and no maintained line declares 3.1.1" -- is now CLOSED, and it is worth being
-#: precise about what that did and did not give us. It shipped ``@adcp/sdk@13.1.0`` on the
-#: ``adcp-3.1`` tag, which declares ``adcp_version: 3.1.20``. Closer than 3.2.0-rc.4, still not
-#: 3.1.1, and it predates the A2A dispatch above -- so it is not a retirement path for this
-#: divergence today. Retire the pin when a line both declares this repo's pin and carries the
-#: A2A signing dispatch, or when the runner separates the client contract from the vectors it
-#: grades against.
-_ACCEPTED_DIVERGENCE = ("14.0.0-rc.42", "3.2.0-rc.4", "3.1.1")
+#: The epic that moved the pin SAID this: "Conformance runner: @adcp/sdk@14.4.0, which
+#: declares 3.2.1 exactly, so the accepted-divergence record is retired." That was recorded
+#: before the storyboard leg was ever run against the new pin, and it was re-derived from npm
+#: afterwards at the cost of a wrong intermediate conclusion (salesagent-8qela.160). Read the
+#: record before measuring.
+#:
+#: IF A DIVERGENCE EVER RETURNS, restore a triple here rather than widening the assertion --
+#: keyed ``(sdk version, sdk adcp_version, repo pin)`` so a move on ANY of the three fails and
+#: asks for a decision instead of widening quietly. That design was right and is why this
+#: fired at all.
+_ACCEPTED_DIVERGENCE: tuple[str, str, str] | None = None
 
 
 def test_runner_sdk_targets_the_pinned_adcp_version() -> None:
