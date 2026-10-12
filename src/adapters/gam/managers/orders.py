@@ -12,7 +12,7 @@ from typing import Any
 
 from googleads import ad_manager
 
-from src.adapters.gam.pricing_compatibility import LineItemPlan, PricingCompatibility
+from src.adapters.gam.pricing_compatibility import PricingCompatibility
 from src.adapters.gam.utils.error_handler import map_gam_exception
 from src.adapters.gam.utils.formatters import format_datetime_for_gam
 from src.adapters.gam.utils.timeout_handler import timeout
@@ -346,7 +346,6 @@ class GAMOrdersManager:
         end_time: datetime,
         network_time_zone: str,
         products_map: dict[str, Any],
-        line_item_plans: dict[str, LineItemPlan],
         log_func: Callable | None = None,
         tenant_id: str | None = None,
         order_name: str | None = None,
@@ -363,9 +362,6 @@ class GAMOrdersManager:
             end_time: Flight end datetime
             network_time_zone: The network's time zone, from ``current_network_time_zone``
             products_map: Map of product_id to product config
-            line_item_plans: Each package's line item type, priority, goal type and unit
-                type, keyed by package_id. The adapter resolves them before it creates the
-                order (``PricingCompatibility.plan_line_item``).
             log_func: Optional logging function
             tenant_id: Tenant ID for fetching naming templates
             order_name: Order name for line item naming context
@@ -747,9 +743,11 @@ class GAMOrdersManager:
                 full_line_item_name, GAM_NAME_LIMITS["max_line_item_name_length"]
             )
 
-            # The package's validated pricing; the adapter refused a package without it
-            # before creating the order.
-            pricing_info = (package_pricing_info or {})[package.package_id]
+            # The package's validated pricing, from the request's selected pricing option
+            pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
+            if not pricing_info:
+                log(f"[red]Error: Package '{package.package_id}' has no pricing information[/red]")
+                raise AdCPConfigurationError()
             pricing_model = pricing_info["pricing_model"]
             currency = pricing_info["currency"]
             rate = unit_price(pricing_info)
@@ -768,9 +766,15 @@ class GAMOrdersManager:
                 cost_per_unit_micro = int(rate * 1_000_000)
                 log(f"  Pricing: {pricing_model.upper()} @ ${rate:,.2f} {currency} → GAM {cost_type}")
 
-            # Type, priority, goal type and unit type were planned before the order; the
-            # goal units follow the planned goal type, from the core's lifetime volume.
-            plan = line_item_plans[package.package_id]
+            # Type, priority, goal type and unit type are decided first; the goal units
+            # follow the planned goal type, from the core's lifetime volume.
+            # delivery_type (guaranteed or not) is the product's, separate from fixed vs auction pricing.
+            plan = PricingCompatibility.plan_line_item(
+                pricing_model,
+                is_guaranteed=(product.get("delivery_type") if product else None) == "guaranteed",
+                implementation_config=impl_config,
+                product_id=product_name,
+            )
             goal = {
                 "goalType": plan.goal_type,
                 "unitType": plan.unit_type,

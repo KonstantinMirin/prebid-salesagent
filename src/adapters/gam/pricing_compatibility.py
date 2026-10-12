@@ -40,7 +40,7 @@ GOAL_TYPES: dict[str, tuple[str, ...]] = {
 
 
 class LineItemPlan(NamedTuple):
-    """How one package is booked in GAM: decided before the order exists."""
+    """How one package is booked in GAM."""
 
     line_item_type: LineItemType
     priority: int

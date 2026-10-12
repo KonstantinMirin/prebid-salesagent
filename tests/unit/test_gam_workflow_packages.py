@@ -11,16 +11,13 @@ with a required ``package_id``, so pydantic refuses a result that lacks them.
 """
 
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
 from src.adapters.base import AdapterCreateRequest
 from src.adapters.google_ad_manager import GoogleAdManager
-from src.core.helpers.pricing_helpers import pricing_info_for
 from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, PackageRequest
-from tests.factories import PricingOptionFactory
 
 
 @pytest.fixture
@@ -91,16 +88,6 @@ def sample_packages():
             format_ids=[FormatId(agent_url="https://test.com", id="display_728x90")],
         ),
     ]
-
-
-def _pricing_info_for(packages):
-    """The validated pricing the tool hands the adapter for each package, as production stores it.
-
-    ``create_media_buy`` always passes it (``_execute_adapter_media_buy_creation``), and
-    the adapter refuses a package without it before creating the order.
-    """
-    option = PricingOptionFactory.build(rate=Decimal("5.00"))
-    return {package.package_id: pricing_info_for(option) for package in packages}
 
 
 def _build_gam_adapter(mock_principal):
@@ -189,20 +176,14 @@ class TestGAMManualApprovalPath:
             with (
                 patch.object(adapter, "_requires_manual_approval", return_value=True),
                 patch.object(adapter.workflow_manager, "create_manual_order_workflow_step") as mock_workflow,
-                patch("src.core.database.database_session.get_db_session") as mock_db_session,
             ):
-                _stub_product_session(mock_db_session)
                 mock_workflow.return_value = "workflow_step_123"
 
                 # Act
                 start_time = datetime.now()
                 end_time = start_time + timedelta(days=30)
                 response = adapter.create_media_buy(
-                    request=sample_request,
-                    packages=sample_packages,
-                    start_time=start_time,
-                    end_time=end_time,
-                    package_pricing_info=_pricing_info_for(sample_packages),
+                    request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
                 )
 
                 # The returned packages ARE the requested ones: same ids, none dropped,
@@ -250,9 +231,7 @@ class TestGAMManualApprovalPath:
             with (
                 patch.object(adapter, "_requires_manual_approval", return_value=True),
                 patch.object(adapter.workflow_manager, "create_manual_order_workflow_step") as mock_workflow,
-                patch("src.core.database.database_session.get_db_session") as mock_db_session,
             ):
-                _stub_product_session(mock_db_session)
                 mock_workflow.return_value = None  # Simulate failure
 
                 # Act / Assert - workflow failure raises the typed AdCPWorkflowError,
@@ -269,7 +248,6 @@ class TestGAMManualApprovalPath:
                         packages=sample_packages,
                         start_time=start_time,
                         end_time=end_time,
-                        package_pricing_info=_pricing_info_for(sample_packages),
                     )
                 assert exc_info.value.error_code == "WORKFLOW_CREATION_FAILED"
 
@@ -343,11 +321,7 @@ class TestGAMActivationWorkflowPath:
                 start_time = datetime.now()
                 end_time = start_time + timedelta(days=30)
                 response = adapter.create_media_buy(
-                    request=sample_request,
-                    packages=sample_packages,
-                    start_time=start_time,
-                    end_time=end_time,
-                    package_pricing_info=_pricing_info_for(sample_packages),
+                    request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
                 )
 
             # Same ids in, same ids out (see the note on the manual-approval test for
@@ -427,11 +401,7 @@ class TestGAMSuccessPath:
                 start_time = datetime.now()
                 end_time = start_time + timedelta(days=30)
                 response = adapter.create_media_buy(
-                    request=sample_request,
-                    packages=sample_packages,
-                    start_time=start_time,
-                    end_time=end_time,
-                    package_pricing_info=_pricing_info_for(sample_packages),
+                    request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
                 )
 
             # Same ids in, same ids out (see the note on the manual-approval test for
@@ -476,11 +446,7 @@ class TestGAMAdapterErrorTaxonomy:
             end_time = start_time + timedelta(days=30)
             with pytest.raises(AdCPLineItemError) as exc_info:
                 adapter.create_media_buy(
-                    request=sample_request,
-                    packages=sample_packages,
-                    start_time=start_time,
-                    end_time=end_time,
-                    package_pricing_info=_pricing_info_for(sample_packages),
+                    request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
                 )
 
         assert exc_info.value.error_code == "AD_SERVER_CREATE_FAILED"
@@ -525,7 +491,6 @@ class TestGAMAdapterSeamPreservesClassification:
                     packages=sample_packages,
                     start_time=start_time,
                     end_time=end_time,
-                    package_pricing_info=_pricing_info_for(sample_packages),
                 )
 
         # Not AdCPAdapterError, not AD_SERVER_CREATE_FAILED: the seam must not
@@ -572,11 +537,7 @@ class TestGAMProductUnavailableRaiseSites:
             end_time = start_time + timedelta(days=30)
             with pytest.raises(AdCPProductUnavailableError) as exc_info:
                 adapter.create_media_buy(
-                    request=sample_request,
-                    packages=sample_packages,
-                    start_time=start_time,
-                    end_time=end_time,
-                    package_pricing_info=_pricing_info_for(sample_packages),
+                    request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
                 )
 
         assert exc_info.value.error_code == "PRODUCT_UNAVAILABLE", condition
