@@ -139,8 +139,15 @@ def pytest_collection_finish(session):
 
 
 @lru_cache(maxsize=1)
-def _collected_items() -> tuple[dict[str, Any], ...]:
-    """Every collected ``tests/bdd`` item with its marker set, from a real run."""
+def collect_bdd_items_with_markers() -> tuple[dict[str, Any], ...]:
+    """Every collected ``tests/bdd`` item with its marker set, from a real run.
+
+    PUBLIC because a second guard consumes it: ``test_architecture_route_xfail_census``
+    counts how many scenarios each setup-xfail route claims, and it needs the same
+    (nodeid, derived marker set) rows this already produces. A second collector would
+    drift about the ``BDD_E2E_ENABLED`` pop below, which decides the scope every count
+    is quoted against (salesagent-8qela.151).
+    """
     repo = repo_root()
     # A private dir per invocation: under xdist each worker runs its own nested
     # collection, and two workers sharing one dump would race.
@@ -216,7 +223,7 @@ def _scenario_id(markers: list[str]) -> str | None:
 def _scenarios_by_module() -> dict[str, dict[str, frozenset[frozenset[str]]]]:
     """``module -> scenario id -> the distinct marker sets its items carry``."""
     grouped: dict[str, dict[str, set[frozenset[str]]]] = defaultdict(lambda: defaultdict(set))
-    for row in _collected_items():
+    for row in collect_bdd_items_with_markers():
         scenario_id = _scenario_id(row["markers"])
         if scenario_id is None:
             continue
@@ -425,7 +432,7 @@ def test_pinned_derivation_accessor_reproduces_iter_markers_for_every_collected_
     reproduces this lane's disease one layer out, where the agreement test above
     cannot see it — same function, same argument supplied by the test.
     """
-    rows = _collected_items()
+    rows = collect_bdd_items_with_markers()
     assert accessor_dotted_module() is not None, (
         f"{DERIVATION_ACCESSOR}()'s home is not pinned yet (binding input G2: the implement atom records the "
         f"chosen module in the task and pins it in tests/unit/_liveness_contract_pins.py).\n{FIX_HINT}"
