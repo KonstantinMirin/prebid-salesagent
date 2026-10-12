@@ -513,21 +513,10 @@ class CreativeSyncEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
         lambda self: None
     )
     def serve_reference_formats(self) -> None:
-        """The creative agent answers a lookup of a reference-catalog format with that format.
+        """Format lookups answer as the registry a test deployment runs: from the reference catalog."""
+        from src.core.creative_agent_registry import ReferenceFormatsRegistry
 
-        Any other id keeps the stand-in's default answer, so a scenario that does not call
-        this sees the registry it always saw.
-        """
-        from src.core.format_cache import load_reference_formats
-
-        registry = self.mock["registry"].return_value
-        default_answer = registry.get_format.return_value
-        catalog = {fmt.format_id.id: fmt for fmt in load_reference_formats()}
-
-        async def _get_format(_agent_url: Any, format_id: Any, *_args: Any, **_kwargs: Any) -> Any:
-            return catalog.get(str(getattr(format_id, "id", format_id)), default_answer)
-
-        registry.get_format = AsyncMock(side_effect=_get_format)
+        self.mock["registry"].return_value.get_format = ReferenceFormatsRegistry().get_format
 
     def preview_creatives_at(self, preview_url: str, *, format_id: str, width: int, height: int) -> None:
         """The creative agent lists reference format *format_id* and previews a creative in it.
