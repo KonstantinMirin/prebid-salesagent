@@ -482,3 +482,67 @@ def test_sni_upstream_detector_reports_a_name_routed_to_the_wrong_service() -> N
     )
 
     assert sni_map_upstreams(synthetic)[COUNTERPARTY_HOSTNAME] == "webhook-capture:8080"
+
+
+def test_the_counterparty_origin_answers_hop_1_as_the_mcp_tool_call() -> None:
+    """Hop 1 is a ``get_adcp_capabilities`` TOOL CALL, and this origin must complete one.
+
+    The sixth site, added after the fixture outlived the SDK behaviour it was shaped
+    around. Up to adcp 6.6.0 hop 1 was a raw ``GET <agent_url>``; adcp 9's
+    ``_resolver_protocol`` opens an MCP session and calls the tool, which is what AdCP
+    3.2.1 § "Discovering an agent's signing keys via ``brand_json_url``" step 1
+    specifies. This origin answered only the raw GET, so hop 1 failed and seven signing
+    scenarios across three suites reported ``request_signature_capabilities_unreachable``
+    — the pin's correct code for a failed hop 1 (``salesagent-8qela.167``).
+
+    The other five sites read files. This one EXECUTES, through the real
+    ``fetch_protocol_capabilities`` rather than a hand-rolled client, because the defect
+    it guards was a disagreement between this fixture and that function — and only the
+    function itself is authority on what it sends. It needs no Docker: the origin binds
+    a loopback port in-process for the length of the test.
+
+    The uninstalled slot is the CONTROL. Without it a handler that answered every path
+    with a document would pass, and the fixture's deliberate hop-1 refusal for a slot
+    nobody installed (``_agent_capabilities``) would be gone with nothing to notice.
+    """
+    import asyncio
+
+    import httpx
+    from adcp.signing._resolver_protocol import DiscoveryTransport, fetch_protocol_capabilities
+
+    from tests.e2e.counterparty_origin_service import run_counterparty_origin
+
+    async def capabilities_at(base: str, path: str) -> dict | None:
+        async with httpx.AsyncClient(timeout=10.0, trust_env=False, follow_redirects=False) as client:
+            transport = DiscoveryTransport(client, f"{base}{path}", 64 * 1024, 0)
+            try:
+                return await fetch_protocol_capabilities(transport, "mcp", 10.0)
+            except Exception:  # noqa: BLE001 - the refusal is one of the two outcomes graded
+                return None
+
+    async def walk() -> tuple[dict | None, dict | None, dict | None]:
+        with run_counterparty_origin(host="127.0.0.1", port=0) as base:
+            return (
+                await capabilities_at(base, "/agent/listed"),
+                await capabilities_at(base, "/agent/unlisted"),
+                await capabilities_at(base, "/agent/slot/nothing-is-installed-here"),
+            )
+
+    listed, unlisted, uninstalled_slot = asyncio.run(walk())
+
+    assert listed is not None, (
+        "hop 1 did not complete over MCP for /agent/listed — the SDK's own "
+        "fetch_protocol_capabilities could not reach a capabilities document, which is "
+        "exactly the condition that produced request_signature_capabilities_unreachable"
+    )
+    assert listed.get("identity", {}).get("brand_json_url", "").endswith("/.well-known/brand.json"), (
+        f"hop 1 resolved but carried no usable identity.brand_json_url, so hop 2 has nothing to fetch: {listed!r}"
+    )
+    assert unlisted is not None and "brand-unlisted" in unlisted.get("identity", {}).get("brand_json_url", ""), (
+        "the unlisted sibling must resolve too and point at the unlisted brand.json — it "
+        f"differs from its twin in brand.json, not in hop 1: {unlisted!r}"
+    )
+    assert uninstalled_slot is None, (
+        "a slot with no keyset installed completed hop 1, so the deliberate hop-1 refusal "
+        f"is gone and an unknown slot will now fail later as an unresolvable keyid: {uninstalled_slot!r}"
+    )
