@@ -824,16 +824,46 @@ def iter_architecture_guard_trees(
 # ---------------------------------------------------------------------------
 
 
-def src_python_files(repo: Path) -> Iterator[Path]:
-    """Every .py file under src/.
+def src_python_files(repo: Path) -> tuple[Path, ...]:
+    """Every .py file under src/, and never zero of them.
 
     There is no exclusion. ``src/vendor/`` held a verbatim copy of the SDK's URL
     canonicalizer, carried because the then-pinned adcp 6.6.0 failed 14 of the 37
     published canonicalization vectors. The pin is now 9.0.0b1, which passes all 37
     (measured), so the copy is gone and with it the one region of ``src/`` the
     architecture guards did not grade.
+
+    IT REFUSES AN EMPTY SCAN, and that is the whole reason it is not a generator
+    any more. THIRTY-TWO call sites across the architecture guards consume this,
+    and every one of them sweeps for a violation and asserts there are none — so a
+    scan that finds no files makes all thirty-two PASS. Not a skip, not a moved
+    item count: a clean green pass that neither a per-nodeid delta nor a
+    reconciled total can see, because every item still runs and still passes.
+
+    Measured (salesagent-kdkbo): 341 files at a correct ``repo``, 0 and no error at
+    a wrong one. A ``repo_root()`` that resolved wrong, or ``src/`` renamed, would
+    switch the whole guard layer off silently. The sibling precedent is
+    ``tests/unit/_storyboard_guard_env.py``'s Finding 12 — ``ADCP_HOME=/nonexistent``
+    once gave "670 passed, 25 skipped, exit 0" with twenty-five guards switched off —
+    and its answer is the one applied here: a MISCONFIGURED instrument must fail,
+    where only a genuinely unprovisioned one may opt out.
+
+    Returning a tuple rather than yielding is deliberate. A generator could only
+    discover emptiness at exhaustion, so the refusal would land at the end of
+    whatever loop consumed it, attributed to that caller; and a generator created
+    and never consumed would not check at all. Checked at the call, the refusal
+    names the real fault. No caller uses generator semantics — verified across all
+    32 sites, every one is plain iteration.
     """
-    yield from (repo / "src").rglob("*.py")
+    files = tuple((repo / "src").rglob("*.py"))
+    assert files, (
+        f"src_python_files({repo}) found no .py files under {repo / 'src'}. "
+        "Every architecture guard reached through this helper sweeps for violations and asserts "
+        "there are none, so an empty scan makes all 32 of them pass green with nothing graded "
+        "(salesagent-kdkbo). This is a misconfigured instrument, not a clean tree: check that "
+        "repo_root() resolves to the repository and that src/ exists under it."
+    )
+    return files
 
 
 def iter_workflow_files(repo: Path) -> Iterator[Path]:
