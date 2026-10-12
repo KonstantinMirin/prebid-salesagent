@@ -4755,10 +4755,24 @@ def when_create_media_buy_registering_reporting_cadence(ctx: dict, cadence: str)
     (``harness_create_request_kwargs``) and from
     ``ReportingWebhookRequestFactory``, so a package, pricing or
     schema rejection can never stand in for the cadence refusal under test. The
-    factory supplies the ``authentication`` block and ``operation_id`` that
-    ``core/reporting-webhook.json`` and the interim correlation agreement
-    require, which is what leaves the cadence as the only thing a scenario
-    varies.
+    factory supplies the ``authentication`` block that
+    ``core/reporting-webhook.json`` REQUIRES, and the ``operation_id`` that the
+    AdCP 3.2 interim reporting-correlation agreement (``webhooks.mdx``
+    :656-673) asks for -- a field that schema does NOT declare, carried under
+    its ``additionalProperties: true``. Together they leave the cadence as the
+    only thing a scenario varies.
+
+    THE TWO AUTHORITIES ARE NAMED SEPARATELY ON PURPOSE. Folding them into one
+    citation is how a reader comes to grep ``core/reporting-webhook.json`` for
+    ``operation_id``, find nothing, and conclude the fixture is wrong or the
+    suppression gate is invented -- which is the investigation
+    salesagent-8qela.178 actually ran before the agreement's text was found on
+    main. Measured on the pinned wheel at
+    ``adcp/_schemas/3.2/core/reporting-webhook.json``: ``required`` is
+    ``[url, authentication, reporting_frequency]`` and ``properties`` carries no
+    ``operation_id``. ``ReportingWebhookRequestFactory``'s own docstring states
+    the same split, which is the attribution this sentence should have followed
+    in the first place.
 
     PARAMETERISED rather than three near-identical steps: the only difference
     between the accepted and refused legs is this one enum member, and three
