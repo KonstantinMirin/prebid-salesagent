@@ -375,9 +375,11 @@ def _process_assignments(
                     # An approved creative assigned to a package booked as a line item is
                     # trafficked now (#2381), unless this assignment exists and the ad server
                     # already holds the creative. A creative under review is trafficked when it
-                    # is approved; a buy not yet booked, when it is executed.
+                    # is approved; a buy not yet booked, when it is executed. Another
+                    # principal's package is assigned (#2417) and never trafficked.
                     if (
                         creative_row.status in CLEARED_TO_SERVE
+                        and db_media_buy.principal_id == principal_id
                         and (db_package.package_config or {}).get("platform_line_item_id")
                         and not (existing_assignment and (creative_row.data or {}).get("ad_server_creative_id"))
                     ):

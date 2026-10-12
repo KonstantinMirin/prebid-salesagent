@@ -3642,15 +3642,15 @@ async def _create_media_buy_impl(
 
                             # The ad server's own id for the creative, when it already holds it
                             platform_creative_id = creative.data.get("ad_server_creative_id") if creative.data else None
-                            if platform_creative_id:
-                                # Already in GAM — add to association list
-                                platform_creative_ids.append(platform_creative_id)
-                            elif creative.status == "pending_review":
+                            if creative.status == "pending_review":
                                 # Hold back until the creative is approved; the DB assignment below
                                 # ensures approve_creative can find it for retroactive push
                                 logger.info(
                                     log_safe(f"[AUTO-APPROVAL] Holding back creative {creative_id} (pending_review)")
                                 )
+                            elif platform_creative_id:
+                                # Already in GAM — add to association list
+                                platform_creative_ids.append(platform_creative_id)
                             else:
                                 # Upload to GAM via shared asset helper
                                 try:

@@ -76,6 +76,16 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
     And Google Ad Manager associated that creative with line items "5000001"
 
+  # sync_creatives accepts an assignment to another buyer's package (#2417). Nothing of it
+  # reaches that buyer's line item.
+  @T-UC-006-local-gam-other-buyers-package
+  Scenario: An assignment to another buyer's booked package sends nothing to GAM
+    Given another buyer of the seller holds a buy booked in Google Ad Manager as order "6000004" whose package "pkg-other-buyer" is line item "5000004" accepting 300x250
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-other-buyer" with weight 40
+    When the Buyer Agent syncs the creative with assignments
+    Then Google Ad Manager created no creative
+    And Google Ad Manager changed no line item
+
   # A record written before GAM's id had its own key holds the buyer's id as the ad server's
   # (#2247). That id is not one GAM has, so the creative is created.
   @T-UC-006-local-gam-buyer-id-not-read-as-gams

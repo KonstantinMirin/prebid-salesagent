@@ -98,9 +98,17 @@ class GamSellerMixin:
             self.mock["adapter"].side_effect = get_adapter
 
     def book_in_gam(
-        self, *, package_id: str, line_item_id: str, size: tuple[int, int], order_id: str, product: Any, status: str
+        self,
+        *,
+        package_id: str,
+        line_item_id: str,
+        size: tuple[int, int],
+        order_id: str,
+        product: Any,
+        status: str,
+        principal: Any = None,
     ) -> Any:
-        """A buy of the env's buyer that the seller already booked in GAM as order *order_id*.
+        """A buy the seller already booked in GAM as order *order_id*: the env's buyer's, unless *principal* names another.
 
         The rows the create path leaves: one package on *product*, whose ``package_config``
         carries the order id and its line item id. The stand-in network holds that line
@@ -113,10 +121,10 @@ class GamSellerMixin:
         from tests.factories.media_buy import request_package
         from tests.helpers.gam_client import gam_line_item
 
-        tenant, principal = self.setup_default_data()
+        tenant, buyer = self.setup_default_data()
         media_buy = MediaBuyFactory(
             tenant=tenant,
-            principal=principal,
+            principal=principal or buyer,
             status=status,
             confirmed_at=datetime.now(UTC),
             # The flight a create resolves and stores, on the factory's own flight dates.
