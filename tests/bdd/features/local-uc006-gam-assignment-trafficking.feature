@@ -40,14 +40,13 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
     And Google Ad Manager associated that creative with line items "5000001"
 
-  # The sync stores the creative agent's preview link as the creative's URL. The markup is what
-  # GAM serves; the preview page is not sent to GAM as an image.
+  # sync_creatives records the creative agent's preview link as an HTML creative's URL. The
+  # markup is what GAM serves; the preview page is not sent to GAM as an image.
   @T-UC-006-local-gam-html-creative
-  Scenario: A synced HTML creative is created in GAM as a third-party creative whose snippet is its markup
-    Given the seller's product also sells the reference format "display_300x250_html"
-    And the creative agent previews a creative in the format "display_300x250_html" at "https://preview.example.com/cr-html" as 300x250
-    And the buyer syncs a 300x250 HTML creative "cr-html" with markup "<div>Example ad</div>" assigned to package "pkg-banner-a"
-    When the Buyer Agent syncs the creative with assignments
+  Scenario: An HTML creative is created in GAM as a third-party creative whose snippet is its markup
+    Given the product "prod-banner" supports format_ids ["display_300x250_image", "display_300x250_html"]
+    And the buyer holds an approved 300x250 HTML creative "cr-html" with markup "<div>Example ad</div>", recorded with the creative agent's preview link "https://preview.example.com/cr-html" as its URL
+    When the Buyer Agent references library creative "cr-html", without resending it, assigned to package "pkg-banner-a"
     Then creative "cr-html" is assigned to package "pkg-banner-a"
     And Google Ad Manager created one third-party creative for advertiser "3000001" whose snippet is "<div>Example ad</div>" and which names no image URL
     And Google Ad Manager associated that creative with line items "5000001"

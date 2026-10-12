@@ -95,16 +95,40 @@ def _library_image_creative(
 
     The buyer's own unless *principal* names another; *data* adds keys to its stored record.
     """
+    from tests.factories.creative_asset import image_spec
+
+    _library_creative(
+        ctx,
+        creative_id,
+        "display_300x250_image",
+        image_spec("banner_image", url=url),
+        status=status,
+        principal=principal,
+        **data,
+    )
+
+
+def _library_creative(
+    ctx: dict,
+    creative_id: str,
+    format_id: str,
+    asset: Any,
+    *,
+    status: str = "approved",
+    principal: Any = None,
+    **data: Any,
+) -> None:
+    """A creative stored in the library with one asset, in reference-catalog format *format_id*."""
     from tests.factories.creative import CreativeFactory
-    from tests.factories.creative_asset import build_assets, image_spec
+    from tests.factories.creative_asset import build_assets
 
     CreativeFactory(
         creative_id=creative_id,
         tenant=ctx["tenant"],
         principal=principal or ctx["principal"],
-        format="display_300x250_image",
+        format=format_id,
         status=status,
-        data={"assets": build_assets(image_spec("banner_image", url=url)), **data},
+        data={"assets": build_assets(asset), **data},
     )
 
 
@@ -130,6 +154,34 @@ def given_another_buyer_holds_creative(ctx: dict, creative_id: str, url: str) ->
 def given_buyer_holds_creative_recorded_with_own_id(ctx: dict, creative_id: str, url: str) -> None:
     """A library creative whose record holds the buyer's id under ``platform_creative_id``, as #2247 wrote it."""
     _library_image_creative(ctx, creative_id, url, platform_creative_id=creative_id)
+    ctx["env"]._commit_factory_data()
+
+
+@given(
+    parsers.parse(
+        'the buyer holds an approved 300x250 HTML creative "{creative_id}" with markup "{markup}", '
+        'recorded with the creative agent\'s preview link "{preview_url}" as its URL'
+    )
+)
+def given_buyer_holds_html_creative(ctx: dict, creative_id: str, markup: str, preview_url: str) -> None:
+    """A library creative in the reference HTML format, recorded as sync_creatives records one.
+
+    Its one asset is HTML markup (core/assets/html-asset.json: ``asset_type: "html"``, the
+    markup in ``content``). The sync records the first render of the creative agent's preview
+    as the creative's root ``url``, ``width`` and ``height``
+    (src/core/tools/creatives/_processing.py).
+    """
+    from tests.factories.creative_asset import asset_spec
+
+    _library_creative(
+        ctx,
+        creative_id,
+        "display_300x250_html",
+        asset_spec("html_creative", "html", content=markup),
+        url=preview_url,
+        width=300,
+        height=250,
+    )
     ctx["env"]._commit_factory_data()
 
 
@@ -219,62 +271,16 @@ def given_buyer_holds_booked_buy(
 
 def _image_creative(creative_id: str, url: str) -> dict[str, Any]:
     """A 300x250 image creative as the buyer sends it, in the reference format the GAM product sells."""
-    from tests.factories.creative_asset import image_spec
-
-    return _creative(creative_id, "display_300x250_image", image_spec("banner_image", url=url))
-
-
-def _creative(creative_id: str, format_id: str, asset: Any) -> dict[str, Any]:
-    """A creative as the buyer sends it: one asset, in reference-catalog format *format_id*."""
     from src.core.format_cache import DEFAULT_AGENT_URL
-    from tests.factories.creative_asset import build_assets
+    from tests.factories.creative_asset import build_assets, image_spec
     from tests.factories.request import CreativeAssetRequestFactory
 
     return CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
         name=f"Creative {creative_id}",
-        format_id={"agent_url": DEFAULT_AGENT_URL, "id": format_id},
-        assets=build_assets(asset),
+        format_id={"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250_image"},
+        assets=build_assets(image_spec("banner_image", url=url)),
     )
-
-
-@given(parsers.parse('the seller\'s product also sells the reference format "{format_id}"'))
-def given_product_also_sells_format(ctx: dict, format_id: str) -> None:
-    """The GAM product sells one more reference-catalog format, so a creative in it may be assigned."""
-    from src.core.format_cache import DEFAULT_AGENT_URL
-
-    product = ctx["default_product"]
-    product.format_ids = [*product.format_ids, {"agent_url": DEFAULT_AGENT_URL, "id": format_id}]
-    ctx["env"]._commit_factory_data()
-
-
-@given(
-    parsers.parse(
-        'the creative agent previews a creative in the format "{format_id}" at "{preview_url}" as {width:d}x{height:d}'
-    )
-)
-def given_creative_agent_previews(ctx: dict, format_id: str, preview_url: str, width: int, height: int) -> None:
-    """The creative agent lists the format and answers preview_creative with one render: a link, and its size."""
-    ctx["env"].preview_creatives_at(preview_url, format_id=format_id, width=width, height=height)
-
-
-@given(
-    parsers.parse(
-        'the buyer syncs a 300x250 HTML creative "{creative_id}" with markup "{markup}" assigned to package "{package}"'
-    )
-)
-def given_buyer_syncs_html_creative(ctx: dict, creative_id: str, markup: str, package: str) -> None:
-    """The When's sync sends one creative in the reference HTML format, assigned to the package.
-
-    Its one asset is HTML markup (core/assets/html-asset.json: ``asset_type: "html"``, the
-    markup in ``content``).
-    """
-    from tests.factories.creative_asset import asset_spec
-
-    ctx["creatives"] = [
-        _creative(creative_id, "display_300x250_html", asset_spec("html_creative", "html", content=markup))
-    ]
-    ctx["assignments"] = {creative_id: [package]}
 
 
 @given(
