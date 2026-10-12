@@ -1143,11 +1143,27 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "proximity_geometry",
             "proximity_radius",
             "proximity_travel_time",
-            "frequency_cap_missing_fields",
+            # Graduated: frequency_cap_missing_fields, on all three transports this
+            # outline parametrizes (rest, a2a, mcp — enumerated from the collected
+            # ids, not assumed; this module has no impl or e2e_rest row, and
+            # e2e_rest_known_failures.txt carries no entry for it, so no sibling is
+            # left behind). The gap was "frequency_cap field-combo validation": the
+            # seller accepted {"max_impressions": 3} with no per/window.
+            # core/frequency-cap.json has always declared
+            # dependencies.max_impressions -> [per, window]; the adcp 9.0.0b3 pin
+            # compiles that root constraint onto the exported class, so the DTO now
+            # refuses the document at _boundary.py:240 and the buyer gets
+            # INVALID_REQUEST with a suggestion — which is what the scenario demands.
+            # Not a vacuous pass: the Then reaches
+            # TransportResult.assert_wire_error(code, require_suggestion=True) via
+            # _assert_error_outcome, i.e. the captured envelope, not a reconstructed
+            # exception. Run: bdd_inprocess at 9c88c3b2e, 6 strict XPASSes, the only
+            # failures in 8648 items. The other labels in this set still xfail, so
+            # this is one scenario graduated, not the entry emptied.
             "keyword_duplicate",
         },
         "Pre-existing UC-003 targeting-overlay validation gaps (not da07): pydantic "
-        "extra='forbid' / GeoProximity coordinate modes / frequency_cap / keyword-dup / device_type overlap",
+        "extra='forbid' / GeoProximity coordinate modes / keyword-dup / device_type overlap",
     ),
     (
         "T-UC-003-boundary-targeting-overlay",
@@ -1158,11 +1174,13 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "with travel_time only",
             "with radius only",
             "with geometry only",
-            "frequency_cap max_impressions without per",
+            # Graduated: "frequency_cap max_impressions without per", the boundary
+            # half of the same gap the partition entry above graduates. Same three
+            # transports, same measurement, same wire-envelope assertion.
             "keyword_targets with duplicate",
         },
         "Pre-existing UC-003 targeting-overlay validation gaps (not da07): pydantic "
-        "extra='forbid' / GeoProximity coordinate modes / frequency_cap / keyword-dup / device_type overlap",
+        "extra='forbid' / GeoProximity coordinate modes / keyword-dup / device_type overlap",
     ),
     # ── #1721 lane D: three UC-018 outlines newly wired ──
     # The lane converts _handle_list_creatives_skill to the shared build_*_request
