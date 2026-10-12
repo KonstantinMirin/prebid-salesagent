@@ -79,11 +79,13 @@ def stub_gam_client(*, line_items: tuple[SoapObject, ...] | list[SoapObject] = (
       objects are not mutated. GAM keys a line item creative association by its line item
       and creative and gives it no id; the id this stand-in adds to one is its own, and
       nothing should read it.
+    * ``LineItemCreativeAssociationService.getLineItemCreativeAssociationsByStatement``
+      answers the associations the network created, read at call time.
 
     Ceilings:
 
-    * ``getLineItemsByStatement`` answers every line item the network holds; it does not
-      evaluate PQL.
+    * ``getLineItemsByStatement`` and ``getLineItemCreativeAssociationsByStatement`` answer
+      every line item and every association the network holds; they do not evaluate PQL.
     * A test must not drive the adapter's background approval path
       (``google_ad_manager.py`` starts it when the in-request approval fails): its daemon
       thread polls for minutes and can construct a client after the test has released the
@@ -115,6 +117,12 @@ def stub_gam_client(*, line_items: tuple[SoapObject, ...] | list[SoapObject] = (
     }
     for service, method in GAM_CREATE_METHODS:
         setattr(services.setdefault(service, MagicMock()), method, MagicMock(side_effect=_creates(service, method)))
+    lica = "LineItemCreativeAssociationService"
+    services[lica].getLineItemCreativeAssociationsByStatement = MagicMock(
+        side_effect=lambda *_args: SoapObject(
+            results=list(created.get((lica, "createLineItemCreativeAssociations"), []))
+        )
+    )
 
     client.GetService.side_effect = lambda name, *_args, **_kwargs: services.setdefault(name, MagicMock())
     client.created_objects = created

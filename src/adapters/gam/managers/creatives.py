@@ -73,7 +73,7 @@ class GAMCreativesManager:
             assets: List of creative asset dictionaries (each may contain placement_ids
                 from creative assignments for placement targeting). An asset carrying
                 ``platform_creative_id`` names a creative GAM already holds: it is
-                associated with the line items, and not created again.
+                associated with the line items it is not on yet, and not created again.
             today: Current datetime
             placement_targeting_map: Optional map of placement_id → targeting_name for
                 creative-level targeting. Built from product impl_config.placement_targeting.
@@ -850,7 +850,7 @@ class GAMCreativesManager:
         lica_service,
         placement_targeting_map: dict[str, str] | None = None,
     ) -> None:
-        """Associate creative with its assigned line items.
+        """Associate creative with those of its assigned line items it is not on yet.
 
         Supports creative rotation weights (AdCP 2.5). When weights differ from the default (100),
         the weight is passed to GAM's manualCreativeRotationWeight field for MANUAL rotation.
@@ -866,7 +866,28 @@ class GAMCreativesManager:
             placement_targeting_map: Optional map of placement_id → targeting_name for
                 creative-level targeting. Built from product impl_config.placement_targeting.
         """
+        # A creative GAM held before this call may already be on some of these line items:
+        # GAM is asked, and only the missing associations are created. The statement names
+        # the creative and the line item is matched here, as strings, because GAM ids arrive
+        # as numbers or strings. Ceiling: one page, the statement builder's default limit
+        # (500). An association past it is not seen, its create is sent again, and the asset
+        # comes back failed; a creative on more line items than that needs paging. An
+        # inactive association counts as held.
+        held: set[tuple[str, str]] = set()
+        if asset.get("platform_creative_id"):
+            statement = (
+                self.client_manager.get_statement_builder()
+                .Where("creativeId = :creativeId")
+                .WithBindVariable("creativeId", int(gam_creative_id))
+            )
+            page = lica_service.getLineItemCreativeAssociationsByStatement(statement.ToStatement())
+            held = {(str(a["creativeId"]), str(a["lineItemId"])) for a in getattr(page, "results", None) or []}
+
         for line_item_id, weight in _line_item_weights(asset.get("package_assignments", [])):
+            if (str(gam_creative_id), line_item_id) in held:
+                logger.info(f"Creative {gam_creative_id} is already on line item {line_item_id}")
+                continue
+
             # Determine targetingName for creative-level placement targeting (adcp#208)
             targeting_name = None
             first_placement_id = None

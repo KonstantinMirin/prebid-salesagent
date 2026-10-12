@@ -67,8 +67,8 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     Then creative "cr-banner" reports package "pkg-leader" in assignment_errors and not in assigned_to
     And Google Ad Manager created no creative
 
-  # The refused assignment is not kept, so sending it again asks GAM again: the creative GAM
-  # already holds from another package is not read as placed on this one.
+  # GAM is asked again when the assignment is sent again: that it holds the creative from
+  # another package does not place the creative on this one.
   @T-UC-006-local-gam-refused-assignment-resent
   Scenario: A refused assignment of a creative GAM already holds is refused again when re-sent
     Given the buyer holds a buy booked in Google Ad Manager as order "6000003" whose package "pkg-leader" is line item "5000003" accepting 728x90
@@ -89,15 +89,49 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
     And Google Ad Manager associated that creative with line items "5000001"
 
-  # sync_creatives accepts an assignment to another buyer's package (#2417). Nothing of it
-  # reaches that buyer's line item.
+  # sync_creatives accepts an assignment to another buyer's package and reports it assigned
+  # (#2417). Nothing of it reaches that buyer's line item.
   @T-UC-006-local-gam-other-buyers-package
   Scenario: An assignment to another buyer's booked package sends nothing to GAM
     Given another buyer of the seller holds a buy booked in Google Ad Manager as order "6000004" whose package "pkg-other-buyer" is line item "5000004" accepting 300x250
     And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-other-buyer" with weight 40
     When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-banner" is assigned to package "pkg-other-buyer"
+    And Google Ad Manager created no creative
+    And Google Ad Manager changed no line item
+
+  # The seller's approval traffics a creative onto a buy as that buy's owner. The assignment
+  # row sync_creatives wrote on another buyer's live buy (#2417) is not that owner's.
+  @T-UC-006-local-gam-approval-other-buyers-buy
+  Scenario: Approving a creative assigned to another buyer's live buy sends nothing to GAM
+    Given the tenant has approval_mode "require-human"
+    And another buyer of the seller holds a buy booked in Google Ad Manager as order "6000006" in status "active" whose package "pkg-other-live" is line item "5000006" accepting 300x250
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-other-live" with weight 40
+    When the seller approves creative "cr-banner"
     Then Google Ad Manager created no creative
     And Google Ad Manager changed no line item
+
+  # A buy the seller has not approved has no line item yet. Its creatives are sent when the
+  # seller approves the buy.
+  @T-UC-006-local-gam-unbooked-package
+  Scenario: An assignment to a package not yet booked in GAM is assigned and sends nothing to GAM
+    Given the buyer holds a buy awaiting the seller's approval, not booked in Google Ad Manager, with package "pkg-unbooked"
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-unbooked"
+    When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-banner" is assigned to package "pkg-unbooked"
+    And Google Ad Manager created no creative
+
+  # The seller approved the buy while its creative was under review, so nothing of it is in
+  # GAM. Approving the creative books the buy, and the creative goes onto the line item GAM
+  # created for its package (#2378).
+  @T-UC-006-local-gam-approval-books-held-buy
+  Scenario: Approving the creative an unbooked buy waits for books the buy and places the creative on its line item
+    Given the tenant has approval_mode "require-human"
+    And the buyer holds a buy the seller approved and holds for its creatives, not booked in Google Ad Manager, with package "pkg-unbooked"
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-unbooked"
+    When the seller approves creative "cr-banner"
+    Then Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
+    And Google Ad Manager associated each creative it created with the line item it created
 
   # A record written before GAM's id had its own key holds the buyer's id as the ad server's
   # (#2247). That id is not one GAM has, so the creative is created.
@@ -141,6 +175,7 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     Then creative "cr-banner" is assigned to package "pkg-banner-a"
     And Google Ad Manager created no creative
 
+  # Approving it a second time finds it on the line item and sends no second association.
   # The id the approval records is GAM's own: the later assignment places that creative on
   # the second line item instead of creating it again.
   @T-UC-006-local-gam-approval-on-live-buy
@@ -151,13 +186,16 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     When the seller approves creative "cr-banner"
     Then Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
     And Google Ad Manager associated that creative with line items "5000005"
+    When the seller approves creative "cr-banner"
+    Then Google Ad Manager associated that creative with line items "5000005"
     When the Buyer Agent references library creative "cr-banner", without resending it, assigned to package "pkg-banner-a"
     Then creative "cr-banner" is assigned to package "pkg-banner-a"
     And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
     And Google Ad Manager associated that creative with line items "5000005, 5000001"
 
-  # The buyer re-sends the creative it already synced, with the same assignment. GAM already
-  # holds the creative on that line item, so nothing is sent again.
+  # The buyer re-sends the creative it already synced, with the same assignment. GAM is asked
+  # and already holds the creative on that line item, so no creative and no association is
+  # created again.
   @T-UC-006-local-gam-resend-no-second-creative
   Scenario: Re-sending a creative GAM already holds, with the same assignment, creates nothing in GAM
     Given the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
@@ -166,3 +204,18 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     Then creative "cr-banner" is assigned to package "pkg-banner-a"
     And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
     And Google Ad Manager associated that creative with line items "5000001"
+
+  # The assignment was stored while the creative was under review, so nothing was sent for it.
+  # GAM holds the creative from another package; that does not place it on this one.
+  @T-UC-006-local-gam-resend-unplaced-assignment
+  Scenario: Re-sending an assignment GAM does not hold places the creative on that line item
+    Given the buyer holds a buy booked in Google Ad Manager as order "6000002" whose package "pkg-banner-b" is line item "5000002" accepting 300x250
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
+    And the tenant has approval_mode "require-human"
+    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-b"
+    And the tenant has approval_mode "auto-approve"
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-b"
+    When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-banner" is assigned to package "pkg-banner-b"
+    And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
+    And Google Ad Manager associated that creative with line items "5000001, 5000002"
