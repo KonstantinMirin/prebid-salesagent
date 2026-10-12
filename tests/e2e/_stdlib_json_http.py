@@ -51,19 +51,26 @@ class JsonRequestHandler(BaseHTTPRequestHandler):
 
     protocol_version = "HTTP/1.1"
 
-    def _write_json(self, status: int, body: dict) -> None:
+    def _write_json(self, status: int, body: dict, extra_headers: dict[str, str] | None = None) -> None:
         """Send *body* as JSON with an explicit length and no keep-alive.
 
         ``Content-Length`` plus ``Connection: close`` rather than chunked: these
         origins are read by ``urllib``, ``httpx`` and the SDK's IP-pinned
         transport, and an explicit length is the one framing all three agree on
         without negotiation.
+
+        *extra_headers* exists for one caller: an MCP endpoint assigns a session
+        through the ``Mcp-Session-Id`` RESPONSE header, which is protocol framing
+        rather than payload and so has no spelling in *body*. Optional and empty by
+        default, so every existing call is unchanged.
         """
         data = json.dumps(body).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Connection", "close")
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(data)
 
