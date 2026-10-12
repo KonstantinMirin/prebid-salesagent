@@ -166,9 +166,37 @@ dev = [
 # The path below is a SIBLING path, not an absolute one, because
 # `.pre-commit-hooks/` refuses a developer path and is right to.
 #
-# WHEN THE OWNER PUBLISHES: replace the `path` below with the release's `url`, leave the
-# `adcp==9.0.0b3` pin in [project.dependencies] alone unless the release carries a local
-# version segment (then both change together), and `uv lock`.
+# THIS WHEEL IS PAYLOAD-IDENTICAL TO THE STAGED RELEASE, checked rather than assumed
+# because the filenames differ (the release carries the `+sa.8qela.1c1e49b61` local
+# segment): 5505 payload entries each, code identical with `.dist-info` excluded, both
+# built from 1c1e49b61 with clean trees. So a green measurement against this path pin
+# transfers to the artifact that will publish, which a wheel built from any other tree
+# would not have.
+#
+# WHEN THE OWNER PUBLISHES, the swap is mechanical. Replace the `path` below with the
+# release's `url` and `uv lock`. Nothing else changes, and all three reasons are measured:
+#
+#   adcp = { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-1c1e49b61/adcp-9.0.0b3%2Bsa.8qela.1c1e49b61-py3-none-any.whl" }
+#
+#   * `%2B`, NOT a literal `+`. The release's local version segment is `+sa.8qela.1c1e49b61`
+#     and it must be percent-encoded in the URL; a literal `+` has bitten this series before.
+#   * THE SPECIFIER DOES NOT MOVE. `adcp==9.0.0b3` in [project.dependencies] already matches
+#     `9.0.0b3+sa.8qela.1c1e49b61`, because a bare `==` ignores a local segment (verified:
+#     SpecifierSet('==9.0.0b3') contains 9.0.0b3+sa.8qela.1c1e49b61, and does NOT contain
+#     9.0.0b4, so the check discriminates). The corollary matters more than the convenience:
+#     it ALSO matches `9.0.0b3+anything`, so the specifier cannot say WHICH local build is
+#     installed. The source line below is the only thing that identifies the build; treat it
+#     as the pin, not the `==`.
+#   * NO GUARD BREAKS ON THE SWAP. The pin-drift guard
+#     (tests/unit/test_adcp_spec_version.py) asserts `adcp.get_adcp_spec_version()` against
+#     EXPECTED_SPEC_VERSION, i.e. the ADCP_VERSION file packaged in the wheel — 3.2.1 in
+#     both this build and the staged release — never the distribution version. Nothing under
+#     tests/, src/ or scripts/ reads the resolved package version at all
+#     (`get_adcp_sdk_version`, `adcp.__version__`, `metadata.version("adcp")`: zero hits, on
+#     a grep calibrated to find `get_adcp_spec_version` in 6 files over the same paths), and
+#     nothing reads `[tool.uv.sources]`. Independently of that enumeration: the url form
+#     passed on _collapse because it WAS the pin, and the path form passes now, so every
+#     guard that exists accepts both spellings.
 #
 # THE LIMITATION, measured before this pin and still true. A path source does not survive the
 # Docker build or a cassini run: the build context is `COPY pyproject.toml uv.lock` only, so a
