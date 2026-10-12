@@ -10,7 +10,7 @@ is compared with what the harness seeded.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -133,30 +133,21 @@ def given_pending_buy_without_pricing_info(ctx: dict) -> None:
     request names the product's first option, and nothing on the row says which option the
     package bought.
     """
-    from tests.factories import MediaBuyFactory, MediaPackageFactory
+    from tests.factories import MediaPackageFactory
+    from tests.helpers.media_buy_approval import pending_media_buy
 
-    product = ctx["default_product"]
     package = {
-        "product_id": product.product_id,
+        "product_id": ctx["default_product"].product_id,
         "budget": 420.0,
         "pricing_option_id": ctx["default_pricing_option"].pricing_option_id,
     }
-    start = datetime.now(UTC) + timedelta(days=1)
-    end = start + timedelta(days=14)
-    media_buy = MediaBuyFactory(
+    media_buy = pending_media_buy(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
+        package=package,
+        starts_in_days=1,
+        flight_days=14,
         budget=Decimal("420"),
-        start_date=start.date(),
-        end_date=end.date(),
-        start_time=start,
-        end_time=end,
-        raw_request={
-            "brand": {"domain": "testbrand.com"},
-            "start_time": start.isoformat(),
-            "end_time": end.isoformat(),
-            "packages": [package],
-        },
     )
     MediaPackageFactory(media_buy=media_buy, package_id="pkg_a", budget=Decimal("420"), package_config=package)
     ctx["env"]._commit_factory_data()

@@ -148,6 +148,7 @@ Feature: A Google Ad Manager seller books each package's own volume, type, prior
       | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "NETWORK"}     | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          |
       | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "SPONSORSHIP"} | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          |
       | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "HOUSE"}       | STANDARD       | 8        | CPM      | LIFETIME | IMPRESSIONS          |
+      | guaranteed     | cpm_usd_standard  | cpm   | {"line_item_type": "BULK"}        | BULK           | 12       | CPM      | LIFETIME | IMPRESSIONS          |
       | guaranteed     | vcpm_usd_standard | vcpm  | {}                                | STANDARD       | 8        | VCPM     | LIFETIME | VIEWABLE_IMPRESSIONS |
       | non-guaranteed | cpm_usd_standard  | cpm   | {"line_item_type": "NETWORK"}     | PRICE_PRIORITY | 12       | CPM      | NONE     | IMPRESSIONS          |
 
