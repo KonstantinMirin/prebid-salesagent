@@ -32,6 +32,7 @@ import pytest
 import yaml
 
 from tests.unit._architecture_helpers import repo_root
+from tests.utils.derived_population import assert_derived_population
 from tests.utils.ratchet_counters import (
     ALL_RATCHETS,
     FAST_RATCHETS,
@@ -67,6 +68,30 @@ def test_fast_ratchet_baseline_is_not_slack(ratchet: RatchetCounter) -> None:
 
 
 @pytest.mark.arch_guard
+def test_the_ratchet_registry_is_not_empty() -> None:
+    """The registry every other test in this module is driven by.
+
+    Both ratchet tests are parametrized over ``FAST_RATCHETS``, so an empty
+    registry deletes them rather than failing them, and reports one skip while the
+    failure count goes down (salesagent-8qela.176). The enforcement check below is
+    worse: it is NOT parametrized, so an empty ``ALL_RATCHETS`` makes ``missing``
+    and ``unenforced`` both empty and the test passes green over nothing — the
+    guard that exists to stop a ratchet going unenforced, itself unenforced.
+
+    The ratchet COUNTERS do not need this: ``assert_not_slack`` builds its
+    comparison from ``committed.items()``, the baseline FILE, so a counter whose
+    scan returns an empty mapping still yields ``0 < base`` for every committed
+    key and fails loudly. Driving the comparison off the side that cannot silently
+    empty is what makes that safe, and it is the pattern to copy.
+    """
+    assert_derived_population(
+        FAST_RATCHETS, name="FAST_RATCHETS", derived_from="tests/utils/ratchet_counters.py", minimum=4
+    )
+    assert_derived_population(
+        ALL_RATCHETS, name="ALL_RATCHETS", derived_from="FAST_RATCHETS + SLOW_RATCHETS", minimum=6
+    )
+
+
 def test_every_ratchet_names_an_enforcement_that_executes() -> None:
     """A ratchet filed only under pre-push/CI is enforced nowhere.
 
