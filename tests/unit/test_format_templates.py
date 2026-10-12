@@ -111,23 +111,20 @@ class TestFormatIdGetDimensions:
         )
         assert format_id.get_dimensions() is None
 
-    def test_get_dimensions_partial_width_only(self):
-        """Returns None when only width is set (both required)."""
-        format_id = SchemasFormatId(
-            agent_url="https://creative.example.com",
-            id="display_static",
-            width=300,
-        )
-        assert format_id.get_dimensions() is None
-
-    def test_get_dimensions_partial_height_only(self):
-        """Returns None when only height is set (both required)."""
-        format_id = SchemasFormatId(
-            agent_url="https://creative.example.com",
-            id="display_static",
-            height=250,
-        )
-        assert format_id.get_dimensions() is None
+    # The two partial-dimension tests that stood here are DELETED, not moved.
+    #
+    # They graded get_dimensions() on a FormatId carrying exactly one of width and
+    # height. core/format-id.json states
+    #     "dependencies": {"width": ["height"], "height": ["width"]}
+    # so width and height are mutually dependent and a one-sided pair is not a
+    # document the pin admits. The rebuilt SDK compiles that onto the exported class
+    # and refuses it; the previous SDK did not, which is the only reason the tests
+    # ever ran (salesagent-8qela.121).
+    #
+    # The correct behaviour is that get_dimensions() has exactly two cases, a
+    # complete pair and absent dimensions, and both are graded directly above by
+    # test_get_dimensions_with_both and test_get_dimensions_without_params. There is
+    # no third case to assert, so there is nothing here to re-ground.
 
     def test_get_duration_ms(self):
         """Returns duration_ms when set."""
@@ -237,19 +234,11 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
         )
         assert fmt.get_primary_dimensions() == (728, 90)
 
-    def test_partial_format_id_dimensions_falls_through(self):
-        """Partial format_id dimensions (width only) fall through to next source."""
-        fmt = Format(
-            format_id=FormatId(
-                agent_url="https://creative.example.com",
-                id="display_static",
-                width=300,
-            ),
-            name="Static Display",
-            type="display",
-            requirements={"width": 728, "height": 90},
-        )
-        assert fmt.get_primary_dimensions() == (728, 90)
+    # test_partial_format_id_dimensions_falls_through is DELETED for the reason given
+    # in TestFormatIdGetDimensions above: its format_id carried width without height,
+    # which core/format-id.json's dependencies forbid. The fall-through it claimed to
+    # grade — a format_id with no usable dimensions deferring to requirements — is
+    # graded by test_falls_back_to_requirements, whose fixture is legal.
 
     def test_format_id_takes_priority_over_renders_and_requirements(self):
         """format_id dimensions take priority over both renders and requirements."""
