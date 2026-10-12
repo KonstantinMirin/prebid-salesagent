@@ -21,9 +21,7 @@
 # percentage of impressions; PRICE_PRIORITY takes LIFETIME, DAILY or NONE. The goal is in the
 # unit the package is sold in (Goal.unitType): IMPRESSIONS for CPM, VIEWABLE_IMPRESSIONS for
 # vCPM. The line item is billed at the selected option's unit price (LineItem.costType and
-# costPerUnit); a flat-rate price is billed per day (CPD) over the flight's days. A seller
-# misconfiguration is refused with CONFIGURATION_ERROR (enums/error-code.json, recovery
-# terminal) before anything is written to GAM.
+# costPerUnit); a flat-rate price is billed per day (CPD) over the flight's days.
 #
 # The sales-guaranteed storyboard's create_media_buy step sends two packages with different
 # budgets and validates only the response schema, so these scenarios grade the booking
@@ -34,7 +32,6 @@
 #
 # @source repo=adcp ref=v3.1.1 path=docs/media-buy/task-reference/create_media_buy.mdx
 # @source repo=adcp ref=v3.1.1 path=docs/media-buy/advanced-topics/pricing-models.mdx
-# @source repo=adcp ref=v3.1.1 path=static/schemas/source/enums/error-code.json
 # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/specialisms/sales-guaranteed/index.yaml pointer=/phases/create_buy
 Feature: A Google Ad Manager seller books each package's own volume, type, priority and goal (local)
 
@@ -118,12 +115,14 @@ Feature: A Google Ad Manager seller books each package's own volume, type, prior
     # The line item is billed at the package's bid, not at the option's 1.00 floor.
     # 425 at 12.00 buys 35416.67 impressions: the volume is floored, so it never costs more
     # than the budget, and a DAILY goal floors the spread over 14 days (2529.76).
+    # WEEKLY is not a goal type GAM accepts on PRICE_PRIORITY, so the type's LIFETIME goal is booked.
     Examples:
       | configured | budget | bid   | micros   | goalType | units  |
       | LIFETIME   | 560    | 4.00  | 4000000  | LIFETIME | 140000 |
       | DAILY      | 560    | 4.00  | 4000000  | DAILY    | 10000  |
       | NONE       | 425    | 12.00 | 12000000 | NONE     | 35416  |
       | DAILY      | 425    | 12.00 | 12000000 | DAILY    | 2529   |
+      | WEEKLY     | 560    | 4.00  | 4000000  | LIFETIME | 140000 |
 
   @T-UC-002-local-gam-type-priority @extension
   Scenario Outline: A per-unit package books its type's default priority, and a share-of-voice type only for flat rate
@@ -174,21 +173,3 @@ Feature: A Google Ad Manager seller books each package's own volume, type, prior
       | settings                       | type        | priority |
       | {"line_item_type": "STANDARD"} | SPONSORSHIP | 4        |
       | {"line_item_type": "NETWORK"}  | NETWORK     | 12       |
-
-  @T-UC-002-local-gam-goal-type-refused @extension
-  Scenario: A goal type GAM does not accept is refused before anything reaches GAM
-    Given a valid create_media_buy request
-    And the account exists and is active
-    And the seller's guaranteed product has pricing options:
-      | product_id | pricing_option_id | pricing_model | fixed_price | floor_price |
-      | prod_a     | cpm_usd_standard  | cpm           | 12.00       |             |
-    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", with product settings '{"line_item_type": "PRICE_PRIORITY", "primary_goal_type": "WEEKLY"}'
-    And the buyer's packages, over a 14-day flight, are:
-      | product_id | pricing_option_id | budget | bid_price |
-      | prod_a     | cpm_usd_standard  | 420    |           |
-    When the Buyer Agent sends the create_media_buy request
-    Then the error code should be "CONFIGURATION_ERROR"
-    And the error recovery should be "terminal"
-    And the wire error details should include capability "line_item_goal_type:PRICE_PRIORITY"
-    And the wire error details should include rejected_value "WEEKLY"
-    And Google Ad Manager received no order and no line item

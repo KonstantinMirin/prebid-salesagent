@@ -531,8 +531,8 @@ class GoogleAdManager(AdServerAdapter):
                 self.log(f"[red]Error: {error_msg}[/red]")
                 raise AdCPProductUnavailableError()
 
-            # Plan the package's line item (type, priority, goal) now, so a configuration
-            # GAM would refuse is refused before the order exists.
+            # Plan the package's line item (type, priority, goal) from its validated pricing;
+            # a package without it is refused here, before the order exists.
             pricing_info = (package_pricing_info or {}).get(package.package_id)
             if not pricing_info:
                 raise AdCPConfigurationError(

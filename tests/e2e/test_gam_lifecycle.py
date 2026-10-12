@@ -295,8 +295,7 @@ def _seed_lifecycle_test_data():
 
         # Product for the archive lifecycle test. It configures HOUSE, but a CPM package on it
         # books PRICE_PRIORITY at that type's default priority: the adapter books a
-        # share-of-voice type (SPONSORSHIP, NETWORK, HOUSE) only for flat rate, and the
-        # configured priority belongs to the configured type.
+        # share-of-voice type (SPONSORSHIP, NETWORK, HOUSE) only for flat rate.
         product_house = Product(
             tenant_id=GAM_LIFECYCLE_TENANT_ID,
             product_id="gam_e2e_house",

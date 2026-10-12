@@ -19,9 +19,7 @@ class GAMProductConfigService:
             formats: List of format IDs to derive creative placeholders
 
         Returns:
-            Dictionary of GAM implementation config with sensible defaults. It writes no
-            ``priority``: a line item books its type's GAM default priority
-            (``PricingCompatibility.plan_line_item``).
+            Dictionary of GAM implementation config with sensible defaults
         """
         # Base configuration shared across all types
         base_config = {
@@ -36,6 +34,7 @@ class GAMProductConfigService:
             base_config.update(
                 {
                     "line_item_type": "STANDARD",
+                    "priority": 6,
                     "primary_goal_type": "LIFETIME",  # the only goal type GAM accepts on STANDARD
                     "delivery_rate_type": "EVENLY",
                     "non_guaranteed_automation": "manual",  # Guaranteed always manual
@@ -45,6 +44,7 @@ class GAMProductConfigService:
             base_config.update(
                 {
                     "line_item_type": "PRICE_PRIORITY",
+                    "priority": 10,
                     "primary_goal_type": "NONE",
                     "delivery_rate_type": "AS_FAST_AS_POSSIBLE",
                     "creative_rotation_type": "OPTIMIZED",
@@ -137,8 +137,6 @@ class GAMProductConfigService:
     def validate_config(config: dict[str, Any]) -> tuple[bool, str | None]:
         """Validate GAM implementation config for required fields.
 
-        ``priority`` is not required: a line item books its type's GAM default priority.
-
         Args:
             config: GAM implementation configuration dictionary
 
@@ -149,11 +147,16 @@ class GAMProductConfigService:
             return False, "implementation_config is required for GAM products"
 
         # Required fields
-        required_fields = ["creative_placeholders"]
+        required_fields = ["priority", "creative_placeholders"]
 
         for field in required_fields:
             if field not in config:
                 return False, f"Missing required GAM field: {field}"
+
+        # Validate priority range
+        priority = config.get("priority")
+        if not isinstance(priority, int) or priority < 1 or priority > 16:
+            return False, "priority must be an integer between 1 and 16"
 
         # Validate line item type (optional - if not provided, will be auto-selected based on pricing)
         if "line_item_type" in config:

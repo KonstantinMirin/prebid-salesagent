@@ -16,8 +16,8 @@ import logging
 from collections.abc import Mapping
 from typing import Any, Literal, NamedTuple
 
-from src.core.errors.details import CapabilityRefusalDetails, ConfigurationDetails
-from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPConfigurationError
+from src.core.errors.details import CapabilityRefusalDetails
+from src.core.exceptions import AdCPCapabilityNotSupportedError
 
 logger = logging.getLogger(__name__)
 
@@ -173,20 +173,16 @@ class PricingCompatibility:
     ) -> LineItemPlan:
         """Decide a package's line item type, priority, goal type and unit type, in that order.
 
-        The one reader and validator of the product's ``line_item_type``,
-        ``primary_goal_type`` and ``primary_goal_unit_type``. Run before the order exists,
-        so a refusal leaves nothing behind in GAM.
+        The one reader of the product's ``line_item_type``, ``primary_goal_type`` and
+        ``primary_goal_unit_type``.
 
         1. Type: ``select_line_item_type`` with the configured type as the override.
-        2. Priority: the booked type's GAM default (``get_default_priority``).
-        3. Goal type: DAILY on a share-of-voice type; otherwise the one GAM accepts for the
-           type, and for PRICE_PRIORITY the configured ``primary_goal_type``, LIFETIME when none.
+        2. Priority: the booked type's default (``get_default_priority``).
+        3. Goal type: the configured ``primary_goal_type`` when GAM accepts it on the booked
+           type (DAILY on a share-of-voice type, ``GOAL_TYPES`` otherwise); otherwise the
+           type's goal.
         4. Unit type: IMPRESSIONS on a share-of-voice type; CLICKS for CPC; VIEWABLE_IMPRESSIONS
            for vCPM; otherwise the configured ``primary_goal_unit_type``, IMPRESSIONS when none.
-
-        Raises:
-            AdCPConfigurationError: a configured goal type GAM does not accept for the
-                booked type. The seller's configuration; the buyer cannot fix it.
         """
         configured_type = implementation_config.get("line_item_type")
         line_item_type = cls.select_line_item_type(pricing_model, is_guaranteed, configured_type)
@@ -200,20 +196,8 @@ class PricingCompatibility:
             )
 
         accepted_goal_types = ("DAILY",) if line_item_type in SHARE_OF_VOICE_TYPES else GOAL_TYPES[line_item_type]
-        if len(accepted_goal_types) == 1:
-            goal_type = accepted_goal_types[0]
-        else:
-            goal_type = implementation_config.get("primary_goal_type", accepted_goal_types[0])
-            if goal_type not in accepted_goal_types:
-                raise AdCPConfigurationError(
-                    details=ConfigurationDetails(
-                        product_id=product_id,
-                        capability=f"line_item_goal_type:{line_item_type}",
-                        rejected_value=str(goal_type),
-                        accepted_values=list(accepted_goal_types),
-                    )
-                )
         configured_goal_type = implementation_config.get("primary_goal_type")
+        goal_type = configured_goal_type if configured_goal_type in accepted_goal_types else accepted_goal_types[0]
         if configured_goal_type and configured_goal_type != goal_type:
             logger.info(
                 "Product %s configures goal type %s, which GAM does not accept on %s; booking %s",
