@@ -4,15 +4,14 @@ The storyboard job grades us with `@adcp/sdk`'s runner. That SDK declares which
 AdCP release its CLIENT is built for in its own ``package.json`` (``adcp_version``),
 independently of the ``--compliance-version`` / ``--compliance-dir`` we hand it.
 
-Those two can disagree silently, and did: `@adcp/sdk@9.3.0` declared **3.1.0**
-while this repo then pinned **3.1.1**, so for its whole life the baseline was
-measured by a client one release behind the storyboards it was grading against.
-Nothing failed — the storyboards and schemas were the right version, only the code
-driving them was not. That incident is why this guard exists.
+Those two can disagree silently, and have more than once: a client one release
+behind the storyboards it grades fails nothing, because the storyboards and schemas
+are the right version and only the code driving them is not.
 
 Pointing a mismatched client at the right storyboards is exactly the kind of
 "looks measured, isn't" result this whole module exists to prevent, so it gets a
-guard rather than a comment.
+guard rather than a comment. The guard asserts equality and offers no tolerance:
+a divergence that is allowed is a divergence nobody re-examines.
 
 Lives in tests/storyboard/ (not tests/unit/) because it reads the INSTALLED
 package: the assertion is about what will actually run, not about what a manifest
@@ -35,16 +34,27 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts.audit import storyboard_spec  # noqa: E402
 
+#: WHEN BUMPING THE RUNNER, it must satisfy BOTH or the storyboard leg stops measuring what
+#: it claims to:
+#:
+#:   * declare this repo's pin in its own ``adcp_version`` (``npm view @adcp/sdk@<v>
+#:     adcp_version``), which is what this guard asserts;
+#:   * be on a line carrying the A2A request-signing dispatch (adcp-client#2967). Without it
+#:     every ``signed_requests`` vector on the A2A card is ungradable, so the newest release
+#:     is not automatically the right one -- the 15 line declares 3.2.3, which is not our pin.
+#:
+#: ``14.4.0`` satisfies both. There is deliberately no escape hatch for a runner that
+#: satisfies only the first: a tolerated mismatch here is indistinguishable from a measured
+#: result, which is the failure this module exists to prevent.
+
 
 def test_runner_sdk_targets_the_pinned_adcp_version() -> None:
-    """The runner's adcp_version matches the repo's pin, with no divergence to accept.
+    """The runner's adcp_version matches the repo's pin, or is the one accepted divergence.
 
-    This guard carried one accepted divergence for the life of the 14.0.0-rc line, which
-    declared 3.2.0-rc.4 against a 3.2.1 pin: the rc line was the only one carrying the A2A
-    request-signing dispatch (adcp-client#2967), so taking the nearest version-matched
-    release meant giving up the A2A card entirely. ``@adcp/sdk@14.4.0`` is on the same line
-    and declares 3.2.1 exactly, which is the retirement condition the record stated, so the
-    record is gone and the assertion below stands on its own.
+    Not an xfail. An xfail would pass whatever the two versions said, including a second,
+    unexamined divergence appearing beside this one. Pinning the triple keeps the assertion
+    real: the known state passes, and any movement -- a runner upgrade, a backport landing, a
+    deliberate pin bump -- fails and asks for a decision.
     """
     if not _SDK_PACKAGE_JSON.is_file():
         pytest.fail(
@@ -62,10 +72,8 @@ def test_runner_sdk_targets_the_pinned_adcp_version() -> None:
         f"conformance runner targets AdCP {sdk_targets!r} but this repo pins {repo_pins!r}.\n"
         f"  installed: @adcp/sdk@{sdk.get('version')}\n"
         "Grading with a client built for a different release measures the wrong contract, "
-        "however right the --compliance-version happens to be. Something moved: a runner "
-        "upgrade, a pin bump, or a backport landing. Either pin an @adcp/sdk whose "
-        "adcp_version matches (check `npm view @adcp/sdk@<v> adcp_version`) or move the "
-        "repo's pin deliberately per docs/adcp-spec-version.md. A divergence this repo "
-        "chooses to accept is a deliberate decision with a reason recorded here -- the last "
-        "one was the 14.0.0-rc line, retired when 14.4.0 declared the pin exactly."
+        "however right the --compliance-version happens to be. Pin an @adcp/sdk whose "
+        "adcp_version matches (`npm view @adcp/sdk@<v> adcp_version`) and which is on a line "
+        "carrying the A2A request-signing dispatch, or move the repo's pin deliberately per "
+        "docs/adcp-spec-version.md."
     )
