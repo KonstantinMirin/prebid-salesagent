@@ -55,6 +55,7 @@ from tests.factories.request import (
 from tests.factories.signing import SigningKeyFactory
 from tests.factories.targeting import (
     CollectionListReferenceFactory,
+    FrequencyCapFactory,
     PropertyListReferenceFactory,
     TargetingFactory,
 )
@@ -122,6 +123,7 @@ __all__ = [
     "CurrencyLimitFactory",
     "GAMInventoryFactory",
     "FormatPerformanceMetricsFactory",
+    "FrequencyCapFactory",
     "MediaBuyFactory",
     "MediaPackageFactory",
     "PackageRequestFactory",

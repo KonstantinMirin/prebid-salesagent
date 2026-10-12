@@ -22,6 +22,7 @@ from adcp.types import (
 )
 
 from src.core.schemas import FrequencyCap, Targeting
+from tests.factories import FrequencyCapFactory
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +64,9 @@ class TestTargetingV3Construction:
             geo_metros_exclude=[{"system": "nielsen_dma", "values": ["803"]}],
             geo_postal_areas_exclude=[{"system": "us_zip", "values": ["90210"]}],
             device_type_any_of=["mobile", "desktop"],
-            frequency_cap={"max_impressions": 5, "suppress_minutes": 60},
+            # Through the factory because this test DOES assert on max_impressions,
+            # which the pin only admits alongside per and window.
+            frequency_cap=FrequencyCapFactory.build(max_impressions=5, suppress_minutes=60),
         )
         assert len(t.geo_countries) == 2
         assert len(t.geo_regions) == 2
@@ -175,33 +178,41 @@ class TestTargetingModelDumpSerialization:
 # FrequencyCap Inheritance
 # ---------------------------------------------------------------------------
 class TestFrequencyCapInheritance:
+    # Every test here is about the SUBCLASS — that it inherits the library type and
+    # carries ``scope``, and that ``suppress_minutes`` takes an int or a float. None
+    # of them asserts anything about ``max_impressions``, which these fixtures used
+    # to carry. They cannot carry it alone: ``core/frequency-cap.json`` makes
+    # ``max_impressions`` depend on ``per`` and ``window``, so the old fixtures were
+    # documents the pin forbids (salesagent-8qela.120). ``suppress_minutes`` on its
+    # own satisfies the schema's anyOf, so dropping the field costs no assertion and
+    # leaves each test with only what it grades.
     def test_isinstance_library_freq_cap(self):
-        fc = FrequencyCap(max_impressions=5, suppress_minutes=60)
+        fc = FrequencyCap(suppress_minutes=60)
         assert isinstance(fc, LibraryFrequencyCap)
 
     def test_scope_field_preserved(self):
-        fc = FrequencyCap(max_impressions=5, suppress_minutes=60, scope="package")
+        fc = FrequencyCap(suppress_minutes=60, scope="package")
         assert fc.scope == "package"
 
     def test_scope_default_media_buy(self):
-        fc = FrequencyCap(max_impressions=5, suppress_minutes=60)
+        fc = FrequencyCap(suppress_minutes=60)
         assert fc.scope == "media_buy"
 
     def test_suppress_minutes_accepts_float(self):
-        fc = FrequencyCap(max_impressions=5, suppress_minutes=60.5)
+        fc = FrequencyCap(suppress_minutes=60.5)
         assert fc.suppress_minutes == 60.5
 
     def test_suppress_minutes_accepts_int(self):
-        fc = FrequencyCap(max_impressions=5, suppress_minutes=60)
+        fc = FrequencyCap(suppress_minutes=60)
         assert isinstance(fc.suppress_minutes, float)
 
     def test_model_dump_includes_scope(self):
-        fc = FrequencyCap(max_impressions=5, suppress_minutes=60, scope="package")
+        fc = FrequencyCap(suppress_minutes=60, scope="package")
         d = fc.model_dump()
         assert d["scope"] == "package"
 
     def test_freq_cap_in_targeting(self):
-        t = Targeting(frequency_cap={"max_impressions": 5, "suppress_minutes": 60, "scope": "package"})
+        t = Targeting(frequency_cap={"suppress_minutes": 60, "scope": "package"})
         assert t.frequency_cap.scope == "package"
         assert isinstance(t.frequency_cap, FrequencyCap)
         assert isinstance(t.frequency_cap, LibraryFrequencyCap)

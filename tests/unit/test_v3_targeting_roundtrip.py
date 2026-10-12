@@ -9,6 +9,7 @@ Proves data survives:
 import json
 
 from src.core.schemas import FrequencyCap, Targeting
+from tests.factories import FrequencyCapFactory
 
 
 def _roundtrip(t: Targeting) -> Targeting:
@@ -43,7 +44,7 @@ class TestV3ConstructRoundtrip:
             geo_metros_exclude=[{"system": "nielsen_dma", "values": ["602"]}],
             geo_postal_areas_exclude=[{"system": "us_zip", "values": ["90210"]}],
             device_type_any_of=["mobile", "desktop"],
-            frequency_cap={"max_impressions": 5, "suppress_minutes": 60, "scope": "package"},
+            frequency_cap=FrequencyCapFactory.build(max_impressions=5, suppress_minutes=60, scope="package"),
         )
         d1 = t.model_dump(exclude_none=True)
         t2 = _roundtrip(t)
@@ -80,7 +81,7 @@ class TestV3ConstructRoundtrip:
             device_type_any_of=["mobile"],
             browser_any_of=["chrome"],
             audiences_any_of=["seg_123"],
-            frequency_cap={"max_impressions": 3, "suppress_minutes": 30},
+            frequency_cap=FrequencyCapFactory.build(max_impressions=3, suppress_minutes=30),
         )
         t2 = _roundtrip(t)
         d1 = t.model_dump(exclude_none=True)
@@ -170,9 +171,14 @@ class TestDBStorageSimulation:
 # FrequencyCap Roundtrip
 # ---------------------------------------------------------------------------
 class TestFrequencyCapRoundtrip:
+    # The caps here go through FrequencyCapFactory because they carry
+    # ``max_impressions``, which ``core/frequency-cap.json`` admits only alongside
+    # ``per`` and ``window`` (salesagent-8qela.120). That means these roundtrips now
+    # also carry those two fields through the cycle, which is the point: they are
+    # part of the document the pin defines.
     def test_freq_cap_scope_roundtrip(self):
         """scope='package' survives dump -> reconstruct."""
-        t = Targeting(frequency_cap={"max_impressions": 5, "suppress_minutes": 60, "scope": "package"})
+        t = Targeting(frequency_cap=FrequencyCapFactory.build(max_impressions=5, suppress_minutes=60, scope="package"))
         d1 = t.model_dump(exclude_none=True)
         t2 = _roundtrip(t)
         d2 = t2.model_dump(exclude_none=True)
@@ -181,13 +187,17 @@ class TestFrequencyCapRoundtrip:
 
     def test_freq_cap_suppress_float_roundtrip(self):
         """Float suppress_minutes value survives roundtrip."""
-        t = Targeting(frequency_cap={"max_impressions": 3, "suppress_minutes": 45.5, "scope": "media_buy"})
+        t = Targeting(
+            frequency_cap=FrequencyCapFactory.build(max_impressions=3, suppress_minutes=45.5, scope="media_buy")
+        )
         t2 = _json_roundtrip(t)
         assert t2.frequency_cap.suppress_minutes == 45.5
 
     def test_freq_cap_json_roundtrip(self):
         """FrequencyCap through JSON storage roundtrip."""
-        t = Targeting(frequency_cap={"max_impressions": 10, "suppress_minutes": 120, "scope": "package"})
+        t = Targeting(
+            frequency_cap=FrequencyCapFactory.build(max_impressions=10, suppress_minutes=120, scope="package")
+        )
         t2 = _json_roundtrip(t)
         assert t2.frequency_cap.max_impressions == 10
         assert t2.frequency_cap.suppress_minutes == 120.0
