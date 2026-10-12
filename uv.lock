@@ -74,8 +74,8 @@ wheels = [
 
 [[package]]
 name = "adcp"
-version = "9.0.0b3"
-source = { path = "../acp-wheel-8qela/dist/adcp-9.0.0b3-py3-none-any.whl" }
+version = "9.0.0b3+sa.8qela.2aeef29c2"
+source = { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-2aeef29c2/adcp-9.0.0b3%2Bsa.8qela.2aeef29c2-py3-none-any.whl" }
 dependencies = [
     { name = "a2a-sdk" },
     { name = "cryptography" },
@@ -96,7 +96,7 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 wheels = [
-    { filename = "adcp-9.0.0b3-py3-none-any.whl", hash = "sha256:3d2abf8a8c01fd24a5decb22e441027d2867e7587cb5d5d9fc775476592ef28f" },
+    { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-2aeef29c2/adcp-9.0.0b3%2Bsa.8qela.2aeef29c2-py3-none-any.whl", hash = "sha256:ede51b4ab48f1a23b769aa61022749470a557b2acd564081a9f59eb0ac58d3af" },
 ]
 
 [package.metadata]
@@ -249,7 +249,7 @@ requires-dist = [
     { name = "a2a-cli", specifier = ">=0.2.0" },
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=1.0.1" },
     { name = "a2wsgi", specifier = ">=1.10.0" },
-    { name = "adcp", path = "../acp-wheel-8qela/dist/adcp-9.0.0b3-py3-none-any.whl" },
+    { name = "adcp", url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-2aeef29c2/adcp-9.0.0b3%2Bsa.8qela.2aeef29c2-py3-none-any.whl" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "allure-pytest", marker = "extra == 'ui-tests'", specifier = "==2.16.0" },
     { name = "authlib", specifier = ">=1.6.12" },
