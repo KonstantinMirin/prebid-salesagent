@@ -13,6 +13,16 @@ This module exists so there is nowhere for a second copy to be needed. It import
 only (18 modules via the ``tests.helpers`` package, against the conftest's 2098), which is
 what makes it importable from a plugin.
 
+THE DUPLICATE WAS NOT CARELESSNESS, AND THE SAME PRESSURE WILL RECREATE IT. A pytest plugin
+cannot import a conftest without dragging the whole collection graph in, so a plugin that
+needs a conftest's helper has exactly two options: duplicate it, or have a stdlib-only
+shared home. Before this file there was no such home, so the duplicate was the only
+available spelling -- and it then drifted, silently, for months. The next plugin needing a
+conftest helper faces the identical fork, so THIS FIX IS ONLY DURABLE IF THIS IS WHERE
+PEOPLE LOOK: put the next one here rather than copying it, and keep the conftest's call
+sites spelled as they were (it aliases these two names) so adopting the shared home never
+costs a fifteen-site churn.
+
 THE BRACKET IS THE WHOLE RULE. Anchoring on the OPENING bracket is what makes a parametrize
 value containing ``[`` -- an IPv6 URL, a JSON payload, an array -- harmless. The same defect
 shape, a nodeid split on a delimiter that also occurs inside a parametrize value, is live in

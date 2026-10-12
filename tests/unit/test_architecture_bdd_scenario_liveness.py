@@ -80,7 +80,17 @@ def test_transport_name_no_bracket_is_default() -> None:
 #: ``suite_delta.nodeid_of`` in another repository (salesagent-8qela.72/.128), whose own
 #: round-trip self-check likewise has no bracketed case.
 #:
-#: All three payloads are REAL, taken from the artifact rather than invented.
+#: All payloads are REAL, taken from the artifact rather than invented.
+#:
+#: WHICH OF THESE ARE LOAD-BEARING, measured by reinstating the last-bracket split: THREE of
+#: the five fire. The two IPv6 rows do, because their value contains a literal ``[``, and so
+#: does ``test_transport_name_refuses_a_param_merely_containing_a_transport_name`` below.
+#: The two JSON rows DO NOT -- ``{"radius": 10}`` and ``"US"]}`` carry braces, not brackets,
+#: so a last-bracket split still answers correctly for the nodeids as spelled here; their
+#: real nodeids must have carried an earlier ``[`` that these reconstructions omit. They are
+#: kept because they document the shapes the artifact actually held, but a weakening of the
+#: split would pass them. If you are changing the derivation, the IPv6 rows are the ones to
+#: watch.
 _BRACKETED_PARAMS = [
     # an IPv6 literal inside a URL -- the worst shape, and the one shared with .72/.128
     ("tests/bdd/test_x.py::test_foo[rest-https://[fc00::1]/hook]", "rest"),
