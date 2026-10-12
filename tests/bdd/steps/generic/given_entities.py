@@ -274,36 +274,18 @@ def given_seller_various_input_formats(ctx: dict) -> None:
     _sync_registry(ctx)
 
 
-@given("a seller with creative agent formats of various types")
-def given_seller_creative_agent_various_types(ctx: dict) -> None:
-    """Seller has creative agent formats of various types (partition/boundary).
-
-    The catalog these scenarios query is the harness default reference set, and it
-    has to stay that way: T-UC-005-partition-agent-type and its boundary sibling
-    are ledgered against upstream adcp#7338 precisely because the REFERENCE
-    formats declare ``pixel_tracker``. Replacing the registry here would erase the
-    gap the ledger entry grades.
-
-    So what the sentence can establish is that the variety it claims is real --
-    every type it names must be one the pinned format vocabulary admits. The list
-    of raw dicts this replaced was written into a ctx key no step read (and raw
-    dicts in a registry Given are what ``test_architecture_bdd_no_dict_registry``
-    exists to refuse).
-    """
-    for creative_type in ("audio", "video", "display", "dooh"):
-        assert creative_type in CATEGORY_MAP, (
-            f"Step claims a seller catalog 'of various types', but {creative_type!r} is "
-            f"not a known creative format category: {sorted(CATEGORY_MAP)}"
-        )
-
-
 @given("a seller with creative agent formats containing various asset types")
 def given_seller_creative_agent_various_assets(ctx: dict) -> None:
     """Seller has creative agent formats with various asset types (partition/boundary).
 
-    Same reasoning as ``given_seller_creative_agent_various_types``: the served
-    catalog stays the reference set, so this checks the claimed variety against
-    the pinned asset vocabulary instead of recording it into a dead ctx key.
+    The served catalog stays the harness default reference set, so this checks the
+    claimed variety against the pinned asset vocabulary instead of recording it
+    into a dead ctx key -- raw dicts in a registry Given are what
+    ``test_architecture_bdd_no_dict_registry`` exists to refuse.
+
+    Its ``of various types`` sibling is gone with the two creative-agent TYPE
+    outlines: the media-buy variant this seller binds declares ``asset_types`` and
+    no ``type``, so only this half has a filter to grade.
     """
     for asset_type in ("image", "video", "text"):
         assert asset_type in ASSET_TYPES, (

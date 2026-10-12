@@ -650,26 +650,10 @@ def when_boundary_input_ids(ctx: dict, boundary_point: str) -> None:
 
 
 # ── Creative agent format queries (partition / boundary) ─────────────
-# These test creative-agent-specific format filtering through the same
-# list_creative_formats harness. Type filter was removed in adcp 3.12
-# so type partitions dispatch unfiltered. Asset type partitions map to
-# the asset_types filter on ListCreativeFormatsRequest.
-
-
-def _partition_agent_type(ctx: dict, partition: str) -> None:
-    """Creative agent type filter — REMOVED in adcp 3.12, all dispatch unfiltered.
-
-    ``ListCreativeFormatsRequest`` has no ``type`` field (the creative-agent-type
-    filter was excised in adcp 3.12), so EVERY type partition — including the
-    former 'unknown_value'/'native' rejection cases — carries no field to land on
-    and dispatches the same unfiltered request through the wire. Production no
-    longer rejects any value; it returns the full catalog. The previous code
-    constructed a test-side ``ValueError`` to fake a rejection production never
-    performs. Per the schema hierarchy (3.12 authoritative), these reconcile to
-    SUCCESS: dispatch unfiltered via the wire (_call) and let production emit the
-    real result. #1417.
-    """
-    _call(ctx)
+# Asset type partitions map to the ``asset_types`` filter on
+# ``ListCreativeFormatsRequest``, which the media-buy variant this seller binds
+# does declare. The TYPE partitions are gone with their outlines — see
+# tests/bdd/conftest.py's UC-005 record.
 
 
 def _partition_agent_asset_types(ctx: dict, partition: str) -> None:
@@ -689,25 +673,9 @@ def _partition_agent_asset_types(ctx: dict, partition: str) -> None:
         _call_raw(ctx, asset_types=[partition])
 
 
-@when(parsers.parse('the Buyer Agent queries creative agent formats with type "{partition}"'))
-def when_query_agent_type(ctx: dict, partition: str) -> None:
-    _partition_agent_type(ctx, partition)
-
-
 @when(parsers.parse('the Buyer Agent queries creative agent formats with asset_types "{partition}"'))
 def when_query_agent_asset_types(ctx: dict, partition: str) -> None:
     _partition_agent_asset_types(ctx, partition)
-
-
-@when(parsers.parse('the Buyer Agent queries creative agent formats at type boundary "{boundary_point}"'))
-def when_boundary_agent_type(ctx: dict, boundary_point: str) -> None:
-    mapping = {
-        "audio (first enum value)": "audio",
-        "dooh (last enum value)": "dooh",
-        "Not provided (no filter)": "not_provided",
-        "native (valid in media-buy variant but not in creative agent)": "native",
-    }
-    _partition_agent_type(ctx, mapping.get(boundary_point, boundary_point))
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats at asset_types boundary "{boundary_point}"'))

@@ -1046,6 +1046,9 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # (@T-UC-005-partition-agent-type, -partition-agent-asset, -boundary-agent-type,
     # -boundary-agent-asset, "-valid" rows only) are graduated: 63 nodes, plus the 6 from
     # the two whole-scenario tags in _XFAIL_TAGS, which is the 69 that were XPASS(strict).
+    # Two of those four are since DELETED rather than graduated -- the two TYPE
+    # outlines graded nothing, see the record below and salesagent-8qela.149 -- so
+    # the 63 is a count of what this block released, not of what still exists.
     #
     # THE CONDITION THIS BLOCK NAMED IS MET. It said "graduates when the SPEC pin moves to
     # v3.1.22 or later, not when the agent pin moves". adcp#7421 (merged 2026-09-11, first
@@ -1189,8 +1192,34 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # a rejection, which left the outline's five valid rows passing for asserting that
     # type filtering had not happened. Both outlines are gone from the feature.
     # Graduated: T-UC-005-boundary-asset-types (all 4 transports pass — brief/catalog now in enum)
-    # Graduated: T-UC-005-partition-agent-type, T-UC-005-boundary-agent-type,
-    # T-UC-005-boundary-agent-asset — all pass now that When steps dispatch through harness.
+    # Graduated: T-UC-005-boundary-agent-asset — passes now that the When step
+    # dispatches through the harness, and it GRADES: the media-buy variant declares
+    # asset_types, _partition_agent_asset_types sends it via _call_raw (invalid rows
+    # included), and the Examples table keeps real INVALID_REQUEST rows.
+    #
+    # DELETED with their outlines: T-UC-005-partition-agent-type and
+    # T-UC-005-boundary-agent-type. The graduation that listed them beside the asset
+    # one was premature — they passed while grading NOTHING, because
+    # _partition_agent_type dispatched a bare _call(ctx) and the request carried no
+    # `type` for any partition, so every row would pass whatever the table named
+    # (salesagent-8qela.129, .149).
+    #
+    # THE SELLER HAS NO `type` FILTER TO GRADE, and the chain is read not inferred:
+    # schemas/cache/3.2 declares `type` on creative/list-creative-formats-request.json
+    # and NOT on media-buy/; adcp/types/legacy.py:112 aliases
+    # LegacyListCreativeFormatsRequest to the MEDIA-BUY class (the creative one is
+    # separately named ListCreativeFormatsRequestCreativeAgent); and
+    # src/core/schemas/creative.py inherits that alias. So `type` is not a field on
+    # the accepted shape, and under critical pattern #7 an undeclared field is
+    # refused in dev and dropped in production.
+    #
+    # NOT a role this seller claims: creative_formats.py's
+    # ADVERTISED_CREATIVE_AGENT_CAPABILITIES is attached to REFERRALS to
+    # tenant-registered remote agents in the media-buy response, not to its own tool
+    # surface.
+    #
+    # Same action and same ground as T-UC-005-partition-type-filter /
+    # -boundary-type-filter above: rows that assert type filtering did not happen.
     # FIXME: BR-RULE-029 defines 4 notification types but production
     # WebhookDeliveryService only emits {scheduled, final, adjusted}. No is_delayed flag.
     (

@@ -1057,29 +1057,6 @@ Feature: BR-UC-005 Discover Creative Formats
       | FormatId missing agent_url                       | INVALID_REQUEST  |
       | FormatId missing id                              | INVALID_REQUEST  |
 
-  @T-UC-005-partition-agent-type @UC-005-MAIN-MCP-21 @partition @creative_agent_format_type
-  Scenario Outline: Creative agent format type partition - <partition>
-    Given a seller with creative agent formats of various types
-    When the Buyer Agent queries creative agent formats with type "<partition>"
-    Then the response is compliant with the list_creative_formats spec
-    And the creative agent type filtering should result in <expected>
-
-    Examples: Valid partitions
-      | partition     | expected |
-      | audio         | valid    |
-      | video         | valid    |
-      | display       | valid    |
-      | dooh          | valid    |
-      | not_provided  | valid    |
-
-    # Type filter REMOVED in adcp 3.12 — ListCreativeFormatsRequest has no
-    # 'type' field, so every value dispatches unfiltered and production returns
-    # the full catalog. The former 'unknown_value -> invalid' rejection no longer
-    # exists; reconciled to valid (success).
-    Examples: Formerly-invalid partitions (filter removed in 3.12, now valid)
-      | partition      | expected |
-      | unknown_value  | valid    |
-
   @T-UC-005-partition-agent-asset @UC-005-MAIN-MCP-22 @partition @creative_agent_asset_type
   Scenario Outline: Creative agent asset type partition - <partition>
     Given a seller with creative agent formats containing various asset types
@@ -1102,23 +1079,6 @@ Feature: BR-UC-005 Discover Creative Formats
       | partition      | expected |
       | unknown_value  | INVALID_REQUEST  |
       | empty_array    | INVALID_REQUEST  |
-
-  @T-UC-005-boundary-agent-type @UC-005-MAIN-MCP-21 @boundary @creative_agent_format_type
-  Scenario Outline: Creative agent format type boundary - <boundary_point>
-    Given a seller with creative agent formats of various types
-    When the Buyer Agent queries creative agent formats at type boundary "<boundary_point>"
-    Then the response is compliant with the list_creative_formats spec
-    And the creative agent type handling should be <expected>
-
-    # Type filter REMOVED in adcp 3.12 — no 'type' field on the request, so
-    # 'native' dispatches unfiltered like every other value; production no longer
-    # rejects it. Reconciled to valid (success).
-    Examples:
-      | boundary_point                                                  | expected |
-      | audio (first enum value)                                        | valid    |
-      | dooh (last enum value)                                          | valid    |
-      | Not provided (no filter)                                        | valid    |
-      | native (valid in media-buy variant but not in creative agent)   | valid    |
 
   @T-UC-005-boundary-agent-asset @UC-005-MAIN-MCP-22 @boundary @creative_agent_asset_type
   Scenario Outline: Creative agent asset type boundary - <boundary_point>
