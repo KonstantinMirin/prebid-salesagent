@@ -64,7 +64,10 @@ from typing import Any
 
 import pytest
 
-from tests.unit.test_architecture_env_route_agreement import collect_bdd_items_with_markers
+from tests.unit._architecture_helpers import (
+    assert_violations_match_allowlist,
+    collect_bdd_items_with_markers,
+)
 
 #: Per-route ceiling on routed (function, non-transport-parametrization) combinations.
 #:
@@ -201,30 +204,33 @@ def test_no_setup_xfail_route_grows(census: _Census) -> None:
 
 
 @pytest.mark.arch_guard
-def test_every_setup_xfail_route_is_declared(census: _Census) -> None:
-    """A new ``xfail_reason`` route must be added here deliberately.
+def test_the_declared_routes_are_exactly_the_routed_ones(census: _Census) -> None:
+    """``_CEILINGS``' key set must EQUAL the set of routes that xfail at setup.
 
-    This is the half that closes the catch-all door: without it a new placeholder row
-    carries any number of scenarios and the ceilings say nothing about it.
+    Two obligations in one equality, which is why this is the shared primitive's shape
+    rather than two hand-rolled set differences:
+
+    * a route present and UNDECLARED is a new placeholder row carrying any number of
+      scenarios while the ceilings say nothing about it -- the catch-all door;
+    * a route declared and ABSENT is a stale entry. Draining to zero is the GOAL, so a
+      route that drains loses its entry in the same change, or this file accumulates
+      ceilings nobody can grow and the next reader cannot tell which are live.
+
+    ``assert_violations_match_allowlist`` reports those two separately, as "new violations"
+    and "stale entries" -- exactly the distinction, reported the way every other allowlist
+    in the suite reports it.
     """
-    undeclared = sorted(set(census.combinations) - set(_CEILINGS))
-    assert not undeclared, (
-        "these ENV_ROUTES rows xfail at fixture setup and are in no ceiling: "
-        f"{undeclared}. Add each with its measured count, or do not add the row"
+    assert_violations_match_allowlist(
+        {(tag,) for tag in census.combinations},
+        {(tag,) for tag in _CEILINGS},
+        fix_hint=(
+            "A newly routed row needs a ceiling entry with its measured count, or should "
+            "not exist. A stale entry means the harness was wired -- delete it, the work is "
+            "done. The per-route COUNT is graded separately by "
+            "test_no_setup_xfail_route_grows: a shrink-only numeric ceiling, which is not a "
+            "set comparison and so is not expressible here."
+        ),
     )
-
-
-@pytest.mark.arch_guard
-def test_no_ceiling_outlives_its_route(census: _Census) -> None:
-    """A ceiling naming no routed scenario is a stale entry.
-
-    Dropping to zero is the GOAL, so a route that drains must lose its entry in the same
-    change -- otherwise this file accumulates ceilings nobody can grow and the next reader
-    cannot tell which are live. That is the dead-allowlist-entry failure the repo's other
-    allowlists are already held to.
-    """
-    stale = sorted(set(_CEILINGS) - set(census.combinations))
-    assert not stale, f"these ceilings name no routed scenario any more: {stale}. Delete the entry"
 
 
 @pytest.mark.arch_guard

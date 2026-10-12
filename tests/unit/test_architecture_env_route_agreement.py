@@ -46,11 +46,6 @@ scenario. See ``test_uc004_catch_all_is_unreachable_so_all_of_it_resolves_wired`
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import subprocess
-import sys
-import tempfile
 from collections import defaultdict
 from functools import lru_cache
 from pathlib import Path
@@ -58,7 +53,11 @@ from typing import Any
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, repo_root
+from tests.unit._architecture_helpers import (
+    assert_violations_match_allowlist,
+    collect_bdd_items_with_markers,
+    repo_root,
+)
 from tests.unit._liveness_contract_pins import (
     DERIVATION_ACCESSOR,
     FIX_HINT,
@@ -71,6 +70,18 @@ from tests.unit._liveness_contract_pins import (
 pytestmark = pytest.mark.arch_guard
 
 _BDD_DIR = Path("tests/bdd")
+
+# BDD modules whose scenarios carry NO ``T-`` identity tag. They are outside the
+# join by construction — ``scenario_liveness._scenario_identifier`` returns None,
+# so no artifact record is ever written for them and no verdict is ever
+# published. Pinned as an exact set rather than skipped silently: a module
+# sliding into this bucket is a scenario losing its identity, which is a
+# regression, not a shrug.
+_MODULES_WITHOUT_SCENARIO_IDENTITY = frozenset(
+    {
+        "tests/bdd/test_get_products_inventory_profile.py",
+    }
+)
 _OWNER_MODULE = ".".join(OWNER.with_suffix("").parts)
 
 # One catch-all scenario per branch UC, by EXACT tag, each verified in-tree to
@@ -94,116 +105,6 @@ _CATCH_ALL_SCENARIOS = (
 )
 
 _UC004_TAG_PREFIX = "T-UC-004-"
-
-# The nested collection yields ~7.2k items today (7223 at authoring time).
-_MINIMUM_COLLECTED_ITEMS = 6000
-
-# BDD modules whose scenarios carry NO ``T-`` identity tag. They are outside the
-# join by construction — ``scenario_liveness._scenario_identifier`` returns None,
-# so no artifact record is ever written for them and no verdict is ever
-# published. Pinned as an exact set rather than skipped silently: a module
-# sliding into this bucket is a scenario losing its identity, which is a
-# regression, not a shrug.
-_MODULES_WITHOUT_SCENARIO_IDENTITY = frozenset(
-    {
-        "tests/bdd/test_get_products_inventory_profile.py",
-    }
-)
-
-# A pytest plugin, written to a tmp dir and loaded with -p, that dumps every
-# collected item's marker set — and, once the pinned accessor exists, the set
-# that accessor derives for the same node. `pytest_collection_finish` runs after
-# every `pytest_collection_modifyitems`, so the auto-applied entity markers
-# (tests/conftest.py) and conftest's own deselection are already reflected.
-_COLLECTOR_PLUGIN = """
-import importlib
-import json
-import os
-
-
-def pytest_collection_finish(session):
-    dotted = os.environ.get("LANE_F_ACCESSOR_MODULE") or ""
-    accessor = getattr(importlib.import_module(dotted), os.environ["LANE_F_ACCESSOR_NAME"]) if dotted else None
-    rows = []
-    for item in session.items:
-        rows.append(
-            {
-                "nodeid": item.nodeid,
-                "markers": sorted({m.name for m in item.iter_markers()}),
-                "derived": None if accessor is None else sorted(accessor(item)),
-            }
-        )
-    with open(os.environ["LANE_F_DUMP"], "w", encoding="utf-8") as handle:
-        json.dump(rows, handle)
-"""
-
-
-@lru_cache(maxsize=1)
-def collect_bdd_items_with_markers() -> tuple[dict[str, Any], ...]:
-    """Every collected ``tests/bdd`` item with its marker set, from a real run.
-
-    PUBLIC because a second guard consumes it: ``test_architecture_route_xfail_census``
-    counts how many scenarios each setup-xfail route claims, and it needs the same
-    (nodeid, derived marker set) rows this already produces. A second collector would
-    drift about the ``BDD_E2E_ENABLED`` pop below, which decides the scope every count
-    is quoted against (salesagent-8qela.151).
-    """
-    repo = repo_root()
-    # A private dir per invocation: under xdist each worker runs its own nested
-    # collection, and two workers sharing one dump would race.
-    plugin_dir = Path(tempfile.mkdtemp(prefix="lane_f_collect_"))
-    (plugin_dir / "lane_f_collector.py").write_text(_COLLECTOR_PLUGIN, encoding="utf-8")
-    dump = plugin_dir / "collected.json"
-
-    env = dict(os.environ)
-    # The nested collection must not inherit the outer suite's e2e switch: with
-    # it on, scenarios additionally parametrize over e2e_rest and the collected
-    # marker sets stop being the in-process ones this grader reasons about.
-    env.pop("BDD_E2E_ENABLED", None)
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(plugin_dir), env.get("PYTHONPATH", "")]))
-    env["LANE_F_DUMP"] = str(dump)
-    env["LANE_F_ACCESSOR_NAME"] = DERIVATION_ACCESSOR
-    dotted = accessor_dotted_module()
-    if dotted is not None:
-        env["LANE_F_ACCESSOR_MODULE"] = dotted
-    env.setdefault("ADCP_TESTING", "true")
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            str(_BDD_DIR),
-            "--collect-only",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-            "-p",
-            "no:randomly",
-            "-p",
-            "lane_f_collector",
-        ],
-        cwd=repo,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    context = f"stdout:\n{result.stdout[-4000:]}\nstderr:\n{result.stderr[-4000:]}"
-    assert result.returncode == 0, (
-        f"the nested `pytest --collect-only {_BDD_DIR}` exited {result.returncode}. A partial collection would "
-        f"silently shrink this grader's input.\n{context}"
-    )
-    assert dump.is_file(), f"the nested `pytest --collect-only {_BDD_DIR}` did not write {dump}.\n{context}"
-    rows = json.loads(dump.read_text(encoding="utf-8"))
-    shutil.rmtree(plugin_dir, ignore_errors=True)
-    # The suite collects ~7.2k items today. A floor well under that still catches
-    # a truncated collection, which would make every verdict below vacuous.
-    assert len(rows) > _MINIMUM_COLLECTED_ITEMS, (
-        f"the nested collection produced only {len(rows)} items (expected > {_MINIMUM_COLLECTED_ITEMS}) — "
-        f"the grader would be reasoning about a truncated suite.\n{context}"
-    )
-    return tuple(rows)
 
 
 def _scenario_id(markers: list[str]) -> str | None:
