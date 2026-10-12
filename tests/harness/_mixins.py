@@ -458,9 +458,45 @@ def _attach_reporting_webhook(env: Any, media_buy: Any) -> None:
 
     The URL comes from :func:`_registered_webhook_url`, so what the media buy says and
     what the registration says can never diverge.
+
+    THE REST OF THE DOCUMENT COMES FROM THE FACTORY, for the same reason the URL comes
+    from a resolver: a hand-written literal here diverges from what a real
+    ``create_media_buy`` writes, and the divergence is invisible until production starts
+    reading a field the literal omits. It did. The literal was
+    ``{"url": ..., "frequency": "daily"}`` and
+    ``core/reporting-webhook.json`` requires ``authentication`` and
+    ``reporting_frequency`` alongside ``url`` — so it carried neither the auth block nor
+    the cadence under its real name — while the interim correlation agreement
+    (``webhooks.mdx`` :656-673) wants ``operation_id``. Production writes all of them:
+    :meth:`MediaBuyRepository.create_from_request` stores
+    ``req.model_dump(mode="json")`` and ``adcp.types.ReportingWebhook`` declares no
+    aliases, so a real buyer's document carries every field under its own name.
+
+    Omitting ``operation_id`` is what broke six UC-004 e2e_rest scenarios
+    (salesagent-8qela.170). ``DeliveryWebhookScheduler`` asks
+    :func:`~src.core.webhooks.registration.reporting_stream_id_missing` of THIS document
+    before it gathers anything, and suppresses the whole stream when the id is absent —
+    correctly, per :666, which forbids fabricating one or reading it off the URL. So the
+    seed decided whether any delivery was attempted at all, and the assertion read
+    ``assert []``. It is e2e-only because this function runs only on the live-server
+    branch (:func:`_deliver_via_live_server`) and the gate lives only in the scheduler,
+    which the in-process branch never enters.
+
+    The factory's ``authentication`` default does NOT decide the signing mode here, and
+    that is worth stating because it looks as though it should. The scheduler prefers a
+    stored ``PushNotificationConfig`` row whenever one matches the URL —
+    "a stored row still wins: a real registration outranks whatever the request carried
+    inline" (``delivery_webhook_scheduler.py``) — and consults this document's
+    ``authentication`` only when no row exists. Every scenario here registers a row, so
+    ``the reporting_webhook registers no authentication block`` keeps selecting RFC 9421
+    off the row it asserts on, and this document cannot flip it to legacy HMAC.
     """
+    from tests.factories.webhook import ReportingWebhookRequestFactory
+
     raw_request = dict(media_buy.raw_request or {})
-    raw_request["reporting_webhook"] = {"url": _registered_webhook_url(env), "frequency": "daily"}
+    raw_request["reporting_webhook"] = ReportingWebhookRequestFactory.payload(
+        url=_registered_webhook_url(env),
+    )
     media_buy.raw_request = raw_request
     env._commit_factory_data()
 
