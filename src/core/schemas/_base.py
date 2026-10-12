@@ -2698,6 +2698,33 @@ class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
     - ext: dict (extension object for custom fields)
     - po_number: str (purchase order number)
     - reporting_webhook: dict (webhook configuration)
+
+    THIS CLASS AND THE LIBRARY ROOT EMIT A DIFFERENT ``error.field`` FOR THE SAME
+    DOCUMENT, and both are correct. Do not "fix" the difference.
+
+    ``core/media-buy/create-media-buy-request.json`` is a branch-split root, and the
+    SDK's dispatch gate is a ``"_branch_models" in cls.__dict__`` test. This subclass
+    INHERITS ``_branch_models`` rather than declaring it, so it does not dispatch and
+    validates through the merged base. Measured on ``{"packages": 1}`` at
+    ``adcp==9.0.0b3+sa.8qela.2aeef29c2``:
+
+        this class     6 issues, all located, issues[0].loc == "idempotency_key"
+        library root   6 issues, issues[0].loc == "account", plus a trailing
+                       unlocated "anyOf" (the combinator's whole-document refusal,
+                       which has no field and sorts last)
+
+    ``error.field`` is projected from ``issues[0]``, so the seller answers
+    ``idempotency_key`` where the bare library root answers ``account``. Both are
+    located, so both satisfy ``core/error.json``'s MUST that ``field`` be populated
+    from ``issues[0]`` whenever ``issues`` is present — the MUST constrains that the
+    locator EXISTS, not which of several genuinely-missing root-required fields is
+    named first.
+
+    Anyone diffing this seller's envelope against the SDK's for one document will see
+    the divergence and is likely to read it as a defect here. It is not, and chasing it
+    means either making this class dispatch — which reintroduces the unlocated-root
+    refusal ``salesagent-8qela.116`` fixed, see ``salesagent-8qela.140`` for why .108
+    must not land without .116 — or pinning an issue ORDER the pin does not specify.
     """
 
     TAGS: ClassVar[tuple[str, ...]] = (
