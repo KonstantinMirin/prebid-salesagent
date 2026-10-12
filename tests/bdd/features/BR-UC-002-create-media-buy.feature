@@ -539,7 +539,18 @@ Feature: BR-UC-002 Create Media Buy
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error recovery should be "correctable"
+    And the error field should contain "reporting_webhook.url"
     And the error should include "suggestion" field
+    # WHY THE FIELD LINE IS HERE, and it is the only informative assertion of the four.
+    # VALIDATION_ERROR + correctable + a suggestion is the shape of EVERY correctable
+    # refusal of a create_media_buy, and message/suggestion are pure functions of the
+    # code via CODE_TABLE — so without the field pointer this scenario passed on any
+    # correctable refusal, not on the SSRF gate it names. Refusing the metadata URL and
+    # refusing for an unrelated reason were the same observable
+    # (salesagent-8qela.172). field=reporting_webhook.url is what
+    # reject_unsafe_webhook_registration_url passes at
+    # media_buy_create.py:2102-2106, and the integration sibling
+    # (test_webhook_url_ingest_refusal.py) already grades exactly this.
     # Repo-local SSRF policy (ungraded extension): reuses AdCP 3.1.1
     # VALIDATION_ERROR / recovery=correctable enum values + suggestion on
     # MCP/REST/A2A tool transports. Schema is silent on SSRF. A2A-native
