@@ -91,14 +91,24 @@ def _asset_classes_by_type(model: type[BaseModel], field: str = "assets") -> dic
 #: class to point at.
 _ASSET_CLASS_MAP = _asset_classes_by_type(Format)
 
-#: Every asset type the generated in-group union models — 12, omitting brief and
-#: catalog. That omission is the SDK's, not the schema's: format.json declares
-#: GroupBriefAsset and GroupCatalogAsset alongside the other 19.
+#: Every asset type the generated in-group union models. Derived, so it tracks
+#: whatever the pinned SDK generates.
+#:
+#: This comment used to read "12, omitting brief and catalog ... that omission is
+#: the SDK's, not the schema's". At the 3.2 pin there is NO omission: the
+#: repeatable_group arm of core/format.json declares all 21 and the generated
+#: group union models all 21, which
+#: ``test_format_factory_refuses_unknown_asset`` now derives and compares on both
+#: sides rather than restating (salesagent-8qela.168).
 _GROUP_ASSET_CLASS_MAP = _asset_classes_by_type(RepeatableAssetGroup)
 
 # The asset-type vocabulary this factory can build, for steps that need to check
 # a claimed asset type is real rather than build one. Derived, not restated.
 ASSET_TYPES = frozenset(_ASSET_CLASS_MAP)
+
+#: The same for the in-group union. Public so a guard can compare it against the
+#: pinned schema's own repeatable_group arm without reaching into a private name.
+GROUP_ASSET_TYPES = frozenset(_GROUP_ASSET_CLASS_MAP)
 
 
 def make_asset(asset_type: str, asset_id: str | None = None) -> FormatAssetUnion:
