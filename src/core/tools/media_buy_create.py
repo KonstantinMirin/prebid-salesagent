@@ -743,7 +743,7 @@ def _build_adapter_asset_from_creative(
     click_url = extract_click_url(creative_data, format_spec)
     impression_tracker_url = extract_impression_tracker_url(creative_data, format_spec)
 
-    if not (markup or url) or not width or not height:
+    if not url or not width or not height:
         return None, (
             f"Creative {creative.creative_id} missing url/width/height "
             f"(width={width}, height={height}, url={'set' if url else 'missing'}, format={creative.format})"
