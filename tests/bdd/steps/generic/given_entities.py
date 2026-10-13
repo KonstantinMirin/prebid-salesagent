@@ -14,7 +14,6 @@ from pytest_bdd import given, parsers
 from tests.bdd.steps.generic._registry import sync_registry as _sync_registry
 from tests.factories.format import (
     ASSET_TYPES,
-    CATEGORY_MAP,
     FormatFactory,
     FormatIdFactory,
     make_asset,
