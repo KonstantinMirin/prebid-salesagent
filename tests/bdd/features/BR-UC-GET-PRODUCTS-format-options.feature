@@ -20,8 +20,8 @@ Feature: Canonical format options a seller stores are announced to buyers on the
   # and it is only worth anything if the assertion survives to the buyer, which is what the
   # first scenario grades.
   #
-  # @source repo=adcp ref=v3.2.1 path=_schemas/3.2/core/product.json
-  # @source repo=adcp ref=v3.2.1 path=_schemas/3.2/core/product-format-declaration.json
+  # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/product.json
+  # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/product-format-declaration.json
 
   Background:
     Given a tenant is configured for product discovery

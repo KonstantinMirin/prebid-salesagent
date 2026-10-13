@@ -397,9 +397,6 @@ storyboards:
   protocols/media-buy/scenarios/account_change_feed.yaml:
     coverage: none
     note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
-  protocols/media-buy/scenarios/advanced_delivery_reporting.yaml:
-    coverage: none
-    note: On-path since the 3.2.1 pin; not yet triaged against a measured run.
   protocols/media-buy/scenarios/available_actions.yaml:
     coverage: none
     note: On-path since the 3.2.1 pin; not yet triaged against a measured run.

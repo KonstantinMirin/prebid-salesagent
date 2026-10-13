@@ -26,8 +26,8 @@ Feature: A legacy format_id filter on get_products selects on the declaring agen
   # UC-005 third-party scenario xpassed VACUOUSLY for exactly as long as its discriminating
   # assertion compared a hand-built raw tuple against canonicalized identities.
   #
-  # @source repo=adcp ref=v3.2.1 path=_schemas/3.2/core/format-id.json property=agent_url
-  # @source repo=adcp ref=v3.2.1 path=_schemas/3.2/core/product-filters.json property=format_ids
+  # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/format-id.json property=agent_url
+  # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/product-filters.json property=format_ids
 
   Background:
     Given a tenant is configured for product discovery

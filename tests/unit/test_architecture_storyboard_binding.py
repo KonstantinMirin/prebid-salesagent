@@ -49,6 +49,7 @@ INDEX = REPO_ROOT / "tests" / "fixtures" / "adcp_storyboards_pinned" / "index.js
 sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.audit import storyboard_spec  # noqa: E402
+from tests.helpers.adcp_pin import SPEC_REV  # noqa: E402
 
 # Scenarios whose binding is known-broken at the audit baseline. MAY ONLY SHRINK.
 # Every entry is a scenario the 3.1.1 audit found mis-bound; removing one means its
@@ -189,6 +190,13 @@ def test_allowlist_has_no_stale_entries() -> None:
     )
 
 
+# The ref in cases c-e is DERIVED from the pin, not written. Spelled as a literal it was
+# correct only until the pin moved: at 3.2.3 a hardcoded `ref=v3.2.1` makes every one of
+# those cases fail case b's version check INSTEAD of the mode it exists to probe, so the
+# three strongest rows in this table silently stop testing what they name. `ids=` is
+# explicit for the same reason the ref is derived — interpolating the version into the
+# parametrize value would otherwise rename the nodeids on every bump and break any
+# per-nodeid comparison against an earlier run.
 @pytest.mark.parametrize(
     "block,expected",
     [
@@ -200,22 +208,23 @@ def test_allowlist_has_no_stale_entries() -> None:
         ),
         (
             "  @T-X-storyboard-c @storyboard-v3.1\n  Scenario: x\n"
-            "    # @source repo=adcp ref=v3.2.1 path=protocols/media-buy/scenarios/nope.yaml\n",
+            f"    # @source repo=adcp ref={SPEC_REV} path=protocols/media-buy/scenarios/nope.yaml\n",
             "does not exist",
         ),
         (
             "  @T-X-storyboard-d @storyboard-v3.1\n  Scenario: x\n"
-            "    # @source repo=adcp ref=v3.2.1 path=protocols/media-buy/index.yaml"
+            f"    # @source repo=adcp ref={SPEC_REV} path=protocols/media-buy/index.yaml"
             " phases=create_buy,create_media_buy\n",
             "malformed @source footer",
         ),
         (
             "  @T-X-storyboard-e @storyboard-v3.1\n  Scenario: x\n"
-            "    # @source repo=adcp ref=v3.2.1 path=protocols/media-buy/index.yaml"
+            f"    # @source repo=adcp ref={SPEC_REV} path=protocols/media-buy/index.yaml"
             " phase=create_buy step=not_a_real_step\n",
             "cites step",
         ),
     ],
+    ids=["no-footer", "wrong-version", "path-missing", "malformed-footer", "step-missing"],
 )
 def test_guard_catches_each_failure_mode(tmp_path: Path, monkeypatch, block: str, expected: str) -> None:
     """Meta-test: a guard that cannot fail is not a guard."""

@@ -1,6 +1,6 @@
 {
-  "adcp_spec_version": "3.2.1",
-  "source": "adcontextprotocol/adcp dist/compliance/3.2.1",
+  "adcp_spec_version": "3.2.3",
+  "source": "adcontextprotocol/adcp dist/compliance/3.2.3",
   "storyboard_count": 214,
   "storyboards": {
     "protocols/brand/index.yaml": {
@@ -557,7 +557,11 @@
         "create_media_buy",
         "get_media_buy_delivery",
         "get_products"
-      ]
+      ],
+      "requires_capability": {
+        "contains": "wholesale",
+        "path": "media_buy.buying_modes"
+      }
     },
     "protocols/media-buy/scenarios/audience_activation_discovery.yaml": {
       "phases": [
@@ -2458,6 +2462,7 @@
         "create_media_buy",
         "create_media_buy_unknown_proposal",
         "finalize_proposal",
+        "finalize_replay",
         "get_products_brief",
         "get_products_finalize",
         "get_products_finalize_replay",
@@ -3807,24 +3812,29 @@
     },
     "specialisms/sales-guaranteed/index.yaml": {
       "phases": [
-        "account_setup",
         "capability_discovery",
-        "confirm_active",
+        "complete_io",
+        "confirm_approved",
         "create_buy_submitted",
         "create_media_buy",
         "creative_sync",
         "delivery_monitoring",
+        "force_submitted_buy",
+        "force_task_completion",
         "get_capabilities",
+        "get_completed_task",
         "get_delivery",
-        "get_media_buys_active",
+        "get_media_buys_approved",
         "get_products_brief",
+        "get_submitted_task",
         "product_discovery",
-        "sync_accounts",
         "sync_creatives"
       ],
       "required_tools": [
+        "comply_test_controller",
         "create_media_buy",
-        "get_products"
+        "get_products",
+        "get_task_status"
       ],
       "specialism": "sales-guaranteed"
     },
@@ -4244,7 +4254,6 @@
         "validate_squeezeback_sponsored"
       ],
       "required_tools": [
-        "comply_test_controller",
         "validate_input"
       ],
       "universal": true
@@ -4540,7 +4549,6 @@
         "warn_non_user_action_overlay_entry"
       ],
       "required_tools": [
-        "comply_test_controller",
         "validate_input"
       ],
       "universal": true

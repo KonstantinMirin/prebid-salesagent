@@ -203,7 +203,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # push-config endpoints map the same gate to InvalidParamsError with the
     # AdCP VALIDATION_ERROR envelope in data= — unit-pinned, not this scenario.
     # recovery=correctable comes from error-code.json's enumMetadata.
-    # @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/enums/error-code.json
+    # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.1.1/enums/error-code.json
     # POST-F1, POST-F2, POST-F3
     # --- ext-b: AUTH_INVALID ---
 
@@ -1161,7 +1161,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # sync_creatives' pinned request schema marks idempotency_key REQUIRED, but the
     # universal storyboard has NO `task: sync_creatives` step at 3.1.1 — the obligation
     # is mandated and UNGRADED, so these two scenarios are its only grading for this tool.
-    # @source repo=adcp ref=v3.2.1 path=dist/compliance/3.1.1/universal/idempotency.yaml
+    # @source repo=adcp ref=v3.2.3 path=dist/compliance/3.1.1/universal/idempotency.yaml
 
   @T-UC-006-idempotency-replay @uc006-idempotency @idempotency-key @happy-path
   Scenario: Retrying a sync with the same idempotency_key does not re-execute the write
@@ -1455,7 +1455,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # status surface here is the advisory CreativeStatus on each per-creative RESULT
     # of the SyncCreativesSuccess shape. These boundaries fix the enum membership of
     # that response value.
-    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
     Examples: Valid scope combinations
       | boundary_point                          | scope_setup                                              | expected                                                       |
@@ -1497,7 +1497,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # synchronously, so the pin's third shape is never produced and cannot be graded.
     # sync_creatives makes no ad-platform call and bills nothing on any account, so
     # INV-2/INV-3 have no observable here beyond the flag itself.
-    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
     Examples: Synchronous success shape (sandbox permitted)
       | boundary_point                      | creative                          | account_kind                             | expected                                        |
@@ -1548,7 +1548,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # ("DAAST has no NonLinearAds element"). A refused tracker is a schema violation,
     # so the whole request is INVALID_REQUEST (as ext-c). Accepted trackers are stored
     # as sent, for the sales agent to assemble into TrackingEvents at serve time.
-    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
     Examples: Accepted trackers, persisted as sent
       | partition            | tracker_assets                                               | expected                                                      |
@@ -1591,7 +1591,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # provenance_enforcement Phase 2: cheapest buyer mistake -- no provenance attached.
     # Seller accepts envelope but per-creative action=failed with PROVENANCE_REQUIRED.
     # provenance_enforcement: provenance entirely absent under provenance_required policy
-    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_no_provenance step=sync_creatives_no_provenance
+    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_no_provenance step=sync_creatives_no_provenance
 
   @T-UC-006-storyboard-provenance-digital-source-type-missing @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @provenance @rejection
   Scenario: PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING -- provenance present but digital_source_type omitted
@@ -1605,7 +1605,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # under a policy with require_digital_source_type=true. Distinct from
     # PROVENANCE_REQUIRED because provenance IS present.
     # provenance_enforcement: digital_source_type missing under require_digital_source_type policy
-    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_missing_digital_source_type step=sync_creatives_no_digital_source_type
+    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_missing_digital_source_type step=sync_creatives_no_digital_source_type
 
   @T-UC-006-storyboard-provenance-disclosure-missing @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @provenance @rejection
   Scenario: PROVENANCE_DISCLOSURE_MISSING -- provenance present but disclosure block omitted under require_disclosure_metadata
@@ -1619,7 +1619,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # submitted manifest against creative_policy.provenance_requirements.require_disclosure_metadata
     # without calling any verifier. error.field points at the missing disclosure path.
     # provenance_enforcement: disclosure block missing under require_disclosure_metadata policy
-    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_missing_disclosure step=sync_creatives_missing_disclosure
+    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_missing_disclosure step=sync_creatives_missing_disclosure
 
   @T-UC-006-storyboard-provenance-corrected-acceptance @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @provenance @acceptance
   Scenario: Corrected resubmission with disclosure block and on-list verifier is accepted
@@ -1634,7 +1634,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # drawn from creative_policy.accepted_verifiers. Per-creative action transitions
     # to created/updated (not failed); the creative enters the seller's review lifecycle.
     # provenance_enforcement: corrected resubmission terminates the rejection cascade
-    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=accept_with_disclosure step=sync_creatives_with_disclosure
+    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=accept_with_disclosure step=sync_creatives_with_disclosure
 
   @T-UC-006-storyboard-provenance-claim-contradicted @uc006-storyboard-routing @schema-v3.1 @v3-1 @provenance @rejection @truth-of-claim
   Scenario: PROVENANCE_CLAIM_CONTRADICTED -- on-list verifier refutes buyer's digital_source_type claim
@@ -1654,7 +1654,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # claimed_value, observed_value, confidence) -- no detail_url, no verifier extension
     # fields. This is the cross-tenant trust boundary.
     # provenance_truth_of_claim: verifier contradicts buyer claim; details bounded to audit-safe allowlist
-    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/compliance/source/protocols/creative/index.yaml
+    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/compliance/source/protocols/creative/index.yaml
 
   # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
     # Gated upstream by the `creative` PROTOCOL, which AdCP 3.2 split creatives into and which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
@@ -1679,7 +1679,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # graded by the sibling scenario below, split out because their known production gap
     # aborted this scenario and left these assertions dead (#1858).
     # sync_multiple: bulk multi-format validation returns per-creative action+status
-    # @source repo=adcp ref=v3.2.1 path=static/compliance/source/protocols/creative/index.yaml phase=sync_multiple step=sync_creatives
+    # @source repo=adcp ref=v3.2.3 path=static/compliance/source/protocols/creative/index.yaml phase=sync_multiple step=sync_creatives
 
   # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
     # Gated upstream by the `creative` PROTOCOL, which AdCP 3.2 split creatives into and which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
@@ -1699,7 +1699,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # The STATUS half of the same storyboard step as the sibling scenario above.
     # Per-creative status is from creative-status (approved, pending_review, rejected).
     # sync_multiple: bulk multi-format validation returns per-creative action+status
-    # @source repo=adcp ref=v3.2.1 path=static/compliance/source/protocols/creative/index.yaml phase=sync_multiple step=sync_creatives
+    # @source repo=adcp ref=v3.2.3 path=static/compliance/source/protocols/creative/index.yaml phase=sync_multiple step=sync_creatives
 
   # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
     # Gated upstream by the `creative` PROTOCOL, which AdCP 3.2 split creatives into and which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
@@ -1722,7 +1722,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # that it returned in products, its catalog does not roundtrip and a buy
     # would silently fail at sync_creatives after commit.
     # format_id roundtrip: seller MUST accept its own format_ids on sync_creatives
-    # @source repo=adcp ref=v3.2.1 path=static/compliance/source/protocols/creative/index.yaml phase=sync_multiple step=sync_creatives
+    # @source repo=adcp ref=v3.2.3 path=static/compliance/source/protocols/creative/index.yaml phase=sync_multiple step=sync_creatives
 
   @T-UC-006-storyboard-creative-reception-stateful-render @uc006-storyboard-routing @schema-v3.1 @v3-1 @stateful-push @creative-reception
   Scenario: Stateful sales agent accepts pushed creatives and exposes them via per-creative status transitions

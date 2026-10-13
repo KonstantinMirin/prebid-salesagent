@@ -17,7 +17,7 @@ is not enough, that document lists every reference that must move with it.
 from __future__ import annotations
 
 #: The AdCP spec version the pinned ``adcp`` SDK in pyproject.toml targets.
-EXPECTED_SPEC_VERSION = "3.2.1"
+EXPECTED_SPEC_VERSION = "3.2.3"
 
 #: The same pin in the git-tag form the upstream spec repository uses.
 #:
