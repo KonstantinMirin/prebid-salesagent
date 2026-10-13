@@ -37,6 +37,7 @@ from unittest.mock import MagicMock
 
 from src.core.errors.details import EntityRefDetails
 from tests.harness._base import BaseTestEnv
+from tests.helpers.media_buy_row_stubs import stub_package_row
 
 _MODULE = "src.core.tools.media_buy_update"
 _DB_MODULE = "src.core.database.database_session"
@@ -155,17 +156,16 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         # Default package: the ROW a package-level update reads back, carrying the fields
         # the tool projects into ``affected_packages`` as the column and the JSON document
         # really hold them (``paused`` defaults to false per 3.2.1 core/package.json;
-        # ``budget`` is a nullable DECIMAL column). A bare MagicMock answers
-        # ``package_config.get(...)`` with another MagicMock, which the response model
-        # rightly refuses — the mock was the defect, not the projection.
+        # ``budget``, ``bid_price`` and ``pacing`` are nullable columns). A bare MagicMock
+        # answers every unset attribute with another MagicMock, which the response model
+        # rightly refuses — the mock was the defect, not the projection. The columns are
+        # DERIVED from the model by ``stub_package_row`` rather than listed here, so the
+        # next column the projection starts reading does not reopen this.
         #
         # ``return_value``, deliberately NOT ``side_effect``: a side_effect WINS over a
         # later ``get_package.return_value = None``, so the not-found tests
         # (TestUC003ExtL) would have been unable to configure their own absence.
-        _default_package = MagicMock()
-        _default_package.budget = None
-        _default_package.package_config = {"paused": False}
-        _mb_repo.get_package.return_value = _default_package
+        _mb_repo.get_package.return_value = stub_package_row(package_config={"paused": False})
 
         # creatives repo: by default every referenced creative "exists" with an
         # approved status and no format restriction (uow.products.get_by_id

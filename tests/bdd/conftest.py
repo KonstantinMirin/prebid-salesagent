@@ -4614,9 +4614,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "AdCPValidationError caught and re-raised as plain ValueError, stripping error code",
             ),
             # Immutable: only REST success-path update tests fail (error tests pass)
+            #
+            # Graduated: [rest-no_immutable_fields_present (salesagent-mx7a8). That row
+            # sends packages[0] = {package_id, budget: 8000, pacing: "even"} and the
+            # outcome step reads BOTH back off the response package. pacing is now applied
+            # — update_media_buy writes the MediaPackage.pacing column that create already
+            # dual-writes — and the one affected_packages snapshot per modified package
+            # carries the column, so a2a and mcp moved failed->passed and this REST row
+            # moved xfail->xpass in the same run. The pass is NOT vacuous: the Then is
+            # _assert_requested_package_effects, which derives its assertion from the
+            # request and fails BY NAME on any requested field it cannot read back.
+            # Fire-probed by reverting the pacing write: the row fails on
+            # "Requested pacing='even', package carries None".
             (
                 "T-UC-026-partition-immutable",
-                {"[rest-update_mutable_only", "[rest-no_immutable_fields_present"},
+                {"[rest-update_mutable_only"},
                 f"partition immutable success {_UC026_REST_VACUOUS}",
             ),
             (
@@ -4839,13 +4851,30 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             ),
             # Replacement: REST all tests fail (update dispatch) +
             # creative_assignments/optimization_goals on impl/a2a/mcp
+            #
+            # Graduated: replace_catalogs on every transport, and the REST siblings
+            # [rest-replace_catalogs / [rest-catalogs provided / [rest-only scalar fields
+            # updated (salesagent-mx7a8). catalogs is now applied: 3.2
+            # media-buy/package-update.json defines it as "Replace the catalogs this
+            # package promotes. Uses replacement semantics — the provided array replaces
+            # the current list", and update_media_buy writes that whole document through
+            # MediaBuyRepository.update_package_config, which the one affected_packages
+            # snapshot then reads back. Measured in one serial run over this module's
+            # 63 immutable/replacement rows: 29 passed / 8 failed / 22 xfailed / 4 xpassed
+            # -> 37 passed / 0 failed / 18 xfailed / 8 xpassed, the four new xpasses being
+            # exactly the REST siblings of the four rows that went green.
+            #
+            # "creative_assignments" and "optimization_goals" STAY, and for different
+            # reasons: optimization_goals is a declared field this seller still cannot
+            # apply (it is now REFUSED with UNSUPPORTED_FEATURE rather than dropped —
+            # salesagent-14ffd), and the creative_assignments rows ask for an assignment
+            # to a creative the Given never creates.
             (
                 "T-UC-026-partition-replacement",
                 {
                     "creative_assignments",
                     "optimization_goals",
                     "[rest-omit_array_fields",
-                    "[rest-replace_catalogs",
                     "[rest-replace_targeting_overlay",
                 },
                 f"creative_assignments/optimization_goals replacement not implemented on any transport; the REST {_UC026_REST_VACUOUS}",
@@ -4856,8 +4885,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "creative_assignments",
                     "optimization_goals",
                     "[rest-all array fields omitted",
-                    "[rest-catalogs provided",
-                    "[rest-only scalar fields updated",
                     "[rest-targeting_overlay replacement",
                 },
                 f"creative_assignments/optimization_goals replacement not implemented on any transport; the REST {_UC026_REST_VACUOUS}",

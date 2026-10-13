@@ -10,6 +10,7 @@ Handles media buy updates including:
 
 import logging
 import uuid
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
@@ -157,14 +158,43 @@ def _applied_instant() -> datetime:
     return datetime.now(UTC)
 
 
+@dataclass
+class _PackageChanges:
+    """What this update DID to one package, accumulated across its per-field branches.
+
+    ONE of these per modified package, not one per field: the pin's obligation is
+    per-PACKAGE ("the state of each directly modified package"), so a request that
+    changes a package's budget AND its pacing owes one snapshot carrying both, not two
+    snapshots each carrying half. The six per-branch ``affected_packages_list.append``
+    calls this replaces produced the second shape, and a seventh branch would have
+    produced a seventh copy of the same assembly — which is why the assembly moved to
+    one place (``_affected_package``, called once per package after the loop) instead.
+
+    ``applied`` holds what the branches WROTE, for the fields the record cannot be
+    re-read for: the adapter commits its package writes in its OWN session, so a value
+    this update caused is carried here rather than looked up again.
+    """
+
+    changes_applied: dict[str, Any] = field(default_factory=dict)
+    paused: bool | None = None
+    budget: float | None = None
+
+
+def _package_changes(records: dict[str, _PackageChanges], package_id: str) -> _PackageChanges:
+    """The accumulator for *package_id*, created on first touch.
+
+    ``setdefault`` in one place rather than at each branch: the dict's insertion order IS
+    the order ``affected_packages`` reports, so "first branch that modified this package"
+    has to mean the same thing everywhere.
+    """
+    return records.setdefault(package_id, _PackageChanges())
+
+
 def _affected_package(
     uow: MediaBuyUoW,
     media_buy_id: str,
     package_id: str,
-    *,
-    changes_applied: dict[str, Any],
-    paused: bool | None = None,
-    budget: float | None = None,
+    changes: _PackageChanges,
 ) -> AffectedPackage:
     """One package's POST-UPDATE state, for ``affected_packages``.
 
@@ -173,23 +203,39 @@ def _affected_package(
     objects showing complete post-update state for each modified package ... a state
     snapshot, not a sparse delta: sellers MUST NOT return ``{ package_id }``-only stubs",
     and allows the empty array only for "campaign-level updates that do not modify
-    packages". Four branches of this tool were hand-building the entry with
-    ``paused=False`` written in as a literal — so a budget change to an already-paused
+    packages". The written spec at the same tag (``docs/media-buy/specification.mdx``)
+    says it as an obligation on the seller: "Sales agents MUST return ``affected_packages``
+    containing the state of each directly modified package after the update is applied
+    ...; an empty array is valid when only campaign-level fields (e.g., ``paused``,
+    ``start_time``) are updated." Four branches of this tool were hand-building the entry
+    with ``paused=False`` written in as a literal — so a budget change to an already-paused
     package reported it as active — and a fifth (``paused``) reported nothing at all.
 
-    ``paused``, ``budget`` and ``product_id`` come from the STORED package, except where
-    the calling branch has just written one and passes it in. That split is not a
-    convenience: the adapter commits its package writes in its OWN session, so a field
-    this branch changed is supplied rather than re-read, while the fields it did not touch
-    are whatever the record holds — the same source ``get_media_buys`` serves them from,
-    which is what keeps the two surfaces from describing one package differently.
+    Every field below comes from the STORED package, except where the calling branch has
+    just written one and passes it on ``changes``. That split is not a convenience: the
+    adapter commits its package writes in its OWN session, so a field this update changed
+    is supplied rather than re-read, while the fields it did not touch are whatever the
+    record holds — the same source ``get_media_buys`` serves them from, which is what keeps
+    the two surfaces from describing one package differently.
 
-    ``targeting_overlay`` is NOT carried yet, and the reason is a type boundary rather than
-    an oversight: a package update's overlay is the INPUT sibling (``TargetingInput``) while
-    the readback field takes ``Targeting``, and the two are siblings with neither a subclass
-    of the other — crossing that gap is ``_adopt_sibling``'s job, by attribute, never by a
-    dump in a caller. Rehydrating a STORED overlay is separately ``get_media_buys``' job,
-    which owns the corrupt-row advisory that goes with it (``media_buy_list.py:274``).
+    WHAT IS STILL MISSING, and why it is not here. The snapshot carries the three columns
+    (``budget``, ``bid_price``, ``pacing``), the two ``package_config`` scalars this file
+    already trusted (``product_id``, ``paused``) and the one ``package_config`` document
+    this tool itself writes (``catalogs``). It does NOT carry ``format_ids``,
+    ``impressions``, ``start_time`` or ``end_time``, which also sit in ``package_config``:
+    those are untyped blobs written by past clients, so reading them needs the
+    corrupt-row tolerance ``get_media_buys`` owns (``_resolve_blob_field``, which answers a
+    bad row with a per-row advisory rather than a 500). Borrowing that is a separate
+    change, tracked as its own item; a bare ``config.get(...)`` into a typed field here
+    would turn one malformed historical row into a failed update.
+
+    ``targeting_overlay`` is NOT carried either, and that reason is a type boundary rather
+    than an oversight: a package update's overlay is the INPUT sibling (``TargetingInput``)
+    while the readback field takes ``Targeting``, and the two are siblings with neither a
+    subclass of the other — crossing that gap is ``_adopt_sibling``'s job, by attribute,
+    never by a dump in a caller. Rehydrating a STORED overlay is separately
+    ``get_media_buys``' job, which owns the corrupt-row advisory that goes with it
+    (``media_buy_list.py:274``).
     """
     assert uow.media_buys is not None
     # The tolerant accessor, deliberately: a media buy whose packages live only in
@@ -201,23 +247,61 @@ def _affected_package(
     stored = uow.media_buys.get_package(media_buy_id, package_id)
     config = (stored.package_config or {}) if stored is not None else {}
     stored_budget = float(stored.budget) if stored is not None and stored.budget is not None else None
+    stored_bid_price = float(stored.bid_price) if stored is not None and stored.bid_price is not None else None
     return AffectedPackage(
         package_id=package_id,
-        paused=bool(config.get("paused", False)) if paused is None else paused,
-        budget=stored_budget if budget is None else budget,
+        paused=bool(config.get("paused", False)) if changes.paused is None else changes.paused,
+        budget=stored_budget if changes.budget is None else changes.budget,
+        bid_price=stored_bid_price,
+        # Re-read rather than carried: ``update_package_fields`` writes the column inside
+        # THIS session, so the row already answers with what this update applied.
+        pacing=stored.pacing if stored is not None else None,
         product_id=config.get("product_id"),
+        # Written by the catalogs branch below and by nothing else, so the stored document
+        # is this tool's own shape — not a blob some past client's create left behind.
+        catalogs=config.get("catalogs"),
         # Internal, exclude=True on both: off the wire, off persistence, off the
         # idempotency hash.
         buyer_package_ref=package_id,
-        changes_applied=changes_applied,
+        changes_applied=changes.changes_applied,
     )
 
 
-#: The package-update targeting operations this seller accepts in its DTO — because the
-#: pinned schema declares them — and cannot execute. DERIVED from the DTO's own field set
-#: rather than hand-listed, so a field renamed upstream cannot leave a stale literal here
-#: silently refusing nothing. If the prefixes ever match nothing the set is empty and the
-#: refusal stops firing, which the BDD scenarios that demand UNSUPPORTED_FEATURE turn red on.
+#: The package-update fields this seller APPLIES: each one has a branch below that writes
+#: a persisted effect, and the ``affected_packages`` snapshot reads that effect back.
+#:
+#: ``package_id`` is absent on purpose — it names WHICH package to update rather than
+#: asking for a change — and so are ``context`` and ``ext``, which are the protocol's own
+#: echoed context and the namespaced extension bag (``core/context.json``, ``core/ext.json``)
+#: rather than update instructions.
+#:
+#: A name here that the DTO no longer declares is not silent: its own branch reads
+#: ``pkg_update.<name>`` and raises ``AttributeError``, and the renamed field's new spelling
+#: lands in the refusal set below.
+_APPLIED_PACKAGE_FIELDS: frozenset[str] = frozenset(
+    {
+        "budget",
+        "pacing",
+        "catalogs",
+        "paused",
+        "targeting_overlay",
+        "creative_ids",
+        "creatives",
+        "creative_assignments",
+    }
+)
+
+#: Not instructions, so neither applied nor refused: the package's identity, the echoed
+#: protocol context, and the extension bag.
+_NON_INSTRUCTION_PACKAGE_FIELDS: frozenset[str] = frozenset({"package_id", "context", "ext"})
+
+#: The package-update fields this seller accepts in its DTO — because the pinned schema
+#: declares them — and cannot execute. DERIVED by SUBTRACTION from the DTO's own field set,
+#: so a field this tool does not apply is refused whether or not anybody remembered to list
+#: it: a property added to ``3.2/media-buy/package-update.json`` upstream lands here the
+#: moment the SDK declares it. That is the opposite of the previous shape — a
+#: ``keyword_targets_`` / ``negative_keywords_`` prefix match — which refused four fields
+#: and let the other fourteen through silently, the defect this derivation closes.
 #:
 #: WHY A REFUSAL AND NOT A SILENT NO-OP. Two sentences in the pin, independently:
 #: ``core/targeting.json`` — "A fresh create/update request MUST be applied exactly or
@@ -232,7 +316,12 @@ def _affected_package(
 #: ``3.2/media-buy/package-update.json``, so dropping them is not the dev/prod tolerance for
 #: an undeclared field. It is also NOT the ``_FIELD_POLICY`` ``ignored_by_design`` shape used
 #: for the seven 3.2 account fields — that is right there because nothing in those fields'
-#: schemas carries an apply-exactly-or-reject MUST, and targeting carries one twice.
+#: schemas carries an apply-exactly-or-reject MUST, and these carry one each:
+#: ``min_spend_target`` and ``pacing`` name ``UNSUPPORTED_FEATURE`` in their own pinned
+#: descriptions; ``bidding``, ``daily_budget_cap`` and ``optimization_goals`` define
+#: replacement semantics a no-op cannot deliver; and ``canceled`` is the one that makes the
+#: silence expensive — a buyer asking to stop a package's delivery used to be answered
+#: ``completed`` while the package kept delivering.
 #:
 #: The DISCOVERY half of the obligation is already met, by omission.
 #: ``core/targeting-overlay-support.json`` is binding — "Product.overlay_support is the
@@ -241,13 +330,15 @@ def _affected_package(
 #: ``git grep overlay_support -- src/`` returns nothing, so this seller advertises no overlay
 #: support at all and never claimed keyword targeting. (It also understates the dimensions
 #: this seller DOES support, which is its own gap and not this refusal's business.)
-_UNSUPPORTED_PACKAGE_TARGETING_OPS: tuple[str, ...] = tuple(
-    name for name in AdCPPackageUpdate.model_fields if name.startswith(("keyword_targets_", "negative_keywords_"))
+_UNAPPLIED_PACKAGE_FIELDS: tuple[str, ...] = tuple(
+    name
+    for name in AdCPPackageUpdate.model_fields
+    if name not in _APPLIED_PACKAGE_FIELDS and name not in _NON_INSTRUCTION_PACKAGE_FIELDS
 )
 
 
-def _refuse_unsupported_targeting_ops(req: UpdateMediaBuyRequest) -> None:
-    """Refuse a package update carrying a targeting operation this seller cannot apply.
+def _refuse_unapplied_package_fields(req: UpdateMediaBuyRequest) -> None:
+    """Refuse a package update carrying a field this seller cannot apply.
 
     Raised BEFORE the UoW opens, because the spec puts the rejection "before any
     mutation" and a partially-applied update is the state it exists to prevent.
@@ -258,9 +349,9 @@ def _refuse_unsupported_targeting_ops(req: UpdateMediaBuyRequest) -> None:
     sibling).
     """
     for pkg_update in req.packages or ():
-        for op in _UNSUPPORTED_PACKAGE_TARGETING_OPS:
-            if getattr(pkg_update, op, None) is not None:
-                raise AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(capability=op))
+        for name in _UNAPPLIED_PACKAGE_FIELDS:
+            if getattr(pkg_update, name, None) is not None:
+                raise AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(capability=name))
 
 
 def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
@@ -487,8 +578,12 @@ def _update_media_buy_impl(
     Returns:
         UpdateMediaBuyResponse with updated media buy details
     """
-    # Initialize tracking for affected packages (internal tracking, not part of schema)
-    affected_packages_list: list[AffectedPackage] = []
+    # One entry per package this update MODIFIES, in the order the request named them.
+    # The per-field branches below record into it; the single assembly point after the
+    # loop turns each entry into the post-update snapshot the pin requires. The list of
+    # AffectedPackage this replaced was appended to from six branches, so a package
+    # touched twice appeared twice and a field no branch read appeared not at all.
+    changes_by_package: dict[str, _PackageChanges] = {}
 
     principal_id = identity.principal.principal_id
     tenant = identity.tenant
@@ -528,7 +623,7 @@ def _update_media_buy_impl(
 
     # Capability refusal, above the UoW for the same reason the webhook gates are: the spec
     # puts this rejection "before any mutation", so no transaction may be open when it fires.
-    _refuse_unsupported_targeting_ops(req)
+    _refuse_unapplied_package_fields(req)
 
     # ── Workflow-step bookkeeping fence ──────────────────────────────────
     # Hoist ``ctx_manager`` and ``step`` out of the try below so the
@@ -883,19 +978,13 @@ def _update_media_buy_impl(
 
                         # This branch modified a package, so the response says which one
                         # and in what state. It used to apply the pause through the adapter
-                        # and append NOTHING, which is the one shape the pin's
+                        # and record NOTHING, which is the one shape the pin's
                         # affected_packages description does not allow outside a
                         # campaign-level update (see _affected_package). ``paused`` is
-                        # passed, not re-read: it is the value this branch just caused.
-                        affected_packages_list.append(
-                            _affected_package(
-                                uow,
-                                req.media_buy_id,
-                                pkg_update.package_id,
-                                paused=pkg_update.paused,
-                                changes_applied={"paused": pkg_update.paused},
-                            )
-                        )
+                        # carried, not re-read: it is the value this branch just caused.
+                        record = _package_changes(changes_by_package, pkg_update.package_id)
+                        record.paused = pkg_update.paused
+                        record.changes_applied["paused"] = pkg_update.paused
 
                     # Handle budget updates
                     if pkg_update.budget is not None:
@@ -963,20 +1052,14 @@ def _update_media_buy_impl(
                             today=utc_flight_start(today),
                         )
 
-                        # Track budget update in affected_packages. ``budget`` is passed
+                        # Track budget update in affected_packages. ``budget`` is carried
                         # (the value just applied); ``paused`` is read off the record,
                         # because a budget change does not alter it and the literal
                         # ``False`` that stood here reported an already-paused package as
                         # active.
-                        affected_packages_list.append(
-                            _affected_package(
-                                uow,
-                                req.media_buy_id,
-                                pkg_update.package_id,
-                                budget=budget_amount,
-                                changes_applied={"budget": {"updated": budget_amount, "currency": currency}},
-                            )
-                        )
+                        record = _package_changes(changes_by_package, pkg_update.package_id)
+                        record.budget = budget_amount
+                        record.changes_applied["budget"] = {"updated": budget_amount, "currency": currency}
 
                     # Handle creative_ids updates (AdCP v2.2.0+)
                     if pkg_update.creative_ids is not None:
@@ -1052,20 +1135,11 @@ def _update_media_buy_impl(
                         session.flush()
 
                         # Store results for affected_packages response
-                        affected_packages_list.append(
-                            _affected_package(
-                                uow,
-                                req.media_buy_id,
-                                pkg_update.package_id,
-                                changes_applied={
-                                    "creative_ids": {
-                                        "added": list(added_ids),
-                                        "removed": list(removed_ids),
-                                        "current": pkg_update.creative_ids,
-                                    }
-                                },
-                            )
-                        )
+                        _package_changes(changes_by_package, pkg_update.package_id).changes_applied["creative_ids"] = {
+                            "added": list(added_ids),
+                            "removed": list(removed_ids),
+                            "current": pkg_update.creative_ids,
+                        }
 
                     # Handle creatives (inline upload) - AdCP 2.5
                     if pkg_update.creatives:
@@ -1134,14 +1208,9 @@ def _update_media_buy_impl(
                         synced_ids = [
                             r.creative_id for r in sync_response.creatives if r.action in ["created", "updated"]
                         ]
-                        affected_packages_list.append(
-                            _affected_package(
-                                uow,
-                                req.media_buy_id,
-                                pkg_update.package_id,
-                                changes_applied={"creatives_uploaded": synced_ids},
-                            )
-                        )
+                        _package_changes(changes_by_package, pkg_update.package_id).changes_applied[
+                            "creatives_uploaded"
+                        ] = synced_ids
 
                     # Handle creative_assignments (weight/placement updates) - adcp#208
                     if pkg_update.creative_assignments:
@@ -1284,14 +1353,9 @@ def _update_media_buy_impl(
                         session.flush()
 
                         # Track in affected_packages
-                        affected_packages_list.append(
-                            _affected_package(
-                                uow,
-                                req.media_buy_id,
-                                pkg_update.package_id,
-                                changes_applied={"creative_assignments_updated": updated_assignments},
-                            )
-                        )
+                        _package_changes(changes_by_package, pkg_update.package_id).changes_applied[
+                            "creative_assignments_updated"
+                        ] = updated_assignments
 
                     # Handle targeting_overlay updates
                     if pkg_update.targeting_overlay is not None:
@@ -1317,13 +1381,57 @@ def _update_media_buy_impl(
                         )
 
                         # Track targeting update in affected_packages
-                        affected_packages_list.append(
-                            _affected_package(
-                                uow,
-                                req.media_buy_id,
-                                pkg_update.package_id,
-                                changes_applied={"targeting": pkg_update.targeting_overlay},
-                            )
+                        _package_changes(changes_by_package, pkg_update.package_id).changes_applied["targeting"] = (
+                            pkg_update.targeting_overlay
+                        )
+
+                    # Handle pacing updates. 3.2 media-buy/package-update.json declares
+                    # pacing as "Updated package pacing, subordinate to media-buy pacing",
+                    # and the MediaPackage row carries a ``pacing`` COLUMN that
+                    # create_media_buy already dual-writes — so applying it is a column
+                    # write, and the snapshot above re-reads the column. Accepted and
+                    # dropped until now: a buyer asking for even pacing alongside a budget
+                    # change got ``completed`` with the budget applied and the pacing gone.
+                    if pkg_update.pacing is not None:
+                        if not pkg_update.package_id:
+                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
+                        # The row must exist before the write, for the reason the budget
+                        # branch states: ``update_package_fields`` answers a missing package
+                        # with None, which is a quiet failure.
+                        uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
+                        uow.media_buys.update_package_fields(
+                            req.media_buy_id,
+                            pkg_update.package_id,
+                            # The column is VARCHAR(20) and the DTO field is the pinned
+                            # ``enums/pacing.json`` enum, so the MEMBER'S VALUE is what
+                            # persists — the same string create_media_buy's dual-write puts
+                            # there and the same one get_media_buys reads back.
+                            pacing=pkg_update.pacing.value,
+                        )
+                        _package_changes(changes_by_package, pkg_update.package_id).changes_applied["pacing"] = (
+                            pkg_update.pacing
+                        )
+
+                    # Handle catalogs replacement. 3.2 media-buy/package-update.json:
+                    # "Replace the catalogs this package promotes. Uses replacement
+                    # semantics — the provided array replaces the current list. Omit to
+                    # leave catalogs unchanged." So the write is a whole-document swap,
+                    # never a merge, and omission is already handled by this guard.
+                    if pkg_update.catalogs is not None:
+                        if not pkg_update.package_id:
+                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
+                        catalog_pkg = uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
+                        # Through the repository's own writer rather than a mutate +
+                        # flag_modified pair: it replaces the document, bumps the buy's
+                        # revision (the buyer's optimistic-concurrency token, which an
+                        # applied update owes them) and flushes, in one call.
+                        uow.media_buys.update_package_config(
+                            req.media_buy_id,
+                            pkg_update.package_id,
+                            {**(catalog_pkg.package_config or {}), "catalogs": pkg_update.catalogs},
+                        )
+                        _package_changes(changes_by_package, pkg_update.package_id).changes_applied["catalogs"] = (
+                            pkg_update.catalogs
                         )
 
             # A campaign-level budget update is not expressible in AdCP 3.1.1: the request
@@ -1398,7 +1506,15 @@ def _update_media_buy_impl(
             )
             session.add(mapping)
 
-            # Build final response first
+            # THE ONE ASSEMBLY POINT for affected_packages: one snapshot per package this
+            # update modified, built after every branch has run, so a package touched on
+            # two fields is reported once with both. The six per-branch constructions this
+            # replaced each reported a package's state as of ONE field's branch, which is
+            # the "sparse delta" the pin names and forbids.
+            affected_packages_list = [
+                _affected_package(uow, req.media_buy_id or "", package_id, changes)
+                for package_id, changes in changes_by_package.items()
+            ]
             logger.info(f"[update_media_buy] Final affected_packages before return: {affected_packages_list}")
 
             # affected_packages_list contains AffectedPackage objects with both:

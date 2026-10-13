@@ -44,7 +44,11 @@ BEHAVIORAL_MOCK_CONSTRUCTION_CAP: dict[str, int] = {
     # 2 -> 1: the webhook delivery path owns its connection and the retry-loop
     # test builds a real QueuedWebhook instead of mocking a config object.
     "tests/unit/test_delivery_service_behavioral.py": 1,
-    "tests/unit/test_update_media_buy_behavioral.py": 103,
+    # 103 -> 88: fifteen hand-rolled ``MagicMock()`` package rows replaced by
+    # ``stub_package_row``, which derives the attribute set from
+    # ``MediaPackage.__table__.columns`` instead of setting the two attributes each site
+    # happened to need.
+    "tests/unit/test_update_media_buy_behavioral.py": 88,
 }
 
 # unittest.mock construction callables counted as hand-rolled mocking.

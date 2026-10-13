@@ -65,6 +65,7 @@ from tests.factories.media_buy import (
 )
 from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory
+from tests.helpers.media_buy_row_stubs import stub_package_row
 from tests.helpers.unit_identity import fabricated_account_identity
 
 # ---------------------------------------------------------------------------
@@ -1583,9 +1584,9 @@ class TestUpdateMediaBuyMainFlow:
             # The package the update names exists — a budget update on a missing one is
             # PACKAGE_NOT_FOUND. (The second, identical _stub_media_buy_reads call that
             # stood here was a copy of the first; this is the stub that was missing.)
-            _mock_pkg = MagicMock()
-            _mock_pkg.budget = Decimal("1000")
-            _mock_pkg.package_config = {"paused": False, "product_id": "prod_1"}
+            _mock_pkg = stub_package_row(
+                budget=Decimal("1000"), package_config={"paused": False, "product_id": "prod_1"}
+            )
             _stub_package_reads(mock_uow.media_buys, _mock_pkg)
 
             result = _update_media_buy_impl(req=req, identity=identity)
@@ -2019,8 +2020,7 @@ class TestUpdateMediaBuyCreativeIds:
         mock_buy.status = "active"
         mock_buy.approved_at = None
 
-        mock_package = MagicMock()
-        mock_package.package_config = {"product_id": "prod_1"}
+        mock_package = stub_package_row(package_config={"product_id": "prod_1"})
 
         mock_product = MagicMock()
         mock_product.format_ids = []
@@ -2182,8 +2182,7 @@ class TestUpdateMediaBuyCreativeIds:
         mock_buy.status = "active"
         mock_buy.approved_at = None
 
-        mock_package = MagicMock()
-        mock_package.package_config = {"product_id": "prod_1"}
+        mock_package = stub_package_row(package_config={"product_id": "prod_1"})
 
         mock_product = MagicMock()
         mock_product.format_ids = [{"agent_url": "http://agent.test", "id": "display_300x250"}]
@@ -2268,8 +2267,7 @@ class TestUpdateMediaBuyCreativeIds:
         mock_buy.status = "active"
         mock_buy.approved_at = None
 
-        mock_package = MagicMock()
-        mock_package.package_config = {"product_id": "prod_1"}
+        mock_package = stub_package_row(package_config={"product_id": "prod_1"})
 
         mock_product = MagicMock()
         mock_product.format_ids = [{"agent_url": "http://agent.test", "id": "display_300x250"}]
@@ -2370,8 +2368,7 @@ class TestUpdateMediaBuyCreativeIds:
         mock_buy.status = "active"
         mock_buy.approved_at = None
 
-        mock_package = MagicMock()
-        mock_package.package_config = {"product_id": "prod_1"}
+        mock_package = stub_package_row(package_config={"product_id": "prod_1"})
 
         mock_product = MagicMock()
         mock_product.format_ids = []

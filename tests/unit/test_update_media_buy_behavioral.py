@@ -45,6 +45,7 @@ from src.core.tools.media_buy_update import _update_media_buy_impl
 from tests.factories.creative import stamp_format_identity
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness.media_buy_update import MediaBuyUpdateEnv
+from tests.helpers.media_buy_row_stubs import stub_package_row
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -1021,8 +1022,7 @@ class TestUC003UpdateCreativeIds:
         mock_session.scalars.return_value = mock_scalars
 
         # Package with product
-        mock_pkg = MagicMock()
-        mock_pkg.package_config = {"product_id": "prod_1"}
+        mock_pkg = stub_package_row(package_config={"product_id": "prod_1"})
         uow.media_buys.get_package.return_value = mock_pkg
 
         return mock_session, creatives
@@ -1137,8 +1137,7 @@ class TestUC003UpdateCreativeIds:
             uow.products.get_by_id.return_value = mock_product
 
             # Package with product
-            mock_pkg = MagicMock()
-            mock_pkg.package_config = {"product_id": "prod_1"}
+            mock_pkg = stub_package_row(package_config={"product_id": "prod_1"})
             uow.media_buys.get_package.return_value = mock_pkg
 
             identity = env.identity
@@ -1175,8 +1174,7 @@ class TestUC003UpdateCreativeIds:
             uow.creatives.get_by_ids.side_effect = None
             uow.creatives.get_by_ids.return_value = [c1]
 
-            mock_pkg = MagicMock()
-            mock_pkg.package_config = {"product_id": "prod_1"}
+            mock_pkg = stub_package_row(package_config={"product_id": "prod_1"})
             uow.media_buys.get_package.return_value = mock_pkg
 
             mock_product = MagicMock()
@@ -1440,8 +1438,7 @@ class TestUC003UpdateCreativeAssignments:
             env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
             # Package with product that has placements
-            mock_pkg = MagicMock()
-            mock_pkg.package_config = {"product_id": "prod_1"}
+            mock_pkg = stub_package_row(package_config={"product_id": "prod_1"})
             env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
 
             # Product with placements
@@ -1492,8 +1489,7 @@ class TestUC003UpdateCreativeAssignments:
             mock_mb.media_buy_id = "mb_no_placement"
             env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
-            mock_pkg = MagicMock()
-            mock_pkg.package_config = {"product_id": "prod_1"}
+            mock_pkg = stub_package_row(package_config={"product_id": "prod_1"})
             env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
 
             # Product WITHOUT placements
@@ -1543,8 +1539,7 @@ class TestUC003UpdateCreativeAssignments:
             mock_mb.approved_at = None
             uow.media_buys.get_by_id.return_value = mock_mb
 
-            mock_pkg = MagicMock()
-            mock_pkg.package_config = {"product_id": "prod_1"}
+            mock_pkg = stub_package_row(package_config={"product_id": "prod_1"})
             uow.media_buys.get_package.return_value = mock_pkg
 
             # C999 does not exist in the creative library.
@@ -1585,8 +1580,7 @@ class TestUC003UpdateTargetingOverlay:
         Covers: UC-003-ALT-UPDATE-TARGETING-OVERLAY-01
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            mock_pkg = MagicMock()
-            mock_pkg.package_config = {"targeting_overlay": {"old": True}}
+            mock_pkg = stub_package_row(package_config={"targeting_overlay": {"old": True}})
             env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
 
             identity = env.identity
@@ -1609,8 +1603,7 @@ class TestUC003UpdateTargetingOverlay:
         Covers: UC-003-ALT-UPDATE-TARGETING-OVERLAY-03
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            mock_pkg = MagicMock()
-            mock_pkg.package_config = {}
+            mock_pkg = stub_package_row()
             env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
 
             identity = env.identity
@@ -1639,8 +1632,7 @@ class TestUC003UpdateTargetingOverlay:
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
             from src.core.exceptions import AdCPValidationError
 
-            mock_pkg = MagicMock()
-            mock_pkg.package_config = {"product_id": "prod_strict"}
+            mock_pkg = stub_package_row(package_config={"product_id": "prod_strict"})
             env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
 
             # uow.products.get_by_id returns a product that disallows property targeting.
@@ -1727,8 +1719,7 @@ class TestUC003UpdateTargetingOverlay:
         Covers: UC-003-MAIN-14
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            mock_pkg = MagicMock()
-            mock_pkg.package_config = {"product_id": "prod_strict"}
+            mock_pkg = stub_package_row(package_config={"product_id": "prod_strict"})
             env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
 
             identity = env.identity
@@ -1776,11 +1767,12 @@ class TestUC003UpdateTargetingOverlay:
                     "list_id": "A",
                 },
             }
-            mock_pkg = MagicMock()
-            mock_pkg.package_config = {
-                "product_id": "prod_open",
-                "targeting_overlay": dict(existing_overlay),  # copy so test isn't aliased
-            }
+            mock_pkg = stub_package_row(
+                package_config={
+                    "product_id": "prod_open",
+                    "targeting_overlay": dict(existing_overlay),  # copy so test isn't aliased
+                }
+            )
             env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
 
             # Product allows property targeting so the validation guard doesn't fire
@@ -2230,8 +2222,7 @@ class TestUC003ExtJ:
             uow.creatives.get_by_ids.side_effect = None
             uow.creatives.get_by_ids.return_value = [c1]
 
-            mock_pkg = MagicMock()
-            mock_pkg.package_config = {"product_id": "prod_1"}
+            mock_pkg = stub_package_row(package_config={"product_id": "prod_1"})
             uow.media_buys.get_package.return_value = mock_pkg
 
             mock_product = MagicMock()
@@ -2277,8 +2268,7 @@ class TestUC003ExtJ:
             uow.creatives.get_by_ids.side_effect = None
             uow.creatives.get_by_ids.return_value = [c1, c2]
 
-            mock_pkg = MagicMock()
-            mock_pkg.package_config = {"product_id": "prod_1"}
+            mock_pkg = stub_package_row(package_config={"product_id": "prod_1"})
             uow.media_buys.get_package.return_value = mock_pkg
 
             mock_product = MagicMock()
@@ -2488,8 +2478,7 @@ class TestUC003ExtM:
             mock_mb.media_buy_id = "mb_bad_placement"
             env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
-            mock_pkg = MagicMock()
-            mock_pkg.package_config = {"product_id": "prod_1"}
+            mock_pkg = stub_package_row(package_config={"product_id": "prod_1"})
             env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
 
             mock_product = MagicMock()
@@ -2533,8 +2522,7 @@ class TestUC003ExtM:
             mock_mb.media_buy_id = "mb_no_placements"
             env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
 
-            mock_pkg = MagicMock()
-            mock_pkg.package_config = {"product_id": "prod_1"}
+            mock_pkg = stub_package_row(package_config={"product_id": "prod_1"})
             env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
 
             mock_product = MagicMock()
