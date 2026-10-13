@@ -190,17 +190,31 @@ dev = [
 # build backend is plain setuptools with no hook, so nothing regenerates it and the error-code
 # table fails to build on import. A git install of a previous fork revision had 0 schema files.
 #
-# THE BUILD THIS NAMES: cut from integrate/8qela 2aeef29c2, the graded tree with ZERO failing
-# SDK tests (16712 passed, 0 failed, 2594 skipped, 1 xfailed, reconciling against 19328
-# collected). It carries five commits beyond the earlier path-pinned wheel, so measurements
-# against that one do not transfer and the application was RE-measured against this.
+# THE BUILD THIS NAMES: cut from pin/spec-3.2.3 bf0228b68, which is the 3.2.3 adoption merged
+# with upstream/main 47084e83a. It supersedes the 2aeef29c2 wheel and carries two changes the
+# application depends on, both verified on the PUBLISHED asset rather than on a local build:
 #
-# THE PUBLISHED WHEEL AND AN INDEPENDENT LOCAL BUILD OF 2aeef29c2 HAVE IDENTICAL PAYLOADS —
-# 5505 entries each, 0 added, 0 removed, 0 changed with `.dist-info` excluded. Two builds from
-# one commit by two parties agreeing entry-for-entry is the fact worth recording; the digest
-# itself is not, because the two measurements computed it over different scopes and reported
-# different values for the same agreeing comparison. Cite the comparison, not the hash.
-adcp = { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-2aeef29c2/adcp-9.0.0b3%2Bsa.8qela.2aeef29c2-py3-none-any.whl" }
+#   ADCP_VERSION  3.2.3  (was 3.2.1) — the SDK is now generated at the version the
+#                 conformance runner grades. @adcp/sdk 15.2.1-15.8.1 declare 3.2.3, and
+#                 15.8.1's signing exports are a strict superset of 14.4.0's, so moving the
+#                 runner line loses no A2A request-signing dispatch.
+#   _compliance   ['3.2.1', '3.2.3'] — ADDITIVE. 3.2.1 still ships because tests still grade
+#                 it; a replacement left a tree that ships one and grades the other.
+#
+# 3.2.1 -> 3.2.3 IS CONTRACT-NEUTRAL, which is why this pin move is cheap: over 722716 derived
+# contract-surface pointers (enum and `required` member sets, `properties` key sets, and the
+# type/format/const/pattern/min*/max*/$ref scalars, version labels blanked) it changes zero and
+# adds one, and that one addition is inside an example. All 206 enum files have byte-equal
+# member arrays — error-code stays at 120 and request-signing-error-code at 29. The real content
+# of the move is 33 new A2A request-signing vectors grading 3.2.3's "Operation resolution over
+# A2A" erratum, which the SDK does not yet implement (salesagent-8qela.180.3).
+#
+# ALSO IN THIS WHEEL: the open asset unions are now DERIVED rather than hand-written. On the
+# published artifact `Format.assets` and `RepeatableAssetGroup.assets` each route all 21
+# `asset_type` values `core/format.json` declares; upstream routes 14 and 12, silently
+# validating the remainder as `UnknownFormatAsset`. Filed upstream as
+# adcontextprotocol/adcp-client-python#1486.
+adcp = { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-bf0228b68/adcp-9.0.0b3%2Bsa.8qela.bf0228b68-py3-none-any.whl" }
 
 [tool.ruff]
 line-length = 120
