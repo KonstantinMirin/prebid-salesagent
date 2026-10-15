@@ -56,9 +56,40 @@ def _live_ad_server_on_the_live_stack(self: MediaBuyCreateEnv, adapter_type: str
     self._write_adapter_config(adapter_type)
 
 
-#: Audit operation the Mock adapter writes once per creative push, as
-#: ``"<adapter_name>.<operation>"`` — so the lookup below is a substring match.
+#: Audit operations the Mock adapter writes, one row per call, as
+#: ``"<adapter_name>.<operation>"`` — so the lookups below are substring matches.
 _CREATIVE_PUSH_OPERATION = "add_creative_assets"
+_BUY_CREATE_OPERATION = "create_media_buy"
+
+
+def _adapter_operation_receipts(self: MediaBuyCreateEnv, operation: str) -> list[dict[str, Any]]:
+    """The ``details`` of every audit row the server's ad server wrote for *operation*.
+
+    THE ONE e2e READBACK, parameterised by the operation rather than copied per seam. Over
+    e2e_rest the adapter runs inside the server container, so a mock read in this process
+    would report nothing on every branch — which is worse than no evidence, because a
+    scenario asserting something did NOT happen would pass vacuously.
+
+    What the server leaves behind is a row. ``MockAdServer`` calls
+    ``audit_logger.log_operation(...)`` in production code for both operations named above,
+    on its own session, committed before the create response returns — so the receipt exists
+    by the time a Then runs, with no polling. (Same seam shape as
+    ``_e2e_slack_notified_creatives``: the server's durable trace, not the test rig's mock.)
+
+    THE RECORD IS THE CALL, not its success: ``log_operation`` runs before the work can
+    raise, exactly as an in-process ``call_args_list`` records a call whatever it returned.
+    The two branches therefore mean the same thing.
+
+    ``expire_all`` first, and ordered by ``log_id``: the server committed through its own
+    session, so rows written since this session last read are otherwise served from the
+    identity map, and ``find_by_operation`` imposes no order of its own.
+    """
+    from src.core.database.repositories.audit_log import AuditLogRepository
+
+    session = self.get_session()
+    session.expire_all()
+    rows = AuditLogRepository(session, self.tenant_id).find_by_operation(operation)
+    return [row.details or {} for row in sorted(rows, key=lambda r: r.log_id)]
 
 
 def _uploaded_assets_from_the_audit_trail(self: MediaBuyCreateEnv) -> list[dict[str, Any]]:
@@ -81,24 +112,27 @@ def _uploaded_assets_from_the_audit_trail(self: MediaBuyCreateEnv) -> list[dict[
     media-buy-exists check raises, exactly as the in-process ``call_args_list`` records a
     call whatever it returned. The two branches therefore mean the same thing.
 
+    That audit record carries the asset dicts AS HANDED, which is why both branches of this
+    seam return the same shape and one assertion can read either.
+
     ONLY THE IMMEDIATE AND SYNC-DELAY MODES write it. ``_add_creative_assets_async`` parks
     the request on a workflow step and audits nothing, so a scenario driving the async
     upload mode needs its own seam rather than a widened one here — which path ran is part
     of what such a scenario would be asserting.
-
-    ``expire_all`` first, and ordered by ``log_id``: the server committed through its own
-    session, so rows written since this session last read are otherwise served from the
-    identity map, and ``find_by_operation`` imposes no order of its own.
     """
-    from src.core.database.repositories.audit_log import AuditLogRepository
-
-    session = self.get_session()
-    session.expire_all()
-    rows = AuditLogRepository(session, self.tenant_id).find_by_operation(_CREATIVE_PUSH_OPERATION)
     uploaded: list[dict[str, Any]] = []
-    for row in sorted(rows, key=lambda r: r.log_id):
-        uploaded.extend((row.details or {}).get("assets") or [])
+    for details in _adapter_operation_receipts(self, _CREATIVE_PUSH_OPERATION):
+        uploaded.extend(details.get("assets") or [])
     return uploaded
+
+
+def _buy_creates_from_the_audit_trail(self: MediaBuyCreateEnv) -> int:
+    """How many times the SERVER's ad server was asked to create a buy.
+
+    ``MockAdServer._create_media_buy_immediate`` audits every create, so the row count is
+    the call count. Read for the same reason as its sibling and through the same seam.
+    """
+    return len(_adapter_operation_receipts(self, _BUY_CREATE_OPERATION))
 
 
 def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> None:
@@ -493,6 +527,25 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             assets = call.args[1] if len(call.args) > 1 else call.kwargs.get("assets")
             uploaded.extend(assets or [])
         return uploaded
+
+    @realize_e2e(_buy_creates_from_the_audit_trail)
+    def ad_server_create_count(self) -> int:
+        """How many times the ad server was asked to create a media buy.
+
+        The observable for "system state is unchanged on failure": a refusal that happens
+        BEFORE the adapter call leaves nothing behind, and one that happens after answers the
+        buyer an error while a buy exists at the ad server. Both reach the wire as the same
+        code, so without this a scenario cannot tell them apart -- which a fire-probe
+        demonstrated rather than predicted: removing the pre-adapter refusal left all twelve
+        canonical-clickthrough nodeids green, because the asset builder refused afterwards
+        and the buyer saw the same VALIDATION_ERROR.
+
+        A count rather than the calls themselves, because the obligation is arity: the
+        in-process branch counts the mock's calls and the e2e branch counts the audit rows
+        the server's own ad server wrote, and those are comparable where call arguments
+        (a request model in one process, a JSON document in another) are not.
+        """
+        return len(self.mock["adapter"].return_value.create_media_buy.call_args_list)
 
     @realize_e2e(_live_ad_server_on_the_live_stack)
     def run_ad_server(self, adapter_type: str) -> None:

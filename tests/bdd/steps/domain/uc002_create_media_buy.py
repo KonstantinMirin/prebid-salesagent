@@ -2180,3 +2180,81 @@ def then_valid_actions_are_enum_members(ctx: dict) -> None:
         f"valid_actions carries {unknown!r}, which the pinned media-buy-valid-action enum does not "
         f"define (legal: {sorted(enum_members)})"
     )
+
+
+@then("the ad server receives that creative with its clickthrough URL")
+def then_ad_server_receives_clickthrough(ctx: dict) -> None:
+    """Assert what the creative upload CARRIED, read off the adapter boundary.
+
+    The click destination has no response field -- it is not echoed to the buyer -- so the
+    asset dict handed to the ad server is the only place it is observable. That is also
+    exactly why losing it is silent: the buy succeeds, and nothing anywhere reports an ad
+    nobody can click.
+
+    Read through the env's ``uploaded_adapter_assets`` seam rather than by reaching into the
+    env's mock registry from here. The escape-hatch guard refuses that reach in a step -- it
+    "works in-process, cannot work on e2e_rest, and is declarable nowhere" -- and the seam
+    answers on all four transports: in process it reads the adapter mock's call args, and on
+    the live stack it reads the receipt the server's own ad server wrote to its audit trail.
+
+    THREE assertions, and the middle one is what fails before the fix: the upload happened
+    at all, the asset carries a ``click_url``, and it is the URL the manifest declared rather
+    than another the seller might have found. Truthiness alone would pass on a seller that
+    echoed the media URL into it. The expected value is imported from the Given's module
+    rather than restated, so the two cannot drift onto different URLs.
+    """
+    from tests.bdd.steps.generic.given_media_buy import CANONICAL_CLICK_URL
+
+    uploaded = ctx["env"].uploaded_adapter_assets()
+    assert uploaded, (
+        "the create never uploaded the creative, so there is nothing to grade -- the asset "
+        "gate or the closed set refused it before the ad-server call"
+    )
+    asset = uploaded[-1]
+    assert asset.get("click_url"), (
+        f"the ad server received the creative with no clickthrough: {asset!r}. The manifest "
+        f"declared it under the canonical click-destination slot."
+    )
+    assert asset["click_url"] == CANONICAL_CLICK_URL, (
+        f"the ad server was given click_url={asset['click_url']!r}, not the "
+        f"{CANONICAL_CLICK_URL!r} the manifest declared"
+    )
+
+
+@then("the ad server receives that creative with its media URL")
+def then_ad_server_receives_media_url(ctx: dict) -> None:
+    """The audio buy's observable: the upload happened and carried the audio file.
+
+    "The response succeeded" alone would pass on a seller that created the buy and then
+    silently declined to push the creative, which is a different bug wearing the same green.
+    Read through the same seam as its clickthrough sibling, for the same reason.
+    """
+    uploaded = ctx["env"].uploaded_adapter_assets()
+    assert uploaded, (
+        "the create never uploaded the creative -- the asset gate refused it before the "
+        "ad-server call, which is the refusal this scenario exists to grade the absence of"
+    )
+    asset = uploaded[-1]
+    assert asset.get("url"), f"the ad server received the creative with no media URL: {asset!r}"
+
+
+@then("the ad server was never asked to create the media buy")
+def then_ad_server_never_asked_to_create(ctx: dict) -> None:
+    """POST-F1 as an observable: the refusal happened BEFORE the adapter was called.
+
+    Without this the refusal scenario cannot tell a pre-adapter gate from a refusal raised
+    after the buy exists -- both reach the buyer as the same VALIDATION_ERROR. That is not
+    an argument, it is a measurement: with the pre-adapter check removed, all twelve
+    canonical-clickthrough nodeids stayed GREEN, because the asset builder refused
+    afterwards and the wire looked identical. The difference the buyer pays for is an
+    orphaned buy at the ad server.
+
+    Read through the env's ``ad_server_create_count`` seam, which counts the adapter's
+    create calls in process and the receipts the server's own ad server wrote on the live
+    stack.
+    """
+    created = ctx["env"].ad_server_create_count()
+    assert created == 0, (
+        f"the ad server was asked to create {created} media buy(s) before the request was "
+        f"refused, so the buyer holds an error while a buy exists at the ad server"
+    )

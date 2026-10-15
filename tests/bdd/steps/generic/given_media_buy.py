@@ -2393,6 +2393,126 @@ def given_request_inline_creatives_valid(ctx: dict) -> None:
     _seed_auto_approval(ctx)
 
 
+#: The click destination the canonical-clickthrough scenarios ship and then expect at the
+#: ad server. Public and defined once, because the Given seeds it and the Then asserts it: a
+#: Then comparing against its own literal would pass on a seller that invented a URL, and
+#: two literals drift.
+CANONICAL_CLICK_URL = "https://advertiser.example.com/canonical-landing"
+
+#: How a manifest can tell the seller which url asset is the click destination, per the
+#: ladder in ``core/assets/url-asset.json``. Two independent signals -- the KEY the asset is
+#: stored under, and whether the asset carries ``url_type`` -- and each row offers exactly
+#: ONE of them, so each ISOLATES one rung.
+#:
+#: That orthogonality is the point and it is not free. A row shipping ``url_type`` on an
+#: asset ALSO keyed ``landing_page_url`` offers both signals at once: remove the registry
+#: lookup from production and the row stays green, because the ``url_type`` read still finds
+#: it. A row two rungs can satisfy grades neither.
+#:
+#: ``mystery`` is a deliberately non-canonical ``asset_group_id``. The registry permits one
+#: ("Non-canonical IDs remain valid for platform-specific extensions"), so pairing it with
+#: ``url_type`` is a legitimate manifest rather than a malformed one -- which is what makes
+#: it a fair isolation of the first rung instead of a broken input.
+_CLICK_SIGNALS: dict[str, tuple[str, str | None]] = {
+    # url_type present, asset_group_id meaningless -> ONLY the first rung can find it.
+    "url_type": ("mystery", "clickthrough"),
+    # asset_group_id in the registry, no url_type -> ONLY the registry lookup can find it.
+    "the canonical slot name alone": ("landing_page_url", None),
+    # neither signal -> the pin forbids a guess and recommends refusing the manifest.
+    "nothing the pin recognises": ("mystery", None),
+}
+
+
+@given(
+    parsers.parse(
+        'a valid create_media_buy request with a canonical creative signalling its clickthrough by "{signal}"'
+    )
+)
+def given_request_canonical_creative_with_clickthrough(ctx: dict, signal: str) -> None:
+    """Attach an approved CANONICAL creative whose manifest carries a url asset.
+
+    Shaped after ``given_request_inline_creatives_valid`` above and differing in the two
+    things under test: the creative is identified by ``canonical_kind`` rather than by a
+    legacy ``format``, and its manifest carries a url asset. Everything else -- approved
+    status, auto-approval, one package -- is the sibling's, because those are what make the
+    synchronous create path reach ``adapter.add_creative_assets`` at all, and these
+    scenarios are about what that call CARRIES rather than whether it happens.
+
+    ``image_main`` is what ``formats/canonical/image.json`` declares as the image slot, and
+    it is fixed across every row: the media asset is not what these rows vary.
+
+    The product gets a canonical ``format_options`` declaration, because a canonical
+    creative is graded against the product's closed set and the default product publishes
+    only the deprecated arm -- without it the buy is refused UNSUPPORTED_FEATURE before any
+    upload, and the scenario would grade the closed set instead of the clickthrough.
+    """
+    from tests.factories.creative import CreativeFactory
+    from tests.factories.creative_asset import build_assets, image_spec, url_spec
+
+    assert signal in _CLICK_SIGNALS, f"unknown click signal {signal!r}; known: {sorted(_CLICK_SIGNALS)}"
+    asset_key, url_type = _CLICK_SIGNALS[signal]
+
+    _ensure_request_defaults(ctx)
+    env = ctx["env"]
+    creative = CreativeFactory(
+        creative_id="cr-canonical-click",
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        canonical_kind="image",
+        approved=True,
+        data={
+            "assets": build_assets(
+                image_spec("image_main"),
+                url_spec(asset_key, url=CANONICAL_CLICK_URL, url_type=url_type),
+            )
+        },
+    )
+    env._commit_factory_data()
+    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    product = ctx.get("default_product")
+    if product is not None:
+        product.format_options = [
+            *(product.format_options or []),
+            {"format_kind": "image", "params": {"width": 300, "height": 250}},
+        ]
+        env._commit_factory_data()
+    _seed_auto_approval(ctx)
+
+
+@given("a valid create_media_buy request with a canonical audio creative")
+def given_request_canonical_audio_creative(ctx: dict) -> None:
+    """Attach an approved canonical ``audio_hosted`` creative carrying only its audio slot.
+
+    ``audio_main`` is what ``formats/canonical/audio_hosted.json`` declares, and the
+    manifest deliberately carries NOTHING else: the kind also declares ``companion_image``,
+    and including one would supply dimensions and so hide the obligation under test. An
+    audio asset has no width or height, and the buy must be accepted anyway.
+    """
+    from tests.factories.creative import CreativeFactory
+    from tests.factories.creative_asset import asset_spec, build_assets
+
+    _ensure_request_defaults(ctx)
+    env = ctx["env"]
+    creative = CreativeFactory(
+        creative_id="cr-canonical-audio",
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        canonical_kind="audio_hosted",
+        approved=True,
+        data={"assets": build_assets(asset_spec("audio_main", "audio", url="https://cdn.example.com/spot.mp3"))},
+    )
+    env._commit_factory_data()
+    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    product = ctx.get("default_product")
+    if product is not None:
+        product.format_options = [
+            *(product.format_options or []),
+            {"format_kind": "audio_hosted", "params": {}},
+        ]
+        env._commit_factory_data()
+    _seed_auto_approval(ctx)
+
+
 @given("the ad server rejects the creative upload")
 def given_ad_server_rejects_creative_upload(ctx: dict) -> None:
     """ext-q: make the adapter raise on the creative-upload call.
