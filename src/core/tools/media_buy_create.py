@@ -522,7 +522,7 @@ def _validate_creatives_before_adapter_call(
 
         # Only validate reference creatives (formats we can directly use)
         # Extract URL and dimensions using shared helper
-        url, width, height = extract_media_url_and_dimensions(creative_data, format_spec)
+        url, width, height = extract_media_url_and_dimensions(creative_data, format_spec, identity.kind)
 
         if not url:
             validation_errors.append(
@@ -907,7 +907,7 @@ def _build_adapter_asset_from_creative(
             # historical resilience: log and build from raw creative data.
             logger.warning(log_safe(f"[ASSET] Could not load format spec for {creative.creative_id}: {e}"))
 
-    url, width, height = extract_media_url_and_dimensions(creative_data, format_spec)
+    url, width, height = extract_media_url_and_dimensions(creative_data, format_spec, identity.kind)
     click_url = extract_click_url(creative_data, format_spec)
     impression_tracker_url = extract_impression_tracker_url(creative_data, format_spec)
 
