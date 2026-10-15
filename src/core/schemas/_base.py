@@ -86,6 +86,7 @@ from adcp.types.domains.core.error import Source as LibraryErrorSource
 # qualname, now under ``domains``) plus the ``pixel_ratio`` the spec added.
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from adcp.types.domains.core.format_option_ref import FormatOptionReference as LibraryFormatOptionReference
+from adcp.types.domains.core.package_format_snapshot import PackageFormatSnapshot as LibraryPackageFormatSnapshot
 from adcp.types.domains.core.version_envelope import AdcpVersionEnvelope
 from adcp.types.domains.enums.creative_approval_status import (
     # Aliased to OUR name for this concept, not to the library's. Two reasons, both
@@ -3053,6 +3054,27 @@ class MediaPackage(SalesAgentBaseModel):
     # Accept library FormatId (not our extended FormatId) to avoid validation errors
     # when Product from library returns LibraryFormatId instances
     format_ids: list[LibraryFormatId]  # FormatId objects per AdCP spec
+    # THE CANONICAL CONTRACT, carried to the adapter as the snapshots themselves.
+    #
+    # ``core/package.json`` makes ``formats_to_provide`` the package's "immutable canonical
+    # creative contracts established for this package", and says "the live Product is never
+    # substituted for the package snapshot". An adapter translating a package into a vendor
+    # payload needs the SELECTED declaration's ``params`` -- width, height and duration are
+    # first-class there -- and until this field existed it could only be handed the
+    # deprecated ``format_ids`` above, so the snapshots had to be projected onto those
+    # references with their dimensions merged on (the deleted
+    # ``format_resolver.snapshot_adapter_format_ids``).
+    #
+    # That projection had a stated ceiling and this field is its upgrade path: a
+    # canonical-only declaration asserting no ``v1_format_ref`` cannot be NAMED in
+    # ``format_ids`` at all, so such a package reached every adapter with an empty legacy arm
+    # and fell back to the product-level seeded config -- the live product's, which is the
+    # substitution the snapshot exists to prevent (salesagent-ol033.8, E1).
+    #
+    # The PINNED union, not a local subclass: this is a carrier read by adapters, nothing
+    # reshapes a snapshot on the way through, and the one function that reads it
+    # (``gam_product_config_service.declared_gam_slots``) reads attributes.
+    formats_to_provide: list[LibraryPackageFormatSnapshot] | None = None
     # Either arm: this carrier is built from a REQUEST package, whose overlay is the
     # input subclass, and read by adapters that only touch dimensions both declare.
     targeting_overlay: AnyTargeting | None = None
