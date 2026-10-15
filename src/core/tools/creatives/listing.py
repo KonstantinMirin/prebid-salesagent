@@ -411,6 +411,12 @@ def _list_creatives_impl(
     format_ids = (
         [format_id_identity(f) for f in req_filters.format_ids] if req_filters and req_filters.format_ids else None
     )
+    # The canonical kind is handed through as the buyer sent it: the pin's items are bare
+    # strings from a closed vocabulary, the stored identity is the same vocabulary in a
+    # column, and the comparison is therefore equality with no identity to build. Nothing is
+    # projected here -- the v1 -> v2 order already ran on the way IN, once per creative, and
+    # re-running it per request would be a second answer to a settled question.
+    format_kinds = list(req_filters.format_kinds) if req_filters and req_filters.format_kinds else None
     created_after_dt = req_filters.created_after if req_filters else None
     created_before_dt = req_filters.created_before if req_filters else None
     search = req_filters.name_contains if req_filters else None
@@ -461,6 +467,7 @@ def _list_creatives_impl(
             has_variables=has_variables,
             creative_ids=creative_ids,
             format_ids=format_ids,
+            format_kinds=format_kinds,
             created_after=created_after_dt,
             created_before=created_before_dt,
             search=search,
@@ -680,6 +687,12 @@ def _list_creatives_impl(
             filters_applied.append(f"statuses={','.join(str(s) for s in req.filters.statuses)}")
         if req.filters.format_ids:
             filters_applied.append(f"format_ids={','.join(str(f) for f in req.filters.format_ids)}")
+        if format_kinds:
+            # Reported from the list that was APPLIED, not from `req.filters` -- the same
+            # discipline the media_buy_ids entry follows. The pin makes format_kinds
+            # `uniqueItems: true` and the generated model dedupes, so the two happen to agree
+            # today; reading the applied value is what keeps POST-S7 honest if they stop.
+            filters_applied.append(f"format_kinds={','.join(format_kinds)}")
         if req.filters.tags:
             filters_applied.append(f"tags={','.join(req.filters.tags)}")
         if req.filters.tags_any:
