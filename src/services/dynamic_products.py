@@ -306,7 +306,16 @@ def create_variant_from_template(
         "description": customize_description(
             template.description, signal, activation_key, brief, template.variant_description_template
         ),
+        # BOTH format arms, because a variant that carries neither is unservable.
+        # ``core/product.json``: "Products MUST carry format_ids, format_options, or both
+        # during the 3.x migration window", and a variant is a product the buyer sees in
+        # ``get_products`` like any other. This copied only the deprecated arm, so a
+        # canonically-authored template -- format_options set, format_ids NULL, which is the
+        # shape the same sentence tells new products to author ("Do not author a new product
+        # from format_ids alone") -- generated variants satisfying no branch of that anyOf.
+        # Legacy templates were unaffected, which is why it went unseen (salesagent-ki6a4).
         "format_ids": template.format_ids,
+        "format_options": template.format_options,
         "targeting_template": template.targeting_template,
         "delivery_type": template.delivery_type,
         "measurement": template.measurement,
