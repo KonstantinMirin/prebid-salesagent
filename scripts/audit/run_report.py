@@ -26,6 +26,16 @@ DELTA AGAINST A BASELINE
     ``scripts/audit/compare_runs.py`` remains the strict regression GATE; this is
     the readable account of the same data, and it never issues a verdict.
 
+    IT STILL MAKES A CROSS-TREE CLAIM, which is why it takes the same identity
+    refusals the gate does (``scripts/audit/run_identity.py``): a baseline that
+    carries no ``meta.json``, or one whose sha has no ancestry relationship with
+    this run's, is refused per baseline and named. Not issuing a verdict is no
+    protection -- the 36 "regressions" that started this were read off THIS
+    section's shape, and a labelled table of nodeids is exactly as quotable as a
+    verdict. ``--allow-unidentified`` proceeds past the missing-identity half
+    for the retained runs that predate the field, and labels the section.
+    The identity of the run itself is printed unconditionally, baseline or not.
+
 Usage::
 
     python3 -m scripts.audit.run_report test-results/innet_120926_1917 \
@@ -45,11 +55,15 @@ import sys
 from pathlib import Path
 
 from scripts.audit.compare_runs import outcomes
+from scripts.audit.run_identity import IDENTITY_FILE, describe, read, refusals, report_refusals
 
 #: Where ``run_all_tests.sh`` keeps the runner's per-protocol summaries inside a run.
 #: A subdirectory, not ``<run>/*.json``: ``compare_runs.py`` globs that level as pytest
 #: reports and would read a summary (no ``tests`` key) as an empty suite.
 STORYBOARD_SUBDIR = "storyboard"
+#: This repository, for the ancestry question. Any worktree answers it -- they share
+#: one object database -- so the tool's own location is a steadier root than the cwd.
+REPO = Path(__file__).resolve().parents[2]
 PROTOCOLS = ("mcp", "a2a")
 OUTCOMES = ("passed", "failed", "error", "xfailed", "xpassed", "skipped")
 NOT_PASSING = ("failed", "error", "xfailed", "skipped")
@@ -63,6 +77,8 @@ def read_run(run: Path) -> Run:
         raise FileNotFoundError(f"run directory does not exist: {run}")
     suites: Run = {}
     for report in sorted(run.glob("*.json")):
+        if report.name == IDENTITY_FILE:
+            continue  # beside the reports, not one of them — see present_suites()
         suites[report.stem] = outcomes(report)
     if not suites:
         raise FileNotFoundError(f"{run}: no per-suite reports")
@@ -290,9 +306,17 @@ def _flat(run: Run) -> dict[tuple[str, str], str]:
 
 
 def baseline_section(
-    label: str, base: Run, base_sb: dict[str, dict], run: Run, run_sb: dict[str, dict], limit: int, out
+    label: str,
+    base: Run,
+    base_sb: dict[str, dict],
+    run: Run,
+    run_sb: dict[str, dict],
+    limit: int,
+    out,
+    unattributed: bool = False,
 ) -> None:
-    print(f"\nAGAINST BASELINE {label}", file=out)
+    if unattributed:
+        print("  (UNATTRIBUTED: no tree is named for one of these runs)", file=out)
     before, now = _flat(base), _flat(run)
     fixed = sorted(k for k, o in before.items() if o in ("failed", "error") and now.get(k) == "passed")
     regressed = sorted(k for k, o in before.items() if o == "passed" and k in now and now[k] in NOT_PASSING)
@@ -328,11 +352,25 @@ def baseline_section(
 
 
 def report(
-    run_dir: Path, baselines: dict[str, Path], limit: int, out=sys.stdout, groups_json: Path | None = None
-) -> None:
+    run_dir: Path,
+    baselines: dict[str, Path],
+    limit: int,
+    out=sys.stdout,
+    groups_json: Path | None = None,
+    allow_unidentified: bool = False,
+) -> int:
+    """Print the report; return how many requested baselines were refused.
+
+    The body is printed either way -- a run's own suite table, skips and
+    failures make no cross-tree claim and are worth reading regardless. The
+    RETURN is what stops a refused ``--baseline`` from exiting 0: this tool
+    issues no verdict, but a section somebody asked for and did not get is the
+    same class of event as an unreadable run directory, which already exits 2.
+    """
     run = read_run(run_dir)
     run_sb = read_storyboard(run_dir)
     print(f"RUN {run_dir}", file=out)
+    print(f"  tree {describe(read(run_dir))}", file=out)
     suite_table(run, out)
     skips_section(run, out)
     storyboard_section(run_sb, out)
@@ -342,8 +380,18 @@ def report(
         groups_json.write_text(json.dumps(groups, indent=1))
         print(f"\n  groups written to {groups_json}", file=out)
     failure_details(run, limit, out)
+    refused = 0
     for label, path in baselines.items():
-        baseline_section(label, read_run(path), read_storyboard(path), run, run_sb, limit, out)
+        # Per baseline, not once for the batch: one unattributable baseline must
+        # not suppress a second that is perfectly comparable, and the refusal has
+        # to name which of several it is about.
+        print(f"\nAGAINST BASELINE {label}", file=out)
+        hard, waivable, identities = refusals(path, run_dir, REPO, (label, "run"))
+        if not report_refusals(hard, waivable, identities, allow_unidentified, out):
+            refused += 1
+            continue
+        baseline_section(label, read_run(path), read_storyboard(path), run, run_sb, limit, out, bool(waivable))
+    return refused
 
 
 def _parse_baseline(value: str) -> tuple[str, Path]:
@@ -359,13 +407,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--baseline", action="append", type=_parse_baseline, default=[], metavar="LABEL=DIR")
     parser.add_argument("--details", type=int, default=60, help="rows listed per section (default 60)")
     parser.add_argument("--groups-json", type=Path, default=None, help="also write the failure groups as JSON here")
+    parser.add_argument(
+        "--allow-unidentified",
+        action="store_true",
+        help="compare against a baseline that records no tree (runs retained from before meta.json existed)",
+    )
     args = parser.parse_args(argv)
     try:
-        report(args.run, dict(args.baseline), args.details, groups_json=args.groups_json)
+        refused = report(
+            args.run,
+            dict(args.baseline),
+            args.details,
+            groups_json=args.groups_json,
+            allow_unidentified=args.allow_unidentified,
+        )
     except FileNotFoundError as exc:
         print(f"NOT MEASURED: {exc}", file=sys.stderr)
         return 2
-    return 0
+    return 2 if refused else 0
 
 
 if __name__ == "__main__":

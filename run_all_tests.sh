@@ -243,6 +243,23 @@ scripts/creative-agent-stack.sh build
 echo "Building image + bringing up the app stack in-network (project: $COMPOSE_PROJECT_NAME)..."
 dc build postgres adcp-server adcp-server-storyboard proxy tests
 
+# WHICH TREE THIS RUN GRADED, recorded beside its reports before a single suite
+# runs. A run directory used to carry no commit, no branch and no installed pin,
+# so a per-nodeid comparison could be made against a baseline that graded neither
+# tree in the claim -- and was: 36 regressions and 15 fixes reported, all of which
+# dissolved against a real base (salesagent-dxb3j). The reports cannot carry this
+# and nothing can reconstruct it afterwards, because the working tree moves.
+#
+# HERE and not later for that reason. The one fact that cannot come from the host
+# is the adcp pin AS INSTALLED -- `pyproject.toml` declares `adcp==9.0.0b3` while
+# the wheel that grades the run is `9.0.0b3+sa.<lane>.<sha>`, and only the local
+# segment separates two builds of the same release. So it is read from the
+# interpreter that runs the suites, which is why this sits immediately after the
+# `tests` image is built and before anything uses it. A failure to read it records
+# null rather than aborting the run: an unknown pin is worth less than no run.
+_adcp_pin="$(dc run --rm --no-deps -T tests python -m scripts.audit.run_identity --adcp 2>/dev/null | tail -1)" || _adcp_pin=""
+python3 -m scripts.audit.run_identity --write "$RESULTS_DIR" --adcp-json "$_adcp_pin"
+
 # Pre-create logs/ group-writable + setgid BEFORE anything else touches the
 # bind mount: adcp-server bind-mounts .:/app and creates logs/audit.log at
 # import time (uid 1001, its own baked umask) -- when that umask strips the

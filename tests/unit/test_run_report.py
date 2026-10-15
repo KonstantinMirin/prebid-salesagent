@@ -15,14 +15,38 @@ import pathlib
 
 from scripts.audit.run_report import STORYBOARD_SUBDIR, main, report
 
+#: The tree every run below claims. The SAME sha on both sides of a baseline
+#: pair, and well-formed rather than real: these tests grade what the report
+#: SHOWS, not a delta between trees, and ``run_identity.ancestry`` answers an
+#: equal pair without consulting git -- so they stay hermetic. The refusals get
+#: their own tests in ``test_run_identity.py`` and ``test_compare_runs.py``.
+_SHA = "1111111111111111111111111111111111111111"
+
 
 def _write_run(
     directory: pathlib.Path,
     reports: dict[str, dict[str, tuple[str, str]]],
     storyboard: dict[str, dict] | None = None,
+    commit: str | None = _SHA,
 ) -> pathlib.Path:
     """``reports``: suite -> {nodeid: (outcome, longrepr)}; ``storyboard``: protocol -> runner summary."""
     directory.mkdir(parents=True, exist_ok=True)
+    if commit is not None:
+        (directory / "meta.json").write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "run": directory.name,
+                    "commit": commit,
+                    "branch": "work/lane",
+                    "detached": False,
+                    "tree": "clean",
+                    "source": "git",
+                    "unidentified_because": None,
+                    "adcp": {"spec_version": "3.2.1", "distribution": "9.0.0b3+sa.test.0"},
+                }
+            )
+        )
     for suite, tests in reports.items():
         payload = {
             "tests": [
@@ -307,3 +331,63 @@ def test_a_run_with_no_skips_says_so_rather_than_printing_nothing(tmp_path) -> N
         f"a run with no skips printed an empty SKIPS section, which is indistinguishable "
         f"from a run whose skips were not recorded:\n{text}"
     )
+
+
+# --------------------------------------------------------------------------
+# A baseline this run cannot be compared against.
+#
+# This tool issues no verdict, and that is no protection: the 36 "regressions"
+# that started salesagent-dxb3j were read off the shape of the section above,
+# and a labelled table of nodeids is exactly as quotable as a verdict. So the
+# cross-tree claim takes the same refusals the gate does.
+# --------------------------------------------------------------------------
+
+
+def test_a_baseline_with_no_identity_is_refused_and_named(tmp_path: pathlib.Path) -> None:
+    base = _write_run(tmp_path / "base", {"unit": {"t.py::one": ("failed", "boom")}}, commit=None)
+    run = _write_run(tmp_path / "run", {"unit": {"t.py::one": ("passed", "")}})
+
+    text = _render(run, {"exec": base})
+
+    assert "REFUSED" in text, f"a baseline nothing attributes to a tree must be refused:\n{text}"
+    assert "exec" in text, f"the refusal must name WHICH baseline:\n{text}"
+    assert "FIXED (failed there, passes here)" not in text, (
+        f"the delta must not be printed over an unattributable baseline:\n{text}"
+    )
+
+
+def test_a_refused_baseline_does_not_exit_zero(tmp_path: pathlib.Path) -> None:
+    """A section somebody asked for and did not get is not a successful report.
+
+    Same class as the unreadable run directory this tool already exits 2 for.
+    """
+    base = _write_run(tmp_path / "base", {"unit": {"t.py::one": ("passed", "")}}, commit=None)
+    run = _write_run(tmp_path / "run", {"unit": {"t.py::one": ("passed", "")}})
+
+    assert main([str(run), "--baseline", f"exec={base}"]) == 2
+    assert main([str(run), "--baseline", f"exec={base}", "--allow-unidentified"]) == 0
+    assert main([str(run)]) == 0, "a report with no baseline makes no cross-tree claim and is unaffected"
+
+
+def test_one_unattributable_baseline_does_not_suppress_a_comparable_one(tmp_path: pathlib.Path) -> None:
+    """Refused per baseline, not once for the batch."""
+    anonymous = _write_run(tmp_path / "anon", {"unit": {"t.py::one": ("passed", "")}}, commit=None)
+    known = _write_run(tmp_path / "known", {"unit": {"t.py::one": ("failed", "boom")}})
+    run = _write_run(tmp_path / "run", {"unit": {"t.py::one": ("passed", "")}})
+
+    text = _render(run, {"anon": anonymous, "known": known})
+
+    assert "REFUSED" in text.split("AGAINST BASELINE known")[0], "the anonymous one is refused"
+    assert "FIXED (failed there, passes here): 1" in text.split("AGAINST BASELINE known")[1], (
+        f"the comparable one must still be graded:\n{text}"
+    )
+
+
+def test_the_run_states_its_own_tree_even_with_no_baseline(tmp_path: pathlib.Path) -> None:
+    """Printed, not remembered. The attribution belongs beside the numbers."""
+    run = _write_run(tmp_path / "run", {"unit": {"t.py::one": ("passed", "")}})
+
+    assert "1111111111 (work/lane, clean, 9.0.0b3+sa.test.0)" in _render(run)
+
+    anonymous = _write_run(tmp_path / "anon", {"unit": {"t.py::one": ("passed", "")}}, commit=None)
+    assert "IDENTITY UNKNOWN" in _render(anonymous)
