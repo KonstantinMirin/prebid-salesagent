@@ -1,41 +1,19 @@
-"""CI guard: assert the adcp SDK pin targets the expected AdCP spec version."""
+"""Checks over the vendored copies of pinned artifacts.
+
+There is no spec-version guard here any more. The version has ONE source — the
+installed wheel, read by ``tests.helpers.adcp_pin`` — so there is no second
+declaration for it to disagree with and nothing to assert.
+
+What remains are checks over COPIES: the vendored schema trees and conformance
+vectors are files committed into this repo, and a copy can drift from the thing
+it was copied from however the version is addressed.
+"""
 
 from pathlib import Path
 
-import adcp
-
-# ONE definition, imported — the version is deliberately NOT spelled anywhere in this
-# module. Upstream assigned the literal here; the signing branch lifted it into
-# tests/helpers/adcp_pin.py because six other modules (the e2e schema-validation test,
-# the conformance-vector pin, the vendored-fixture refresher, ...) need the same
-# constant, and a test importing a sibling test module is a structural violation.
-# Re-declaring it here too would give the pin two homes that can drift — which is
-# precisely the failure this module exists to catch.
 from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION
 
 _REPO = Path(__file__).resolve().parents[2]
-
-# CLAUDE.md used to state the spec version and the SDK pin in one sentence, and a
-# guard here held that sentence to both authorities. The sentence is gone and so is
-# the guard: CLAUDE.md states no version, so there is no claim left to hold. See
-# the note further down for the reasoning, which applies to every prose guard this
-# module used to carry.
-
-
-def test_adcp_spec_version_matches_pin() -> None:
-    """Verify SDK pin targets the spec version this codebase expects.
-
-    Failure here means the adcp Python SDK pin in pyproject.toml has shifted
-    to a version that targets a different AdCP spec version. Either revert
-    the pin or follow docs/adcp-spec-version.md to update
-    EXPECTED_SPEC_VERSION and the related references it lists.
-    """
-    actual = adcp.get_adcp_spec_version()
-    assert actual == EXPECTED_SPEC_VERSION, (
-        f"adcp SDK targets spec {actual}, but this codebase expects "
-        f"{EXPECTED_SPEC_VERSION}. See docs/adcp-spec-version.md for "
-        f"reconciliation steps."
-    )
 
 
 def test_the_vendored_schema_tree_matches_the_pin() -> None:

@@ -118,18 +118,23 @@ normalizes to release-precision on the wire.
 
 ## Bumping the spec version
 
+**The spec version is not declared anywhere in this repo.** `pyproject.toml`
+declares which `adcp` wheel we install; that wheel declares which AdCP version it
+implements; `tests/helpers/adcp_pin.py` reads it with
+`adcp.get_adcp_spec_version()`. There is no second copy to keep in agreement, and
+therefore nothing asserting one. Steps 2 and 3 are the bump; the rest is
+re-vendoring the files that are *copies*.
+
 1. Read the AdCP spec changelog for the target version.
-2. Update the `adcp` pin in `pyproject.toml` (confirm its spec target with the
-   command above).
-3. `uv lock --upgrade-package adcp`.
-4. Update `EXPECTED_SPEC_VERSION` in `tests/helpers/adcp_pin.py` (the constant lives
-   there; `tests/unit/test_adcp_spec_version.py` imports it).
-5. Re-vendor the **pinned schema tree** to the new version — the directory under
+2. Update the `adcp` pin in `pyproject.toml`.
+3. `uv lock --upgrade-package adcp`. **`EXPECTED_SPEC_VERSION` now follows on its
+   own** — it is `get_adcp_spec_version()`, so there is no constant to edit.
+4. Re-vendor the **pinned schema tree** to the new version — the directory under
    `tests/fixtures/adcp_schemas_pinned/` is named for the spec version, and
    `test_the_vendored_schema_tree_matches_the_pin` fails until it matches. A stale tree
    grades our trust-root documents against the previous version's schemas while every
    version literal in production has already moved.
-6. Re-vendor the request-signing conformance vectors and their `MANIFEST.json`:
+5. Re-vendor the request-signing conformance vectors and their `MANIFEST.json`:
 
    ```bash
    uv run python -m tests.fixtures.adcp_schemas_pinned._refresh
@@ -137,10 +142,10 @@ normalizes to release-precision on the wire.
 
    Nothing to edit in that script first: `VECTORS_REV`, `VECTORS_SPEC_VERSION`,
    `VECTORS_SRC` and the root sets all derive from `EXPECTED_SPEC_VERSION` and
-   `SPEC_REV`, so step 4 already moved them. `tests/unit/test_adcp_conformance_vectors_pin.py`
+   `SPEC_REV`, which followed the wheel on their own. `tests/unit/test_adcp_conformance_vectors_pin.py`
    ties the vendored snapshot to the pin, so skipping the re-vendor fails CI rather
    than silently grading the verifier against the previous version's conformance data.
-7. Refresh the two storyboard artifacts that are pin-coupled but do not move
+6. Refresh the two storyboard artifacts that are pin-coupled but do not move
    themselves:
    - `tests/fixtures/adcp_storyboards_pinned/index.json` — run its
      `_refresh.py` against a fresh `~/projects/adcp` clone at the new pin.
@@ -152,9 +157,9 @@ normalizes to release-precision on the wire.
      `tests/storyboard/runner/`. `tests/storyboard/test_runner_sdk_pin.py`'s
      `test_runner_sdk_targets_the_pinned_adcp_version` fails until this is
      done.
-8. Update this document.
-9. Run `make quality` and address Pydantic field/type changes.
-10. Re-verify integration and BDD coverage.
+7. Update this document.
+8. Run `make quality` and address Pydantic field/type changes.
+9. Re-verify integration and BDD coverage.
 
 Nothing needs updating for the served `$schema` values: `_SCHEMA_BASE`
 (`src/core/signing/trust_root.py`) derives them from `adcp.get_adcp_spec_version()`, so
