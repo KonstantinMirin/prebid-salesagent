@@ -3297,7 +3297,12 @@ async def _create_media_buy_impl(
             # rather than accepted on the option route. Comparing the routes that DO resolve
             # (steps 13/14, CONFLICTING_SELECTORS) is stage 4's.
             if matching_package:
-                from src.core.format_satisfaction import canonical_refusal, satisfies_routes, selector_routes
+                from src.core.format_satisfaction import (
+                    FormatRefusal,
+                    canonical_refusal,
+                    satisfies_routes,
+                    selector_routes,
+                )
 
                 # ``params or {}`` inside ``selector_routes`` is the absent-versus-empty
                 # distinction: a buyer who sent ``format_kind`` and no ``params`` HAS claimed
@@ -3313,7 +3318,7 @@ async def _create_media_buy_impl(
                     pkg_product.format_options,
                     legacy_catalog=pkg_product.format_ids,
                 )
-                if not selector_verdict:
+                if not selector_verdict and selector_verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED:
                     # The pointer names the ARM that failed, which the verdict carries from
                     # the route it came from -- not the first arm present on the package.
                     assert selector_verdict.field is not None, "a selector route always names its request field"
@@ -3322,6 +3327,28 @@ async def _create_media_buy_impl(
                         field=package_field_path(selector_verdict.field, pkg_index),
                         product_id=pkg_product.product_id,
                     )
+                # LEGACY_NOT_ACCEPTED is the DEPRECATED lane's refusal and it is already
+                # answered, as VALIDATION_ERROR, by the ``format_ids`` block immediately
+                # below -- which is where this condition has always been raised and what the
+                # scenarios grade. Raising it here answered the buyer SERVICE_UNAVAILABLE
+                # (salesagent-e6elu): ``canonical_refusal`` asserts it is not given this
+                # member, so the gate tripped its own precondition and the boundary reported
+                # a RETRYABLE code for a permanently-wrong request. The other four
+                # satisfaction gates all branch on it; this was the only one that did not,
+                # and the tell was that it is the only site importing ``canonical_refusal``
+                # without ``FormatRefusal``.
+                #
+                # Deferring loses nothing, which is why it is the fix rather than a second
+                # raise site for one condition. This member can only come from
+                # ``_legacy_lane``, i.e. from a product that declares the legacy arm, so
+                # ``matching_package.format_ids`` is non-empty and the block below always
+                # runs; both sides read the identity set through
+                # ``format_resolver.product_format_identities`` and render it with
+                # ``format_display``, so the comparison is the same one; and the block
+                # reports EVERY unsupported id where a route carries one. The ordering
+                # obligation is untouched: an unprojectable legacy id against a canonically
+                # declared product is ``LEGACY_UNPROJECTABLE``, a different member, which
+                # still refuses here as UNSUPPORTED_FEATURE.
 
             # If found and has format_ids, validate and use those
             if matching_package and matching_package.format_ids:
