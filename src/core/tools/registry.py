@@ -213,6 +213,29 @@ _TOOLS: dict[str, ToolSpec] = {
         impl=_get_products_impl,
         rest=RestBinding("POST", "/products"),
     ),
+    # DEPRECATED FOR A SALES AGENT AT AdCP 3.2, and this row is a COMPATIBILITY SURFACE
+    # rather than the model to extend. ``docs/creative/sales-agent-creative-capabilities.mdx``
+    # states why: "An agent-global format list cannot express product-, placement-,
+    # account-, or inventory-specific deliverability. For that reason, sales-agent
+    # `list_creative_formats` is deprecated in 3.2." ``docs/creative/formats.mdx`` adds
+    # "Named `format_id` objects and `list_creative_formats` are deprecated compatibility
+    # surfaces" and dates the removal: "Fields named exactly `format_ids` are removed in
+    # AdCP 4.0; singular `format_id`, named-format definitions, and the task follow separate
+    # schedules." The pin agrees structurally -- ``core/format-id.json`` carries
+    # "deprecated": true at 3.2 and did not at 3.0/3.1.
+    #
+    # WHAT REPLACES IT for this seller is ``get_products``' ``format_options[]``: per
+    # formats.mdx's three authorities, "What can a sales agent deliver for this product?" is
+    # answered by ``Product.format_options[]``, which is product-scoped where this task is
+    # agent-global.
+    #
+    # THE ROW STAYS, and its comparison semantics stay LEGACY-KEYED on purpose. The pinned
+    # request declares only ``format_ids``-shaped filters, so the legacy
+    # ``(canonical agent_url, id)`` pair is the correct key for this surface's whole
+    # lifetime -- the 3.x compatibility window is open and a buyer calling it is by
+    # definition an older peer. Do not "canonicalize" the comparison here; do not add a
+    # ``format_kinds`` filter to it. New format work belongs on ``get_products``
+    # (``salesagent-ol033.8``, S5).
     "list_creative_formats": ToolSpec(
         dto=ListCreativeFormatsRequest,
         impl=_list_creative_formats_impl,
