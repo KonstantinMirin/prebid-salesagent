@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
     from src.core.database.repositories.media_buy import MediaBuyRepository
     from src.core.database.repositories.uow import MediaBuyUoW as _MediaBuyUoWType
+    from src.core.format_satisfaction import SelectorResolution
 
 from adcp.server.helpers import valid_actions_for_status
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
@@ -618,6 +619,90 @@ def _pre_validate_package_creatives(
         if step:
             ctx_manager.update_workflow_step(step.step_id, status="failed", error_message="Creative validation failed")
         raise
+
+
+def _resolve_package_selectors(
+    req: CreateMediaBuyRequest,
+    declared_format_arms: dict[str, tuple[list[Any], list[Any]]],
+) -> dict[int, "SelectorResolution"]:
+    """Resolve every package's format selector, and refuse before any state is persisted.
+
+    HERE, beside :func:`_pre_validate_package_creatives`, because it is the same kind of
+    obligation and that function's docstring already states the rule both of them serve:
+    "the same buyer input is rejected identically ... regardless of the tenant's approval
+    mode, BEFORE any media-buy state is persisted". The selector gate used to run after
+    both approval branches had returned, so it held only auto-approval tenants to the
+    product's declarations (salesagent-gz86t).
+
+    ONE CALL for both arms. ``media-buy/package-request.json``'s "Format selector contract
+    (normative)" states four receiver steps with no approval-mode condition, and
+    ``core/product-format-declaration.json`` makes the closed set "rejected at
+    create_media_buy regardless of preference" -- so resolving per approval mode would be
+    two spellings of one question, which is what the satisfaction function exists to
+    prevent.
+
+    RETURNS THE RESOLUTIONS, keyed by package index, so the package loop can read what was
+    selected instead of asking again. That is work item C6's rule -- the projection is
+    recorded where it was decided -- applied to the decision as well as to its output: a
+    second resolution could disagree with the one that admitted the request.
+
+    Args:
+        req: the buyer's request; its packages carry the selector arms.
+        declared_format_arms: per product_id, the ``(format_options, format_ids)``
+            documents the product AUTHORED, captured while its row was attached.
+
+    Raises:
+        AdCPConflictingSelectorsError: co-present routes resolved and selected different
+            product options. The pointer names the PACKAGE, which is what
+            ``enums/error-code.json`` asks for on this code.
+        AdCPCapabilityNotSupportedError: a route failed to resolve, or a single resolved
+            route selected nothing. The pointer names the ARM the verdict came from.
+    """
+    from src.core.format_satisfaction import (
+        FormatRefusal,
+        canonical_refusal,
+        conflicting_selectors,
+        resolve_routes,
+        selector_routes,
+    )
+
+    resolutions: dict[int, SelectorResolution] = {}
+    for pkg_index, pkg in enumerate(req.packages or []):
+        # A package naming a product this tenant does not hold is already refused above by
+        # AdCPProductNotFoundError over the same map, so an absent entry here cannot be a
+        # missing product -- it is a product the catalogue read excluded, which imposes no
+        # declarations to grade against.
+        declarations, legacy_catalog = declared_format_arms.get(pkg.product_id or "", ([], []))
+        selector = resolve_routes(
+            selector_routes(
+                format_kind=pkg.format_kind,
+                format_option_refs=pkg.format_option_refs,
+                params=pkg.params,
+                format_ids=pkg.format_ids,
+            ),
+            declarations,
+            legacy_catalog=legacy_catalog,
+        )
+        if selector.conflicting:
+            raise conflicting_selectors(
+                selector,
+                field=f"{PACKAGES_FIELD}[{pkg_index}]",
+                product_id=pkg.product_id,
+                package_index=pkg_index + 1,
+            )
+        verdict = selector.refused
+        # A DEPRECATED-LANE refusal is left to the legacy branch in the package loop, which
+        # raises the graded VALIDATION_ERROR with both value lists; ``canonical_refusal``'s
+        # own assert refuses it here (salesagent-n1blr).
+        if verdict is not None and verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED:
+            assert verdict.field is not None, "a selector route always names its request field"
+            raise canonical_refusal(
+                verdict,
+                field=package_field_path(verdict.field, pkg_index),
+                product_id=pkg.product_id,
+            )
+        resolutions[pkg_index] = selector
+    return resolutions
 
 
 def _execute_adapter_media_buy_creation(
@@ -2407,6 +2492,24 @@ async def _create_media_buy_impl(
                     field=PACKAGES_FIELD,
                 )
 
+            # The two format arms each product DECLARES, captured as the plain documents
+            # the JSON columns hold, for the selector gate below. HERE because this is
+            # where ``product_map`` is in scope and the rows are attached; carried out as
+            # documents rather than as rows because the gate runs after this unit closes
+            # and a detached row raises on attribute access.
+            #
+            # The declarations are what the product AUTHORED, which is what a selector is
+            # graded against. That is the same answer the converted schema Product gives:
+            # ``format_satisfaction.product_declarations`` absorbs both shapes on purpose,
+            # and the one place the two could differ -- the divergence decline, which
+            # announces no legacy arm -- cannot change a verdict, because the deprecated
+            # lane is reached ONLY when a product declares no ``format_options`` at all,
+            # and a product with no canonical arm has no divergence to decline.
+            declared_format_arms = {
+                product_id: (list(row.format_options or []), list(row.format_ids or []))
+                for product_id, row in product_map.items()
+            }
+
             # AdCP spec (core/targeting.json): "Sellers SHOULD return a validation
             # error if the product has property_targeting_allowed: false."
             # Lives here because product_map is in scope; the rest of targeting
@@ -2819,6 +2922,33 @@ async def _create_media_buy_impl(
             f"operations: {manual_approval_operations}, "
             f"adapter type: {adapter.__class__.__name__}"
         )
+
+        # --- Canonical format satisfaction, for EVERY approval mode ---------------------
+        #
+        # ABOVE the two approval branches, which is the whole of the fix: both of them
+        # return (:3147 and :3267 before this moved), and the gate used to sit after both,
+        # so a tenant with human_review_required=True was served by a seller that applied
+        # no selector rule at all -- not the closed set, not the params rules, not M2, not
+        # the resolution/selection split, not CONFLICTING_SELECTORS. Measured: one product
+        # fixing 300x250, one package selecting a bare `image`, and the ONLY difference the
+        # tenant column -- REFUSED on auto, ACCEPTED and parked on manual
+        # (salesagent-gz86t).
+        #
+        # ONE CALL, not a second gate. ``core/product-format-declaration.json`` says
+        # ``format_options[]`` is "rejected at create_media_buy REGARDLESS OF PREFERENCE"
+        # and ``media-buy/package-request.json`` states its four receiver steps with no
+        # approval-mode condition, so there is one question and it has one asking site.
+        # The package loop below READS this record rather than re-resolving, which is work
+        # item C6's rule applied to the resolution itself: recorded once, where it was
+        # decided.
+        #
+        # THE REPO ALREADY STATED THIS INVARIANT and already honours it one line below, for
+        # creatives: ``_pre_validate_package_creatives`` is "shared by the auto-approval
+        # and manual-approval create paths so the same buyer input is rejected identically
+        # ... REGARDLESS OF THE TENANT'S APPROVAL MODE, BEFORE any media-buy state is
+        # persisted". The selector gate arrived later and did not follow suit; this is it
+        # following suit.
+        selector_resolutions = _resolve_package_selectors(req, declared_format_arms)
 
         # No tenant field declares auto-creation; the dict shim this replaced always
         # answered its default, so the tenant never disables it.
@@ -3334,92 +3464,24 @@ async def _create_media_buy_impl(
             # Use format_ids from request package if provided
             matching_package = pkg  # The package we're iterating over
 
-            # --- Canonical format satisfaction for the package's own selector ---
+            # --- The selected declaration, READ from where it was decided ---------------
             #
-            # THE SAME function the creative gates ask, asked here of the PACKAGE's
-            # selector. The legacy branch below has always graded ``format_ids`` against the
-            # product's; the two canonical arms the pin added -- ``format_option_refs`` and
-            # ``format_kind`` + ``params`` -- were ACCEPTED AND IGNORED, so a buyer naming a
-            # bare ``image`` against a product that fixes 300x250 was sold inventory it
-            # cannot fill. That is the storyboard's
-            # ``reject_bare_image_selector_for_fixed_mrec`` step, and
-            # ``core/product-format-declaration.json`` makes the refusal mandatory:
-            # ``format_options[]`` "IS the closed set of accepted formats; anything outside
-            # the list is rejected at create_media_buy regardless of preference".
+            # The resolution ran ONCE, above both approval branches
+            # (``_resolve_package_selectors``), which is what holds every tenant to the
+            # product's declarations whatever its approval mode. Re-resolving here would be
+            # a second asking site free to disagree with the one that admitted the request;
+            # work item C6's rule is that the projection is recorded where it was decided,
+            # and that applies to the decision as much as to its output.
             #
-            # EVERY route the package names is resolved, not the first that succeeds, and
-            # the pin's four steps are ``SelectorResolution``'s four properties -- which
-            # refusal a buyer sees is decided there and read here:
-            #
-            #   resolution failure -> UNSUPPORTED_FEATURE, naming the ARM that failed. The
-            #     ordering is an obligation rather than a choice ("Resolution failure is
-            #     reported before selector equivalence and must not be mislabeled
-            #     CONFLICTING_SELECTORS"), so a package carrying a resolving option ref
-            #     beside an unprojectable legacy id is refused on the legacy route.
-            #   routes disagree    -> CONFLICTING_SELECTORS, naming the PACKAGE. "Canonical
-            #     precedence must not hide the dimensional conflict", so precedence (step 4)
-            #     applies only after the selected option sets have been required to match.
-            #   one route, selected nothing -> UNSUPPORTED_FEATURE. "A single resolved route
-            #     that does not satisfy the product is rejected with UNSUPPORTED_FEATURE."
-            if matching_package:
+            # A package with no entry resolved nothing to select -- the product narrows
+            # neither arm, or the request named no selector -- and records an empty tuple,
+            # which keeps ``formats_to_provide`` absent rather than an empty array the pin
+            # does not allow (``minItems: 1``).
+            selector = selector_resolutions.get(pkg_index)
+            if selector is not None and selector.selected is not None:
                 from src.core.format_resolver import package_format_snapshot
-                from src.core.format_satisfaction import (
-                    FormatRefusal,
-                    canonical_refusal,
-                    conflicting_selectors,
-                    resolve_routes,
-                    selector_routes,
-                )
 
-                # ``params or {}`` inside ``selector_routes`` is the absent-versus-empty
-                # distinction: a buyer who sent ``format_kind`` and no ``params`` HAS claimed
-                # no dimensions, which is a claim and is graded. (A stored creative passes
-                # ``None`` -- it has not stated its params at all; see ``satisfies``.)
-                selector = resolve_routes(
-                    selector_routes(
-                        format_kind=matching_package.format_kind,
-                        format_option_refs=matching_package.format_option_refs,
-                        params=matching_package.params,
-                        format_ids=matching_package.format_ids,
-                    ),
-                    pkg_product.format_options,
-                    legacy_catalog=pkg_product.format_ids,
-                )
-                if selector.conflicting:
-                    # The PACKAGE, not an arm: no single arm is at fault, the set of them is,
-                    # and ``enums/error-code.json`` says so for this code ("error.field
-                    # SHOULD point at the conflicting package").
-                    raise conflicting_selectors(
-                        selector,
-                        field=f"{PACKAGES_FIELD}[{pkg_index}]",
-                        product_id=pkg_product.product_id,
-                        package_index=idx,
-                    )
-                selector_verdict = selector.refused
-                # A DEPRECATED-LANE refusal is NOT raised here. ``canonical_refusal``'s own
-                # assert says why -- "the legacy lane raises VALIDATION_ERROR at its site"
-                # -- and that site is the legacy branch forty lines below, which raises
-                # AdCPValidationError with the field and both value lists the scenarios pin.
-                # Raising here instead tripped that assert, and the AssertionError became
-                # AdCPAdapterError: a buyer naming a format a legacy-only product does not
-                # accept was answered SERVICE_UNAVAILABLE, "retry with exponential backoff",
-                # for a request no retry can satisfy (salesagent-n1blr).
-                if selector_verdict is not None and selector_verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED:
-                    # The pointer names the ARM that failed, which the verdict carries from
-                    # the route it came from -- not the first arm present on the package.
-                    assert selector_verdict.field is not None, "a selector route always names its request field"
-                    raise canonical_refusal(
-                        selector_verdict,
-                        field=package_field_path(selector_verdict.field, pkg_index),
-                        product_id=pkg_product.product_id,
-                    )
-                # C6: recorded HERE, at accept. One snapshot, because one package selects one
-                # declaration -- every route that resolved selected the same one, which is
-                # what ``conflicting`` just required.
-                if selector.selected is not None:
-                    pkg_format_snapshots = (
-                        package_format_snapshot(selector.selected, product_id=pkg_product.product_id),
-                    )
+                pkg_format_snapshots = (package_format_snapshot(selector.selected, product_id=pkg_product.product_id),)
             format_snapshots_by_index.append(pkg_format_snapshots)
 
             # If found and has format_ids, validate and use those
