@@ -33,11 +33,17 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   # creative carrying no legacy assertion while the update and assignment gates REFUSED
   # one, so one buyer input had two answers depending on which tool received it.
   #
-  # EVERY SCENARIO HERE SEEDS A DUAL-ARM PRODUCT — format_ids AND format_options, which is
-  # the shape the conformance fixture canonical_formats_mrec_display uses. Not incidental:
-  # a canonical-ONLY product's legacy selector route is resolved by stage 4 (work item C3),
-  # so seeding one would make these scenarios fail on a route nothing has wired yet instead
-  # of on the satisfaction rule each one names.
+  # NEARLY EVERY SCENARIO HERE SEEDS A DUAL-ARM PRODUCT — format_ids AND format_options,
+  # which is the shape the conformance fixture canonical_formats_mrec_display uses. Not
+  # incidental: a product carrying both arms leaves every selector route reachable, so a
+  # refusal is attributable to the satisfaction rule the scenario names rather than to an
+  # arm the product never declared.
+  #
+  # THE ONE EXCEPTION is the purchasability scenario at the end, which seeds a
+  # CANONICAL-ONLY product. That was deferred while stage 4 (work item C3) had not yet
+  # resolved a canonical-only product's legacy selector route — it now has, so the
+  # deferral is spent, and the scenario it was blocking is the one stage-1 guarantee
+  # nothing graded.
   #
   # @source repo=adcp ref=v3.2.3 path=docs/creative/formats.mdx
   # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/product-format-declaration.json
@@ -577,3 +583,69 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # transport, and it is the load-bearing half here: the snapshot is persisted BY the
     # create path, so a transport that persisted a malformed one would be caught. It is not
     # four approval executions, and nothing here pretends otherwise.
+
+  @T-UC-FORMAT-SATISFACTION-canonical-only-purchasable @format_satisfaction @requires_db
+  Scenario Outline: a product declaring only canonical format options is purchasable - <selector>
+    Given the seller declares a canonical format option "fixed_300x250" and no format_ids
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+    And the package snapshots the "satisfaction_image_mrec" declaration fixed at 300x250
+    And the package's deprecated format_ids_to_provide names "display_300x250"
+
+    Examples: canonical selector routes against a product with no deprecated arm
+      | selector           |
+      | exact_300x250      |
+      | product_option_ref |
+
+    # THE SHAPE 3.2 TELLS NEW PRODUCTS TO AUTHOR, graded on the buy path rather than the
+    # discovery path. core/product.json's root anyOf has a "Canonical-format product"
+    # branch, format_ids is "Deprecated in AdCP 3.2; removed in AdCP 4.0" and is absent
+    # from the root `required` list — so a product declaring only format_options is legal,
+    # and the sibling BR-UC-GET-PRODUCTS-format-options feature already grades that such a
+    # product is ANNOUNCED. Whether it can then be BOUGHT was graded by nothing: every
+    # other scenario in this file, and every create scenario elsewhere, seeds a product
+    # that still carries the deprecated arm. Discoverable-but-unpurchasable is a coherent
+    # failure and it had no detector.
+    #
+    # NO CREATIVE IS ASSIGNED, deliberately. A creative's claimed format reference is
+    # RESOLVED against a live catalog, whereas a product's declaration is compared as an
+    # identity — so a creative would add a second, independent reason for this scenario to
+    # fail (an id the pinned agent does not serve: salesagent-yfu33) while saying nothing
+    # about the product's arms, which is its subject. create_media_buy requires no
+    # creative; assigning one is BR-UC-FORMAT-SATISFACTION's own creative scenarios' job.
+    #
+    # THE THIRD OUTCOME SAYS THE PROJECTION STILL HAPPENS WITH NO ARM TO PROJECT FROM.
+    # registries/v1-canonical-mapping.json is normative that v2 -> v1 projection "MUST rely
+    # on v1_format_ref on the v2 ProductFormatDeclaration", and here the product declares no
+    # format_ids whatever — so display_300x250 reaching the package proves the seller read
+    # the selected declaration's assertion, and that a canonical-only product still reports
+    # legacy readiness rather than leaving a 3.x peer with a field whose absence the pin
+    # gives a defined meaning to (format_ids_pending: "Absence means legacy readiness was
+    # not reported and MUST NOT be interpreted as full coverage").
+    #
+    # IT DOES NOT PROVE MORE THAN THAT, and an earlier draft of this comment claimed it
+    # did — that a dual-arm fixture cannot tell a projection sourced from the snapshot from
+    # one sourced from the product's own arm, because both name display_300x250. Measured,
+    # that ambiguity does not exist: _legacy_formats_to_provide reads the snapshot when
+    # there is one and the BUYER'S REQUEST arm when there is not, and the product's
+    # format_ids column is not a candidate source at either branch. The sibling scenario
+    # above already separates the two real sources by sending no request arm. Left here
+    # because the claim is the kind that reads plausibly and would have been inherited.
+    #
+    # WHICH OUTCOME CARRIES THE GRADING, measured by perturbation rather than assumed.
+    # Dropping the product's declarations before the selector is graded does NOT refuse the
+    # buy — a selector that selects nothing "imposes no format restriction", so the buy
+    # succeeds and the package simply carries no snapshot. So the SNAPSHOT outcome is this
+    # scenario's discriminating assertion, and the acceptance outcome is its precondition:
+    # it is live (grading every canonical claim as under-specified refuses the buy and fails
+    # it) but it cannot catch a declarations-plumbing regression on its own. The pairing is
+    # what makes the scenario non-vacuous in both directions: the acceptance outcome alone
+    # would pass with no format contract at all, and the snapshot outcome alone has no
+    # package to read when the buy is refused.
+    #
+    # BOTH CANONICAL ROUTES, because they resolve independently — a direct format_kind +
+    # params selector and a product-scoped format_option_ref reach the declaration by
+    # different code, and one working says nothing about the other. The legacy selector
+    # route against a canonical-only product is a different question (it resolves through
+    # the declaration's asserted ref) and belongs to stage 4's own scenarios, not here.

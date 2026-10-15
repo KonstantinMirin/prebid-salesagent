@@ -253,27 +253,25 @@ def given_tenant_for_create(ctx: dict) -> None:
     )
 
 
-@given(parsers.parse('the seller declares a canonical format option "{declaration}"'))
-def given_declaration(ctx: dict, declaration: str) -> None:
-    """Store a DUAL-ARM product -- the named canonical declarations plus the legacy arm.
-
-    Dual-arm on purpose, and the feature's comment says why: a canonical-only product's
-    legacy selector route is stage 4's to resolve, so seeding one would make these
-    scenarios fail on an unwired route instead of on the satisfaction rule each names.
+def _store_declaring_product(ctx: dict, declaration: str, *, with_legacy_arm: bool) -> None:
+    """Store one product carrying *declaration*, with or without the deprecated arm.
 
     The product becomes ``ctx["default_product"]``, which is what the shared create-request
     builder points the package at -- so the buyer's request names THIS product without this
     module duplicating the request literal.
+
+    ``with_legacy_arm=False`` stores a CANONICAL-ONLY product: ``format_ids`` NULL, which
+    migration 08cd415b3d91 made representable. The product id carries the shape so two
+    scenarios naming the same declaration cannot collide on one row.
     """
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
-    options = _DECLARATIONS[declaration]
     product = ProductFactory(
         tenant=ctx["tenant"],
-        product_id=f"satisfaction_{declaration}",
+        product_id=f"satisfaction_{declaration}" if with_legacy_arm else f"satisfaction_canonical_{declaration}",
         delivery_type="non_guaranteed",
-        format_ids=list(_LEGACY_ARM),
-        format_options=options,
+        format_ids=list(_LEGACY_ARM) if with_legacy_arm else None,
+        format_options=_DECLARATIONS[declaration],
         property_tags=["all_inventory"],
     )
     ctx["default_pricing_option"] = PricingOptionFactory(
@@ -284,6 +282,29 @@ def given_declaration(ctx: dict, declaration: str) -> None:
     # ctx["default_product"] and is guarded against re-running.
     ctx.pop("request_kwargs", None)
     _ensure_request_defaults(ctx)
+
+
+@given(parsers.parse('the seller declares a canonical format option "{declaration}"'))
+def given_declaration(ctx: dict, declaration: str) -> None:
+    """Store a DUAL-ARM product -- the named canonical declarations plus the legacy arm.
+
+    Dual-arm is what the satisfaction scenarios want: the rule each one names is about the
+    SELECTOR, and a product carrying both arms leaves every selector route reachable, so a
+    refusal is attributable to the rule rather than to an arm the product never declared.
+    """
+    _store_declaring_product(ctx, declaration, with_legacy_arm=True)
+
+
+@given(parsers.parse('the seller declares a canonical format option "{declaration}" and no format_ids'))
+def given_canonical_only_declaration(ctx: dict, declaration: str) -> None:
+    """Store a CANONICAL-ONLY product -- the declaration, and no deprecated arm at all.
+
+    The shape AdCP 3.2 tells new products to author, and the one stage-1 guarantee nothing
+    graded: that such a product is PURCHASABLE and not merely discoverable. Every other
+    product fixture on the create path carries the deprecated arm, so
+    discoverable-but-unpurchasable had no detector.
+    """
+    _store_declaring_product(ctx, declaration, with_legacy_arm=False)
 
 
 @given(
