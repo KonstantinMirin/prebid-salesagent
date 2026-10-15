@@ -8,10 +8,11 @@ import uuid
 from decimal import Decimal
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import joinedload
+from werkzeug.exceptions import HTTPException
 
 from src.admin.form_validation import sanitize_form_data
 from src.admin.utils import require_tenant_access
@@ -1401,10 +1402,18 @@ def add_product(tenant_id):
                 # Redirect to products list
                 return redirect(url_for("products.list_products", tenant_id=tenant_id))
 
-        except Exception as e:
-            logger.error(f"Error creating product: {e}", exc_info=True)
-            flash(f"Error creating product: {str(e)}", "error")
-            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+        except HTTPException:
+            # Werkzeug's own control flow, not a failure to report -- see the twin handler at
+            # the end of ``edit_product`` for why this is re-raised rather than rendered.
+            raise
+        except Exception:
+            # Says nothing to the operator about their input, for the same reason as
+            # ``edit_product``'s handler: every failure this function CAN act on is caught by
+            # one of its eight typed handlers, which re-render the form with a message. An
+            # exception arriving here is a defect in this code or an outage beneath it, and
+            # flashing ``str(e)`` asserted that the operator caused it.
+            logger.error(f"Unhandled error creating product for tenant {tenant_id}", exc_info=True)
+            abort(500)
 
     # GET request - show adapter-specific form (use helper with no form_data)
     return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data=None)
@@ -2203,10 +2212,30 @@ def edit_product(tenant_id, product_id):
                     selected_publisher_properties=selected_publisher_properties,
                 )
 
-    except Exception as e:
-        logger.error(f"Error editing product: {e}", exc_info=True)
-        flash(f"Error editing product: {str(e)}", "error")
-        return redirect(url_for("products.list_products", tenant_id=tenant_id))
+    except HTTPException:
+        # Werkzeug's own control flow, not a failure to report. An ``abort()`` reached from
+        # inside this handler used to be caught below and rendered as
+        # "Error editing product: 404 Not Found" behind a 302, losing both its status and its
+        # meaning. ``src/admin/utils/helpers.py`` guards the same way for 403/404.
+        raise
+    except Exception:
+        # NOTHING HERE IS SAID TO THE OPERATOR, and that is the point. This handler reaches
+        # here only for a failure it did not anticipate -- every failure it CAN act on is
+        # caught by one of the seven typed handlers above, which flash the operator a message
+        # about their input and redirect. So an exception arriving here is a defect in this
+        # code or an outage beneath it, and the previous answer -- flashing ``str(e)`` and
+        # redirecting -- made it look like neither: it asserted that the operator's input
+        # caused a NameError, discarded their edit, and returned a 302 that monitoring counts
+        # as a success. That is how the NameError behind the deleted ``line_item_type`` guard
+        # survived unnoticed for the life of that branch.
+        #
+        # The traceback goes to the log, where a diagnostic belongs, and the response is a 500,
+        # which is both honest to the operator and visible to whatever watches status codes.
+        logger.error(
+            f"Unhandled error editing product {product_id} for tenant {tenant_id}",
+            exc_info=True,
+        )
+        abort(500)
 
 
 @products_bp.route("/<product_id>/delete", methods=["DELETE"])
