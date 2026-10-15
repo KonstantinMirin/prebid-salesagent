@@ -261,9 +261,18 @@ def test_the_edit_form_authors_the_canonical_arm_on_a_legacy_product(operator, s
     row = _stored(factory_session, tenant_id, "legacy_product")
     assert row.format_options == [IMAGE_DECLARATION]
     assert row.format_ids == [LEGACY_FORMAT_ID], "an edit that submits one arm leaves the other alone"
-    # Both arms is a legal shape, so the conversion must still serve it.
+
+    # Both arms is a legal shape, so the conversion must serve BOTH. Asserted on the
+    # served product rather than on the columns: the row assertions above only round-trip
+    # strings this test wrote, which cannot tell a stored id that RESOLVES from one that
+    # does not. LEGACY_FORMAT_ID names an id the reference catalog actually carries
+    # ("display_300x250_image"; the bare "display_300x250" is absent from it), and the
+    # served arm below is the pinned FormatReferenceStructuredObject the DTO declares --
+    # so it came back through validation into the pin's type, not as the dict stored.
     served = convert_product_model_to_schema(row, adapter_type="mock")
     assert [declaration.format_kind for declaration in served.format_options] == ["image"]
+    assert [reference.id for reference in served.format_ids] == ["display_300x250_image"]
+    assert type(served.format_ids[0]) is not dict
 
 
 def test_the_edit_form_refuses_clearing_the_last_declared_arm(operator, seller, factory_session):
