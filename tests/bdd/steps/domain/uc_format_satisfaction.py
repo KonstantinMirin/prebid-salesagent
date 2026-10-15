@@ -494,13 +494,27 @@ def given_sync_legacy_creative(ctx: dict, format_id: str) -> None:
     The ONE difference from its canonical sibling is which identifier arm the creative
     carries, which is what decides the lane -- so the lenient asymmetry's two rows differ in
     the creative's arm and the product's arm and nothing else.
+
+    Built through ``resolvable_format_ref`` rather than from the scenario's string directly,
+    because a CREATIVE's claim is resolved over the wire: the id has to be one the creative
+    agent actually serves, or the sync is refused REFERENCE_NOT_FOUND before any satisfaction
+    verdict exists to grade. The scenario still says WHICH id, and now it cannot name one
+    that only the in-process registry mock would answer.
+
+    The factory's default asset -- one 300x250 image -- is kept DELIBERATELY under a video
+    claim, and is left inconsistent rather than tidied. Nothing validates a creative's assets
+    against the format it claims: ``creatives/_validation.py`` carries ``TODO(#767)`` exactly
+    where that comparison would go, and this row passing with a mismatched asset is the
+    evidence. Authoring a video asset here would make the fixture look right and remove the
+    only thing in the suite that shows the check is missing.
     """
+    from tests.factories.format import resolvable_format_ref
     from tests.factories.request import CreativeAssetRequestFactory
 
     ctx["creatives"] = [
         CreativeAssetRequestFactory.payload(
             creative_id=_SYNC_CREATIVE_ID,
-            format_id={"id": format_id, "agent_url": DEFAULT_CREATIVE_AGENT_URL},
+            format_id=resolvable_format_ref(format_id),
         )
     ]
 
@@ -643,6 +657,12 @@ def then_assignment_error_recorded(ctx: dict) -> None:
     names THIS package, and the recorded reason names both format identities -- the refused
     one and what the product accepts. The reason is graded on those VALUES and not on its
     wording, the same correction made to the sibling integration test.
+
+    ``video_1280x720`` is the refused id, and it is a CATALOG id on purpose: the scenario's
+    creative claims a reference production RESOLVES, so what the record names is a
+    satisfaction verdict rather than an unresolvable-reference refusal upstream of the gate.
+    It also cannot satisfy the second assertion by accident, which a nearer id would --
+    ``display_300x250`` is a substring of the catalog's ``display_300x250_image``.
     """
     result = ctx["result"]
     assert result.is_success, f"lenient mode should have answered success, got {result.error!r}"
@@ -652,7 +672,7 @@ def then_assignment_error_recorded(ctx: dict) -> None:
     errors = creative_results[0].assignment_errors or {}
     assert package_id in errors, f"no assignment error recorded for {package_id!r}: {errors!r}"
     recorded = errors[package_id]
-    assert "video_640x480" in recorded, f"the record does not name the refused format: {recorded}"
+    assert "video_1280x720" in recorded, f"the record does not name the refused format: {recorded}"
     assert "display_300x250" in recorded, f"the record does not name what the product accepts: {recorded}"
 
 
