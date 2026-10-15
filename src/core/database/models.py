@@ -93,6 +93,27 @@ class Tenant(Base, JSONValidatorMixin):
     hitl_webhook_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # List of format ID strings (just the id part, not full FormatId objects)
     # Validated at database level via CHECK constraint (see migration: rename_formats_to_format_ids)
+    #
+    # A LEGACY-ONLY CONVENIENCE THAT CANNOT CHANGE AN APPROVAL OUTCOME. Recorded here because
+    # it reads like policy and is not: no canonical sibling is needed, and adding one would
+    # add a reader where there is none.
+    #
+    # Its value reaches ``config["creative_engine"]["auto_approve_formats"]`` (admin/utils/
+    # helpers.py, core/utils/tenant_utils.py, admin/tenant_management_api.py) and the only
+    # object that consumes that key is ``MockCreativeEngine``, whose ``process_creatives`` has
+    # no caller in ``src/`` at all -- the module-level instance that once existed in
+    # ``core/main.py`` was built from a hardcoded ``{}`` and read by nothing, and is deleted.
+    # The one live behaviour anywhere downstream of this column is
+    # ``setup_checklist_service``'s ``has_approval_config``, which tests PRESENCE and reads no
+    # element.
+    #
+    # THE REAL APPROVAL DECISION IS ``approval_mode`` BELOW: a tri-state applied to every
+    # creative whatever its format (``core/tools/creatives/_sync.py`` ->
+    # ``_processing.py``). The pin has nothing to say about approval POLICY -- it defines
+    # outcomes (``core/creative-approval-scope.json``, ``enums/creative-approval-status.json``)
+    # and no policy input -- so keying this on ``format_kind`` would be new ungraded
+    # behaviour, not a migration of existing behaviour (salesagent-ol033.8 D4, measured in
+    # salesagent-b8gf9).
     auto_approve_format_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     human_review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     policy_settings: Mapped[dict | None] = mapped_column(JSONType, nullable=True)

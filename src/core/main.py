@@ -5,8 +5,6 @@ from fastmcp import FastMCP
 from fastmcp.tools.base import Tool, ToolResult
 from rich.console import Console
 
-from src.adapters.mock_creative_engine import MockCreativeEngine
-
 logger = logging.getLogger(__name__)
 
 # Database models
@@ -145,9 +143,22 @@ mcp = FastMCP(
 # credential the tool hands it, so this was pure double resolution -- measured at 2x
 # resolve_identity per MCP request while it stood.
 
-# Initialize creative engine with minimal config (will be tenant-specific later)
-creative_engine_config: dict[str, Any] = {}
-creative_engine = MockCreativeEngine(creative_engine_config)
+# (Deleted) A module-level MockCreativeEngine built from an empty config dict, with a comment
+# promising it would become tenant-specific. Nothing read the name, in any import spelling --
+# enumerated by resolving ``src.core.main.creative_engine`` through the AST of every module
+# under src/, scripts/ and tests/ rather than by grepping the word, which matches
+# src/adapters/creative_engine.py, CreativeEngineAdapter, the ADAPTER_REGISTRY key and
+# config["creative_engine"] dict literals and tells you nothing.
+#
+# It was also unreachable in a second, independent way: the config it was handed was a
+# hardcoded ``{}``, so even a tenant that sets ``auto_approve_format_ids`` could not have
+# reached its auto-approve branch. The live approval decision is ``tenant.approval_mode``
+# (src/core/tools/creatives/_sync.py), which is format-blind.
+#
+# ``MockCreativeEngine`` itself is kept: it is a mock adapter and the class is still graded
+# directly by its own unit tests, which construct their own instance. See salesagent-ol033.9
+# for those tests -- they grade code no production path can reach, which is that bead's
+# subject, and they are deliberately neither deleted nor re-grounded here.
 
 
 # Removed get_task_from_db - replaced by workflow-based system
