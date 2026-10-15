@@ -210,6 +210,7 @@ EXPECTED_GATED_STORYBOARDS: frozenset[str] = frozenset(
         "protocols/media-buy/scenarios/account_timezone_buyer_selected.yaml",
         "protocols/media-buy/scenarios/account_timezone_seller_assigned.yaml",
         "protocols/media-buy/scenarios/account_timezone_seller_fixed.yaml",
+        "protocols/media-buy/scenarios/advanced_delivery_reporting.yaml",
         "protocols/media-buy/scenarios/audience_activation_discovery.yaml",
         "protocols/media-buy/scenarios/audience_buy_flow.yaml",
         "protocols/media-buy/scenarios/bidding_cost_binding.yaml",
