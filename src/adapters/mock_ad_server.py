@@ -1072,14 +1072,33 @@ class MockAdServer(AdServerAdapter):
         """Add creative assets immediately (original behavior)."""
         from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario
 
-        # Log operation
+        # Log operation. ``assets`` is the receipt: the dicts this ad server was HANDED,
+        # recorded whole rather than counted.
+        #
+        # A count cannot answer the one question an audit trail of a creative push exists to
+        # answer. Several fields of an uploaded asset appear in NO response the buyer ever
+        # sees -- the click destination is the plain case, which is why losing it is silent
+        # (the buy succeeds and the line item ships unclickable). With only
+        # ``creative_count`` here, neither the buyer nor the seller can establish after the
+        # fact what was sent, and the in-memory ``_media_buys[...]["creatives"]`` record
+        # below dies with the process.
+        #
+        # It is also what makes the push observable across a process boundary, which is how
+        # the e2e harness grades it: ``MediaBuyCreateEnv.uploaded_adapter_assets`` reads the
+        # adapter's own mock in-process and this row on the live stack, where the adapter
+        # runs inside the server container. Same fact, two sources, one assertion.
+        #
+        # KNOWN CEILING: the whole asset list goes into one JSON column, so a push of very
+        # many creatives writes a large row. Unbounded deliberately -- a truncated receipt
+        # is the failure mode this replaces -- and acceptable because this is the mock ad
+        # server. A real adapter wanting the same record should bound it.
         self.audit_logger.log_operation(
             operation="add_creative_assets",
             principal_name=self.principal.name,
             principal_id=self.principal.principal_id,
             adapter_id=self.adapter_principal_id or "unknown",
             success=True,
-            details={"media_buy_id": media_buy_id, "creative_count": len(assets)},
+            details={"media_buy_id": media_buy_id, "creative_count": len(assets), "assets": assets},
         )
 
         self.log(

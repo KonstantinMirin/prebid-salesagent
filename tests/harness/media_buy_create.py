@@ -56,6 +56,51 @@ def _live_ad_server_on_the_live_stack(self: MediaBuyCreateEnv, adapter_type: str
     self._write_adapter_config(adapter_type)
 
 
+#: Audit operation the Mock adapter writes once per creative push, as
+#: ``"<adapter_name>.<operation>"`` — so the lookup below is a substring match.
+_CREATIVE_PUSH_OPERATION = "add_creative_assets"
+
+
+def _uploaded_assets_from_the_audit_trail(self: MediaBuyCreateEnv) -> list[dict[str, Any]]:
+    """The assets the SERVER's ad server was handed, read off the receipt it wrote.
+
+    Over e2e_rest the adapter runs inside the server container, so the mock the in-process
+    branch reads lives in the wrong process and would report an empty list on every branch —
+    which is worse than no evidence, because a scenario asserting that something was NOT
+    sent would pass vacuously.
+
+    What the server leaves behind is a row. ``MockAdServer._add_creative_assets_immediate``
+    calls ``audit_logger.log_operation(operation="add_creative_assets", ...)`` in production
+    code, on its own session, committed before the create response returns — so the receipt
+    exists by the time a Then runs, with no polling. That audit record carries the asset
+    dicts AS HANDED, which is why both branches of this seam return the same shape and one
+    assertion can read either. (Same seam shape as
+    ``_e2e_slack_notified_creatives``: the server's durable trace, not the test rig's mock.)
+
+    THE RECORD IS THE CALL, not its success. ``log_operation`` runs before the
+    media-buy-exists check raises, exactly as the in-process ``call_args_list`` records a
+    call whatever it returned. The two branches therefore mean the same thing.
+
+    ONLY THE IMMEDIATE AND SYNC-DELAY MODES write it. ``_add_creative_assets_async`` parks
+    the request on a workflow step and audits nothing, so a scenario driving the async
+    upload mode needs its own seam rather than a widened one here — which path ran is part
+    of what such a scenario would be asserting.
+
+    ``expire_all`` first, and ordered by ``log_id``: the server committed through its own
+    session, so rows written since this session last read are otherwise served from the
+    identity map, and ``find_by_operation`` imposes no order of its own.
+    """
+    from src.core.database.repositories.audit_log import AuditLogRepository
+
+    session = self.get_session()
+    session.expire_all()
+    rows = AuditLogRepository(session, self.tenant_id).find_by_operation(_CREATIVE_PUSH_OPERATION)
+    uploaded: list[dict[str, Any]] = []
+    for row in sorted(rows, key=lambda r: r.log_id):
+        uploaded.extend((row.details or {}).get("assets") or [])
+    return uploaded
+
+
 def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> None:
     """Re-inject creative_ids stripped by model_dump(exclude=True).
 
@@ -420,6 +465,34 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             # names a MISSING account still missing it.
             self._seed_named_account_ref(kwargs["account"])
         return kwargs
+
+    @realize_e2e(_uploaded_assets_from_the_audit_trail)
+    def uploaded_adapter_assets(self) -> list[dict[str, Any]]:
+        """The asset dicts the create path handed the ad server, newest call last.
+
+        A NAMED SEAM instead of a step reaching into ``env.mock``: the escape-hatch guard
+        refuses that reach in a step because it "works in-process, cannot work on e2e_rest,
+        and is declarable nowhere". Declaring it here is what gives it a fourth-transport
+        answer -- :func:`_uploaded_assets_from_the_audit_trail` reads the receipt the
+        server's own ad server wrote -- rather than an ``e2e_unsupported`` row in a pinned
+        allowlist that may only shrink.
+
+        What a scenario asks of this is what the ad server RECEIVED, which for several
+        fields is the only place they are observable at all: the click destination appears
+        in no response the buyer sees, which is precisely why dropping it is silent.
+
+        Reads ``adapter.add_creative_assets``, the spelling the SYNCHRONOUS create path
+        uses. The approval and retroactive-push paths go through
+        ``adapter.creatives_manager.add_creative_assets`` instead; a scenario wanting those
+        needs its own seam rather than a widened one here, because which path ran is part of
+        what it is asserting.
+        """
+        adapter = self.mock["adapter"].return_value
+        uploaded: list[dict[str, Any]] = []
+        for call in adapter.add_creative_assets.call_args_list:
+            assets = call.args[1] if len(call.args) > 1 else call.kwargs.get("assets")
+            uploaded.extend(assets or [])
+        return uploaded
 
     @realize_e2e(_live_ad_server_on_the_live_stack)
     def run_ad_server(self, adapter_type: str) -> None:
