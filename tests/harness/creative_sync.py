@@ -1099,18 +1099,25 @@ class RealRegistryCreativeSyncEnv(CreativeSyncEnv):
     a reserved literal, a non-https scheme) is refused BEFORE a connection is
     opened, so no packet leaves and no DNS answer is needed.
 
-    AND HERMETIC FOR A SUCCESSFUL FETCH TOO. This paragraph used to end "a scenario
-    that wants a SUCCESSFUL fetch wants plain ``CreativeSyncEnv`` — here the reference
-    agent would be dialled for real", and that was wrong in a way that cost
-    salesagent-3oo5h two wrong readings: it is why the live public host looked like the
-    defect. Under ``ADCP_TESTING`` — every suite sets it, and ``docker-compose.e2e.yml``
-    sets it for the e2e server too — ``RuntimeSettings.reference_formats_only`` selects
-    ``ReferenceFormatsRegistry``, whose ``_operator_formats_override`` answers an
-    OPERATOR reference from the checked-in capture before any fetch is attempted.
-    Measured: the registry this env leaves unpatched IS ``ReferenceFormatsRegistry``,
-    and a reference naming the public identity resolves offline. So what this env buys
-    is the REAL CATALOG in place of the parent's one-format stub, which is how it
+    A FORMAT RESOLUTION IS HERMETIC HERE. THE PROCESS IS NOT. Both halves matter, and the
+    first half alone is what two earlier versions of this paragraph said -- one claiming the
+    reference agent "would be dialled for real" (which sent salesagent-3oo5h's diagnosis to
+    the live public host twice), then one headed "hermetic for a successful fetch too", which
+    is accurate about a fetch and invites the wider reading about the env.
+
+    Resolution is hermetic: under ``ADCP_TESTING`` the registry this env leaves unpatched is
+    ``ReferenceFormatsRegistry``, whose ``_operator_formats_override`` answers an OPERATOR
+    reference from the checked-in capture before any fetch is attempted. So what this env
+    buys is the REAL CATALOG in place of the parent's one-format stub, which is how it
     reproduces in process a sync refusal that otherwise only e2e_rest can see.
+
+    The process is not: that class overrides ONE method and inherits NINE public ones, so
+    hermeticity is a property of what each one happens to call rather than of the class.
+    ``preview_creative``, ``build_creative`` and the agent probe perform a real MCP handshake,
+    and a dial on some paths is swallowed by the call site rather than failing the test.
+    **salesagent-1bc7l** is the mechanism, the measurement and the remedy; it is not restated
+    here, because a docstring that duplicates a bead drifts from it. Read it before using this
+    env to argue that something did not reach the network.
 
     TRAP inherited from the same pattern in ``RealResolverProductEnv``:
     ``self.mock["registry"]`` does not exist after ``__enter__``, so any helper
