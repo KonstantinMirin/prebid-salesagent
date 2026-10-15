@@ -5,9 +5,6 @@ import logging
 from typing import Any
 
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-
-# FIXME(#1388): Package has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp.types import LegacyPackage as Package
 from flask import Blueprint, request
 from sqlalchemy import select
 
@@ -17,7 +14,7 @@ from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.errors.details import RejectionReasonDetails
 from src.core.exceptions import AdCPMediaBuyRejectedError
-from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Error
+from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Error, Package
 from src.core.tools.media_buy_create import ApprovalOutcome
 from src.core.webhooks.delivery import WebhookTaskContext
 from src.services.protocol_webhook_service import get_protocol_webhook_service
