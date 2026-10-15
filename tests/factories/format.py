@@ -271,6 +271,24 @@ def resolvable_format_ref(format_id: str) -> dict[str, str]:
 
     The refusal is shaped after ``tests/integration/test_creative_agent_live.py``'s: say what
     is wrong, say where the authority is, print the remedy.
+
+    WHAT THIS DOES NOT PROMISE: that the format is USABLE, only that it RESOLVES. Membership
+    and derivability are different sets, and they barely overlap -- rfc-gamph measured that 49
+    of the 71 captured ids derive dimensions from no available primitive (salesagent-lyh1i).
+    The relation is close to INVERSE, measured on the four ids this feature touches:
+
+        video_1280x720        IN the capture  | canonical_kind_for RAISES, no dimensions
+        display_300x250_image IN the capture  | kind RAISES, upgrades to display_image 300x250
+        video_640x480         NOT in capture  | kind video_hosted, no dimensions
+        display_300x250       NOT in capture  | kind image, upgrades to display_image 300x250
+
+    So the ids the primitives know are largely the hand-invented legacy ones the agent does
+    NOT serve, and vice versa. A caller needing DIMENSIONS wants the ``display_NNNxNNN_image``
+    family, the only one ``upgrade_legacy_format_id`` sizes; a caller needing only a resolvable
+    identity -- which is what a legacy-lane claim needs, since ``_legacy_lane`` compares whole
+    identities and reads no dimensions -- can take any of the 71. Do not add a third
+    dimension-from-id derivation to narrow this: salesagent-lyh1i owns collapsing the two that
+    already exist.
     """
     from src.core.format_cache import load_reference_formats
 
