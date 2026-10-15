@@ -1,0 +1,194 @@
+"""The GAM creative placeholder the admin SEEDS follows the product's format declarations.
+
+WHY AN ADMIN TEST. A canonical-only product whose GAM placeholder contradicts its own
+declaration is OPERATOR-visible, not buyer-visible: it is the ``implementation_config`` the
+admin writes for a seller, which the GAM adapter later traffics. And it is reachable only
+through a Flask POST -- the registry's tools are all buyer-facing, there is no
+``create_product``, and the BDD harness seeds products through ``ProductFactory``, which
+writes the row directly and never runs the handler. So no BDD scenario can reach this and
+this module is the grader.
+
+WHAT THIS GRADES THAT THE UNIT TEST CANNOT.
+``tests/unit/test_gam_creative_placeholder_derivation.py`` grades the derivation over eight
+input shapes, and every one of those would still pass if ``format_options`` were threaded in
+from nowhere -- a derivation that matches nothing is green. This module grades the PLUMBING:
+that the three admin call sites actually hand the product's canonical arm to the service. It
+is the only test of the set that fails when the wiring is removed and the derivation is left
+intact.
+
+NOT ASSERTED ANYWHERE HERE: 300x250 as the expected placeholder for a product that declared
+something else. That was the defect's signature -- every product got it regardless of what
+the operator selected -- so an expectation of it would pin the bug. The one assertion about
+300x250 is a NEGATIVE one.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+from sqlalchemy import select
+
+from src.core.database.models import Product
+from tests.factories import (
+    AuthorizedPropertyFactory,
+    PricingOptionFactory,
+    ProductFactory,
+    PropertyTagFactory,
+    TenantFactory,
+)
+from tests.helpers.admin_session import admin_auth_session, admin_test_app
+
+pytestmark = [pytest.mark.admin, pytest.mark.requires_db]
+
+#: A canonical declaration fixing a size that is NOT the fallback, so no assertion below can
+#: be satisfied by the fallback firing. ``core/product-format-declaration.json`` (AdCP 3.2.3)
+#: requires ``format_kind``; ``formats/canonical/image.json`` declares ``width``/``height``.
+IMAGE_970x250 = {"format_kind": "image", "params": {"width": 970, "height": 250}}
+
+#: What the defect produced for every product, whatever it declared.
+FALLBACK_PLACEHOLDER = {"width": 300, "height": 250, "expected_creative_count": 1, "is_native": False}
+
+EXPECTED_970x250 = {"width": 970, "height": 250, "expected_creative_count": 1, "is_native": False}
+
+
+@pytest.fixture
+def gam_seller(factory_session):
+    """A GAM tenant an operator can author a product for, built by factories only.
+
+    ``ad_server="google_ad_manager"`` because ``add_product`` reads
+    ``adapter_type = tenant.ad_server or "mock"`` and only that value reaches the GAM
+    branch -- the one that seeds a GAM ``implementation_config``.
+    """
+    tenant = TenantFactory(ad_server="google_ad_manager")
+    PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
+    authorized_property = AuthorizedPropertyFactory(tenant=tenant, tags=["all_inventory"])
+    factory_session.commit()
+    return tenant, f"{authorized_property.publisher_domain}:all_inventory"
+
+
+@pytest.fixture
+def operator(gam_seller):
+    """A Flask client carrying an authenticated admin session for the GAM tenant."""
+    tenant, _ = gam_seller
+    app = admin_test_app()
+    with app.test_client() as client:
+        admin_auth_session(client, tenant.tenant_id)
+        yield client
+
+
+def _create_form(property_tag_selection: str, **overrides: object) -> dict[str, object]:
+    """The product-create form at the minimum the handler requires.
+
+    ``formats: "[]"`` is the canonical-only case: the deprecated arm is empty, so before
+    this change ``if formats:`` was false and the explicit fallback answered.
+    """
+    form: dict[str, object] = {
+        "name": "Canonically Declared Billboard",
+        "description": "Declares image 970x250 canonically and nothing on the legacy arm",
+        "formats": "[]",
+        "pricing_model_0": "cpm_fixed",
+        "currency_0": "USD",
+        "rate_0": "10.00",
+        "property_mode": "tags",
+        "selected_property_tags": property_tag_selection,
+        "delivery_measurement_provider": "publisher",
+    }
+    form.update(overrides)
+    return form
+
+
+def _stored_placeholders(session, tenant_id: str) -> list[dict]:
+    """The seeded placeholders on the one product the tenant now has, read from the row."""
+    session.expire_all()
+    product = session.scalars(select(Product).filter_by(tenant_id=tenant_id)).first()
+    assert product is not None, "the create handler stored no product"
+    assert product.implementation_config, "the create handler seeded no implementation_config"
+    return product.implementation_config["creative_placeholders"]
+
+
+def test_a_canonical_only_product_is_seeded_with_the_size_it_declares(operator, gam_seller, factory_session):
+    """The whole of defect 2, through the handler that was not passing the arm.
+
+    The product declares image 970x250 and nothing on the deprecated arm. Before the fix
+    the admin passed only ``formats`` -- empty here -- so the explicit else-branch assigned
+    300x250, contradicting the declaration the operator had just authored.
+    """
+    tenant, tag_selection = gam_seller
+    response = operator.post(
+        f"/tenant/{tenant.tenant_id}/products/add",
+        data=_create_form(tag_selection, format_options=json.dumps([IMAGE_970x250])),
+        follow_redirects=False,
+    )
+    assert response.status_code in (302, 303), response.data[:3000]
+
+    placeholders = _stored_placeholders(factory_session, tenant.tenant_id)
+    assert placeholders == [EXPECTED_970x250]
+    assert FALLBACK_PLACEHOLDER not in placeholders, (
+        "the product declared 970x250; a 300x250 placeholder is the dead-derivation fallback"
+    )
+
+
+def test_an_edit_that_changes_the_declaration_reseeds_the_placeholder(operator, gam_seller, factory_session):
+    """The third call site: the edit path reads the product's POST-edit declarations.
+
+    ``line_item_type`` is required to reach the regeneration branch -- the handler only
+    rebuilds the default config in explicit mode and preserves the stored config otherwise.
+
+    THIS POST IS NOT WHAT A BROWSER SENDS, and that is stated rather than glossed: measured
+    across ``templates/**/*.html``, no shipped template renders an input named
+    ``line_item_type``, so the branch is unreachable through the UI today. This test reaches
+    it directly because the branch is still the handler's contract -- and reaching it is how
+    the ``NameError`` it had carried for its whole life was found (salesagent-bd8i3, which
+    owns the question of whether the branch should exist at all).
+    """
+    tenant, _ = gam_seller
+    product = ProductFactory(
+        tenant=tenant,
+        product_id="reseeded_product",
+        format_ids=None,
+        format_options=[{"format_kind": "image", "params": {"width": 300, "height": 600}}],
+        implementation_config={"priority": 8, "creative_placeholders": [{"width": 300, "height": 600}]},
+    )
+    PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
+    factory_session.commit()
+
+    response = operator.post(
+        f"/tenant/{tenant.tenant_id}/products/reseeded_product/edit",
+        data={
+            "name": "Reseeded Product",
+            "pricing_model_0": "cpm_fixed",
+            "currency_0": "USD",
+            "rate_0": "10.00",
+            "delivery_measurement_provider": "publisher",
+            "line_item_type": "STANDARD",
+            "format_options": json.dumps([IMAGE_970x250]),
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code in (302, 303), response.data[:3000]
+
+    factory_session.expire_all()
+    edited = factory_session.scalars(
+        select(Product).filter_by(tenant_id=tenant.tenant_id, product_id="reseeded_product")
+    ).first()
+    assert edited.implementation_config["creative_placeholders"] == [EXPECTED_970x250]
+
+
+def test_a_legacy_only_product_is_seeded_from_the_entry_it_stores(operator, gam_seller, factory_session):
+    """Defect 1 through the same handler: the entry's own width/height reach the seed.
+
+    The entry is what ``format-template-picker.js`` emits for a parameterized display
+    selection. ``_parse_format_entries`` stores it, and the derivation read a ``format_id``
+    key it never had -- so this product got 300x250 too.
+    """
+    tenant, tag_selection = gam_seller
+    entry = {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_image", "width": 970, "height": 250}
+    response = operator.post(
+        f"/tenant/{tenant.tenant_id}/products/add",
+        data=_create_form(tag_selection, formats=json.dumps([entry])),
+        follow_redirects=False,
+    )
+    assert response.status_code in (302, 303), response.data[:3000]
+
+    assert _stored_placeholders(factory_session, tenant.tenant_id) == [EXPECTED_970x250]

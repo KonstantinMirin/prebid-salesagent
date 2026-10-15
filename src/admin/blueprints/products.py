@@ -914,7 +914,9 @@ def add_product(tenant_id):
                 if adapter_type == "google_ad_manager":
                     # Parse GAM-specific fields from unified form
                     gam_config_service = GAMProductConfigService()
-                    base_config = gam_config_service.generate_default_config(delivery_type, formats)
+                    base_config = gam_config_service.generate_default_config(
+                        delivery_type, formats, format_options=format_options
+                    )
 
                     # Add ad unit/placement targeting if provided
                     ad_unit_ids = form_data.get("targeted_ad_unit_ids", "").strip()
@@ -1002,7 +1004,9 @@ def add_product(tenant_id):
                 else:
                     # For other adapters, use simple config
                     gam_config_service = GAMProductConfigService()
-                    implementation_config = gam_config_service.generate_default_config(delivery_type, formats)
+                    implementation_config = gam_config_service.generate_default_config(
+                        delivery_type, formats, format_options=format_options
+                    )
 
                 # Parse targeting template from form (includes custom targeting key-value pairs)
                 targeting_template_json = form_data.get("targeting_template", "{}")
@@ -1736,7 +1740,19 @@ def edit_product(tenant_id, product_id):
                     # Otherwise, preserve existing config structure
                     if line_item_type:
                         gam_config_service = GAMProductConfigService()
-                        default_config = gam_config_service.generate_default_config(product.delivery_type, formats)
+                        # ``validated_formats`` and not ``formats``: the latter is a name this
+                        # function never binds, so this line raised NameError on every path
+                        # that reached it and the broad except below flashed it at the
+                        # operator. It went unseen because nothing submits the
+                        # ``line_item_type`` that guards the branch.
+                        #
+                        # ``product.format_options`` and not the submitted value: the arms are
+                        # written above, an edit submitting one arm leaves the other at its
+                        # stored value, and the placeholder must follow the product's
+                        # POST-edit declarations.
+                        default_config = gam_config_service.generate_default_config(
+                            product.delivery_type, validated_formats, format_options=product.format_options
+                        )
                         # Merge default config into base_config (preserving other fields)
                         base_config.update(default_config)
 
