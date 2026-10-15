@@ -2001,14 +2001,12 @@ class TestUpdateMediaBuyCreativeIds:
         mock_c1 = MagicMock()
         mock_c1.creative_id = "c_new1"
         mock_c1.status = "approved"
-        mock_c1.agent_url = "http://agent.test"
-        mock_c1.format = "display_300x250"
+        stamp_format_identity(mock_c1, format_id="display_300x250", agent_url="http://agent.test")
 
         mock_c2 = MagicMock()
         mock_c2.creative_id = "c_new2"
         mock_c2.status = "approved"
-        mock_c2.agent_url = "http://agent.test"
-        mock_c2.format = "display_300x250"
+        stamp_format_identity(mock_c2, format_id="display_300x250", agent_url="http://agent.test")
 
         # Existing assignment for c_old (should be removed)
         mock_existing_assignment = MagicMock()
@@ -2345,14 +2343,12 @@ class TestUpdateMediaBuyCreativeIds:
         mock_c2 = MagicMock()
         mock_c2.creative_id = "c2"
         mock_c2.status = "approved"
-        mock_c2.agent_url = "http://agent.test"
-        mock_c2.format = "display_300x250"
+        stamp_format_identity(mock_c2, format_id="display_300x250", agent_url="http://agent.test")
 
         mock_c4 = MagicMock()
         mock_c4.creative_id = "c4"
         mock_c4.status = "approved"
-        mock_c4.agent_url = "http://agent.test"
-        mock_c4.format = "display_300x250"
+        stamp_format_identity(mock_c4, format_id="display_300x250", agent_url="http://agent.test")
 
         # Existing assignments: c1, c2, c3
         mock_assign_c1 = MagicMock()

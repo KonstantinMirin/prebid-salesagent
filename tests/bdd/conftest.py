@@ -94,6 +94,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_get_products_format_options",
     "tests.bdd.steps.domain.uc_get_products_format_id_filter",
     "tests.bdd.steps.domain.uc_get_products_canonical_format_filters",
+    "tests.bdd.steps.domain.uc_format_satisfaction",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_context_echo",
@@ -6692,6 +6693,20 @@ ENV_ROUTES: list[EnvRoute] = [
         # layer up, and the reason this row is added in the same change as the feature.
         when=lambda m: "canonical_format_filter" in m,
         env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="format-satisfaction",
+        # BR-UC-FORMAT-SATISFACTION dispatches create_media_buy against a product carrying a
+        # real canonical declaration, so it takes the MediaBuyCreateEnv branch and needs the
+        # full create chain seeded -- its own Given asserts that seeding happened rather than
+        # repeating it. Its own identity tag means detect_uc returns None, so WITHOUT this
+        # row every scenario auto-xfails at fixture setup with "No harness wired for None"
+        # and grades nothing while reading green. Added in the same change as the feature,
+        # and pinned in tests/unit/test_architecture_measurement_floors.py in that same
+        # change -- salesagent-8qela.152 is this pin being forgotten for a sibling row.
+        when=lambda m: "format_satisfaction" in m,
+        env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
+        seed=_seed_media_buy_chain,
     ),
     EnvRoute(
         tag="security-wire-error-safety",

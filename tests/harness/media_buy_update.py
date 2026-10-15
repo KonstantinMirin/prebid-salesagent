@@ -36,6 +36,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from src.core.errors.details import EntityRefDetails
+from tests.factories.creative import stamp_format_identity
 from tests.harness._base import BaseTestEnv
 from tests.helpers.media_buy_row_stubs import stub_package_row
 
@@ -180,8 +181,20 @@ class MediaBuyUpdateEnv(BaseTestEnv):
                 cr = MagicMock()
                 cr.creative_id = cid
                 cr.status = "approved"
-                cr.agent_url = None
-                cr.format = "display_300x250"
+                # The FOUR stored identity columns, through the production mapping. This
+                # used to set ``cr.agent_url`` and ``cr.format`` -- two names the Creative
+                # model no longer carries, left over from when the format identity was
+                # loose columns. ``CreativeFormatIdentity.from_row`` reads
+                # ``legacy_format_id`` / ``format_kind`` / ``format_option_ref``, and an
+                # unstubbed MagicMock answers each with a fresh Mock, which is not a state
+                # any of those columns can hold -- so the reader raised
+                # ``ValidationError: Input should be a valid dictionary or instance of
+                # FormatId`` instead of the code under test failing or passing. That was
+                # invisible only because the format gate used to return early on this
+                # stub's product; the moment it read one line further, every test sharing
+                # this default broke on the fixture. ``stamp_format_identity`` exists for
+                # exactly this and says so in its own docstring.
+                stamp_format_identity(cr, format_id="display_300x250")
                 creatives.append(cr)
             return creatives
 

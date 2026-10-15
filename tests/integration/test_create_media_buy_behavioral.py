@@ -1454,27 +1454,15 @@ class TestCrossCuttingObligations:
                 "ObjectWorkflowMapping.object_id must reference the persisted media buy"
             )
 
-    @pytest.mark.asyncio
-    async def test_creative_in_valid_state_assigned_successfully(self):
-        """Creative in valid state with compatible format is assigned.
-
-        Covers: UC-002-CC-CREATIVE-ASSIGNMENT-VALIDATION-03
-
-        Note: This tests the format validation helper directly.
-        """
-        # Build mocks
-        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId
-
-        from src.core.helpers import validate_creative_format_against_product
-
-        creative_format = FormatId(agent_url="https://creative.example.com", id="display_300x250")
-        product = MagicMock()
-        product.format_ids = [{"agent_url": "https://creative.example.com", "id": "display_300x250"}]
-
-        is_valid, error = validate_creative_format_against_product(creative_format_id=creative_format, product=product)
-
-        assert is_valid is True
-        assert error is None
+    # DELETED: test_creative_in_valid_state_assigned_successfully
+    # (UC-002-CC-CREATIVE-ASSIGNMENT-VALIDATION-03). It said so itself -- "this tests the
+    # format validation helper directly" -- and the helper it tested,
+    # ``validate_creative_format_against_product``, no longer exists: the one satisfaction
+    # function (``src/core/format_satisfaction.py``) replaced it and the three sibling gates.
+    # It was also a bare ``MagicMock()`` product, which answers every unstubbed attribute
+    # with a truthy child, so it graded the mock rather than the seller. The behaviour it
+    # named -- a compatible creative IS assigned -- is graded on the wire, on all four
+    # transports, by @T-UC-002-inv-1 and the format-satisfaction feature.
 
 
 class TestExtensionObligations:

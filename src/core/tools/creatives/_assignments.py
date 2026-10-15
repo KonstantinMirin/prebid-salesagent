@@ -13,7 +13,7 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPValidationError,
 )
-from src.core.format_resolver import format_display, product_format_identities
+from src.core.format_satisfaction import FormatRefusal, canonical_refusal, satisfies
 from src.core.logging_config import log_safe
 from src.core.schemas import CreativeFormatIdentity, SyncCreativeResult
 from src.core.tenant_context import TenantContext
@@ -251,45 +251,42 @@ def _process_assignments(
                         # Get product formats
                         product = assignment_repo.get_product_by_id(product_id)
 
-                        if product and product.format_ids:
-                            # Identity is (canonical agent_url, id) per the pinned
-                            # core/format-id.json, asked of format_resolver so this path and
-                            # the media_buy_update assignment path cannot disagree about
-                            # whether a creative's format is one the product declares.
-                            supported_formats = product_format_identities(product.format_ids)
-                            # The stored identity through the ONE row reader; ``legacy`` is
-                            # already the canonical pair this matches on, so the reference is
-                            # no longer rebuilt out of two columns here.
+                        if product:
+                            # THE ONE satisfaction function, which the two create gates and
+                            # update_media_buy also ask -- so no two of the four can disagree
+                            # about whether a creative's format is one the product declares.
+                            # This used to compare against ``product_format_identities``
+                            # alone, which sees only the DEPRECATED arm, so a product
+                            # declaring ``format_options[]`` imposed no restriction here.
                             stored_identity = CreativeFormatIdentity.from_row(db_creative_result)
-                            creative_identity = stored_identity.legacy
+                            verdict = satisfies(
+                                stored_identity, product.format_options, legacy_catalog=product.format_ids
+                            )
 
-                            # A product with no usable format entries imposes no restriction.
-                            is_supported = not supported_formats or creative_identity in supported_formats
-
-                            if not is_supported:
-                                # Creative format not supported by product
-                                creative_format_display = (
-                                    format_display(creative_identity) if creative_identity else stored_identity.label
-                                )
-                                supported_formats_display = ", ".join(
-                                    format_display(identity) for identity in sorted(supported_formats)
-                                )
+                            if not verdict:
                                 error_msg = (
-                                    f"Creative {creative_id} format '{creative_format_display}' "
-                                    f"is not supported by product '{product.name}' (package {package_id}). "
-                                    f"Supported formats: {supported_formats_display}"
+                                    f"Creative {creative_id} {verdict.summary} "
+                                    f"(product '{product.name}', package {package_id})"
                                 )
                                 assignment_errors_by_creative[creative_id][package_id] = error_msg
 
+                                if verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED:
+                                    # A canonical refusal is UNSUPPORTED_FEATURE, and it is
+                                    # raised in BOTH validation modes: lenient means "skip a
+                                    # creative this product will not take", and the product
+                                    # published a closed set this one is outside of, so there
+                                    # is no partial assignment to fall back to. The legacy
+                                    # lane below keeps its lenient skip, which scenarios grade.
+                                    raise canonical_refusal(verdict, creative_id=creative_id, package_id=package_id)
                                 if validation_mode == "strict":
                                     # Reverses #1417, which routed this to CREATIVE_REJECTED: adcp
                                     # 3.1.1's enum reserves that for "Creative failed content policy
                                     # review". Converged with the create and update paths.
                                     raise AdCPValidationError(
-                                        # `supported_formats` is the pin-canonical `accepted_values`.
-                                        # supported_formats_display is a JOINED string, not a list -- wrap it so the
-                                        # canonical accepted_values stays an array as the pin declares.
-                                        details=ValidationDetails(accepted_values=[supported_formats_display]),
+                                        # The verdict's accepted set, joined: the pin-canonical
+                                        # `accepted_values` is an array, and this wire has always
+                                        # carried the whole supported list as its single entry.
+                                        details=ValidationDetails(accepted_values=[", ".join(verdict.accepted_values)]),
                                     )
                                 else:
                                     logger.warning(

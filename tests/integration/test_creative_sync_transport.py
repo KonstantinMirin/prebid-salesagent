@@ -982,7 +982,14 @@ class TestAssignmentFormatCompatibility:
         assert creative_result.assignment_errors is not None
         assert pkg_id in creative_result.assignment_errors
         error_msg = creative_result.assignment_errors[pkg_id]
-        assert "not supported" in error_msg
+        # The two FORMAT IDENTITIES, not the sentence. This asserted the substring "not
+        # supported", which pinned the wording of a diagnostic record rather than anything a
+        # buyer can act on -- and it broke on a reword while every fact it meant to check
+        # still held. The values are what the record exists to carry: which format was
+        # refused and which the product accepts. Same reasoning as ``assert_wire_error``
+        # having deliberately no ``message_substr``.
+        assert "display_300x250" in error_msg, f"the record does not name the refused format: {error_msg}"
+        assert "video_30s" in error_msg, f"the record does not name what the product accepts: {error_msg}"
 
 
 @pytest.mark.requires_db
