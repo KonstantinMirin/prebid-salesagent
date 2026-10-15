@@ -12,9 +12,17 @@ WHAT THIS GRADES THAT THE UNIT TEST CANNOT.
 ``tests/unit/test_gam_creative_placeholder_derivation.py`` grades the derivation over eight
 input shapes, and every one of those would still pass if ``format_options`` were threaded in
 from nowhere -- a derivation that matches nothing is green. This module grades the PLUMBING:
-that the three admin call sites actually hand the product's canonical arm to the service. It
-is the only test of the set that fails when the wiring is removed and the derivation is left
+that the admin CREATE path actually hands the product's canonical arm to the service. It is
+the only test of the set that fails when the wiring is removed and the derivation is left
 intact.
+
+THE EDIT PATH IS NOT GRADED HERE, AND THAT IS THE HONEST STATE. A third test used to assert
+that an edit changing the declarations reseeded the placeholder. It reached that code by
+POSTing a ``line_item_type`` no template submits, which is how the NameError behind that
+unsatisfiable guard was found; the guard and its branches are now deleted, so the behaviour
+the test asserted does not exist. Re-grounding it on the current behaviour would mean
+asserting that an edit leaves the placeholder STALE, which pins a defect. The reseed-on-edit
+obligation and the test that belongs with it are tracked as their own work item.
 
 NOT ASSERTED ANYWHERE HERE: 300x250 as the expected placeholder for a product that declared
 something else. That was the defect's signature -- every product got it regardless of what
@@ -32,8 +40,6 @@ from sqlalchemy import select
 from src.core.database.models import Product
 from tests.factories import (
     AuthorizedPropertyFactory,
-    PricingOptionFactory,
-    ProductFactory,
     PropertyTagFactory,
     TenantFactory,
 )
@@ -127,52 +133,6 @@ def test_a_canonical_only_product_is_seeded_with_the_size_it_declares(operator, 
     assert FALLBACK_PLACEHOLDER not in placeholders, (
         "the product declared 970x250; a 300x250 placeholder is the dead-derivation fallback"
     )
-
-
-def test_an_edit_that_changes_the_declaration_reseeds_the_placeholder(operator, gam_seller, factory_session):
-    """The third call site: the edit path reads the product's POST-edit declarations.
-
-    ``line_item_type`` is required to reach the regeneration branch -- the handler only
-    rebuilds the default config in explicit mode and preserves the stored config otherwise.
-
-    THIS POST IS NOT WHAT A BROWSER SENDS, and that is stated rather than glossed: measured
-    across ``templates/**/*.html``, no shipped template renders an input named
-    ``line_item_type``, so the branch is unreachable through the UI today. This test reaches
-    it directly because the branch is still the handler's contract -- and reaching it is how
-    the ``NameError`` it had carried for its whole life was found (salesagent-bd8i3, which
-    owns the question of whether the branch should exist at all).
-    """
-    tenant, _ = gam_seller
-    product = ProductFactory(
-        tenant=tenant,
-        product_id="reseeded_product",
-        format_ids=None,
-        format_options=[{"format_kind": "image", "params": {"width": 300, "height": 600}}],
-        implementation_config={"priority": 8, "creative_placeholders": [{"width": 300, "height": 600}]},
-    )
-    PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
-    factory_session.commit()
-
-    response = operator.post(
-        f"/tenant/{tenant.tenant_id}/products/reseeded_product/edit",
-        data={
-            "name": "Reseeded Product",
-            "pricing_model_0": "cpm_fixed",
-            "currency_0": "USD",
-            "rate_0": "10.00",
-            "delivery_measurement_provider": "publisher",
-            "line_item_type": "STANDARD",
-            "format_options": json.dumps([IMAGE_970x250]),
-        },
-        follow_redirects=False,
-    )
-    assert response.status_code in (302, 303), response.data[:3000]
-
-    factory_session.expire_all()
-    edited = factory_session.scalars(
-        select(Product).filter_by(tenant_id=tenant.tenant_id, product_id="reseeded_product")
-    ).first()
-    assert edited.implementation_config["creative_placeholders"] == [EXPECTED_970x250]
 
 
 def test_a_legacy_only_product_is_seeded_from_the_entry_it_stores(operator, gam_seller, factory_session):

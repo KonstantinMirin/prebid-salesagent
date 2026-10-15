@@ -1718,43 +1718,19 @@ def edit_product(tenant_id, product_id):
                             product.property_ids = None
                             attributes.flag_modified(product, "properties")
 
-                # Get pricing based on line item type (GAM form) or delivery type (other adapters)
-                line_item_type = form_data.get("line_item_type")
-
-                if line_item_type:
-                    # GAM form: map line item type to delivery type
-                    if line_item_type in ["STANDARD", "SPONSORSHIP"]:
-                        product.delivery_type = "guaranteed"
-                    elif line_item_type in ["PRICE_PRIORITY", "HOUSE"]:
-                        product.delivery_type = "non_guaranteed"
-
-                # Update implementation_config with GAM-specific fields
-                # Note: This must run even if line_item_type is not present (automatic mode)
+                # No ``line_item_type`` is read here. The GAM form does not submit one -- no
+                # template in this repository declares a field by that name -- so the branches
+                # that used to hang off it could not execute, and one of them had carried a
+                # NameError for its whole life behind that unsatisfiable guard.
+                #
+                # Two gaps the deletion makes visible are tracked rather than papered over, and
+                # both predate it: this path never recomputes ``product.delivery_type`` from the
+                # pricing options it replaces below, and an edit that changes the product's
+                # format declarations leaves the seeded ``creative_placeholders`` stale. A
+                # reseed must key on the declarations having changed, never on a GAM form field.
                 if adapter_type == "google_ad_manager":
-                    from src.services.gam_product_config_service import GAMProductConfigService
-
                     # Start with existing config to preserve fields not in the form
                     base_config = product.implementation_config.copy() if product.implementation_config else {}
-
-                    # Only regenerate default config if we have line_item_type (explicit mode)
-                    # Otherwise, preserve existing config structure
-                    if line_item_type:
-                        gam_config_service = GAMProductConfigService()
-                        # ``validated_formats`` and not ``formats``: the latter is a name this
-                        # function never binds, so this line raised NameError on every path
-                        # that reached it and the broad except below flashed it at the
-                        # operator. It went unseen because nothing submits the
-                        # ``line_item_type`` that guards the branch.
-                        #
-                        # ``product.format_options`` and not the submitted value: the arms are
-                        # written above, an edit submitting one arm leaves the other at its
-                        # stored value, and the placeholder must follow the product's
-                        # POST-edit declarations.
-                        default_config = gam_config_service.generate_default_config(
-                            product.delivery_type, validated_formats, format_options=product.format_options
-                        )
-                        # Merge default config into base_config (preserving other fields)
-                        base_config.update(default_config)
 
                     # Add ad unit/placement targeting if provided
                     ad_unit_ids = form_data.get("targeted_ad_unit_ids", "").strip()
@@ -1785,11 +1761,12 @@ def edit_product(tenant_id, product_id):
 
                     base_config["include_descendants"] = form_data.get("include_descendants") == "on"
 
-                    # Add GAM settings
-                    if form_data.get("line_item_type"):
-                        base_config["line_item_type"] = form_data["line_item_type"]
-                    if form_data.get("priority"):
-                        base_config["priority"] = int(form_data["priority"])
+                    # ``line_item_type`` and ``priority`` were written here from the form. They
+                    # were the only fields this handler read that no template submits, so
+                    # neither could ever be set. No other surface sets them either: the form
+                    # parser that reads both, ``GAMProductConfigService.parse_form_config``, has
+                    # no callers at all. An operator who needs to change them edits the stored
+                    # config directly.
 
                     # Parse targeting template from form (includes custom targeting key-value pairs)
                     targeting_template_json = form_data.get("targeting_template", "{}")
