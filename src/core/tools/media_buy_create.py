@@ -3355,7 +3355,9 @@ async def _create_media_buy_impl(
                     if schema_product.format_ids:
                         formats_list = [fmt.id for fmt in schema_product.format_ids]
                     schema_product.implementation_config = gam_validator.generate_default_config(
-                        delivery_type=delivery_type_str, formats=formats_list
+                        delivery_type=delivery_type_str,
+                        formats=formats_list,
+                        format_options=schema_product.format_options,
                     )
 
                     # Persist the auto-generated config to database

@@ -2,21 +2,195 @@
 
 import json
 import logging
+from collections.abc import Iterable, Sequence
 from typing import Any
 
+from adcp.canonical_formats import upgrade_legacy_format_id
+from pydantic import ValidationError
+
+from src.core.format_satisfaction import product_declarations
+
 logger = logging.getLogger(__name__)
+
+#: The slot a product gets when no declaration it carries states one. ``validate_config``
+#: below refuses a config with no placeholder, and this function SEEDS a config an operator
+#: edits afterwards, so it answers with a default rather than refusing.
+_FALLBACK_SIZE = (300, 250)
+
+#: The canonical kinds GAM traffics as a native unit. A native line item takes a 1x1 slot
+#: and lets its creative template decide the rendered size -- ``managers/orders.py`` renders
+#: ``is_native`` as ``creativeSizeType: "NATIVE"`` and pairs it with a 1x1 size, and that is
+#: where this set is grounded. ``formats/canonical/native_in_feed.json``'s
+#: ``main_image_sizes`` is the native image ASSET's size, not the slot's, so it is
+#: deliberately not read here.
+_NATIVE_KINDS = frozenset({"native_in_feed"})
+
+
+def _placeholder(width: int, height: int, *, is_native: bool = False) -> dict[str, Any]:
+    """One GAM creative placeholder: a slot size, and how many creatives GAM waits for.
+
+    ``int()`` because the pinned params generate scalar wrappers over ``int``
+    (``adcp.types._scalar.ScalarInt``); the value compares and serializes as an ``int``
+    either way, and naming the type here keeps the seeded document plain.
+    """
+    return {"width": int(width), "height": int(height), "expected_creative_count": 1, "is_native": is_native}
+
+
+def _canonical_placeholders(format_options: Any) -> list[dict[str, Any]]:
+    """The GAM slots a product's canonical ``format_options[]`` declare.
+
+    The CANONICAL arm, read as a first-class input. ``format_kind`` is the identity every
+    layer of this seller shares, and ``core/product-format-declaration.json`` (AdCP 3.2.3)
+    makes ``params`` the per-kind canonical schema -- so a product's slot size is stated
+    there, in the arm the pin calls "the AdCP 3.2 authoring path", and not only on the
+    deprecated one.
+
+    ``product_declarations`` does the shape normalization, because this is reached with
+    stored DOCUMENTS from an ORM row (the admin paths) and with the pinned union's
+    validated ARMS from a converted product (``_create_media_buy_impl``). It also drops a
+    declaration the union refuses, with a warning, rather than raising -- a product one of
+    whose rows is corrupt must not fail a media buy.
+
+    THE DIMENSION SOURCES, in the order the canonical schemas state them: ``sizes[]`` (a
+    declaration accepting several fixed sizes is several GAM slots), then fixed
+    ``width``/``height``. A declaration stating only a RANGE -- ``min_width``/``max_width``
+    on ``image``, ``video_hosted`` and ``video_vast`` -- yields NO placeholder. A range is
+    not a slot size, and picking an endpoint would be the same invention as the 640x480
+    constant this replaced; the caller seeds the fallback and says so.
+    """
+    placeholders: list[dict[str, Any]] = []
+    for declaration in product_declarations(format_options):
+        kind = str(declaration.format_kind)
+        if kind in _NATIVE_KINDS:
+            placeholders.append(_placeholder(1, 1, is_native=True))
+            continue
+
+        params = declaration.params
+        sizes = getattr(params, "sizes", None)
+        if sizes:
+            placeholders.extend(_placeholder(size.width, size.height) for size in sizes)
+            continue
+
+        width, height = getattr(params, "width", None), getattr(params, "height", None)
+        if width and height:
+            placeholders.append(_placeholder(width, height))
+            continue
+
+        logger.warning(
+            "format_options declaration of kind %r states no fixed slot size, so it contributes "
+            "no GAM creative placeholder.",
+            kind,
+        )
+    return placeholders
+
+
+def _legacy_placeholders(formats: Any) -> list[dict[str, Any]]:
+    """The GAM slots a product's deprecated ``format_ids[]`` imply.
+
+    ONE call answers both halves of the question. ``upgrade_legacy_format_id`` keeps the
+    width and height a stored entry CARRIES (the format picker emits
+    ``{agent_url, id: "display_image", width, height}`` for a parameterized selection, and
+    ``_parse_format_entries`` stores it) and derives them from the id when the entry states
+    none (``display_728x90_image`` -> 728x90). It accepts the entry as a document, a model
+    or a bare string, so the two storage patterns need no branch here.
+
+    THE EIGHT-MEMBER DIMENSION MAP THAT STOOD HERE IS GONE, and not only because nothing
+    reached it: measured against ``tests/fixtures/creative_formats/reference_formats.json``,
+    its keys (``display_300x250``, ``display_320x100``, ``display_300x50``) match no id in
+    the catalogue, which carries ``display_300x250_image`` / ``_html`` / ``_generative`` and
+    a ``display_336x280`` the map lacked. The dimensions are in the data.
+
+    An entry the SDK cannot read is DROPPED with a warning rather than raising, the same
+    choice ``format_resolver.format_identity_or_none`` makes about the same arm and for the
+    same reason: this runs inside ``_create_media_buy_impl``'s auto-generation, where one
+    unusable row must not refuse the buy.
+    """
+    placeholders: list[dict[str, Any]] = []
+    for entry in formats or []:
+        try:
+            upgraded = upgrade_legacy_format_id(entry)
+        except (ValidationError, ValueError, TypeError, AttributeError):
+            logger.warning("Unusable stored format reference, ignored: %r", entry)
+            continue
+
+        if upgraded.width and upgraded.height:
+            placeholders.append(_placeholder(upgraded.width, upgraded.height))
+        else:
+            logger.warning(
+                "Format reference %r states no dimensions and none derive from its id, so it "
+                "contributes no GAM creative placeholder.",
+                upgraded.id,
+            )
+    return placeholders
+
+
+def _one_per_slot(placeholders: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """*placeholders* with each distinct slot kept once, in declared order.
+
+    Two declarations reaching the same size is ordinary -- ``display_728x90_image`` and a
+    picker-parameterized ``display_image`` at 728x90 are one slot -- and emitting it twice
+    tells GAM to wait for two creatives there, since ``expected_creative_count`` is 1 per
+    placeholder. That is the "X out of Y expected" state ``managers/orders.py`` already
+    filters for on the media-buy side.
+    """
+    by_slot: dict[tuple[int, int, bool], dict[str, Any]] = {}
+    for placeholder in placeholders:
+        by_slot.setdefault(
+            (placeholder["width"], placeholder["height"], placeholder["is_native"]),
+            placeholder,
+        )
+    return list(by_slot.values())
+
+
+def _creative_placeholders(formats: Any, format_options: Any) -> list[dict[str, Any]]:
+    """The GAM creative placeholders the format declarations a product carries imply.
+
+    THE CANONICAL ARM ANSWERS WHEN IT STATES A SIZE. ``core/product-format-declaration.json``
+    makes ``format_options[]`` "the closed set of accepted formats for this product" and says
+    legacy named formats "MUST be normalized to canonical declarations before comparison", so
+    the two arms are not unioned -- a product declaring one shape on both arms would
+    otherwise get that slot counted twice.
+
+    The deprecated arm is consulted when the canonical one yields nothing, which covers a
+    legacy-only product AND a canonical declaration stating only a range. Falling through
+    rather than stopping is the deliberate choice: a seeded size the operator can correct is
+    more use than the fallback, and the one product this reads oddly for -- a canonical video
+    range beside a legacy display size -- is mis-authored either way.
+    """
+    placeholders = _canonical_placeholders(format_options) or _legacy_placeholders(formats)
+    if placeholders:
+        return _one_per_slot(placeholders)
+
+    logger.warning(
+        "No format declaration this product carries states a GAM slot size; seeding the "
+        "%dx%d default, which an operator must correct if the product's creatives are a "
+        "different size.",
+        *_FALLBACK_SIZE,
+    )
+    return [_placeholder(*_FALLBACK_SIZE)]
 
 
 class GAMProductConfigService:
     """Handles GAM-specific product configuration management."""
 
     @staticmethod
-    def generate_default_config(delivery_type: str, formats: list[str] | None = None) -> dict[str, Any]:
+    def generate_default_config(
+        delivery_type: str,
+        formats: Sequence[dict[str, Any] | str] | None = None,
+        *,
+        format_options: Any = None,
+    ) -> dict[str, Any]:
         """Generate default GAM implementation config based on product delivery type.
 
         Args:
             delivery_type: "guaranteed" or "non_guaranteed"
-            formats: List of format IDs to derive creative placeholders
+            formats: the product's deprecated ``format_ids`` arm, as the stored entries
+                (``{agent_url, id, width?, height?, duration_ms?}``) or as bare id strings.
+            format_options: the product's canonical ``format_options`` arm, as the stored
+                documents or as the pinned union's validated arms. ``Any`` for the reason
+                ``format_satisfaction.product_declarations`` states: this is reached from an
+                ORM row and from a converted product, and that function is what reconciles
+                the two shapes.
 
         Returns:
             Dictionary of GAM implementation config with sensible defaults
@@ -52,86 +226,9 @@ class GAMProductConfigService:
                 }
             )
 
-        # Generate creative placeholders from formats if provided
-        if formats:
-            base_config["creative_placeholders"] = GAMProductConfigService._generate_creative_placeholders(formats)
-        else:
-            # Default fallback placeholder
-            base_config["creative_placeholders"] = [
-                {"width": 300, "height": 250, "expected_creative_count": 1, "is_native": False}
-            ]
+        base_config["creative_placeholders"] = _creative_placeholders(formats, format_options)
 
         return base_config
-
-    @staticmethod
-    def _generate_creative_placeholders(formats: list[str]) -> list[dict[str, Any]]:
-        """Generate creative placeholders from format IDs.
-
-        Args:
-            formats: List of format IDs (e.g., ["display_300x250", "display_728x90"])
-
-        Returns:
-            List of creative placeholder dictionaries for GAM
-        """
-        placeholders = []
-
-        # Common format mappings (format_id -> dimensions)
-        format_dimensions = {
-            "display_300x250": (300, 250),
-            "display_728x90": (728, 90),
-            "display_160x600": (160, 600),
-            "display_300x600": (300, 600),
-            "display_970x250": (970, 250),
-            "display_320x50": (320, 50),
-            "display_320x100": (320, 100),
-            "display_300x50": (300, 50),
-        }
-
-        for format_item in formats:
-            # Handle both format storage patterns:
-            # 1. Simple string: "display_300x250"
-            # 2. Dict with format_id: {"format_id": "display_300x250", "name": "...", ...}
-            if isinstance(format_item, dict):
-                format_id = format_item.get("format_id", "")
-            else:
-                format_id = format_item
-
-            if format_id in format_dimensions:
-                width, height = format_dimensions[format_id]
-                placeholders.append(
-                    {
-                        "width": width,
-                        "height": height,
-                        "expected_creative_count": 1,
-                        "is_native": False,
-                    }
-                )
-            elif format_id.startswith("native_"):
-                # Native format - use default dimensions
-                placeholders.append(
-                    {
-                        "width": 1,
-                        "height": 1,
-                        "expected_creative_count": 1,
-                        "is_native": True,
-                    }
-                )
-            elif format_id.startswith("video_"):
-                # Video format - use standard video dimensions
-                placeholders.append(
-                    {
-                        "width": 640,
-                        "height": 480,
-                        "expected_creative_count": 1,
-                        "is_native": False,
-                    }
-                )
-
-        # If no placeholders generated, return default
-        if not placeholders:
-            placeholders = [{"width": 300, "height": 250, "expected_creative_count": 1, "is_native": False}]
-
-        return placeholders
 
     @staticmethod
     def validate_config(config: dict[str, Any]) -> tuple[bool, str | None]:

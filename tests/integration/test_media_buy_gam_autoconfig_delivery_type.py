@@ -55,8 +55,15 @@ class TestGAMAutoConfigDeliveryTypeNormalization:
         real_generate = GAMProductConfigService.generate_default_config
         captured: dict = {}
 
-        def _spy(delivery_type, formats=None):
-            config = real_generate(delivery_type, formats=formats)
+        # ``format_options`` is accepted because the production call now passes the
+        # product's canonical arm, and NOT asserted here: this product is legacy-only
+        # (``ProductFactory`` defaults the canonical arm to None), so the value would be
+        # None whether the call site passes it or the spy defaults it -- an assertion that
+        # cannot tell those apart. The call site is graded by
+        # ``test_canonical_autoconfig_seeds_the_declared_size`` below, with a product that
+        # declares one.
+        def _spy(delivery_type, formats=None, *, format_options=None):
+            config = real_generate(delivery_type, formats=formats, format_options=format_options)
             captured["delivery_type"] = delivery_type
             captured["config"] = config
             return config
@@ -89,3 +96,56 @@ class TestGAMAutoConfigDeliveryTypeNormalization:
         assert captured["delivery_type"] == "guaranteed"
         # ... which makes generate_default_config fall through to non_guaranteed.
         assert captured["config"]["line_item_type"] == "STANDARD"
+
+    def test_canonical_autoconfig_seeds_the_declared_size(self, integration_db):
+        """The auto-config path hands the product's CANONICAL arm to the seeder.
+
+        The fourth call site of ``generate_default_config`` and the only one outside the
+        admin. Before this, it passed ``formats`` alone, so a canonically-authored product
+        was auto-configured with the 300x250 fallback contradicting its own declaration --
+        and that value is the one GAM traffics, because ``gam/managers/orders.py`` falls
+        back to ``impl_config["creative_placeholders"]`` for a package naming no
+        ``format_ids``, which is exactly this product.
+
+        970x250 and not 300x250: the fallback is 300x250, so an assertion expecting it
+        would pass whether the canonical arm is read or ignored.
+
+        The spy CALLS THROUGH to the real generator, so ``captured["config"]`` is the
+        genuine seeded document and not a mock's answer. That pass-through is what makes
+        this grade the plumbing: if the call site stopped passing ``format_options``, the
+        spy would receive None, the real generator would fall back, and 300x250 would fail
+        this assertion.
+        """
+        real_generate = GAMProductConfigService.generate_default_config
+        captured: dict = {}
+
+        def _spy(delivery_type, formats=None, *, format_options=None):
+            config = real_generate(delivery_type, formats=formats, format_options=format_options)
+            captured["config"] = config
+            return config
+
+        with MediaBuyCreateEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
+            tenant, _principal = env.setup_default_data()
+            PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
+            product = ProductFactory(
+                tenant=tenant,
+                product_id="prod_canonical",
+                delivery_type="guaranteed",
+                implementation_config=None,  # force the auto-config branch
+                # Canonically authored: the canonical arm on AND the legacy arm off, which
+                # is what makes ``formats`` empty and the canonical arm the only input.
+                format_options=[{"format_kind": "image", "params": {"width": 970, "height": 250}}],
+                format_ids=None,
+                property_tags=["all_inventory"],
+            )
+            PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
+
+            env.mock["adapter"].return_value.__class__ = GoogleAdManager
+
+            with patch.object(GAMProductConfigService, "generate_default_config", side_effect=_spy):
+                env.call_impl(req=_make_request("prod_canonical"))
+
+        assert captured, "GAM auto-config branch did not run -- generate_default_config was never called"
+        assert captured["config"]["creative_placeholders"] == [
+            {"width": 970, "height": 250, "expected_creative_count": 1, "is_native": False}
+        ]
