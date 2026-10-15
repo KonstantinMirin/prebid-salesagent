@@ -7,13 +7,20 @@ All classes are re-exported from src.core.schemas for backward compatibility.
 from typing import Annotated, Any, ClassVar
 
 from adcp.types import BrandReference as LibraryBrandReference
-from adcp.types import LegacyGetProductsRequest as LibraryGetProductsRequest
-from adcp.types import LegacyGetProductsResponse as LibraryGetProductsResponse
-from adcp.types import LegacyPlacement as LibraryPlacement
-from adcp.types import LegacyProduct as LibraryProduct
-from adcp.types import LegacyProductFilters as LibraryFilters
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
+
+# The legacy arm is imported from ``adcp.types.legacy``, the module that contains ONLY it.
+# See the note in ``_base.py`` on why the module and not the ``adcp.types`` facade. All five
+# names have a canonical twin, and reaching them through the facade makes which model this
+# seller extends a property of the ``Legacy`` prefix: three of the twins (Product, Placement,
+# ProductFilters) DROP ``format_ids`` outright, and the request/response pair keeps its own
+# fields while repointing the nested item types (filters, products) at the canonical models.
+from adcp.types.legacy import LegacyGetProductsRequest as LibraryGetProductsRequest
+from adcp.types.legacy import LegacyGetProductsResponse as LibraryGetProductsResponse
+from adcp.types.legacy import LegacyPlacement as LibraryPlacement
+from adcp.types.legacy import LegacyProduct as LibraryProduct
+from adcp.types.legacy import LegacyProductFilters as LibraryFilters
 from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode

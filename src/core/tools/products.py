@@ -8,8 +8,8 @@ import logging
 import time
 from typing import Any, cast
 
-from adcp.types import LegacyProduct as LibraryProduct
 from adcp.types import PropertyListReference
+from adcp.types.legacy import LegacyProduct as LibraryProduct
 
 # The FIXME(#1388) import of FormatReferenceStructuredObject that stood here is gone with
 # its only use: standard_formats_only's isinstance(str | dict | FormatId) chain, which was

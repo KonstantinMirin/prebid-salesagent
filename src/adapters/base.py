@@ -11,7 +11,13 @@ if TYPE_CHECKING:
     from src.core.schemas import Snapshot, Targeting
 
 from adcp.types import BrandReference
-from adcp.types.aliases import Package as ResponsePackage
+
+# ``LegacyPackage`` from the module that contains only the legacy arm, not the unprefixed
+# ``adcp.types.aliases.Package`` this used to read. The two names differ by the word
+# ``aliases``: ``adcp.types.aliases.Package`` is the generated package (format_ids,
+# format_ids_pending, format_ids_to_provide) while ``adcp.types.Package`` is the canonical one
+# without them. See the note in ``src/core/schemas/_base.py``.
+from adcp.types.legacy import LegacyPackage as ResponsePackage
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from rich.console import Console
 

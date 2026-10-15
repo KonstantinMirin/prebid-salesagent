@@ -11,21 +11,6 @@ from enum import Enum
 from typing import Any, ClassVar, Literal
 
 from adcp.types import CreativeStatus
-from adcp.types import (
-    LegacyListCreativeFormatsRequest as LibraryListCreativeFormatsRequest,
-)
-from adcp.types import (
-    LegacyListCreativeFormatsResponse as LibraryListCreativeFormatsResponse,
-)
-from adcp.types import (
-    LegacyListCreativesRequest as LibraryListCreativesRequest,
-)
-from adcp.types import (
-    LegacyListCreativesResponse as LibraryListCreativesResponse,
-)
-from adcp.types import (
-    LegacySyncCreativesRequest as LibrarySyncCreativesRequest,
-)
 from adcp.types import PaginationResponse as LibraryResponsePagination
 from adcp.types import (
     QuerySummary as LibraryQuerySummary,
@@ -53,6 +38,23 @@ from adcp.types.domains.creative.sync_creatives_response import (
 from adcp.types.domains.enums.digital_source_type import DigitalSourceType as LibraryDigitalSourceType
 from adcp.types.domains.media_buy.get_media_buys_response import (
     CreativeApproval as LibraryGetMediaBuysCreativeApproval,
+)
+
+# The legacy arm from the module that contains only it — see the note in ``_base.py``.
+from adcp.types.legacy import (
+    LegacyListCreativeFormatsRequest as LibraryListCreativeFormatsRequest,
+)
+from adcp.types.legacy import (
+    LegacyListCreativeFormatsResponse as LibraryListCreativeFormatsResponse,
+)
+from adcp.types.legacy import (
+    LegacyListCreativesRequest as LibraryListCreativesRequest,
+)
+from adcp.types.legacy import (
+    LegacyListCreativesResponse as LibraryListCreativesResponse,
+)
+from adcp.types.legacy import (
+    LegacySyncCreativesRequest as LibrarySyncCreativesRequest,
 )
 from pydantic import (
     AwareDatetime,

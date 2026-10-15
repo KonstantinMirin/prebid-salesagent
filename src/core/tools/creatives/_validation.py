@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from adcp.types import LegacyCreativeAsset as CreativeAsset
+from adcp.types.legacy import LegacyCreativeAsset as CreativeAsset
 
 from src.core.errors.details import EntityRefDetails, ValidationDetails
 from src.core.exceptions import (

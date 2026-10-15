@@ -25,7 +25,7 @@ from adcp.types import (
     UrlFormatAsset,
     VideoFormatAsset,
 )
-from adcp.types import LegacyFormat as AdcpFormat
+from adcp.types.legacy import LegacyFormat as AdcpFormat
 from adcp.utils.format_assets import get_format_assets
 
 # Format subclass preserved through backward-compatibility helper (PEP 695 type param below).

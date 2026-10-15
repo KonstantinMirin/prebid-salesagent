@@ -50,25 +50,6 @@ from adcp.types import GetAdcpCapabilitiesRequest as LibraryGetAdcpCapabilitiesR
 from adcp.types import GetAdcpCapabilitiesResponse as LibraryGetAdcpCapabilitiesResponse
 from adcp.types import GetMediaBuysRequest as LibraryGetMediaBuysRequest
 from adcp.types import GetTaskStatusResponse as LibraryGetTaskStatusResponse
-from adcp.types import LegacyCreateMediaBuyRequest as LibraryCreateMediaBuyRequest
-
-# Import main request/response types from stable API.
-#
-# ``LegacyFormat``, not ``Format``: adcp 9 (AdCP 3.2) repoints the public name ``Format``
-# at the canonical format DECLARATION (``adcp.types.canonical_creative.Format`` — eleven
-# fields: format_kind, params, format_option_id, …), and the 3.1.1 named-format model this
-# seller extends — format_id, assets, renders, canonical_parameters, twenty fields — is
-# exported as ``LegacyFormat``. The two are different models with one name between them,
-# so an unprefixed import silently rebinds the base. Moving onto the canonical model is
-# the creative migration (salesagent-3xcdk), not the bump.
-from adcp.types import LegacyFormat as LibraryFormat
-from adcp.types import LegacyGetMediaBuysResponse as LibraryGetMediaBuysResponse
-from adcp.types import LegacyPackageRequest as LibraryPackageRequest
-
-# Import types from stable API (per adcp 2.9.0+ - all types now in stable)
-# Note: AffectedPackage was removed in 2.9.0, use Package instead
-from adcp.types import LegacyPackageUpdate as LibraryPackageUpdate
-from adcp.types import LegacyUpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
 from adcp.types import ListTasksRequest as LibraryListTasksRequest
 from adcp.types import ListTasksResponse as LibraryListTasksResponse
 
@@ -81,10 +62,13 @@ from adcp.types import ListTasksResponse as LibraryListTasksResponse
 # LegacyUpdateMediaBuySuccessResponse, and NO LegacyCreateMediaBuy*Response and no
 # LegacyUpdateMediaBuySubmittedResponse. For the four arms with no legacy name the generated
 # module is the only way to name the class 6.6.0 gave, so that is what these import.
+#
+# This one stays at ``adcp.types.aliases`` because ``adcp.types.legacy`` does not export it —
+# the same incompleteness, measured: of the 22 Legacy* names this repo imports, 21 are present
+# in ``adcp.types.legacy`` and this is the one that is not.
 from adcp.types.aliases import (
     LegacyUpdateMediaBuyErrorResponse as AdCPUpdateMediaBuyError,
 )
-from adcp.types.aliases import Package as AdCPPackage
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.base import AdcpRequest as LibraryAdcpRequest
 from adcp.types.canonical_creative import CanonicalFormatKindStr
@@ -152,6 +136,49 @@ from adcp.types.domains.protocol.get_task_status_request import (
     GetTaskStatusRequest as LibraryGetTaskStatusRequest,
 )
 from adcp.types.domains.protocol.list_tasks_response import Task as LibraryTaskSummary
+
+# THE LEGACY ARM IS IMPORTED FROM ``adcp.types.legacy``, NOT FROM THE ``adcp.types`` FACADE,
+# and that is the whole mechanism keeping these bases right.
+#
+# adcp 9 (AdCP 3.2) repoints the unprefixed public names at the CANONICAL models and publishes
+# ``Legacy*`` for the 3.1.1 generated ones. Both arms are reachable from ``adcp.types``, so
+# there the arm is carried by the ``Legacy`` prefix — ``Format`` is the canonical format
+# DECLARATION (eleven fields: format_kind, params, format_option_id, …) while ``LegacyFormat``
+# is the named-format model this seller extends (format_id, assets, renders,
+# canonical_parameters — twenty fields). Two different models with one name between them, and
+# a one-word edit swaps which one this seller serves.
+#
+# ``adcp.types.legacy`` contains only the legacy arm: 63 public names, of which the only
+# unprefixed four are ``FormatReferenceStructuredObject`` and three asset-coercion helpers.
+# No canonical model name resolves there AT ALL. So dropping the prefix at one of these import
+# sites is an ImportError at import time rather than a silently rebound base, and naming a
+# canonical model instead means naming a different MODULE
+# (``adcp.types.canonical_creative``) — a visible edit, not a prefix slip. Every name below is
+# the same class object the facade returns, verified per name; this is a change of address, not
+# of binding.
+#
+# Measured, for the three names imported here whose canonical twin is not field-identical:
+# Format loses 20 declared fields, Package loses 3 (format_ids, format_ids_pending,
+# format_ids_to_provide) and PackageRequest loses format_ids. The other twins keep their own
+# field set and repoint nested item types instead. Moving onto the canonical models is the
+# creative migration (salesagent-3xcdk), not the bump.
+from adcp.types.legacy import LegacyCreateMediaBuyRequest as LibraryCreateMediaBuyRequest
+from adcp.types.legacy import LegacyFormat as LibraryFormat
+from adcp.types.legacy import LegacyGetMediaBuysResponse as LibraryGetMediaBuysResponse
+
+# ``LegacyPackage``, and the rename is the point. This used to read
+# ``from adcp.types.aliases import Package as AdCPPackage``, where the arm was carried by the
+# word ``aliases`` and nothing else: ``adcp.types.aliases.Package`` is the GENERATED package
+# (format_ids, format_ids_pending, format_ids_to_provide) while ``adcp.types.Package`` is the
+# canonical one without them. An unprefixed name whose meaning depends on which module you
+# took it from is worse than a prefixed one, because there is no prefix to notice — and
+# ``LibraryPackage`` below is used as a base class.
+from adcp.types.legacy import LegacyPackage as AdCPPackage
+from adcp.types.legacy import LegacyPackageRequest as LibraryPackageRequest
+
+# Note: AffectedPackage was removed in 2.9.0, use Package instead
+from adcp.types.legacy import LegacyPackageUpdate as LibraryPackageUpdate
+from adcp.types.legacy import LegacyUpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import CODE_TABLE, ErrorCodeT
