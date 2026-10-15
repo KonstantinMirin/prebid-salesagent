@@ -33,9 +33,13 @@ from adcp.types import FormatAssetUnion, RepeatableAssetGroup, Responsive
 from adcp.types.domains.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
 from pydantic import BaseModel
 
+from src.core.creative_agent_registry import PUBLIC_DEFAULT_AGENT_URL
 from src.core.schemas import Format, FormatId
 
-AGENT_URL = "https://creative.adcontextprotocol.org"
+#: Derived, not re-typed -- see ``tests.factories.creative.DEFAULT_CREATIVE_AGENT_URL``, which
+#: is the same value under the name the step modules import. Both are the federated identity
+#: the catalog's own 71 entries declare; neither is a destination.
+AGENT_URL = PUBLIC_DEFAULT_AGENT_URL
 
 # ── Asset class mapping ──────────────────────────────────────────────
 
@@ -247,6 +251,43 @@ def pick_reference_formats(predicate: Callable[[Format], bool], min_count: int =
             "minting a synthetic one."
         )
     return matches
+
+
+def resolvable_format_ref(format_id: str) -> dict[str, str]:
+    """A creative's claimed legacy reference, CHECKED against the catalog that answers it.
+
+    THE door for authoring a ``format_id`` a creative claims. A claimed reference is the one
+    format literal in a fixture that production RESOLVES over the wire -- ``_validation.py``
+    hands it to ``fetch_format_spec`` and refuses the creative REFERENCE_NOT_FOUND when the
+    agent does not serve it. A product's ``format_ids`` arm is a different thing: it is
+    compared as an identity and never dialled, so it is legitimately free of the catalog and
+    does not come through here.
+
+    Refusing here is what makes an unserved id visible IN PROCESS. The in-process harness
+    normally mocks the registry to answer every resolution with one stub, so a claim naming a
+    format nobody serves reads green on three transports and fails only on e2e_rest, where
+    the resolution is real -- which is how ``video_640x480`` survived in
+    BR-UC-FORMAT-SATISFACTION until a box run graded it (#1418, the capture's own issue).
+
+    The refusal is shaped after ``tests/integration/test_creative_agent_live.py``'s: say what
+    is wrong, say where the authority is, print the remedy.
+    """
+    from src.core.format_cache import load_reference_formats
+
+    catalog = {fmt.format_id.id for fmt in load_reference_formats()}
+    if format_id not in catalog:
+        raise ValueError(
+            f"{format_id!r} is not served by the creative agent this run reaches, so a creative "
+            "claiming it is refused REFERENCE_NOT_FOUND. The authority is the pinned capture "
+            "tests/fixtures/creative_formats/reference_formats.json "
+            f"({len(catalog)} formats). Name one of those, or select by property with "
+            "pick_reference_format()/pick_reference_formats(); if the format SHOULD exist, "
+            "register it in the creative agent's own registry and recapture with "
+            "scripts/refresh-reference-formats.py. Do not reach for a literal the catalog "
+            "does not carry -- the in-process registry mock resolves anything, so it would "
+            "read green here and fail only on e2e_rest."
+        )
+    return {"agent_url": AGENT_URL, "id": format_id}
 
 
 def _category_of(fmt: Format) -> str | None:
