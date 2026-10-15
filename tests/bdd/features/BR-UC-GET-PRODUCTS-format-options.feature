@@ -20,23 +20,97 @@ Feature: Canonical format options a seller stores are announced to buyers on the
   # and it is only worth anything if the assertion survives to the buyer, which is what the
   # first scenario grades.
   #
+  # The deprecated arm is NEVER DERIVED from those declarations: projecting a declaration's
+  # v1_format_ref into format_ids is a MAY in core/product.json and this seller declines it,
+  # on a field removed in AdCP 4.0 whose only read path carries the same deprecation. What
+  # the same sentence makes a MUST is that two PRESENT fields "MUST describe the same
+  # underlying formats" — so a product whose two authored arms disagree is served with a
+  # non-fatal producer advisory and no legacy arm, rather than refused. That shape is graded
+  # by the canonical_formats storyboard's get_seeded_divergent_product step, which a
+  # refusing seller fails.
+  #
   # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/product.json
   # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/product-format-declaration.json
+  # @source repo=adcp ref=v3.2.3 path=enums/error-code.json
+  # @source repo=adcp ref=v3.2.3 path=docs/creative/canonical-formats.mdx
+  # @source repo=adcp ref=v3.2.3 path=dist/compliance/3.2.3/protocols/media-buy/scenarios/canonical_formats.yaml
 
   Background:
     Given a tenant is configured for product discovery
 
   @T-UC-GET-PRODUCTS-format-options-v1-ref @format_option_announcement @requires_db
   Scenario: a stored declaration reaches the buyer with its v1_format_ref intact
-    Given the seller stores a canonical format option for "image" with a v1_format_ref to "display_300x250"
+    Given the seller stores a canonical format option for "image" with a v1_format_ref to "display_300x250_image"
     When the buyer requests products
     Then the announced format option declares format_kind "image" and params the seller stored
-    And the announced format option carries v1_format_ref naming "display_300x250"
+    And the announced format option carries v1_format_ref naming "display_300x250_image"
+    And the response carries no format-declaration advisory
     # Both halves are asserted because either alone is satisfiable without the other. A
     # declaration that arrived with its format_kind and params but no v1_format_ref would
     # pass the first outcome while having lost the one field that makes a legacy projection
     # a lookup — which is exactly what happens on the sibling SDK surface, where
     # v1_format_ref parses into a private attribute and never reaches the wire.
+    #
+    # This fixture is DUAL-authored — the factory's legacy arm plus the declaration — and
+    # the ref it asserts is now the id that arm actually names. It asserted
+    # "display_300x250" against an arm naming "display_300x250_image", which is the
+    # DIVERGENT shape and a different scenario (below); the two Thens above passed either
+    # way, so the fixture straddled two behaviours and said so nowhere. The third outcome
+    # is what pins it: this is the AGREEING case, and it must not advise.
+
+  @T-UC-GET-PRODUCTS-format-options-ref-not-projected @format_option_announcement @requires_db
+  Scenario: a canonically-authored product's asserted v1_format_ref is announced but never projected
+    Given the seller stores a canonically-authored product for "image" asserting a v1_format_ref to "display_300x250_image"
+    When the buyer requests products
+    Then the announced format option carries v1_format_ref naming "display_300x250_image"
+    And the announced product carries no format_ids key at all
+    And the response carries no format-declaration advisory
+    # THE SELLER DOES NOT PROJECT, and this is the scenario that says so. The product stores
+    # no legacy arm and its declaration asserts a v1 reference, which is precisely the shape
+    # a projecting seller would dual-emit — core/product.json on format_ids: "sellers MAY
+    # additionally project those declarations to `format_ids` for legacy buyers". MAY. The
+    # same field is "Deprecated in AdCP 3.2; removed in AdCP 4.0", "buyers MUST prefer
+    # `format_options`", and the one read path a projection would serve,
+    # `filters.format_ids`, carries the same deprecation and names its own replacements
+    # ("Use `format_kinds` or `format_option_refs`").
+    #
+    # So the absence here is a decision, not an omission, and grading it is what stops the
+    # decision being reversed by accident. The first outcome is what stops it passing
+    # vacuously: a response that dropped the declaration too would satisfy "no format_ids"
+    # while telling the buyer nothing at all.
+
+  @T-UC-GET-PRODUCTS-format-options-divergent @format_option_announcement @requires_db
+  Scenario: a product whose two format arms disagree is served, and the producer says so
+    Given the seller stores a dual-authored product whose format_ids names "display_300x250_image" and whose declaration asserts "display_728x90_image"
+    When the buyer requests products
+    Then the announced format option declares format_kind "image" and params the seller stored
+    And the announced product carries no format_ids key at all
+    And the response carries one FORMAT_DECLARATION_DIVERGENT advisory from the producer naming "products[0]"
+    And the advisory details name the authored "display_300x250_image" and the asserted "display_728x90_image"
+    # A POPULATED SUCCESS carrying an advisory, which is the shape to get right: the call
+    # succeeds AND errors[] reports the producer bug. enums/error-code.json calls
+    # FORMAT_DECLARATION_DIVERGENT a "Non-fatal advisory", says "Hard-failing the entire
+    # get_products response is discouraged — it punishes downstream buyers for the producer
+    # bug", and mandates errors[] as the single surface ("Logger-only is insufficient").
+    # The pinned storyboard grades exactly this step — compliance
+    # protocols/media-buy/scenarios/canonical_formats.yaml, get_seeded_divergent_product —
+    # with four validations: the response still validates, the seeded product is still
+    # returned, errors[0].code is this code, and errors[0].source is "producer".
+    #
+    # The first two outcomes are why this cannot pass as a refusal: a refusal has no
+    # announced product to read a declaration off, and no products[] to index.
+    #
+    # The legacy arm is OMITTED rather than announced divergent: "A producer that cannot
+    # guarantee agreement MUST omit the legacy compatibility projection" (same section).
+    # Omitting it silently would be the "pick one shape and discard the other without
+    # surfacing the divergence" the consumer rule forbids — the advisory is what makes the
+    # omission legible.
+    #
+    # The two arms disagree on the REFERENCE and agree on the params, deliberately. The
+    # pin has a second divergence axis (v2 params failing to narrow the referenced v1
+    # format's `requirements`) which this seller cannot evaluate without fetching that
+    # format from a catalog; a fixture diverging on both would pass whichever axis was
+    # implemented and could not tell them apart.
 
   @T-UC-GET-PRODUCTS-format-options-absent @format_option_announcement @requires_db
   Scenario: a product declaring no format options omits the key rather than announcing null

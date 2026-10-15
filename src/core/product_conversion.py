@@ -21,6 +21,9 @@ from adcp.types.domains.enums.available_metric import AvailableMetric
 from adcp.types.domains.enums.reporting_frequency import ReportingFrequency
 from adcp.types.domains.pricing_options.time_option import Parameters as TimeParameters
 
+from src.core.errors.details import FormatDeclarationDivergenceDetails
+from src.core.format_resolver import announced_legacy_format_arm
+
 # Import our extended Product (includes implementation_config) and the local
 # pricing member subclasses (our extra policy + internal adapter annotations)
 # — not the raw SDK types (Pattern #1 / local-schema-imports guard).
@@ -378,7 +381,12 @@ def default_reporting_capabilities() -> LibraryReportingCapabilities:
     )
 
 
-def convert_product_model_to_schema(product_model, adapter_type: str | None = None) -> Product:
+def convert_product_model_to_schema(
+    product_model,
+    adapter_type: str | None = None,
+    *,
+    divergences: dict[str, FormatDeclarationDivergenceDetails] | None = None,
+) -> Product:
     """Convert database Product model to Product schema.
 
     Args:
@@ -386,6 +394,18 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
         adapter_type: Adapter type for the tenant (e.g., "google_ad_manager", "mock").
             Used to determine the default delivery_measurement when the product
             does not have one configured. If None, falls back to generic "publisher".
+        divergences: an accumulator the CALLER owns, keyed by product_id, for products
+            whose two format arms disagree. Populated only when the caller passes one --
+            every caller that builds a buyer-facing response wants the advisory, and the
+            ones converting for an internal read do not.
+
+            An out-parameter rather than a second return value because the decision is made
+            HERE, once: this function already asks ``announced_legacy_format_arm`` which arm
+            to announce, and the divergence is the other half of that one answer. A caller
+            asking separately would read ``product_model`` a second time -- which is how the
+            first attempt broke every ``ProductEnv`` test, by reaching for
+            ``effective_format_ids`` on a caller that holds schema objects and patches this
+            function out.
 
     Returns:
         Product schema object
@@ -403,9 +423,14 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
     product_data["description"] = product_model.description
     product_data["delivery_type"] = product_model.delivery_type
 
-    # format_ids: the LEGACY half of core/product.json's root anyOf, resolved through
-    # effective_format_ids so an inventory profile still supplies it. CARRIED when the
-    # product authors it and OMITTED when it does not.
+    # format_ids: the LEGACY half of core/product.json's root anyOf, DERIVED from the
+    # canonical declarations where there are any and resolved through effective_format_ids
+    # otherwise, so an inventory profile still supplies it.
+    #
+    # Which of the three outcomes a product gets -- the authored arm, the projection of its
+    # declarations, or no arm at all because the two disagree -- is decided in ONE place,
+    # `announced_legacy_format_arm`, which carries the producer rules and the citations for
+    # them. Nothing is decided here; this carries the answer.
     #
     # Omitted rather than emitted empty, deliberately. The field is "Deprecated in AdCP 3.2;
     # removed in AdCP 4.0" and is absent from the schema's root `required` list, so a
@@ -413,9 +438,15 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
     # it. An empty array would be worse than absence: the deprecated branch requires only
     # the KEY, so `format_ids: []` satisfies that branch by presence while declaring no
     # format at all.
-    effective_formats = product_model.effective_format_ids or []
-    if effective_formats:
-        product_data["format_ids"] = effective_formats
+    legacy_arm = announced_legacy_format_arm(
+        format_ids=product_model.effective_format_ids,
+        format_options=product_model.format_options,
+        product_id=product_model.product_id,
+    )
+    if legacy_arm.format_ids:
+        product_data["format_ids"] = list(legacy_arm.format_ids)
+    if divergences is not None and legacy_arm.divergence is not None:
+        divergences[product_model.product_id] = legacy_arm.divergence
 
     # format_options: the CANONICAL half of the same MUST. core/product.json's root anyOf
     # accepts format_ids, format_options, or both, so this is carried when the product
