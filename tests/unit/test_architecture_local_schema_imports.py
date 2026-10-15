@@ -117,8 +117,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     # imports the local subclass. The allowlist shrinks; it is never grown.
     # FIXME(#1388): core modules import SDK types directly
     ("src/core/creative_agent_registry.py", "ListCreativeFormatsRequest"),
-    # FIXME(#1388): services import SDK types directly
-    ("src/services/dynamic_pricing_service.py", "FormatId"),
 }
 
 

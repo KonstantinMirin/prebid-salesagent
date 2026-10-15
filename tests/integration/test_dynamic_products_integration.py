@@ -559,3 +559,35 @@ class TestCreateVariantFromTemplate:
         assert variant.activation_key == ak
         assert variant.signal_metadata["name"] == "Premium Users"
         assert variant.expires_at is not None
+
+    def test_a_canonically_authored_template_produces_variants_that_carry_its_declarations(self, factory_env):
+        """The variant inherits the CANONICAL format arm, not only the deprecated one.
+
+        ``core/product.json``: "Products MUST carry format_ids, format_options, or both
+        during the 3.x migration window", and a variant is a product a buyer sees in
+        ``get_products`` like any other. The copy named 23 template columns and omitted
+        ``format_options``, so a template authored the way the same sentence tells sellers to
+        author ("New products MUST author canonical format_options[] ... Do not author a new
+        product from format_ids alone") generated variants satisfying NEITHER branch of that
+        anyOf -- unservable, and invisible while every template was legacy (salesagent-ki6a4).
+
+        The template here is canonical-ONLY on purpose: with a legacy arm present the
+        assertion would pass on the arm that was already copied.
+        """
+        tenant = TenantFactory(tenant_id="test-cvft-canonical", subdomain="cvft-canonical")
+        declarations = [{"format_kind": "image", "params": {"width": 970, "height": 250}}]
+        template = _make_template(tenant, product_id="template_canonical")
+        template.format_ids = None
+        template.format_options = declarations
+        factory_env._commit_factory_data()
+
+        variant = create_variant_from_template(
+            template,
+            _make_signal(name="Premium Users"),
+            {"type": "key_value", "key": "audience", "value": "premium"},
+            "template_canonical__variant_abc",
+            "video ads",
+        )
+
+        assert variant.format_options == declarations
+        assert variant.format_ids is None

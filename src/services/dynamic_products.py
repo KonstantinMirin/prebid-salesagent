@@ -298,7 +298,27 @@ def create_variant_from_template(
     Returns:
         New Product variant
     """
-    # Copy ALL fields from template
+    # HAZARD, named rather than counted: THIS DICT IS AN ENUMERATION, so a column missing
+    # from it is missing from every variant ever generated, silently and with nothing raised.
+    # The comment above it used to say "Copy ALL fields from template", which was not true of
+    # the code and is the reason the canonical format arm below went unnoticed.
+    #
+    # It is not a hypothetical and it is not fixed by this one addition. The derivation that
+    # settles it -- walk this literal's keys against ``Product.__table__.columns`` -- reports
+    # eleven further omissions, and TWO OF THEM WIDEN AUTHORIZATION rather than merely losing
+    # data: dropping ``property_ids`` sends ``effective_properties`` from the ``by_id`` arm to
+    # ``selection_type: "all"``, i.e. the publisher's whole inventory, and dropping
+    # ``allowed_principal_ids`` turns a principal restriction into visibility for every
+    # principal of the tenant. Both measured on this function, both in salesagent-tq42j.
+    #
+    # The right shape is to DERIVE the copied set from the table and pin an exception set
+    # naming each column a variant must not inherit, so a new column is inherited by default
+    # and an exclusion is a recorded decision -- the precedent is
+    # ``tests/helpers/media_buy_row_stubs.stub_package_row``. That is deliberately NOT done
+    # here: it would begin propagating those two authorization columns, which is a
+    # security-relevant behaviour change needing its own grading, and this change's instrument
+    # grades an adapter's vendor payload. Do not add another name here without asking whether
+    # the enumeration itself is what should go.
     variant_data = {
         "tenant_id": template.tenant_id,
         "product_id": variant_id,
@@ -306,7 +326,16 @@ def create_variant_from_template(
         "description": customize_description(
             template.description, signal, activation_key, brief, template.variant_description_template
         ),
+        # BOTH format arms, because a variant that carries neither is unservable.
+        # ``core/product.json``: "Products MUST carry format_ids, format_options, or both
+        # during the 3.x migration window", and a variant is a product the buyer sees in
+        # ``get_products`` like any other. This copied only the deprecated arm, so a
+        # canonically-authored template -- format_options set, format_ids NULL, which is the
+        # shape the same sentence tells new products to author ("Do not author a new product
+        # from format_ids alone") -- generated variants satisfying no branch of that anyOf.
+        # Legacy templates were unaffected, which is why it went unseen (salesagent-ki6a4).
         "format_ids": template.format_ids,
+        "format_options": template.format_options,
         "targeting_template": template.targeting_template,
         "delivery_type": template.delivery_type,
         "measurement": template.measurement,

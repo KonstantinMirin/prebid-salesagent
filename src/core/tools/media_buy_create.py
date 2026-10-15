@@ -1290,26 +1290,32 @@ def execute_approved_media_buy(
                     # the buyer had already bought -- and the wait is exactly when that
                     # happens (salesagent-zoo82).
                     #
-                    # The projection carries the declaration's dimensions, which the asserted
-                    # reference does not: a dimensionless format would send the adapter back
-                    # to the live product by another route. Its ceiling is stated on
-                    # ``snapshot_adapter_format_ids`` -- a declaration asserting no
-                    # ``v1_format_ref`` cannot be named in this carrier, and the upgrade path
-                    # is stage 7 reading the snapshot directly, not an invented id here.
-                    # Until then such a package falls back to the product's arm rather than
-                    # failing an approval over a name the seller never published.
-                    from src.core.format_resolver import snapshot_adapter_format_ids
+                    # THE SNAPSHOTS THEMSELVES NOW TRAVEL, which is stage 7's upgrade of the
+                    # projection this used to build (``salesagent-ol033.8``, E1). The carrier
+                    # gained ``formats_to_provide``, so the declaration's ``params`` reach the
+                    # adapter first-class and the deleted ``snapshot_adapter_format_ids`` --
+                    # which merged those dimensions onto the asserted references because the
+                    # carrier could only hold references -- has nothing left to do. Its stated
+                    # ceiling goes with it: a canonical-only declaration asserting no
+                    # ``v1_format_ref`` could not be NAMED in ``format_ids`` at all, and now
+                    # does not need to be.
+                    #
+                    # The legacy arm is still carried for the adapters that read only it, as
+                    # the references the seller ASSERTED and nothing more
+                    # (``registries/v1-canonical-mapping.json`` forbids synthesizing a v1 id
+                    # from the registry, so there is no other source).
+                    from src.core.format_resolver import snapshot_legacy_arm
 
                     recorded = _PACKAGE_FORMAT_SNAPSHOTS.validate_python(package_config.get("formats_to_provide") or [])
-                    snapshot_formats = snapshot_adapter_format_ids(recorded)
+                    asserted = snapshot_legacy_arm(recorded)
 
                     # Convert formats to FormatId objects with comprehensive validation
                     format_ids_list: list[FormatId] = []
-                    formats: Sequence[Any] = snapshot_formats or product.format_ids or []
+                    formats: Sequence[Any] = asserted or ([] if recorded else product.format_ids or [])
 
                     logger.debug(
                         f"[APPROVAL] Converting {len(formats)} formats for package {package_id} "
-                        f"from {'the recorded snapshot' if snapshot_formats else 'the live product'}"
+                        f"from {'the recorded snapshot' if recorded else 'the live product'}"
                     )
 
                     for idx, fmt in enumerate(formats):
@@ -1337,8 +1343,14 @@ def execute_approved_media_buy(
                             logger.error(f"[APPROVAL] {error_msg}")
                             return ApprovalResult.failed(error_msg)
 
-                    # Validate non-empty format_ids (required by AdCP spec)
-                    if not format_ids_list:
+                    # A PACKAGE WITH NO FORMAT CONTRACT ON EITHER ARM cannot be placed, and
+                    # that is the condition -- not "no legacy references". A canonical-only
+                    # package records declarations that assert no ``v1_format_ref``, so
+                    # ``format_ids_list`` is legitimately empty while ``recorded`` holds the
+                    # whole contract; failing on the legacy arm alone would refuse at approval
+                    # time exactly the shape ``core/product.json`` tells new products to
+                    # author ("New products MUST author canonical format_options[]").
+                    if not format_ids_list and not recorded:
                         error_msg = (
                             f"Failed to reconstruct package {package_id}: "
                             f"Product {product_id} has no valid formats - cannot create media buy"
@@ -1348,7 +1360,8 @@ def execute_approved_media_buy(
 
                     # Log conversion results
                     logger.info(
-                        f"[APPROVAL] Package {package_id}: Successfully converted all {len(format_ids_list)} formats"
+                        f"[APPROVAL] Package {package_id}: {len(format_ids_list)} legacy reference(s) and "
+                        f"{len(recorded)} recorded declaration(s)"
                     )
 
                     media_package = MediaPackage(
@@ -1358,6 +1371,9 @@ def execute_approved_media_buy(
                         cpm=cpm,
                         impressions=impressions,
                         format_ids=cast(list[Any], format_ids_list),
+                        # The recorded contract, handed to the adapter as the declarations
+                        # themselves. This is what makes the legacy arm above optional.
+                        formats_to_provide=list(recorded) or None,
                         targeting_overlay=targeting_overlay,
                         product_id=product_id,
                         budget=budget,
@@ -3754,6 +3770,12 @@ async def _create_media_buy_impl(
                     cpm=cpm,
                     impressions=int(float(total_budget) / cpm * 1000),
                     format_ids=cast(list[Any], format_ids_to_use),
+                    # The selected declarations themselves, so an adapter reads the slot the
+                    # seller recorded instead of re-deriving one from a deprecated name.
+                    # ``None`` rather than ``[]`` for a package that selected nothing, which
+                    # is the same distinction ``formats_to_provide``'s ``minItems: 1`` draws
+                    # on the wire: no canonical contract recorded is not an empty one.
+                    formats_to_provide=list(pkg_format_snapshots) or None,
                     targeting_overlay=(matching_package.targeting_overlay if matching_package else None),
                     product_id=pkg_product.product_id,  # Include product_id
                     budget=package_budget_value,  # Include budget from request (now normalized)
