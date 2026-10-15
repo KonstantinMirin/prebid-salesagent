@@ -1,9 +1,10 @@
 """products carry canonical format options
 
-``core/product.json`` makes it a MUST with three satisfying shapes: "Products MUST carry
-``format_ids``, ``format_options``, or BOTH" (a root ``anyOf``). This seller carried only the
-deprecated half -- ``format_options`` had zero references under ``src/`` -- so a product could
-describe itself to a 3.x peer and not at all to a canonical one.
+``core/product.json``'s root ``anyOf`` has TWO arms: "Named-format product" (requires
+``format_ids``, and marked ``deprecated: true``) and "Canonical-format product" (requires
+``format_options``). This seller carried only the deprecated half -- ``format_options`` had zero
+references under ``src/`` -- so a product could describe itself to a 3.x peer and not at all to a
+canonical one.
 
 One column, because one declaration list is one value. ``core/product-format-declaration.json``
 requires ``format_kind`` and ``params`` per entry and admits fifteen more members, and the
@@ -13,8 +14,9 @@ declares without a second representation in between.
 
 Nullable, and ``format_ids`` stays NOT NULL. The spec's ``anyOf`` is satisfied by either half,
 so a column-level NOT NULL on both would be stricter than the protocol -- it would refuse the
-``format_ids``-only product the pin explicitly permits through 4.x. Which half a product
-carries is a property of that product, not of the schema.
+``format_ids``-only product the pin still admits for the 3.x migration window (the ``format_ids``
+description scopes it exactly: "Deprecated in AdCP 3.2; removed in AdCP 4.0"). Which half a
+product carries is a property of that product, not of the schema.
 
 ``v1_format_ref`` rides inside each declaration rather than beside it. It is what makes serving
 a legacy peer a LOOKUP instead of a synthesis: the one-way projection rule forbids inventing a

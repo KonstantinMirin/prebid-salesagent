@@ -1,11 +1,19 @@
 """products.format_ids drops NOT NULL so a canonical-only product can exist
 
-core/product.json makes a product's format declaration a root ``anyOf`` with three
-satisfying shapes -- "Products MUST carry format_ids, format_options, or BOTH" -- so
-neither column can be NOT NULL on the strength of the spec, and ``format_ids`` held one
-only because it predated ``format_options``. A canonically-authored product declares
-``format_options`` and nothing in the legacy arm, which the NOT NULL made
+core/product.json makes a product's format declaration a root ``anyOf`` over TWO arms --
+"Named-format product" (requires ``format_ids``, and marked ``deprecated: true``) and
+"Canonical-format product" (requires ``format_options``) -- and satisfying either admits
+the row, so neither column can be NOT NULL on the strength of the spec, and ``format_ids``
+held one only because it predated ``format_options``. A canonically-authored product
+declares ``format_options`` and nothing in the legacy arm, which the NOT NULL made
 unrepresentable.
+
+The permission to carry either arm is time-boxed, and it lives in the ``format_ids``
+property description rather than at the root: "Deprecated in AdCP 3.2; removed in AdCP 4.0.
+... Products MUST carry format_ids, format_options, or both during the 3.x migration
+window. New products MUST author canonical format_options[] ... Do not author a new product
+from format_ids alone." Dropping the NOT NULL is therefore what lets the CANONICAL arm
+stand alone; it is not a statement that the two arms are interchangeable for a new product.
 
 The ``products_format_ids_valid`` CHECK is deliberately left alone. It calls
 ``validate_format_ids(format_ids)``, which raises when ``jsonb_typeof(input) != 'array'``

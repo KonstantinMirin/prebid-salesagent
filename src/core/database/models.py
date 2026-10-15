@@ -375,11 +375,23 @@ class Product(Base, JSONValidatorMixin):
     product_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # THE TWO HALVES of a product's format declaration. core/product.json makes it a MUST
-    # with three satisfying shapes -- "Products MUST carry format_ids, format_options, or
-    # BOTH" (a root anyOf) -- so NEITHER column can be NOT NULL on the strength of the spec.
-    # `format_ids` kept a NOT NULL it had only because it predated `format_options`, which
-    # made a canonically-authored product unrepresentable; migration 08cd415b3d91 drops it.
+    # THE TWO HALVES of a product's format declaration. core/product.json's root anyOf has
+    # TWO arms -- "Named-format product" (requires format_ids, and marked
+    # `deprecated: true`) and "Canonical-format product" (requires format_options) -- and
+    # satisfying either admits the row, so NEITHER column can be NOT NULL on the strength of
+    # the spec. `format_ids` kept a NOT NULL it had only because it predated
+    # `format_options`, which made a canonically-authored product unrepresentable; migration
+    # 08cd415b3d91 drops it.
+    #
+    # The two arms are NOT equally available to a new product, and nothing here should be
+    # read as saying so. The pin's permission to carry either lives in the `format_ids`
+    # PROPERTY description, which time-boxes it: "Deprecated in AdCP 3.2; removed in AdCP
+    # 4.0. ... Products MUST carry format_ids, format_options, or both during the 3.x
+    # migration window. New products MUST author canonical format_options[]; sellers MAY
+    # additionally project those declarations to format_ids for legacy buyers. When both
+    # fields are present they MUST describe the same underlying formats, and buyers MUST
+    # prefer format_options. Do not author a new product from format_ids alone."
+    # So the nullability below is a migration-window accommodation, not a standing choice.
     # Which arm is present is checked where the anyOf is readable as a whole -- in
     # product_conversion, against the pair -- and not by a per-column NOT NULL that can only
     # see one arm.
