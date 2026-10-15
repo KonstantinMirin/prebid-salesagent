@@ -402,8 +402,121 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # legacy reference from the registry reddens here, and a seller that emitted none at all
     # reddens the row above.
 
-  # What stage 4 deliberately does NOT land: C8, the approval/HITL replay paths, which still
-  # rebuild their legacy format list from the LIVE product rather than from the snapshot
-  # persisted above. The data is now there for them to read, but no BDD environment drives
-  # execute_approved_media_buy, and the epic's charter refuses an implemented-but-ungraded
-  # obligation. Filed as salesagent-zoo82, blocking stage 7.
+  # ── THE MANUAL-APPROVAL PATH, which none of the above reaches ─────────────────────────
+  #
+  # Every scenario above runs on the AUTO path, and that is not a choice any of them made:
+  # MediaBuyCreateEnv seeds human_review_required=False deliberately (its own comment
+  # explains why — so the live e2e server's gate state matches the other transports), and
+  # its mocked adapter sets manual_approval_operations=[]. So no satisfaction question in
+  # this feature has ever been asked with that tenant column flipped.
+  #
+  # MEASURED on d5c1b3507, through the real _create_media_buy_impl: it is not asked
+  # because production cannot answer it. One product declaring one image option fixed at
+  # 300x250, one package selecting a bare `image`, and the ONLY difference the tenant
+  # column:
+  #
+  #     human_review_required=False  ->  REFUSED  (UNSUPPORTED_FEATURE)
+  #     human_review_required=True   ->  ACCEPTED, submitted
+  #
+  # The cause is ordering and it is structural, not conditional: the manual-approval branch
+  # opens at media_buy_create.py:2828 and its only non-exceptional exit is the return at
+  # :3147, while the canonical selector gate is at :3337 — 190 lines later. A second early
+  # return at :3267 (product-level configuration approval) bypasses it identically. So
+  # everything the gate owns is skipped on this path: the closed set, the params rules, M2,
+  # the resolution/selection split and CONFLICTING_SELECTORS.
+  #
+  # core/product-format-declaration.json leaves no room for an approval-mode carve-out —
+  # format_options[] "IS the closed set of accepted formats; anything outside the list is
+  # rejected at create_media_buy REGARDLESS OF PREFERENCE" — and
+  # media-buy/package-request.json states its four receiver steps with no mode condition
+  # either.
+  #
+  # THESE SCENARIOS ARE RED ON PURPOSE. They are the instrument three beads have been
+  # missing, and each one is red for the obligation it names rather than for a reason it
+  # inherits: salesagent-gz86t (the gate does not run), salesagent-1dcfo (so no snapshot is
+  # recorded), salesagent-zoo82 (so C8 has nothing to read). They land WITHOUT the
+  # behaviour change that greens them, which is a different commit and a different scope.
+  #
+  # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/media-buy/package-request.json
+  # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/package.json
+
+  @T-UC-FORMAT-SATISFACTION-approval-gate-refuses @format_satisfaction @requires_db
+  Scenario: a human-review tenant still refuses a selector the product does not accept
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the tenant requires manual approval
+    And the buyer's package selects "bare_image_kind"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "format_kind" selector
+
+  @T-UC-FORMAT-SATISFACTION-approval-gate-accepts @format_satisfaction @requires_db
+  Scenario: a human-review tenant parks a buy whose selector the product does accept
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the tenant requires manual approval
+    And the buyer's package selects "product_option_ref"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buy is parked for a human decision
+
+    # THE PAIR, and it is the pair that makes the refusal informative rather than a
+    # restatement of "manual approval refuses things". Same product, same tenant column,
+    # same tool — the selectors differ in exactly whether the product accepts them, which
+    # is the dimension being judged. A seller that refused every selector on the approval
+    # path would redden this row; one that accepts every selector reddens the row above.
+    # This row passes today; the one above does not.
+
+  @T-UC-FORMAT-SATISFACTION-approval-snapshot-recorded @format_satisfaction @requires_db
+  Scenario: a parked buy records the declaration its selector selected
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the tenant requires manual approval
+    And the buyer's package selects "product_option_ref"
+    When the Buyer Agent sends the create_media_buy request
+    Then the parked package snapshots the "satisfaction_image_mrec" declaration fixed at 300x250
+    And the parked package's deprecated format_ids_to_provide names "display_300x250"
+
+    # WHY THE PARKED BUY IS THE CASE THAT MATTERS MOST, not an edge of the auto path:
+    # core/package.json requires a package to "retain and return this checklist" and says
+    # "the live Product is never substituted for the package snapshot". A buy waiting for a
+    # human has by construction the LONGEST window between create and execution, so it is
+    # where the live product is most likely to have moved on — and measured, it is the one
+    # case with no snapshot at all. Its package_config carries the buyer's request arm
+    # (`format_ids`) and neither canonical field, so a canonical-only buyer's parked buy
+    # records NOTHING about what creative it needs.
+    #
+    # Read off the stored row rather than the reply, and here that is forced rather than
+    # preferred: the submitted envelope carries no media_buy_id at all — correct, and the
+    # reason the buy is located by tenant through the repository.
+
+  @T-UC-FORMAT-SATISFACTION-approval-executes-from-snapshot @format_satisfaction @requires_db
+  Scenario: approving a parked buy executes the recorded snapshot, not the product as it is now
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the tenant requires manual approval
+    And the buyer's package selects "product_option_ref"
+    And the Buyer Agent sent the create_media_buy request
+    And the seller then republishes that option fixed at 728x90
+    When the publisher approves the parked buy
+    Then the ad server is asked for a 300x250 package
+
+    # THE FIXTURE DIFFERS IN THE JUDGED DIMENSION, which is the whole design of this
+    # scenario: the product is EDITED between create and approval, so "read the snapshot"
+    # and "read the live product" give different answers — 300x250 against 728x90. Without
+    # the edit both answers agree and the scenario grades nothing, which is how an approval
+    # test passes while reading the live product.
+    #
+    # The option id is unchanged and only its params move, so this is not a different
+    # option being selected: it is the SAME contract the buyer bought, republished with
+    # different dimensions. That is exactly what
+    # core/package-format-snapshot.json's immutability rule is about — "changing selected
+    # format, placement set, execution version, or tracker contract requires a replacement
+    # package_id; never mutate this snapshot in place".
+    #
+    # The observable is what the AD SERVER was asked for, read off the adapter boundary
+    # the approval actually calls (_execute_adapter_media_buy_creation ->
+    # adapter.create_media_buy), not off a response field. An approval's whole product is
+    # the ad-server call; its reply says almost nothing.
+    #
+    # ONE TRANSPORT NOTE, recorded because it reads like a gap otherwise.
+    # execute_approved_media_buy has no registry row and no transport — the admin UI calls
+    # it — so this scenario is transport-parametrized on its CREATE half with one identical
+    # approval execution. That is still four-transport grading of the half that is a
+    # transport, and it is the load-bearing half here: the snapshot is persisted BY the
+    # create path, so a transport that persisted a malformed one would be caught. It is not
+    # four approval executions, and nothing here pretends otherwise.

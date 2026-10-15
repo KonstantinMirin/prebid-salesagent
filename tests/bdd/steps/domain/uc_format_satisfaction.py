@@ -28,7 +28,13 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import stored_package_config, wire_absent, wire_entry, wire_field
+from tests.bdd.steps._outcome_helpers import (
+    parked_media_buy,
+    stored_package_config,
+    wire_absent,
+    wire_entry,
+    wire_field,
+)
 from tests.factories import PricingOptionFactory, ProductFactory
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.mint import mint
@@ -855,3 +861,196 @@ def then_refused_naming_packages(ctx: dict) -> None:
     creative refusals on this path already use (``PACKAGES_FIELD``).
     """
     ctx["result"].assert_wire_error("UNSUPPORTED_FEATURE", field="packages")
+
+
+# ── The MANUAL-APPROVAL path ────────────────────────────────────────
+#
+# Everything above dispatches on the AUTO path. These four grade the same satisfaction
+# question, and the same snapshot obligation, with the tenant's human_review_required
+# column flipped -- which production answers differently, because the manual-approval
+# branch returns 190 lines before the selector gate. See the feature's own section comment
+# for the measurement and the three beads these are the instrument for.
+#
+# The Given "the tenant requires manual approval" is the SHARED generic step
+# (steps/generic/given_media_buy.py): it flips the tenant column, configures the env's
+# adapter mocks' manual_approval_operations (production needs both), and writes the
+# AdapterConfig row so the Docker-hosted adapter reads the same state over e2e_rest. Not
+# re-implemented here -- one spelling of "this tenant reviews by hand".
+
+
+@given("the Buyer Agent sent the create_media_buy request")
+def given_create_already_sent(ctx: dict) -> None:
+    """Dispatch the create as a GIVEN, so the approval scenario's When is the approval.
+
+    The same shared When every other scenario in this feature uses, reached from the Given
+    side because this scenario's subject is what happens AFTER the buy is parked. A
+    scenario whose When is the create cannot also have the approval as its When.
+    """
+    from tests.bdd.steps.domain.uc002_create_media_buy import when_send_create_media_buy
+
+    when_send_create_media_buy(ctx)
+
+
+@given(parsers.parse("the seller then republishes that option fixed at {width:d}x{height:d}"))
+def given_product_republished(ctx: dict, width: int, height: int) -> None:
+    """Move the LIVE product's declaration after the buy was parked, keeping the option id.
+
+    THE ONE KNOB THIS SCENARIO TURNS, and the reason it can grade anything: with the
+    product unchanged, "execute the recorded snapshot" and "execute the live product" give
+    the same answer and the scenario is satisfied by either. Editing the params makes the
+    two answers differ -- 300x250 against 728x90 -- so the assertion separates them.
+
+    The ``format_option_id`` is deliberately NOT changed. This is the same published option
+    the buyer selected, republished with different dimensions, which is the case
+    core/package-format-snapshot.json's immutability rule names ("changing selected format
+    ... requires a replacement package_id; never mutate this snapshot in place"). Changing
+    the id instead would make it a different option and the buy's selector simply
+    unresolvable, which is a different question.
+    """
+    product = ctx["default_product"]
+    product.format_options = [{**dict(_DECLARATIONS["fixed_300x250"][0]), "params": {"width": width, "height": height}}]
+    ctx["env"]._commit_factory_data()
+
+
+@when("the publisher approves the parked buy")
+def when_publisher_approves(ctx: dict) -> None:
+    """Run the real approval execution, the way an admin route runs it.
+
+    ``run_approval`` is the ONE spelling of this call (``tests/helpers/media_buy_approval``),
+    shared with the three integration modules that drive it directly, so a BDD scenario and
+    an integration test cannot drift on its keyword arguments. Nothing is patched out: the
+    callee, both units of work and every commit run for real, and the ad-server boundary is
+    the env's adapter mock -- which is what makes the ask observable.
+    """
+    from tests.helpers.media_buy_approval import run_approval
+
+    buy = parked_media_buy(ctx)
+    ctx["approval_result"] = run_approval(buy.media_buy_id, ctx["tenant"].tenant_id)
+
+
+@then(parsers.parse('the parked package snapshots the "{option_id}" declaration fixed at {width:d}x{height:d}'))
+def then_parked_package_snapshots(ctx: dict, option_id: str, width: int, height: int) -> None:
+    """Assert the PARKED buy's persisted package records the declaration its selector chose.
+
+    The stored row and not the reply, and that is forced: the submitted envelope carries no
+    media_buy_id, so there is nothing on the wire to read a package off. ``parked_media_buy``
+    locates the buy by tenant through the repository for the same reason.
+
+    Asserted on the same three identity fields plus the params as the auto-path sibling, so
+    the two paths are held to one obligation rather than two.
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    buy = parked_media_buy(ctx)
+    with MediaBuyUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.media_buys is not None
+        packages = uow.media_buys.get_packages(buy.media_buy_id)
+        configs = [dict(p.package_config or {}) for p in packages]
+    assert len(configs) == 1, f"expected one persisted package on the parked buy, got {len(configs)}"
+    snapshots = configs[0].get("formats_to_provide")
+    assert isinstance(snapshots, list) and len(snapshots) == 1, (
+        f"the parked buy's package records formats_to_provide={snapshots!r}; "
+        f"core/package.json requires the selected declaration to be retained, and the package "
+        f"carries only {sorted(configs[0])}"
+    )
+    snapshot = snapshots[0]
+    assert snapshot.get("format_option_id") == option_id, (
+        f"the recorded snapshot names option {snapshot.get('format_option_id')!r}, not {option_id!r}"
+    )
+    assert snapshot.get("product_id") == ctx["default_product"].product_id, (
+        f"the recorded snapshot binds product {snapshot.get('product_id')!r}"
+    )
+    params = snapshot.get("params") or {}
+    assert (params.get("width"), params.get("height")) == (width, height), (
+        f"the recorded snapshot's dimensions are {params.get('width')}x{params.get('height')}, "
+        f"expected {width}x{height}"
+    )
+
+
+@then(parsers.parse("the ad server is asked for a {width:d}x{height:d} package"))
+def then_adapter_asked_for_dimensions(ctx: dict, width: int, height: int) -> None:
+    """Assert what the APPROVAL handed the ad server, read off the adapter boundary.
+
+    An approval's product IS the ad-server call, so that is the observable rather than a
+    response field. ``_execute_adapter_media_buy_creation`` resolves ``get_adapter`` as a
+    module global in ``media_buy_create``, which is the name this env patches, so the
+    MediaPackage list the approval reconstructed is recorded on the mock.
+
+    Graded on the DIMENSIONS and not on the format id: the id is unchanged by the Given
+    that republishes the option, so an id comparison would pass whichever declaration the
+    approval read. The dimensions are the axis the two answers differ on.
+    """
+    approval = ctx.get("approval_result")
+    assert approval is not None, "no approval was run — the When must dispatch it before this Then"
+    adapter = ctx["env"].mock["adapter"].return_value
+    calls = adapter.create_media_buy.call_args_list
+    assert calls, (
+        f"the approval never reached the ad server, so there is nothing to grade "
+        f"(approval outcome={getattr(approval, 'outcome', approval)!r})"
+    )
+    # The tool calls adapter.create_media_buy(request, packages, ...) positionally.
+    media_packages = calls[-1].kwargs.get("packages") or calls[-1].args[1]
+    dimensions = [(f.width, f.height) for pkg in media_packages for f in (pkg.format_ids or [])]
+    assert (width, height) in dimensions, (
+        f"the ad server was asked for {dimensions!r}, which does not include the "
+        f"{width}x{height} the parked buy recorded — the approval read the live product, "
+        f"not the package snapshot"
+    )
+
+
+@then("the buy is parked for a human decision")
+def then_buy_is_parked(ctx: dict) -> None:
+    """Assert the SUBMITTED task envelope, and that a buy was actually parked.
+
+    Its own step rather than the generic "the approval path should be manual", and the
+    difference is the obligation, not the spelling: that step accepts ``completed`` and
+    ``active`` as well, because the Docker-hosted mock adapter auto-approves over e2e. This
+    scenario's whole claim is that the buy is PARKED -- it is the accept half of the pair
+    whose refuse half asserts a refusal -- so a status that means "already executed" must
+    not satisfy it.
+
+    BOTH halves, for the reason the sibling accept steps in this module record: the
+    envelope alone is satisfied by a seller that answered ``submitted`` and persisted
+    nothing, and a persisted row alone says nothing about what the buyer was told.
+    ``parked_media_buy`` asserts there is exactly one buy for the tenant, which is also
+    what the later approval steps address.
+    """
+    payload = ctx["result"].payload
+    status = str(getattr(payload, "status", None) or "")
+    assert status.endswith("submitted"), f"expected the submitted task envelope for a parked buy, got status={status!r}"
+    buy = parked_media_buy(ctx)
+    assert str(buy.status).endswith("pending_approval"), (
+        f"the buy was reported submitted but persisted status={buy.status!r}, "
+        "so nothing is actually waiting for an approver"
+    )
+
+
+@then(parsers.parse('the parked package\'s deprecated format_ids_to_provide names "{legacy_id}"'))
+def then_parked_legacy_formats_to_provide(ctx: dict, legacy_id: str) -> None:
+    """Assert the PARKED buy's deprecated projection is derived, not echoed, like the auto path's.
+
+    The buyer sent only ``format_option_refs``, so *legacy_id* can have reached the record
+    only through the selected declaration's own ``v1_format_ref`` -- the one legal v2 -> v1
+    direction (``registries/v1-canonical-mapping.json``). Before the manual branch recorded
+    a snapshot there was nothing to derive from and the field was absent, which
+    ``core/package.json`` says a buyer must not read as full coverage
+    ("Absence means legacy readiness was not reported").
+
+    The auto-path sibling asserts the same thing off the WIRE; this one reads the stored
+    row, because a parked buy's envelope carries no package at all.
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    buy = parked_media_buy(ctx)
+    with MediaBuyUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.media_buys is not None
+        configs = [dict(p.package_config or {}) for p in uow.media_buys.get_packages(buy.media_buy_id)]
+    assert len(configs) == 1, f"expected one persisted package on the parked buy, got {len(configs)}"
+    provided = configs[0].get("format_ids_to_provide")
+    assert isinstance(provided, list), (
+        f"the parked buy records format_ids_to_provide={provided!r}; the selected declaration "
+        f"asserts a v1_format_ref, so the projection has a source"
+    )
+    assert [entry.get("id") for entry in provided] == [legacy_id], (
+        f"format_ids_to_provide names {[e.get('id') for e in provided]}, expected exactly [{legacy_id!r}]"
+    )

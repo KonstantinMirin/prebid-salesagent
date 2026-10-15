@@ -10,6 +10,7 @@ the repository owns the query, the helper owns the assertion.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 from tests.harness.transport import TransportResult
@@ -329,6 +330,36 @@ def stored_package_config(ctx: dict, media_buy_id: str, package_id: str) -> dict
             "the create reported it but stored nothing"
         )
         return dict(row.package_config or {})
+
+
+def parked_media_buy(ctx: dict) -> Any:
+    """The one media buy the scenario's tenant holds, through the repository.
+
+    FORCED rather than preferred, which is why it is a helper and not a wire read: a buy
+    parked for a human decision is answered with the SUBMITTED task envelope, and that
+    envelope carries no ``media_buy_id`` — correctly, since nothing is on the ad server
+    yet. So a scenario about a parked buy cannot address it by id and has to find it by
+    tenant.
+
+    Tenant-scoped by the repository's own ``tenant_id`` rather than by a predicate written
+    here, so this cannot see another tenant's buy. Asserts there is EXACTLY one: these
+    scenarios send one request, and "the first of several" would silently grade whichever
+    the database happened to order first.
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx — conftest must seed one"
+    with MediaBuyUoW(tenant.tenant_id) as uow:
+        assert uow.media_buys is not None
+        buys = uow.media_buys.list_all()
+        assert len(buys) == 1, (
+            f"expected exactly one media buy for {tenant.tenant_id!r} to identify the parked buy, "
+            f"got {[b.media_buy_id for b in buys]}"
+        )
+        buy = buys[0]
+        # Read the ids out while the unit is open; the row detaches on exit.
+        return SimpleNamespace(media_buy_id=buy.media_buy_id, status=buy.status)
 
 
 def _real_wire_error_envelope(ctx: dict) -> dict | None:
