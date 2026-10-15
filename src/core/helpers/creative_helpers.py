@@ -1,14 +1,21 @@
 """Creative format parsing and asset conversion helpers.
 
-SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
-- [attr-defined] on lines ~694, ~696, ~816, ~826, ~884, ~896:
-  AssetSpec (ImageFormatAsset) is a RootModel proxy; .asset_type and .asset_id
-  exist at runtime but mypy cannot see through __getattr__. Fixable when the SDK
-  ships typed accessors or a shared unwrapper helper.
+The six ``attr-defined`` suppressions this module carried
+(adcontextprotocol/adcp-client-python#913) are gone, and not by widening a type. Each sat
+on a ``.asset_type`` or ``.asset_id`` read performed after narrowing a declared slot to
+``adcp.types.ImageFormatAsset`` -- which is the IMAGE arm of a discriminated union, so the
+reads mypy could not see through were also reads of the wrong arm. :func:`declared_slots`
+replaced the narrowing with a read of the discriminator itself, and a suppression that
+exists because of a wrong cast disappears with the cast.
+
+Written without the directive's own spelling on purpose: ``.type-ignore-baseline`` counts
+the literal text under ``src/``, so a sentence ABOUT a suppression it no longer has would
+count as one -- a comment that invalidates the number it describes.
 """
 
 import logging
 import uuid
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from adcp.types import ValidationMode
@@ -374,6 +381,31 @@ CLICKTHROUGH_ASSET_IDS = {
     "destination_url",
 }
 
+# The pin's OWN role -> mechanism mapping, from the top-level description of
+# ``core/assets/url-asset.json``, verbatim: "When ``url_type`` is absent, receivers SHOULD
+# fall back to the format's ``url-asset-requirements.role`` per this mapping:
+# clickthrough/landing_page -> ``clickthrough``; impression_tracker/click_tracker ->
+# ``tracker_pixel``; viewability_tracker -> ``tracker_script`` (OMID and equivalent
+# verification SDKs require a <script> tag -- firing them as a pixel produces no
+# measurement); third_party_tracker -> no safe fallback (mechanism is integration-specific
+# -- DV/IAS ship both pixel and script forms -- receivers MAY reject or warn)."
+#
+# ``third_party_tracker`` is ABSENT ON PURPOSE and not an oversight: the pin states it has
+# no safe fallback, so a slot declaring it is identified (the seller knows what the URL is
+# FOR) while its mechanism stays unknown. Mapping it to anything would be the mechanism
+# guess the schema forbids one sentence later.
+#
+# The field is ``role``. ``core/requirements/url-asset-requirements.json`` declares
+# ``role`` with this six-member enum and declares no ``url_type`` at all -- both url readers
+# here used to look for ``requirements.url_type``, a field that schema does not have.
+_SLOT_ROLE_TO_MECHANISM = {
+    "clickthrough": "clickthrough",
+    "landing_page": "clickthrough",
+    "impression_tracker": "tracker_pixel",
+    "click_tracker": "tracker_pixel",
+    "viewability_tracker": "tracker_script",
+}
+
 # Common asset IDs for impression trackers
 IMPRESSION_TRACKER_ASSET_IDS = {
     "impression_tracker",
@@ -381,6 +413,100 @@ IMPRESSION_TRACKER_ASSET_IDS = {
     "pixel",
     "impression_pixel",
 }
+
+
+def _slot_field(slot: Any, name: str) -> Any:
+    """Read one field off a declared slot, whichever shape it arrived in.
+
+    ``adcp.utils.get_format_assets`` returns the format's ``assets`` list — or a canonical
+    declaration's ``params.slots`` — unchanged, so an element is a typed union arm when the
+    spec was validated and a plain dict when it came in as a Mapping. One reader for both.
+    """
+    if isinstance(slot, Mapping):
+        return slot.get(name)
+    return getattr(slot, name, None)
+
+
+def declared_slots(format_spec: Any | None) -> list[tuple[str, str, Any]]:
+    """``(asset_id, asset_type, requirements)`` for every individual slot a spec declares.
+
+    THE GUARD READS THE DISCRIMINATOR, NOT A CLASS. Every reader in this module used to
+    open its format-spec branch with::
+
+        from adcp.types import ImageFormatAsset as Assets
+        if not isinstance(asset_spec, Assets):
+            continue
+
+    and the alias is the lie: ``adcp.types.ImageFormatAsset`` IS
+    ``adcp.types.domains.core.format.Assets``, the IMAGE arm of a discriminated union whose
+    other arms are not subclasses of it (measured at adcp 6.6.0: 45 arm classes, ``video``,
+    ``audio``, ``url``, ``pixel_tracker`` and the rest all ``issubclass -> False``). So the
+    guard admitted image slots only, and then every test the loop performed on
+    ``asset_type`` was testing a value the guard had already pinned to ``"image"``:
+
+    * the url readers' format-spec branch needed ``asset_type == "url"`` and so was
+      structurally unreachable for any spec whatsoever;
+    * the media reader saw image slots only, so a legacy VIDEO or AUDIO creative never
+      resolved its media asset from its own declaration and fell through to a
+      naming-convention allowlist.
+
+    The union is DISCRIMINATED, which is the whole point: the arm that arrived says what it
+    is, so there is nothing to narrow to. A slot with no readable ``asset_id`` or
+    ``asset_type`` is dropped — that is the only thing the old guard legitimately did.
+    """
+    from adcp.utils import get_individual_assets, has_assets
+
+    if format_spec is None or not has_assets(format_spec):
+        return []
+    slots: list[tuple[str, str, Any]] = []
+    for slot in get_individual_assets(format_spec):
+        asset_id = _slot_field(slot, "asset_id")
+        asset_type = _slot_field(slot, "asset_type")
+        if not asset_id or not asset_type:
+            continue
+        slots.append((str(asset_id), str(asset_type).lower(), _slot_field(slot, "requirements")))
+    return slots
+
+
+def _requirement_field(requirements: Any, name: str) -> Any:
+    """Read one field off a slot's ``requirements``, typed or dict, or ``None``."""
+    if requirements is None:
+        return None
+    if isinstance(requirements, Mapping):
+        return requirements.get(name)
+    return getattr(requirements, name, None)
+
+
+def _mechanisms_declared_by_the_format(format_spec: Any | None) -> dict[str, str]:
+    """``asset_id -> mechanism`` for each url slot whose format declares a usable ``role``.
+
+    The pin's SECOND rung, consulted when a manifest asset omits ``url_type``:
+    ``url-asset-requirements.role`` is "the receiver's fallback signal when a manifest URL
+    asset omits ``url_type``", and :data:`_SLOT_ROLE_TO_MECHANISM` is the pin's own
+    translation of it.
+
+    A url slot whose role is ``third_party_tracker`` is absent from the result and that is
+    correct -- the role is declared, so the asset is identified, but the pin gives its
+    mechanism no safe fallback.
+    """
+    mechanisms: dict[str, str] = {}
+    for asset_id, asset_type, requirements in declared_slots(format_spec):
+        if asset_type != "url":
+            continue
+        mechanism = _SLOT_ROLE_TO_MECHANISM.get(str(_requirement_field(requirements, "role") or ""))
+        if mechanism:
+            mechanisms[asset_id] = mechanism
+    return mechanisms
+
+
+def _ids_invoked_as(mechanisms: dict[str, str], mechanism: str) -> list[str]:
+    """The asset ids a mechanism map assigns to *mechanism*, sorted.
+
+    Sorted so two assets carrying the same mechanism resolve the same way on every run; a
+    dict built from a spec's slot order or a manifest's key order would otherwise make which
+    one wins depend on how the document was written.
+    """
+    return sorted(asset_id for asset_id, found in mechanisms.items() if found == mechanism)
 
 
 def _coerce_dimension(raw: Any, axis: str) -> int | None:
@@ -422,21 +548,13 @@ def _media_asset_candidates(format_spec: Any | None, kind: str | None) -> list[t
     iteration.
     """
     # Lazy import to avoid circular dependencies
-    from adcp.types import ImageFormatAsset as Assets
-    from adcp.utils import get_individual_assets, has_assets
-
     from src.core.format_satisfaction import canonical_slot_asset_ids
 
     candidates: list[tuple[str, bool]] = []
 
-    if format_spec is not None and has_assets(format_spec):
-        for asset_spec in get_individual_assets(format_spec):
-            # Type guard: get_individual_assets only returns individual Assets, not repeatable groups
-            if not isinstance(asset_spec, Assets):
-                continue
-            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
-            if asset_type in MEDIA_ASSET_TYPES:
-                candidates.append((asset_spec.asset_id, asset_type in SIZED_ASSET_TYPES))  # type: ignore[attr-defined]
+    for asset_id, asset_type, _requirements in declared_slots(format_spec):
+        if asset_type in MEDIA_ASSET_TYPES:
+            candidates.append((asset_id, asset_type in SIZED_ASSET_TYPES))
 
     if kind:
         sized = canonical_slot_asset_ids(kind, SIZED_ASSET_TYPES)
@@ -517,8 +635,9 @@ def extract_click_url(
     """Extract click-through URL from creative data.
 
     Extraction priority:
-    1. Format spec assets with requirements.url_type == 'clickthrough'
-    2. Fallback to known clickthrough asset_id names (click_url, etc.)
+    1. The format-declared ``url-asset-requirements.role`` of a url slot, mapped to a
+       mechanism by :data:`_SLOT_ROLE_TO_MECHANISM` -- the pin's fallback signal.
+    2. Known clickthrough asset_id names (click_url, etc.), a naming-convention guess.
 
     Args:
         creative_data: Creative data dict from database
@@ -528,44 +647,29 @@ def extract_click_url(
     Returns:
         Click-through URL string (optionally with macros substituted), or None if not found.
     """
-    # Lazy import to avoid circular dependencies
-    from adcp.types import ImageFormatAsset as Assets
-    from adcp.utils import get_individual_assets, has_assets
-
     click_url = None
+    assets = creative_data.get("assets") or {}
+    if not isinstance(assets, dict):
+        assets = {}
 
-    # Priority 1: Use format spec to find clickthrough URL (url_type == 'clickthrough')
-    if creative_data.get("assets") and format_spec and has_assets(format_spec):
-        for asset_spec in get_individual_assets(format_spec):
-            if not isinstance(asset_spec, Assets):
-                continue
-            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
-            if asset_type == "url":
-                requirements = getattr(asset_spec, "requirements", None)
-                if requirements:
-                    req_url_type = None
-                    if isinstance(requirements, dict):
-                        req_url_type = requirements.get("url_type")
-                    elif hasattr(requirements, "url_type"):
-                        req_url_type = requirements.url_type
-                    if req_url_type == "clickthrough":
-                        asset_id = asset_spec.asset_id  # type: ignore[attr-defined]
-                        if asset_id in creative_data["assets"]:
-                            asset_obj = creative_data["assets"][asset_id]
-                            if isinstance(asset_obj, dict) and asset_obj.get("url"):
-                                click_url = asset_obj["url"]
-                                logger.debug(f"Extracted click URL from format spec asset '{asset_id}'")
-                                break
+    # Priority 1: a url slot the FORMAT declares as the click destination. Sorted, so two
+    # declared clickthrough slots resolve the same way on every run rather than by the
+    # order the spec happened to list them.
+    for asset_id in _ids_invoked_as(_mechanisms_declared_by_the_format(format_spec), "clickthrough"):
+        asset_obj = assets.get(asset_id)
+        if isinstance(asset_obj, dict) and asset_obj.get("url"):
+            click_url = asset_obj["url"]
+            logger.debug("Extracted click URL from the format's declared clickthrough slot %r", asset_id)
+            break
 
     # Priority 2: Fallback to known clickthrough asset_id names
-    if not click_url and creative_data.get("assets"):
-        for asset_id in CLICKTHROUGH_ASSET_IDS:
-            if asset_id in creative_data["assets"]:
-                asset_obj = creative_data["assets"][asset_id]
-                if isinstance(asset_obj, dict) and asset_obj.get("url"):
-                    click_url = asset_obj["url"]
-                    logger.debug(f"Extracted click URL from fallback asset '{asset_id}'")
-                    break
+    if not click_url:
+        for asset_id in sorted(CLICKTHROUGH_ASSET_IDS):
+            asset_obj = assets.get(asset_id)
+            if isinstance(asset_obj, dict) and asset_obj.get("url"):
+                click_url = asset_obj["url"]
+                logger.debug("Extracted click URL from fallback asset %r", asset_id)
+                break
 
     # Apply macro substitution if requested
     if click_url and apply_macro_substitution:
@@ -584,7 +688,8 @@ def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: A
     """Extract impression tracker URL from creative data.
 
     Looks for impression tracker URL in the creative's assets, checking:
-    1. Format spec assets with asset_type 'url' AND requirements.url_type == 'tracker_pixel'
+    1. A url slot whose format-declared ``url-asset-requirements.role`` maps to
+       ``tracker_pixel`` (``impression_tracker`` or ``click_tracker``).
     2. Assets with url_type 'tracker_pixel'
     3. Assets with common impression tracker asset_id names
 
@@ -595,57 +700,35 @@ def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: A
     Returns:
         Impression tracker URL string or None if not found.
     """
-    # Lazy import to avoid circular dependencies
-    from adcp.types import ImageFormatAsset as Assets
-    from adcp.utils import get_individual_assets, has_assets
-
     tracker_url = None
+    assets = creative_data.get("assets") or {}
+    if not isinstance(assets, dict):
+        assets = {}
 
-    # Priority 1: Use format spec to find impression tracker
-    # Match url assets where requirements.url_type == 'tracker_pixel'
-    if creative_data.get("assets") and format_spec and has_assets(format_spec):
-        for asset_spec in get_individual_assets(format_spec):
-            if not isinstance(asset_spec, Assets):
-                continue
-            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
-            if asset_type == "url":
-                # Check if this is a tracker_pixel by looking at requirements.url_type
-                requirements = getattr(asset_spec, "requirements", None)
-                if requirements:
-                    req_url_type = None
-                    if isinstance(requirements, dict):
-                        req_url_type = requirements.get("url_type")
-                    elif hasattr(requirements, "url_type"):
-                        req_url_type = requirements.url_type
-                    # Only match tracker_pixel type
-                    if req_url_type == "tracker_pixel":
-                        asset_id = asset_spec.asset_id  # type: ignore[attr-defined]
-                        if asset_id in creative_data["assets"]:
-                            asset_obj = creative_data["assets"][asset_id]
-                            if isinstance(asset_obj, dict) and asset_obj.get("url"):
-                                tracker_url = asset_obj["url"]
-                                logger.debug(f"Extracted impression tracker from format spec asset '{asset_id}'")
-                                break
+    # Priority 1: a url slot the FORMAT declares as a tracker pixel.
+    for asset_id in _ids_invoked_as(_mechanisms_declared_by_the_format(format_spec), "tracker_pixel"):
+        asset_obj = assets.get(asset_id)
+        if isinstance(asset_obj, dict) and asset_obj.get("url"):
+            tracker_url = asset_obj["url"]
+            logger.debug("Extracted impression tracker from the format's declared tracker slot %r", asset_id)
+            break
 
     # Priority 2: Look for assets with tracker_pixel url_type
-    if not tracker_url and creative_data.get("assets"):
-        for asset_id, asset_obj in creative_data["assets"].items():
-            if isinstance(asset_obj, dict):
-                url_type = asset_obj.get("url_type", "")
-                if url_type == "tracker_pixel" and asset_obj.get("url"):
-                    tracker_url = asset_obj["url"]
-                    logger.debug(f"Extracted impression tracker from asset '{asset_id}' with url_type='tracker_pixel'")
-                    break
+    if not tracker_url:
+        for asset_id, asset_obj in sorted(assets.items()):
+            if isinstance(asset_obj, dict) and asset_obj.get("url_type") == "tracker_pixel" and asset_obj.get("url"):
+                tracker_url = asset_obj["url"]
+                logger.debug("Extracted impression tracker from asset %r declaring url_type=tracker_pixel", asset_id)
+                break
 
     # Priority 3: Check common impression tracker asset_id names
-    if not tracker_url and creative_data.get("assets"):
-        for asset_id in IMPRESSION_TRACKER_ASSET_IDS:
-            if asset_id in creative_data["assets"]:
-                asset_obj = creative_data["assets"][asset_id]
-                if isinstance(asset_obj, dict) and asset_obj.get("url"):
-                    tracker_url = asset_obj["url"]
-                    logger.debug(f"Extracted impression tracker from fallback asset '{asset_id}'")
-                    break
+    if not tracker_url:
+        for asset_id in sorted(IMPRESSION_TRACKER_ASSET_IDS):
+            asset_obj = assets.get(asset_id)
+            if isinstance(asset_obj, dict) and asset_obj.get("url"):
+                tracker_url = asset_obj["url"]
+                logger.debug("Extracted impression tracker from fallback asset %r", asset_id)
+                break
 
     return tracker_url
 

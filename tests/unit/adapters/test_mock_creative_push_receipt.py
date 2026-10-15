@@ -56,12 +56,43 @@ def _asset(creative_id: str = "cr_1") -> dict[str, Any]:
 
 
 def _receipt(adapter: MockAdServer) -> dict[str, Any]:
-    """The ``details`` payload of the push the adapter recorded."""
-    adapter.audit_logger.log_operation.assert_called_once()
-    return adapter.audit_logger.log_operation.call_args.kwargs["details"]
+    """The ``details`` payload of the push the adapter recorded.
+
+    The count is asserted off ``call_args_list`` rather than with ``assert_called_once()``:
+    that spelling followed by a ``call_args`` read is the split assertion the weak-mock
+    guard refuses, because it checks the arity and the payload against two different
+    things. ``test_the_record_is_one_call_naming_this_adapters_operation`` below pins the
+    whole call in one assertion, which is the guard's remedy; this helper is the payload
+    reader the per-field tests share.
+    """
+    calls = adapter.audit_logger.log_operation.call_args_list
+    assert len(calls) == 1, f"expected exactly one push record, got {len(calls)}: {calls!r}"
+    return calls[0].kwargs["details"]
 
 
 class TestCreativePushReceipt:
+    def test_the_record_is_one_call_naming_this_adapters_operation(self):
+        """The whole call, in one assertion: arity, operation, principal, payload.
+
+        The readback finds this row by its operation string, which the audit logger writes
+        as ``"<adapter_name>.<operation>"`` — so a renamed operation would leave the row
+        unfindable with nothing failing. Spelled out rather than split into a call-count
+        check plus a payload read, which would grade the two against different things.
+        """
+        adapter = _adapter()
+        assets = [_asset()]
+
+        adapter._add_creative_assets_immediate("mb_1", assets, datetime.now(UTC))
+
+        adapter.audit_logger.log_operation.assert_called_once_with(
+            operation="add_creative_assets",
+            principal_name="Test Principal",
+            principal_id="principal_test",
+            adapter_id="unknown",
+            success=True,
+            details={"media_buy_id": "mb_1", "creative_count": 1, "assets": assets},
+        )
+
     def test_the_receipt_carries_the_assets_as_handed(self):
         """The whole asset list, by value -- not a count, not a projection of it.
 
