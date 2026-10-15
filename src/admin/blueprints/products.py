@@ -2117,36 +2117,6 @@ def edit_product(tenant_id, product_id):
                 )
                 inventory_synced = inventory_count > 0
 
-                # Build set of selected format IDs for template checking
-                # Use composite key (agent_url, format_id) tuples per AdCP spec (same as main.py)
-                selected_format_ids = set()
-                logger.info(
-                    f"[DEBUG] Building selected_format_ids from product_dict['formats']: {product_dict['formats']}"
-                )
-                for fmt in product_dict["formats"]:
-                    agent_url = None
-                    format_id = None
-
-                    if isinstance(fmt, dict):
-                        # Database JSONB: uses "id" per AdCP spec
-                        agent_url = fmt.get("agent_url")
-                        format_id = fmt.get("id") or fmt.get("format_id")  # "id" is AdCP spec, "format_id" is legacy
-                        logger.info(f"[DEBUG] Dict format: agent_url={agent_url}, format_id={format_id}")
-                    elif isinstance(fmt, BaseModel):
-                        # Pydantic object: uses "format_id" attribute (serializes to "id" in JSON)
-                        agent_url = getattr(fmt, "agent_url", None)
-                        format_id = getattr(fmt, "format_id", None) or getattr(fmt, "id", None)
-                        logger.info(f"[DEBUG] Pydantic format: agent_url={agent_url}, format_id={format_id}")
-                    elif isinstance(fmt, str):
-                        # Legacy: plain string format ID (no agent_url) - should be deprecated
-                        format_id = fmt
-                        logger.warning(f"Product {product_dict['product_id']} has legacy string format: {fmt}")
-
-                    if format_id:
-                        selected_format_ids.add((agent_url, format_id))
-
-                logger.info(f"[DEBUG] Final selected_format_ids set: {selected_format_ids}")
-
                 # Fetch assigned inventory for this product
                 from src.core.database.models import ProductInventoryMapping
 
@@ -2186,7 +2156,6 @@ def edit_product(tenant_id, product_id):
                     "add_product_gam.html",
                     tenant_id=tenant_id,
                     product=product_dict,
-                    selected_format_ids=selected_format_ids,
                     inventory_synced=inventory_synced,
                     formats=get_creative_formats(tenant_id=tenant_id),
                     currencies=currencies,
