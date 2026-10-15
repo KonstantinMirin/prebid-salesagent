@@ -651,15 +651,81 @@ def snapshot_legacy_arm(snapshots: Iterable[LibraryPackageFormatSnapshot]) -> tu
     Duplicate-free and order-preserving on the canonical identity, because the array is a
     checklist: two snapshots asserting one reference ask for one creative, not two.
     """
+    return tuple(ref for _snapshot, ref in _asserted_refs(snapshots))
+
+
+def _asserted_refs(
+    snapshots: Iterable[LibraryPackageFormatSnapshot],
+) -> tuple[tuple[LibraryPackageFormatSnapshot, LibraryFormatId], ...]:
+    """Each seller-asserted ``v1_format_ref``, paired with the snapshot that asserts it.
+
+    The ref-reading rule lives HERE once -- read ``v1_format_ref`` and nothing else, and
+    deduplicate on the canonical ``(agent_url, id)`` identity -- because two consumers
+    need it and they project it differently: the WIRE wants the reference as authored
+    (:func:`snapshot_legacy_arm`), and an ADAPTER carrier wants it carrying the selected
+    declaration's dimensions (:func:`snapshot_adapter_format_ids`). Pairing rather than
+    returning bare refs is what lets the second one reach the right snapshot's ``params``
+    when a package records several.
+
+    Duplicate-free and order-preserving on the identity: two snapshots asserting one
+    reference name one format, not two.
+    """
     seen: set[FormatKey] = set()
-    arm: list[LibraryFormatId] = []
+    pairs: list[tuple[LibraryPackageFormatSnapshot, LibraryFormatId]] = []
     for snapshot in snapshots:
         for ref in snapshot.v1_format_ref or []:
             identity = format_id_identity(ref)
             if identity not in seen:
                 seen.add(identity)
-                arm.append(ref)
-    return tuple(arm)
+                pairs.append((snapshot, ref))
+    return tuple(pairs)
+
+
+def snapshot_adapter_format_ids(
+    snapshots: Iterable[LibraryPackageFormatSnapshot],
+) -> tuple[LibraryFormatId, ...]:
+    """The snapshots as the deprecated references an ADAPTER carrier holds, with dimensions.
+
+    ``MediaPackage.format_ids`` is what every adapter is handed today, so a package whose
+    contract is a snapshot has to reach an adapter through that carrier until stage 7
+    (``salesagent-ol033.8``) lets adapters read the snapshot itself. This is that
+    projection, and it differs from :func:`snapshot_legacy_arm` in ONE way: the
+    declaration's ``params`` dimensions ride on the reference, because that is what the
+    adapter reads off it. The asserted refs themselves carry no width or height --
+    measured: ``v1_format_ref: [{id: display_300x250, width: None, height: None}]`` -- so
+    without the merge an adapter would be handed a dimensionless format and would have to
+    ask the live product, which is the substitution the snapshot exists to prevent.
+
+    SELLER-ASSERTED ONLY, like its sibling: ``registries/v1-canonical-mapping.json`` makes
+    ``v1_format_ref`` the one legal v2 -> v1 source and forbids synthesizing an id from the
+    registry. A snapshot asserting no reference therefore projects to NOTHING here, and the
+    caller decides what to do with that -- this function does not invent a name for a
+    declaration the seller never paired with one.
+
+    CEILING, stated because it is a real one: a canonical-only declaration with no
+    ``v1_format_ref`` cannot be expressed in this carrier at all. The upgrade path is
+    stage 7 -- the adapter reads ``formats_to_provide`` and this projection is deleted --
+    not a synthesized id here.
+    """
+    return tuple(
+        ref.model_copy(
+            update={
+                name: value
+                for name, value in (
+                    ("width", _plain_param(snapshot, "width")),
+                    ("height", _plain_param(snapshot, "height")),
+                    ("duration_ms", _plain_param(snapshot, "duration_ms")),
+                )
+                if value is not None
+            }
+        )
+        for snapshot, ref in _asserted_refs(snapshots)
+    )
+
+
+def _plain_param(snapshot: LibraryPackageFormatSnapshot, name: str) -> Any:
+    """One canonical param off a snapshot, or None when the declaration does not state it."""
+    return getattr(snapshot.params, name, None)
 
 
 def format_accepted_by(requested: FormatRef, supported: FormatRef) -> bool:
