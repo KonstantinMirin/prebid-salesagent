@@ -33,7 +33,7 @@ from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from adcp.types.domains.core.package_format_snapshot import PackageFormatSnapshot as LibraryPackageFormatSnapshot
 from adcp.types.legacy import LegacyPackageRequest as AdcpPackageRequest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from rich.console import Console
 
 from src.core.database.integrity import is_constraint_violation
@@ -199,6 +199,14 @@ def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package | M
         List of creative IDs if present, None otherwise
     """
     return getattr(package, "creative_ids", None)
+
+
+#: The persisted ``formats_to_provide`` document, read back as the pinned snapshot union.
+#: A stored document and a freshly built snapshot are then ONE type, so the approval path
+#: grades the same thing the create path recorded rather than poking at raw dicts.
+_PACKAGE_FORMAT_SNAPSHOTS: TypeAdapter[list[LibraryPackageFormatSnapshot]] = TypeAdapter(
+    list[LibraryPackageFormatSnapshot]
+)
 
 
 def _package_format_snapshots(
@@ -1271,15 +1279,52 @@ def execute_approved_media_buy(
                     if delivery_type_str not in ["guaranteed", "non_guaranteed"]:
                         delivery_type_str = "non_guaranteed"  # Default fallback
 
+                    # THE RECORDED SNAPSHOT, not the live product. ``core/package.json``:
+                    # ``formats_to_provide`` holds "immutable canonical creative contracts
+                    # established for this package ... the live Product is never substituted
+                    # for the package snapshot", and
+                    # ``core/package-format-snapshot.json`` adds "changing selected format
+                    # ... requires a replacement package_id; never mutate this snapshot in
+                    # place". This path rebuilt from ``product.format_ids`` at APPROVAL time,
+                    # so a product republished while the buy waited for a human changed what
+                    # the buyer had already bought -- and the wait is exactly when that
+                    # happens (salesagent-zoo82).
+                    #
+                    # The projection carries the declaration's dimensions, which the asserted
+                    # reference does not: a dimensionless format would send the adapter back
+                    # to the live product by another route. Its ceiling is stated on
+                    # ``snapshot_adapter_format_ids`` -- a declaration asserting no
+                    # ``v1_format_ref`` cannot be named in this carrier, and the upgrade path
+                    # is stage 7 reading the snapshot directly, not an invented id here.
+                    # Until then such a package falls back to the product's arm rather than
+                    # failing an approval over a name the seller never published.
+                    from src.core.format_resolver import snapshot_adapter_format_ids
+
+                    recorded = _PACKAGE_FORMAT_SNAPSHOTS.validate_python(package_config.get("formats_to_provide") or [])
+                    snapshot_formats = snapshot_adapter_format_ids(recorded)
+
                     # Convert formats to FormatId objects with comprehensive validation
                     format_ids_list: list[FormatId] = []
-                    formats = product.format_ids or []
+                    formats: Sequence[Any] = snapshot_formats or product.format_ids or []
 
-                    logger.debug(f"[APPROVAL] Converting {len(formats)} formats for package {package_id}")
+                    logger.debug(
+                        f"[APPROVAL] Converting {len(formats)} formats for package {package_id} "
+                        f"from {'the recorded snapshot' if snapshot_formats else 'the live product'}"
+                    )
 
                     for idx, fmt in enumerate(formats):
                         try:
-                            validated = FormatId.model_validate(fmt)
+                            # ``from_attributes=True`` because the two sources are different
+                            # CLASSES: the product's arm is JSON-column documents, while the
+                            # snapshot's asserted refs are the pinned
+                            # ``FormatReferenceStructuredObject``, and pydantic validation is
+                            # class-sensitive -- the local ``FormatId`` subclass refuses its
+                            # own library parent ("Input should be a valid dictionary or
+                            # instance of FormatId"). Reading attributes is the adoption
+                            # CLAUDE.md names for exactly this ("a receiving model adopts a
+                            # sibling generated class ... never by a dump in the caller"),
+                            # and it still accepts a plain document -- measured both ways.
+                            validated = FormatId.model_validate(fmt, from_attributes=True)
                             url_str = str(validated.agent_url)
                             if not url_str.startswith(("http://", "https://")):
                                 raise ValueError(f"agent_url must be HTTP(S), got: {url_str}")
