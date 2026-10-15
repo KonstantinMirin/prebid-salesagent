@@ -258,7 +258,14 @@ dc build postgres adcp-server adcp-server-storyboard proxy tests
 # `tests` image is built and before anything uses it. A failure to read it records
 # null rather than aborting the run: an unknown pin is worth less than no run.
 _adcp_pin="$(dc run --rm --no-deps -T tests python -m scripts.audit.run_identity --adcp 2>/dev/null | tail -1)" || _adcp_pin=""
-python3 -m scripts.audit.run_identity --write "$RESULTS_DIR" --adcp-json "$_adcp_pin"
+# The asserted identity is read HERE, in shell, and passed as arguments. run_identity.py is
+# pure stdlib and cannot import the settings loader (it runs where src/ may not exist), and a
+# raw environment read inside it is banned by ruff-environment.toml. Reading the three
+# variables in the shell satisfies both: SA_RUN_* are set by whoever launched the run --
+# cassini forwards them from the client, where .git exists -- and are empty otherwise, which
+# run_identity records as an absent identity rather than guessing one.
+python3 -m scripts.audit.run_identity --write "$RESULTS_DIR" --adcp-json "$_adcp_pin" \
+    --commit "${SA_RUN_COMMIT:-}" --branch "${SA_RUN_BRANCH:-}" --tree "${SA_RUN_TREE:-}"
 
 # Pre-create logs/ group-writable + setgid BEFORE anything else touches the
 # bind mount: adcp-server bind-mounts .:/app and creates logs/audit.log at

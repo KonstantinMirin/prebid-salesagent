@@ -79,7 +79,6 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
-import os
 import pathlib
 import socket
 import subprocess
@@ -474,6 +473,25 @@ def main(argv: list[str] | None = None) -> int:
         help="the output of a --adcp invocation inside the suites' container; omitted or unparseable records null",
     )
     parser.add_argument("--root", type=pathlib.Path, default=pathlib.Path.cwd(), help="the tree being graded")
+    # The asserted identity arrives as ARGUMENTS, not as this process's environment, and
+    # both halves of that are deliberate.
+    #
+    # This module is pure stdlib plus `git`, reaching only `--root`. It runs before any
+    # suite and in places where the application package is not importable at all --
+    # `tests/unit/test_run_all_tests_parallel_tox.py` provisions a stub workdir holding
+    # this file and five siblings and NO `src/`, and it executes the real runner against
+    # it. So `from src.core.config import ToolingSettings` here is a ModuleNotFoundError
+    # that ends the run before tox is reached; that is measured, not hypothetical.
+    #
+    # And an `os.environ` read here is banned by ruff-environment.toml, correctly: the
+    # environment is read once, by the settings loader. Arguments satisfy both at once --
+    # `run_all_tests.sh` reads `$SA_RUN_COMMIT` in SHELL, where no such ban applies and no
+    # import is needed, and hands the values over the same way it already hands
+    # `--adcp-json` a value derived outside this process. An identity asserted by the
+    # invoker is an INPUT to the audit, so taking it as one is also the honester shape.
+    parser.add_argument("--commit", default="", help="the sha the invoker asserts this run graded")
+    parser.add_argument("--branch", default="", help="the branch the invoker asserts")
+    parser.add_argument("--tree", default="", help="'clean' or 'dirty', as the invoker found it")
     args = parser.parse_args(argv)
 
     if args.adcp:
@@ -484,7 +502,10 @@ def main(argv: list[str] | None = None) -> int:
         pin = json.loads(args.adcp_json) if args.adcp_json.strip() else None
     except ValueError:
         pin = None
-    identity = collect(args.root, dict(os.environ))
+    identity = collect(
+        args.root,
+        {_ENV_COMMIT: args.commit, _ENV_BRANCH: args.branch, _ENV_TREE: args.tree},
+    )
     payload = document(
         identity,
         args.write,
