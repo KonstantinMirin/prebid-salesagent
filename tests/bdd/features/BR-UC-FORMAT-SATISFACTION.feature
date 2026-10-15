@@ -144,6 +144,109 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # gate that refused none would redden this one. Measured before the change: both were
     # accepted.
 
+  @T-UC-FORMAT-SATISFACTION-schema-invalid @format_satisfaction @requires_db
+  Scenario: an atomically-incomplete dimension is a SCHEMA refusal, not a satisfaction one
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the buyer's package selects "width_without_height"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused INVALID_REQUEST
+
+    # The storyboard's reject_image_width_without_height, and it is in THIS phase, so it is
+    # accounted for here rather than assumed to be someone else's. Its negative_path is
+    # `schema_invalid` while every other refusal in the phase is `payload_well_formed`, and
+    # the error bucket differs with it: INVALID_REQUEST, not UNSUPPORTED_FEATURE.
+    #
+    # MEASURED, not assumed: the pinned PackageRequest refuses `params: {width: 300}` with
+    # no height on construction -- "violates a constraint its schema states outside its
+    # properties (media-buy/package-request.json, root conjunct 3) over format_kind, height,
+    # params" -- so fixed-size dimension atomicity is enforced by the REQUEST BOUNDARY and
+    # the selector never reaches the satisfaction function. The owner is the pinned model,
+    # which is the right owner; what needed grading is that the two buckets stay apart,
+    # because a seller that let this through to satisfaction would answer the buyer
+    # UNSUPPORTED_FEATURE ("this product cannot do that") for a request that is simply
+    # malformed ("you did not finish the dimensions"). Those are different recoveries.
+
+  # ── The same function on the UPDATE and ASSIGNMENT paths ──────────────────────────────
+  #
+  # The bead's grading clause names three paths -- "BDD scenarios run against CREATE, UPDATE
+  # and ASSIGNMENT paths" -- and everything above dispatches create_media_buy. These grade
+  # the other two. All four gates call ONE function, so the canonical lane is live on all of
+  # them by construction; what was ungraded is whether each path actually REACHES it and
+  # answers on the wire with the same code.
+  #
+  # This is also where the skip-vs-refuse divergence lived: a creative carrying no legacy
+  # assertion was SKIPPED by the create gate and REFUSED by these two, so one buyer input
+  # had two answers depending on which tool received it. The accept rows here and the
+  # creative accept row above are the same input through three tools, which is what makes
+  # the convergence observable rather than asserted.
+
+  @T-UC-FORMAT-SATISFACTION-update-accepted @format_satisfaction @requires_db
+  Scenario: update_media_buy accepts a creative whose canonical kind the product publishes
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the buyer already holds a media buy for that product
+    And a creative identified by canonical kind "image" exists
+    When the Buyer Agent assigns that creative through update_media_buy
+    Then the update is accepted
+
+  @T-UC-FORMAT-SATISFACTION-update-refused @format_satisfaction @requires_db
+  Scenario: update_media_buy refuses a creative whose canonical kind the product does not publish
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the buyer already holds a media buy for that product
+    And a creative identified by canonical kind "video_hosted" exists
+    When the Buyer Agent assigns that creative through update_media_buy
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "creative_ids" array
+
+    # The field is asserted here too, and it is a DIFFERENT pointer from the create path's:
+    # core/error.json wants it to name the array the buyer actually sent, and this path has
+    # two of them (creative_ids / creative_assignments). A canonical refusal used to travel
+    # with field=None while the legacy refusals on the same path carried one -- the only
+    # refusal here that did not say which array it was about.
+
+  @T-UC-FORMAT-SATISFACTION-sync-accepted @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives accepts an assignment whose canonical kind the product publishes
+    Given a packaged product declaring a canonical image option fixed at 300x250
+    And the buyer syncs a creative identified by canonical kind "image"
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+  @T-UC-FORMAT-SATISFACTION-sync-refused @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives refuses an assignment whose canonical kind the product does not publish
+    Given a packaged product declaring a canonical image option fixed at 300x250
+    And the buyer syncs a creative identified by canonical kind "video_hosted"
+    When the Buyer Agent assigns it to that package
+    Then the buyer is refused UNSUPPORTED_FEATURE
+
+  @T-UC-FORMAT-SATISFACTION-sync-lenient-canonical @format_satisfaction_sync @requires_db
+  Scenario: lenient validation does not soften a closed-set refusal
+    Given a packaged product declaring a canonical image option fixed at 300x250
+    And the buyer syncs a creative identified by canonical kind "video_hosted"
+    And the buyer asks for lenient validation
+    When the Buyer Agent assigns it to that package
+    Then the buyer is refused UNSUPPORTED_FEATURE
+
+    # THE ASYMMETRY, graded deliberately because it reads like a bug to anyone who meets it
+    # without this scenario. ``validation_mode: "lenient"`` means "skip an assignment this
+    # product will not take and record the reason", and the LEGACY lane still does exactly
+    # that -- the row below proves it. A CANONICAL refusal does not soften, because the
+    # product published a closed set and this creative is outside it: there is no partial
+    # assignment to fall back to, and core/product-format-declaration.json calls the
+    # closed-set rejection "structural, not negotiable". Without these two rows side by
+    # side the next person to read the raise site sees one branch ignoring validation_mode
+    # and "fixes" it.
+
+  @T-UC-FORMAT-SATISFACTION-sync-lenient-legacy @format_satisfaction_sync @requires_db
+  Scenario: lenient validation does soften a deprecated-arm refusal
+    Given a packaged product declaring only the deprecated format_ids
+    And the buyer syncs a creative identified by format_id "video_640x480"
+    And the buyer asks for lenient validation
+    When the Buyer Agent assigns it to that package
+    Then the sync succeeds and records an assignment error for that package
+
+    # The OTHER half of the asymmetry, and the control for the row above: same tool, same
+    # lenient mode, same "this product will not take this creative" condition -- and the
+    # legacy lane skips with a recorded error instead of refusing. Both rows are needed:
+    # either one alone is satisfied by a gate that treats every mode the same.
+
     # wrong_publisher_domain is the second half of formats.mdx's fourth rule. It carries
     # the SAME format_option_id the product publishes under a DIFFERENT publisher_domain,
     # which the pin makes a different option outright: the two arms of

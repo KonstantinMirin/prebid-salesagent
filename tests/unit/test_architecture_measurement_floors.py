@@ -135,6 +135,14 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # purpose: the Examples tables grow, and a number in a comment that nothing derives
         # goes stale the first time a row is added.
         "format-satisfaction",
+        # Its sibling, and the THIRD of the three paths the stage-3 bead grades ("BDD
+        # scenarios run against CREATE, UPDATE and ASSIGNMENT paths"): the sync_creatives
+        # assignment gate, which needs CreativeSyncEnv rather than the media-buy env and so
+        # carries its own tag. Pinned for the identical reason -- its own identity tag means
+        # no coarse uc bucket claims it, so deleting the route row would auto-xfail every
+        # scenario including the two that grade the lenient-mode asymmetry, which nothing
+        # else in the suite observes.
+        "format-satisfaction-sync",
         # local-reporting-cadence-refusal's three scenarios, which dispatch a real
         # create_media_buy and carry their own @reporting_cadence identity tag — so
         # detect_uc claims none of them and deleting the row would auto-xfail all three

@@ -498,7 +498,13 @@ def _validate_creatives_for_assignment(
             # the product published a closed set, the recovery is to pick a format inside
             # it, and collecting it beside the legacy problems would answer the buyer one
             # code for two conditions.
-            raise canonical_refusal(verdict, creative_id=creative.creative_id, product_id=display_name)
+            #
+            # ``field`` is the caller's pointer -- ``packages[i].creative_ids`` or
+            # ``packages[i].creative_assignments``, whichever array the buyer actually sent.
+            # The two call sites already resolve it and the legacy refusals below already
+            # travel with it; a canonical refusal arriving with ``field=None`` would be the
+            # only refusal on this path that did not say which array it is about.
+            raise canonical_refusal(verdict, field=field, creative_id=creative.creative_id, product_id=display_name)
         first_refusal = first_refusal or verdict
         incompatible.append(f"{creative.creative_id} (format '{stored.label}')")
 

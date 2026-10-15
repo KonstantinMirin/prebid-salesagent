@@ -6696,17 +6696,41 @@ ENV_ROUTES: list[EnvRoute] = [
     ),
     EnvRoute(
         tag="format-satisfaction",
-        # BR-UC-FORMAT-SATISFACTION dispatches create_media_buy against a product carrying a
-        # real canonical declaration, so it takes the MediaBuyCreateEnv branch and needs the
-        # full create chain seeded -- its own Given asserts that seeding happened rather than
-        # repeating it. Its own identity tag means detect_uc returns None, so WITHOUT this
-        # row every scenario auto-xfails at fixture setup with "No harness wired for None"
-        # and grades nothing while reading green. Added in the same change as the feature,
-        # and pinned in tests/unit/test_architecture_measurement_floors.py in that same
-        # change -- salesagent-8qela.152 is this pin being forgotten for a sibling row.
+        # BR-UC-FORMAT-SATISFACTION dispatches create_media_buy AND update_media_buy against
+        # a product carrying a real canonical declaration, so it takes MediaBuyDualEnv --
+        # which subclasses MediaBuyCreateEnv and routes an update (discriminated by
+        # media_buy_id) to the update wrappers. The create scenarios are unaffected by the
+        # subclass; what it adds is the second of the three paths the bead grades.
+        #
+        # Its own identity tag means detect_uc returns None, so WITHOUT this row every
+        # scenario auto-xfails at fixture setup with "No harness wired for None" and grades
+        # nothing while reading green. Added in the same change as the feature, and pinned in
+        # tests/unit/test_architecture_measurement_floors.py in that same change --
+        # salesagent-8qela.152 is this pin being forgotten for a sibling row.
         when=lambda m: "format_satisfaction" in m,
-        env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
+        env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
         seed=_seed_media_buy_chain,
+    ),
+    EnvRoute(
+        tag="format-satisfaction-sync",
+        # The THIRD path the bead grades: the sync_creatives assignment gate. A different
+        # tool and so a different env, which is why these scenarios carry their own tag
+        # rather than sharing @format_satisfaction -- one row cannot build two envs. Seeded
+        # by the scenarios' own Givens, because CreativeSyncEnv's default seed does not know
+        # which format arms this feature's product needs to declare.
+        #
+        # Pinned alongside its sibling for the same reason: its tag is its own, so no coarse
+        # uc bucket claims it and deleting this row makes all four scenarios auto-xfail.
+        #
+        # ``_seed_default_tenant_and_principal`` and not ``_seed_media_buy_chain``: a buyer
+        # dispatching sync_creatives has to EXIST (``identity_for`` nulls principal_id on a
+        # failed lookup, so an unseeded principal arrives unauthenticated and is refused
+        # AUTH_MISSING before reaching the gate), but the product these scenarios need
+        # declares format arms the shared chain knows nothing about -- so the product, the
+        # buy and the package are the scenarios' own Givens.
+        when=lambda m: "format_satisfaction_sync" in m,
+        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
+        seed=_seed_default_tenant_and_principal,
     ),
     EnvRoute(
         tag="security-wire-error-safety",
