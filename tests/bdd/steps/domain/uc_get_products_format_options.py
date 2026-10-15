@@ -134,6 +134,28 @@ def given_canonical_only_product_with_ref(ctx: dict, format_kind: str, legacy_id
     )
 
 
+@given("the seller stores a dual-authored product whose declaration is a custom format with no format_shape")
+def given_declaration_the_divergence_check_cannot_read(ctx: dict) -> None:
+    """Store the declaration that took a tenant's whole catalogue down (salesagent-1d5z4).
+
+    Legal where it matters and illegal where it used to be read: the pinned
+    ``ProductFormatDeclaration`` union the DTO declares accepts
+    ``{format_kind: "custom", params: {...}}``, and ``adcp.types.canonical_creative.Format``
+    refuses it ("custom formats require format_shape"). The divergence check validated into
+    the latter, so the conversion raised and ``get_products`` answered INTERNAL_ERROR for
+    every product of the tenant.
+
+    DUAL-authored, by keeping the factory's legacy arm. That is the whole point of this
+    fixture over the sibling that caught the outage: a canonical-only product never reaches
+    the comparison, because "no authored arm" short-circuits above it.
+
+    Spelled as its own Given with no parameters, because every part of it is the subject --
+    the kind, the missing member, and the presence of the other arm. A parameterized version
+    would let a caller store a shape that grades something this scenario does not name.
+    """
+    _store_product(ctx, [{"format_kind": "custom", "params": dict(_STORED_IMAGE_PARAMS)}])
+
+
 @given(
     parsers.parse(
         'the seller stores a dual-authored product whose format_ids names "{authored_id}" and '

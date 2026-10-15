@@ -79,6 +79,39 @@ Feature: Canonical format options a seller stores are announced to buyers on the
     # vacuously: a response that dropped the declaration too would satisfy "no format_ids"
     # while telling the buyer nothing at all.
 
+  @T-UC-GET-PRODUCTS-format-options-undeterminable @format_option_announcement @requires_db
+  Scenario: a declaration the divergence check cannot read is served, not turned into an outage
+    Given the seller stores a dual-authored product whose declaration is a custom format with no format_shape
+    When the buyer requests products
+    Then the announced format option declares format_kind "custom" and params the seller stored
+    And the announced product still carries its format_ids
+    And the response carries no format-declaration advisory
+    # THE REGRESSION TEST for salesagent-1d5z4, and the fixture is the shape that caused it:
+    # `format_kind: "custom"` with no `format_shape` is accepted by the sixteen-arm
+    # ProductFormatDeclaration union the DTO declares, and REFUSED by
+    # adcp.types.canonical_creative.Format ("custom formats require format_shape"). The
+    # divergence check used to validate every stored declaration into that stricter type, so
+    # one legal product raised through the conversion and get_products answered
+    # INTERNAL_ERROR for EVERY product of that tenant.
+    #
+    # DUAL-authored deliberately. The sibling scenario that caught the outage
+    # (BR-UC-GET-PRODUCTS-canonical-format-filters, standard_formats_only) seeds a
+    # CANONICAL-ONLY product, which the "nothing authored, nothing to compare" short-circuit
+    # alone rescues — so it cannot reach the read at all, and the fail-soft behaviour would
+    # ship ungraded. Here the authored arm is present, so the comparison IS attempted and the
+    # unreadable declaration is what it has to survive.
+    #
+    # No advisory, because divergence is NOT DETERMINABLE rather than absent, and the seller
+    # does not get to claim either way about a declaration it could not read. The pin's rule
+    # for this very code arrives at the same place from the other side: "Hard-failing the
+    # entire `get_products` response is discouraged — it punishes downstream buyers for the
+    # producer bug" (enums/error-code.json). An advisory that cannot compute itself must not
+    # take the catalogue down.
+    #
+    # The first two outcomes are what make it falsifiable: a seller that raised returns no
+    # products at all and fails both, and the third catches a seller that invented a
+    # divergence it had no basis for.
+
   @T-UC-GET-PRODUCTS-format-options-divergent @format_option_announcement @requires_db
   Scenario: a product whose two format arms disagree is served, and the producer says so
     Given the seller stores a dual-authored product whose format_ids names "display_300x250_image" and whose declaration asserts "display_728x90_image"

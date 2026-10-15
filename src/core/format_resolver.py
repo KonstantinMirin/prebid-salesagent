@@ -13,16 +13,9 @@ import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from fnmatch import fnmatch
-from types import SimpleNamespace
 from typing import Any
 
-from adcp.canonical_formats import (
-    CANONICAL_CREATIVE_AGENT_URL,
-    format_is_supported,
-    load_default_registry,
-    project_product_to_v1,
-)
-from adcp.types.canonical_creative import Format as LibraryCanonicalFormat
+from adcp.canonical_formats import CANONICAL_CREATIVE_AGENT_URL, format_is_supported, load_default_registry
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from adcp.types.domains.registries.v1_canonical_mapping import V1Pattern as LibraryV1GlobPattern
 from pydantic import ValidationError
@@ -367,6 +360,49 @@ def format_display(identity: FormatKey) -> str:
     return f"{agent_url}{separator}{format_id}"
 
 
+def _declaration_kind(declaration: Any) -> str:
+    """The ``format_kind`` a stored declaration names, or ``""`` when it names none.
+
+    Reads the stored DOCUMENT, so the answer is whatever the seller wrote rather than
+    whatever a model would default. ``""`` for a declaration carrying no kind, which
+    ``core/product-format-declaration.json`` puts in ``required``: such a row exists (no DB
+    constraint covers the contents of a JSON column) and the DTO refuses the product for it
+    downstream. Reporting it as the empty string in an advisory summary is honest; raising
+    here would decide a product's fate inside a comparison.
+    """
+    if not isinstance(declaration, Mapping):
+        return ""
+    kind = declaration.get("format_kind")
+    return str(kind) if kind is not None else ""
+
+
+def _asserted_legacy_identities(declaration: Any) -> list[FormatKey]:
+    """The v1 format identities ONE stored declaration asserts, in declared order.
+
+    The seller's own assertion, read as a field. ``core/product-format-declaration.json``
+    makes ``v1_format_ref`` "the authoritative v2 → v1 link", and this is the only direction
+    that resolves, so there is nothing to compute — see
+    :func:`announced_legacy_format_arm` for why the SDK's projection helper is deliberately
+    not used and why this must not raise.
+
+    ``canonical_formats_only`` short-circuits because the pin makes the two mutually
+    exclusive ("a declaration can EITHER assert no v1 projection OR link to v1 named
+    formats, never both"), so a document carrying both is malformed and its opt-out is the
+    half that is safe to honour: treating it as asserting nothing cannot invent a link.
+
+    Each entry goes through :func:`format_identity_or_none`, which already absorbs the one
+    shape variance a PERSISTED reference has and answers ``None`` instead of raising — the
+    same reasoning that function records, applied one level up.
+    """
+    if not isinstance(declaration, Mapping) or declaration.get("canonical_formats_only"):
+        return []
+    refs = declaration.get("v1_format_ref")
+    if not isinstance(refs, Iterable) or isinstance(refs, str | bytes | Mapping):
+        return []
+    identities = (format_identity_or_none(ref) for ref in refs)
+    return [identity for identity in identities if identity is not None]
+
+
 @dataclass(frozen=True, slots=True)
 class LegacyFormatArm:
     """What a product announces on its deprecated ``format_ids`` arm, and the divergence
@@ -426,14 +462,34 @@ def announced_legacy_format_arm(
     * Agreement, and a product with no canonical arm at all, announce the authored arm
       unchanged. There is nothing to disagree with.
 
-    The refs are still PROJECTED here, through the SDK, because that is how the asserted
-    set is read — but only to compare it against the authored arm, never to emit. The
-    projection is a LOOKUP and never a computation: ``v1-canonical-mapping.json`` is
-    authoritative for v1 -> v2 only, so a declaration asserting no ``v1_format_ref`` yields
-    nothing to compare and nothing to announce. The storyboard grades the absence directly
-    (``get_seeded_v2_only_product`` carries ``check: field_absent`` on
-    ``products[0].format_ids``: "v2-only product does not invent v1 named-format
-    fallbacks").
+    THE ASSERTED REFS ARE READ OFF THE STORED DOCUMENT, not through the SDK's projection
+    helper, and THIS FUNCTION CANNOT FAIL THE RESPONSE. Both are the same lesson, learned
+    the expensive way (salesagent-1d5z4): this used to validate each stored declaration into
+    ``adcp.types.canonical_creative.Format``, the type ``project_product_to_v1`` is typed
+    to, and that type is STRICTER than the sixteen-arm union the DTO declares. A
+    ``format_kind: "custom"`` declaration with no ``format_shape`` is accepted by the DTO,
+    served on the wire, and REFUSED by ``Format`` ("custom formats require format_shape") —
+    so one legal product raised through ``convert_product_model_to_schema`` and answered
+    INTERNAL_ERROR for every product of that tenant. The helper bought nothing once the
+    projection was declined: its resolution order exists to decide what to EMIT, and the
+    only question left here is which refs the seller ASSERTED, which is a field read.
+    ``salesagent-ol033.17`` is the same type confusion found independently by the stage-3
+    lane, which also answered it by removing the dependency rather than casting around it.
+
+    So a declaration contributes the refs it carries and nothing else, and a document this
+    cannot read contributes NOTHING rather than raising. That is deliberate and it is the
+    pinned rule for this very advisory, arrived at from the other side —
+    ``enums/error-code.json`` on ``FORMAT_DECLARATION_DIVERGENT``: "Hard-failing the entire
+    ``get_products`` response is discouraged — it punishes downstream buyers for the
+    producer bug." An advisory that cannot compute itself must not take the catalogue down.
+    The product is still REFUSED if its declaration is unannounceable — the DTO does that,
+    downstream, which is where announcing is decided; this reads a field for a comparison
+    and has no business deciding whether a product exists.
+
+    A declaration asserting no ``v1_format_ref`` yields nothing to compare and nothing to
+    announce. The storyboard grades that absence directly (``get_seeded_v2_only_product``
+    carries ``check: field_absent`` on ``products[0].format_ids``: "v2-only product does not
+    invent v1 named-format fallbacks").
 
     DIVERGENCE IS MEASURED AGAINST THE AUTHORED ARM, never the announced one. The
     containment the pin states is ``Product.format_ids[]`` ⊇ the ``v1_format_ref`` entries
@@ -447,44 +503,19 @@ def announced_legacy_format_arm(
         format_ids: the legacy arm the product authored, in the shape it is held in.
         format_options: the stored canonical declarations, as the JSON column holds them.
         product_id: the product the advisory would name.
-
-    Raises:
-        pydantic.ValidationError: when a stored declaration is not a valid canonical
-            declaration. Deliberately not absorbed: the conversion already refuses a
-            product carrying a declaration it cannot announce rather than announcing half
-            of it, and a declaration this cannot read is one of those.
     """
     authored = tuple(format_ids or [])
-    # The SDK's projection is typed to ``adcp.types.canonical_creative.Format``, which
-    # consumes ``v1_format_ref`` into a PrivateAttr and exposes it as
-    # ``legacy_format_refs``. MEASURED: it refuses both of the other two shapes this
-    # declaration exists in — the stored document (``'dict' object has no attribute
-    # 'format_kind'``) and the generated union arm the DTO declares
-    # (``'ProductFormatDeclaration1' object has no attribute 'legacy_format_refs'``), so
-    # the stored document is validated into the type the helper actually reads
-    # (salesagent-ftj5x).
-    declarations = [LibraryCanonicalFormat.model_validate(document) for document in format_options or []]
-    if not declarations:
-        return LegacyFormatArm(format_ids=authored, divergence=None)
+    # NOTHING TO COMPARE AGAINST, so nothing to read. A product with no authored legacy arm
+    # cannot disagree with its own declarations, and under a seller that declines to project
+    # it announces no legacy arm either — so the canonically-authored case, which is the
+    # common one and every storyboard canonical fixture, returns without touching
+    # ``format_options`` at all.
+    if not authored:
+        return LegacyFormatArm(format_ids=(), divergence=None)
 
-    # ``SimpleNamespace`` because the SDK helper documents its product argument as
-    # duck-typed on ``product_id`` and ``format_options``, and there is no product MODEL
-    # here to hand it — this function takes the two arms precisely so both its readers can
-    # ask without one of them holding a row.
-    projected = tuple(
-        project_product_to_v1(SimpleNamespace(product_id=product_id, format_options=declarations)).format_ids
-    )
-    # The SDK's own advisories are discarded, not forwarded: ``make_sdk_advisory`` stamps
-    # ``source="sdk"`` and an ``sdk_id``, which misattributes an emission the storyboard
-    # grades as ``source="producer"``, and the codes it mints
-    # (FORMAT_DECLARATION_V1_AMBIGUOUS on every declaration asserting no ref,
-    # FORMAT_DECLARATION_V1_LOSSY_MULTI_SIZE) are consumption-side. Re-minting the lossy
-    # one as a producer advisory is salesagent-bj8pl.
-    asserted = {format_id_identity(ref) for ref in projected}
-    # ``authored`` and never ``authored or projected``: the asserted refs are read to be
-    # COMPARED, not to be emitted. See the "does not project" paragraph above for why that
-    # is the pin's MAY declined rather than a step left out.
-    if not asserted or not authored:
+    declared = [(_declaration_kind(d), _asserted_legacy_identities(d)) for d in format_options or []]
+    asserted = {identity for _, identities in declared for identity in identities}
+    if not asserted:
         return LegacyFormatArm(format_ids=authored, divergence=None)
 
     missing = asserted - product_format_identities(authored)
@@ -498,10 +529,10 @@ def announced_legacy_format_arm(
             format_ids=sorted(format_display(identity) for identity in product_format_identities(authored)),
             format_options_summary=[
                 FormatOptionDivergenceSummary(
-                    format_kind=str(declaration.format_kind),
-                    v1_format_ref=[format_display(format_id_identity(ref)) for ref in declaration.legacy_format_refs],
+                    format_kind=kind,
+                    v1_format_ref=[format_display(identity) for identity in identities],
                 )
-                for declaration in declarations
+                for kind, identities in declared
             ],
             divergence_reason="v1_format_ref_absent_from_format_ids",
         ),
