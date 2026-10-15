@@ -165,17 +165,16 @@ dev = [
 #
 # THREE FACTS ABOUT THIS PIN THAT ARE EASY TO GET WRONG, each measured:
 #
-#   * `%2B`, NOT a literal `+`. The local version segment is `+sa.8qela.2aeef29c2` and must be
-#     percent-encoded in the URL path, while staying literal in the filename. The URL below was
-#     read off the GitHub API rather than composed, and verified resolving (302 -> 200,
-#     content-length 53567411, byte-size identical to the locally built wheel).
+#   * `%2B`, NOT a literal `+`. The local version segment — `+sa.8qela.<graded-sha>` — must be
+#     percent-encoded in the URL path while staying literal in the filename. Read the URL off
+#     the GitHub API rather than composing it, and verify it resolves before committing.
 #   * THE SOURCE LINE IS THE PIN, NOT THE SPECIFIER. `adcp==9.0.0b3` in [project.dependencies]
 #     matches this build because a bare `==` ignores a local segment — and it therefore also
 #     matches `9.0.0b3+anything`, so the specifier cannot say WHICH build is installed. It does
 #     not match `9.0.0b4`, so it still discriminates a real version bump.
 #   * NO GUARD READS THE DISTRIBUTION VERSION. The pin-drift guard
 #     (tests/unit/test_adcp_spec_version.py) asserts `adcp.get_adcp_spec_version()` against
-#     EXPECTED_SPEC_VERSION — the ADCP_VERSION file packaged inside the wheel, 3.2.1 here — so
+#     EXPECTED_SPEC_VERSION — the ADCP_VERSION file packaged inside the wheel — so
 #     the url/path spelling is invisible to it. Nothing under tests/, src/ or scripts/ reads
 #     the resolved package version at all, and nothing reads [tool.uv.sources].
 #
