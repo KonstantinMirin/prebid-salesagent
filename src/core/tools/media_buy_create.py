@@ -93,6 +93,7 @@ from src.core.helpers.creative_helpers import (
     extract_click_url,
     extract_impression_tracker_url,
     extract_media_url_and_dimensions,
+    media_asset_requires_dimensions,
     process_and_upload_package_creatives,
     unidentified_url_asset_reason,
 )
@@ -538,7 +539,12 @@ def _validate_creatives_before_adapter_call(
                 f"Reference creative {creative.creative_id} (format={identity.label}) "
                 f"missing required URL field in assets"
             )
-        if not width or not height:
+        # Dimensions are owed only by a creative whose media slot CARRIES them. An audio
+        # asset has no width or height -- formats/canonical/audio_hosted.json declares
+        # audio_main as asset_type "audio" -- so demanding them of every creative refuses a
+        # canonical audio buy however correctly its manifest is authored. The declaration
+        # says which slots are sized; the gate asks it rather than re-deriving the rule.
+        if media_asset_requires_dimensions(creative_data, format_spec, identity.kind) and (not width or not height):
             validation_errors.append(
                 f"Reference creative {creative.creative_id} missing dimensions (width={width}, height={height})"
             )
@@ -930,7 +936,11 @@ def _build_adapter_asset_from_creative(
     click_url = extract_click_url(creative_data, format_spec)
     impression_tracker_url = extract_impression_tracker_url(creative_data, format_spec)
 
-    if not url or not width or not height:
+    # Same rule as the pre-adapter gate, for the callers it does not run ahead of: an
+    # unsized media slot (audio) owes no dimensions, and refusing it here would refuse a
+    # canonical audio creative on the approval replay and the retroactive push.
+    needs_dimensions = media_asset_requires_dimensions(creative_data, format_spec, identity.kind)
+    if not url or (needs_dimensions and (not width or not height)):
         return None, (
             f"Creative {creative.creative_id} missing url/width/height "
             f"(width={width}, height={height}, url={'set' if url else 'missing'}, format={identity.label})"

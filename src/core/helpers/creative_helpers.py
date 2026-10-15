@@ -835,11 +835,57 @@ def extract_media_url_and_dimensions(
         - Type validation: width/height must be int or coercible to int
         - Uses adcp.utils.get_individual_assets() for backward compatibility with assets_required
     """
+    url, width, height, _sized = _read_media_assets(creative_data, format_spec, kind)
+    return url, width, height
+
+
+def media_asset_requires_dimensions(
+    creative_data: dict[str, Any], format_spec: Any | None, kind: str | None = None
+) -> bool:
+    """Does this creative owe the ad server a width and a height?
+
+    The answer is a property of the slot its media URL came FROM, read off the declaration:
+    an ``image`` or ``video`` slot carries dimensions and an ``audio`` one does not
+    (:data:`SIZED_ASSET_TYPES`, and ``formats/canonical/audio_hosted.json`` declares
+    ``audio_main`` as ``asset_type: "audio"``). So a canonical ``audio_hosted``,
+    ``audio_vast`` or ``audio_daast`` creative resolves a URL and correctly no dimensions,
+    and demanding them of it refuses a buy whose manifest is perfectly authored.
+
+    NOT a property of the KIND. ``canonical_slot_asset_ids("audio_hosted",
+    SIZED_ASSET_TYPES)`` answers ``{"companion_image"}`` -- that kind DOES declare a sized
+    slot -- so a kind-level predicate would still demand dimensions of an audio-only
+    manifest. It is the slot that was actually read that decides.
+
+    True when nothing resolved, so a creative with no media asset at all keeps failing on
+    the caller's URL check rather than slipping past it.
+
+    A SECOND CALL of the same pure read, deliberately. Folding this into
+    :func:`extract_media_url_and_dimensions`'s return would be tidier and would break six
+    test patch sites that stub that name with a 3-tuple -- three of them in
+    tests/integration/test_create_media_buy_behavioral.py -- and a production path that
+    stopped calling the stubbed name would leave those tests silently unmocked. The shared
+    implementation is :func:`_read_media_assets`; there is one rule, not two.
+    """
+    _url, _width, _height, sized = _read_media_assets(creative_data, format_spec, kind)
+    return sized
+
+
+def _read_media_assets(
+    creative_data: dict[str, Any], format_spec: Any | None, kind: str | None
+) -> tuple[str | None, int | None, int | None, bool]:
+    """``(url, width, height, the url's slot carries dimensions)`` — the one media read.
+
+    Dimensions may come from a DIFFERENT slot than the URL: an ``audio_hosted`` manifest
+    carrying both ``audio_main`` and ``companion_image`` takes the URL from the first and
+    the dimensions from the second. The fourth value therefore reports the slot that
+    supplied the URL, which is what decides whether dimensions are OWED.
+    """
     url = None
     width = None
     height = None
+    url_slot_is_sized = True
 
-    assets = creative_data.get("assets") or {}
+    assets = _manifest_assets(creative_data)
     if assets:
         for asset_id, carries_dimensions in _media_asset_candidates(format_spec, kind):
             asset_obj = assets.get(asset_id)
@@ -847,6 +893,7 @@ def extract_media_url_and_dimensions(
                 continue
             if not url and asset_obj.get("url"):
                 url = asset_obj["url"]
+                url_slot_is_sized = carries_dimensions
                 logger.debug("Extracted media URL from creative asset %r", asset_id)
             if carries_dimensions:
                 width = width or _coerce_dimension(asset_obj.get("width"), "width")
@@ -855,16 +902,19 @@ def extract_media_url_and_dimensions(
                 break
 
     # Last: root-level fields, for simple creatives that carry no assets structure at all.
+    # A root-level url names no slot, so nothing says what type it is and dimensions stay
+    # owed -- the same reading MEDIA_ASSET_FALLBACK_IDS gets.
     if not url:
         root_url = creative_data.get("url")
         if root_url:
             url = root_url
+            url_slot_is_sized = True
             logger.debug("Extracted media URL from root-level 'url' field (legacy fallback)")
 
     width = width or _coerce_dimension(creative_data.get("width"), "width")
     height = height or _coerce_dimension(creative_data.get("height"), "height")
 
-    return url, width, height
+    return url, width, height, url_slot_is_sized
 
 
 def extract_click_url(

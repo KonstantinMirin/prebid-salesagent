@@ -20,6 +20,7 @@ from src.core.helpers.creative_helpers import (
     extract_click_url,
     extract_impression_tracker_url,
     extract_media_url_and_dimensions,
+    media_asset_requires_dimensions,
     unidentified_url_asset_reason,
     url_asset_identification,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "_detect_snippet_type",
     # URL extraction helpers
     "extract_media_url_and_dimensions",
+    "media_asset_requires_dimensions",
     "extract_click_url",
     "extract_impression_tracker_url",
     "url_asset_identification",
