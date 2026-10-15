@@ -13,9 +13,12 @@ the literal text under ``src/``, so a sentence ABOUT a suppression it no longer 
 count as one -- a comment that invalidates the number it describes.
 """
 
+import json
 import logging
 import uuid
 from collections.abc import Mapping
+from functools import lru_cache
+from importlib.resources import files
 from typing import TYPE_CHECKING, Any
 
 from adcp.types import ValidationMode
@@ -371,15 +374,61 @@ MEDIA_ASSET_FALLBACK_IDS = {
     "audio",
 }
 
-# Common asset IDs for clickthrough URLs
-CLICKTHROUGH_ASSET_IDS = {
-    "click_url",
-    "clickthrough",
-    "click",
-    "landing_page",
-    "landing_url",
-    "destination_url",
-}
+# Asset ids this seller once acted on by NAME, and no longer does.
+#
+# These are what is left of two hand-maintained guess lists -- ``CLICKTHROUGH_ASSET_IDS``
+# (six members) and ``IMPRESSION_TRACKER_ASSET_IDS`` (four) -- after measuring both against
+# ``core/asset-group-vocabulary.json``, the pin's normative registry of ``asset_group_id``
+# values. Six of those ten ARE registry names or declared aliases and are now answered by
+# the registry lookup in :func:`url_asset_identification`:
+#
+#   click_url, landing_url  -> aliases of ``landing_page_url``
+#   impression_tracker      -> a canonical entry ("Renderer-fired impression tracker URL")
+#   impression_pixel        -> a declared alias of it
+#
+# The six below appear in NO registry entry. Matching one of them and invoking the URL is
+# exactly what ``core/assets/url-asset.json`` forbids: "receivers MUST NOT silently pick a
+# mechanism".
+#
+# They are KEPT, and they no longer resolve anything: a creative keyed one of them is
+# REFUSED with the name said. Deleting them outright would mean a creative that resolves a
+# clickthrough today stops doing so with nobody told, which is the same silence as the bug
+# arrived at from the other side. The pin's own remedy is the rest of that sentence: "they
+# SHOULD reject the manifest."
+#
+# SHRINK-ONLY, and nothing in this repository keys an asset with any of them (measured over
+# every .py, .json and .feature under src/ and tests/: the only hits are an unrelated
+# ``creative_policy.landing_page`` field and a ``tracking_urls.click`` list). The set
+# reaches zero when no deployment's stored creatives use them.
+_DEPRECATED_URL_ASSET_IDS = frozenset(
+    {
+        # once honoured as the click destination
+        "click",
+        "clickthrough",
+        "destination_url",
+        "landing_page",
+        # once honoured as an impression tracker. ``tracker_pixel`` is an asset_type and a
+        # url_type value, never an asset_group_id; ``pixel`` names nothing at all.
+        "pixel",
+        "tracker_pixel",
+    }
+)
+
+# The registry's canonical name for a slot IS the role name, for every url-bearing entry
+# but one. ``core/requirements/url-asset-requirements.json``'s role enum is
+# {clickthrough, landing_page, impression_tracker, click_tracker, viewability_tracker,
+# third_party_tracker}, and the registry declares entries named ``impression_tracker``,
+# ``click_tracker`` and ``viewability_tracker`` -- the same words. So an ``asset_group_id``
+# resolved through the registry lands directly in :data:`_SLOT_ROLE_TO_MECHANISM`, and the
+# only entry needing a translation is the destination, whose canonical name carries the
+# ``_url`` suffix:
+#
+#   landing_page_url : "Click-through destination URL for the ad."
+#
+# That is the whole of the registry-to-role mapping, and ``test_url_asset_identification``
+# asserts it against the registry so a pin that renames or adds an entry surfaces here
+# rather than silently widening or narrowing what this seller invokes.
+_GROUP_ID_ROLE_OVERRIDES = {"landing_page_url": "clickthrough"}
 
 # The pin's OWN role -> mechanism mapping, from the top-level description of
 # ``core/assets/url-asset.json``, verbatim: "When ``url_type`` is absent, receivers SHOULD
@@ -406,13 +455,70 @@ _SLOT_ROLE_TO_MECHANISM = {
     "viewability_tracker": "tracker_script",
 }
 
-# Common asset IDs for impression trackers
-IMPRESSION_TRACKER_ASSET_IDS = {
-    "impression_tracker",
-    "tracker_pixel",
-    "pixel",
-    "impression_pixel",
-}
+
+def _pinned_schema(*parts: str) -> dict[str, Any]:
+    """One pinned schema document, by its path under the bundle this SDK release targets.
+
+    Reached through the SDK's PUBLIC version API -- the way ``src/core/errors/codes.py``
+    reaches the error-code enum -- so a private schema-root helper moving between SDK
+    releases cannot take this down. Callers cache; nothing here runs at import, because the
+    no-import-time-filesystem-IO guard covers this module.
+    """
+    from adcp import get_adcp_spec_version
+    from adcp.validation.version import resolve_bundle_key
+
+    bundle = resolve_bundle_key(get_adcp_spec_version())
+    document = files("adcp") / "_schemas" / bundle
+    for part in parts:
+        document = document / part
+    parsed: dict[str, Any] = json.loads(document.read_text(encoding="utf-8"))
+    return parsed
+
+
+@lru_cache(maxsize=1)
+def _asset_group_vocabulary() -> dict[str, str]:
+    """Every ``asset_group_id`` the pin DEFINES, each mapped to its canonical name.
+
+    ``core/asset-group-vocabulary.json`` is the "canonical registry of asset_group_id
+    values", and under a heading it marks "Two-tier boundary (normative)" it says it
+    "codifies the recommended canonical set so that buyers and sellers share a vocabulary
+    for the most common slot ROLES". So resolving an asset id through it IS the role lookup
+    the pin's fallback ladder asks for, and not a name guess: the registry DEFINES what the
+    id means.
+
+    Canonical names and declared aliases both map to the canonical name, because the
+    registry's own ``governance.alias_policy`` says "Aliases listed for canonical entries
+    ... are recognized as v1-era variants ... v1 aliases continue to work for backwards
+    compatibility".
+
+    THE WHOLE REGISTRY, not just the click-destination entry. Measured at adcp 6.6.0: 49
+    entries, three of them url-typed -- ``landing_page_url``, ``privacy_policy_url`` and
+    ``subtitle_file``. The latter two are a role this seller does not act on, which is a
+    different fact from a role it was never told: an asset keyed ``privacy_policy_url`` is
+    IDENTIFIED (the pin says what it is) and must not be refused merely because no
+    mechanism follows from it. A reader that knew only ``landing_page_url`` would reject
+    every manifest carrying a privacy policy.
+    """
+    defined: dict[str, str] = {}
+    for canonical, entry in _pinned_schema("core", "asset-group-vocabulary.json")["vocabulary"].items():
+        defined[canonical] = canonical
+        for alias in entry.get("aliases") or ():
+            defined[alias] = canonical
+    return defined
+
+
+@lru_cache(maxsize=1)
+def _manifest_url_mechanisms() -> frozenset[str]:
+    """Every ``url_type`` a manifest asset may declare — ``enums/url-asset-type.json``.
+
+    READ off the enum rather than derived from :data:`_SLOT_ROLE_TO_MECHANISM`'s values,
+    which is a different set and a shorter one: the enum carries ``ad_request``
+    ("invokes a third-party display ad endpoint at impression time; it is not a tracker or
+    click destination"), which no format-side role maps to. An asset declaring that
+    ``url_type`` has told the seller its mechanism and must not be refused as unidentified,
+    so deriving this set from the role map would have refused a legitimate manifest.
+    """
+    return frozenset(_pinned_schema("enums", "url-asset-type.json")["enum"])
 
 
 def _slot_field(slot: Any, name: str) -> Any:
@@ -477,26 +583,160 @@ def _requirement_field(requirements: Any, name: str) -> Any:
     return getattr(requirements, name, None)
 
 
-def _mechanisms_declared_by_the_format(format_spec: Any | None) -> dict[str, str]:
-    """``asset_id -> mechanism`` for each url slot whose format declares a usable ``role``.
+def _url_roles_declared_by_the_format(format_spec: Any | None) -> tuple[dict[str, str], set[str]]:
+    """``({asset_id: mechanism}, {asset_id with ANY declared role})`` for a spec's url slots.
 
     The pin's SECOND rung, consulted when a manifest asset omits ``url_type``:
     ``url-asset-requirements.role`` is "the receiver's fallback signal when a manifest URL
     asset omits ``url_type``", and :data:`_SLOT_ROLE_TO_MECHANISM` is the pin's own
     translation of it.
 
-    A url slot whose role is ``third_party_tracker`` is absent from the result and that is
-    correct -- the role is declared, so the asset is identified, but the pin gives its
-    mechanism no safe fallback.
+    TWO answers, because the pin asks two questions of the same field and they come apart
+    on one role. A slot declaring ``third_party_tracker`` appears in the SECOND set and not
+    the first: the seller has been told what the URL is FOR, so the asset is identified and
+    must not be refused, while the pin gives its mechanism "no safe fallback" so nothing may
+    be invoked from it. One walk, since both answers read the same ``role``.
     """
     mechanisms: dict[str, str] = {}
+    identified: set[str] = set()
     for asset_id, asset_type, requirements in declared_slots(format_spec):
         if asset_type != "url":
             continue
-        mechanism = _SLOT_ROLE_TO_MECHANISM.get(str(_requirement_field(requirements, "role") or ""))
+        role = str(_requirement_field(requirements, "role") or "")
+        if not role:
+            continue
+        identified.add(asset_id)
+        mechanism = _SLOT_ROLE_TO_MECHANISM.get(role)
         if mechanism:
             mechanisms[asset_id] = mechanism
-    return mechanisms
+    return mechanisms, identified
+
+
+def _manifest_assets(creative_data: dict[str, Any]) -> dict[str, Any]:
+    """The creative's assets map, or an empty one for a creative that carries no assets."""
+    assets = creative_data.get("assets") or {}
+    return assets if isinstance(assets, dict) else {}
+
+
+def url_asset_identification(
+    creative_data: dict[str, Any], format_spec: Any | None
+) -> tuple[dict[str, str], list[str]]:
+    """What this manifest's url assets are FOR, per the pin's ladder — and which it never said.
+
+    ``core/assets/url-asset.json`` states the receiver's rule normatively, and this is that
+    sentence as code:
+
+        "``url_type`` declares the mechanism a receiver uses to invoke the URL ... Senders
+         SHOULD include ``url_type`` on every URL asset. When ``url_type`` is absent,
+         receivers SHOULD fall back to the format's ``url-asset-requirements.role`` ... When
+         neither ``url_type`` nor a format-side ``role`` is available, receivers MUST NOT
+         silently pick a mechanism; they SHOULD reject the manifest."
+
+    ONE ladder for every mechanism, consulted by both url readers. It used to be the same
+    line shape written three times, each with its own hand-maintained list of guessed asset
+    ids, and the clickthrough reader's list is the thing the MUST NOT condemns.
+
+    Returns ``(mechanisms, unidentified)``:
+
+    * ``mechanisms`` maps an asset id to the ``url-asset-type`` value a receiver may invoke
+      it as. THREE rungs, in the pin's order: the asset's own ``url_type``; else the
+      format-side ``role``; else the ``asset_group_id`` resolved through the vocabulary
+      registry, which is the role signal for a CANONICAL manifest -- a canonical slot
+      carries no ``role`` property of its own (measured: a slot declares asset_group_id,
+      asset_type, required, min, max, max_chars, max_size_kb, pixel_ratios,
+      required_pixel_ratios, logo_slots, required_logo_slots, consumed_for_production and
+      description). There is no fourth rung, and that is the change: the two
+      naming-convention lists that used to sit at the bottom are gone.
+    * ``unidentified`` lists the url assets no rung could speak for. The caller refuses
+      them; nothing here guesses.
+
+    IDENTIFIED IS WIDER THAN INVOKABLE, and conflating the two would refuse correct
+    manifests. An asset is identified, and so absent from ``unidentified``, when the pin
+    says what it IS even if no mechanism follows: a ``third_party_tracker`` role (explicitly
+    "no safe fallback"), or a registry entry whose role this seller does not invoke
+    (``privacy_policy_url``, ``subtitle_file``).
+
+    WHICH ASSETS COUNT AS URL ASSETS is deliberately narrow: one that positively declares
+    ``asset_type: "url"``, plus :data:`_DEPRECATED_URL_ASSET_IDS`. An asset carrying a url
+    and NO ``asset_type`` is not treated as one, because this seller's own asset validator
+    does not require the field -- so a stored legacy creative keyed ``banner_image`` with no
+    declared type would otherwise come back unidentified and be refused, which is the mirror
+    of the bug being fixed. The named exceptions are there so that the creatives this change
+    STOPS resolving a URL for are refused out loud rather than dropped in silence.
+
+    The ``asset_group_id`` is read from the KEY the asset is stored under, which is what a
+    canonical manifest keys by (the pinned storyboards under ``dist/compliance/<pin>/`` all
+    key the destination ``landing_page_url``) and what this seller's slot-satisfaction
+    reader already assumes.
+    """
+    declared_mechanisms, declared_roles = _url_roles_declared_by_the_format(format_spec)
+    vocabulary = _asset_group_vocabulary()
+    may_declare = _manifest_url_mechanisms()
+
+    mechanisms: dict[str, str] = {}
+    unidentified: list[str] = []
+    # Sorted so two assets answering the same question resolve the same way on every run.
+    for asset_id, asset_obj in sorted(_manifest_assets(creative_data).items()):
+        if not isinstance(asset_obj, dict) or not asset_obj.get("url"):
+            continue
+        if str(asset_obj.get("asset_type") or "") != "url" and asset_id not in _DEPRECATED_URL_ASSET_IDS:
+            continue
+
+        url_type = str(asset_obj.get("url_type") or "")
+        if url_type in may_declare:
+            mechanisms[asset_id] = url_type
+        elif asset_id in declared_mechanisms:
+            mechanisms[asset_id] = declared_mechanisms[asset_id]
+        elif asset_id in declared_roles:
+            continue  # a role with no safe fallback: identified, not invokable
+        elif (group := vocabulary.get(asset_id)) is not None:
+            # The registry names the slot's role; the pin's own role table says what may be
+            # invoked from it. A registry role with no entry in that table -- a privacy
+            # policy, a subtitle file -- is identified and simply not invoked.
+            mechanism = _SLOT_ROLE_TO_MECHANISM.get(_GROUP_ID_ROLE_OVERRIDES.get(group, group))
+            if mechanism:
+                mechanisms[asset_id] = mechanism
+        else:
+            unidentified.append(asset_id)
+    return mechanisms, unidentified
+
+
+def unidentified_url_asset_reason(
+    creative_data: dict[str, Any], format_spec: Any | None, creative_id: str
+) -> str | None:
+    """The pin's refusal for a url asset nothing identified, or ``None`` when all are.
+
+    ``core/assets/url-asset.json``: a receiver with neither a ``url_type`` nor a format-side
+    role "MUST NOT silently pick a mechanism; they SHOULD reject the manifest". Returning a
+    reason rather than raising, because the two call sites that must refuse already have a
+    refusal channel each -- the pre-adapter gate's reasons list and the asset builder's
+    error tuple -- and they reach the buyer as different shapes.
+
+    The sentence NAMES the asset and what is missing. A buyer told only "invalid creative"
+    cannot act, and the whole point of refusing rather than returning no clickthrough is
+    that somebody is told something they can fix.
+    """
+    _mechanisms, unidentified = url_asset_identification(creative_data, format_spec)
+    if not unidentified:
+        return None
+    deprecated = sorted(set(unidentified) & _DEPRECATED_URL_ASSET_IDS)
+    detail = (
+        f"{', '.join(repr(a) for a in sorted(unidentified))} "
+        f"carr{'ies' if len(unidentified) == 1 else 'y'} a URL this seller cannot invoke: "
+        f"no 'url_type' on the asset, no role declared by the format, and "
+        f"{'an' if len(unidentified) == 1 else ''} asset id the canonical vocabulary does not define"
+    )
+    remedy = (
+        "Declare 'url_type' on the asset, or key it by the canonical asset_group_id for its "
+        "role (the click destination is 'landing_page_url')."
+    )
+    if deprecated:
+        remedy = (
+            f"{', '.join(repr(a) for a in deprecated)} was honoured as the click destination by "
+            f"earlier versions of this seller and is in no canonical vocabulary entry, so it is no "
+            f"longer acted on. {remedy}"
+        )
+    return f"Reference creative {creative_id}: asset {detail}. {remedy}"
 
 
 def _ids_invoked_as(mechanisms: dict[str, str], mechanism: str) -> list[str]:
@@ -634,10 +874,11 @@ def extract_click_url(
 ) -> str | None:
     """Extract click-through URL from creative data.
 
-    Extraction priority:
-    1. The format-declared ``url-asset-requirements.role`` of a url slot, mapped to a
-       mechanism by :data:`_SLOT_ROLE_TO_MECHANISM` -- the pin's fallback signal.
-    2. Known clickthrough asset_id names (click_url, etc.), a naming-convention guess.
+    Which asset is the click destination is :func:`url_asset_identification`, the pin's own
+    ladder: the asset's ``url_type``, else the format-declared role, else the
+    ``asset_group_id`` the canonical vocabulary registry names as the destination. An asset
+    no rung speaks for is NOT guessed at -- ``unidentified`` is the caller's refusal, not
+    this reader's -- which is why there is no hand-maintained list of names here any more.
 
     Args:
         creative_data: Creative data dict from database
@@ -648,28 +889,15 @@ def extract_click_url(
         Click-through URL string (optionally with macros substituted), or None if not found.
     """
     click_url = None
-    assets = creative_data.get("assets") or {}
-    if not isinstance(assets, dict):
-        assets = {}
+    assets = _manifest_assets(creative_data)
+    mechanisms, _unidentified = url_asset_identification(creative_data, format_spec)
 
-    # Priority 1: a url slot the FORMAT declares as the click destination. Sorted, so two
-    # declared clickthrough slots resolve the same way on every run rather than by the
-    # order the spec happened to list them.
-    for asset_id in _ids_invoked_as(_mechanisms_declared_by_the_format(format_spec), "clickthrough"):
+    for asset_id in _ids_invoked_as(mechanisms, "clickthrough"):
         asset_obj = assets.get(asset_id)
         if isinstance(asset_obj, dict) and asset_obj.get("url"):
             click_url = asset_obj["url"]
-            logger.debug("Extracted click URL from the format's declared clickthrough slot %r", asset_id)
+            logger.debug("Extracted click URL from asset %r, identified as the click destination", asset_id)
             break
-
-    # Priority 2: Fallback to known clickthrough asset_id names
-    if not click_url:
-        for asset_id in sorted(CLICKTHROUGH_ASSET_IDS):
-            asset_obj = assets.get(asset_id)
-            if isinstance(asset_obj, dict) and asset_obj.get("url"):
-                click_url = asset_obj["url"]
-                logger.debug("Extracted click URL from fallback asset %r", asset_id)
-                break
 
     # Apply macro substitution if requested
     if click_url and apply_macro_substitution:
@@ -687,11 +915,16 @@ def extract_click_url(
 def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: Any | None) -> str | None:
     """Extract impression tracker URL from creative data.
 
-    Looks for impression tracker URL in the creative's assets, checking:
-    1. A url slot whose format-declared ``url-asset-requirements.role`` maps to
-       ``tracker_pixel`` (``impression_tracker`` or ``click_tracker``).
-    2. Assets with url_type 'tracker_pixel'
-    3. Assets with common impression tracker asset_id names
+    Which asset is a tracker pixel is :func:`url_asset_identification`, the same ladder the
+    click reader asks -- the asset's ``url_type``, else the format-declared role, else
+    the ``asset_group_id`` resolved through the vocabulary registry, whose canonical
+    ``impression_tracker`` entry is the one the old four-name guess list was approximating.
+    This reader held three branches that were the click reader's three with different
+    literals; they are one ladder now.
+
+    A ``viewability_tracker`` role resolves to ``tracker_script`` and so is NOT returned
+    here. The pin's parenthetical is the reason: "OMID and equivalent verification SDKs
+    require a <script> tag -- firing them as a pixel produces no measurement".
 
     Args:
         creative_data: Creative data dict from database
@@ -700,37 +933,16 @@ def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: A
     Returns:
         Impression tracker URL string or None if not found.
     """
-    tracker_url = None
-    assets = creative_data.get("assets") or {}
-    if not isinstance(assets, dict):
-        assets = {}
+    assets = _manifest_assets(creative_data)
+    mechanisms, _unidentified = url_asset_identification(creative_data, format_spec)
 
-    # Priority 1: a url slot the FORMAT declares as a tracker pixel.
-    for asset_id in _ids_invoked_as(_mechanisms_declared_by_the_format(format_spec), "tracker_pixel"):
+    for asset_id in _ids_invoked_as(mechanisms, "tracker_pixel"):
         asset_obj = assets.get(asset_id)
         if isinstance(asset_obj, dict) and asset_obj.get("url"):
-            tracker_url = asset_obj["url"]
-            logger.debug("Extracted impression tracker from the format's declared tracker slot %r", asset_id)
-            break
+            logger.debug("Extracted impression tracker from asset %r, identified as a tracker pixel", asset_id)
+            return str(asset_obj["url"])
 
-    # Priority 2: Look for assets with tracker_pixel url_type
-    if not tracker_url:
-        for asset_id, asset_obj in sorted(assets.items()):
-            if isinstance(asset_obj, dict) and asset_obj.get("url_type") == "tracker_pixel" and asset_obj.get("url"):
-                tracker_url = asset_obj["url"]
-                logger.debug("Extracted impression tracker from asset %r declaring url_type=tracker_pixel", asset_id)
-                break
-
-    # Priority 3: Check common impression tracker asset_id names
-    if not tracker_url:
-        for asset_id in sorted(IMPRESSION_TRACKER_ASSET_IDS):
-            asset_obj = assets.get(asset_id)
-            if isinstance(asset_obj, dict) and asset_obj.get("url"):
-                tracker_url = asset_obj["url"]
-                logger.debug("Extracted impression tracker from fallback asset %r", asset_id)
-                break
-
-    return tracker_url
+    return None
 
 
 def asset_value_attr(asset: Any, *attr_names: str) -> str | None:

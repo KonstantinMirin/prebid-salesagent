@@ -42,9 +42,9 @@ from src.core.helpers.creative_helpers import (
 )
 from tests.factories.format import _ASSET_CLASS_MAP, FormatFactory, make_asset
 
-#: Deliberately in NO allowlist this seller carries — not in CLICKTHROUGH_ASSET_IDS, not in
-#: IMPRESSION_TRACKER_ASSET_IDS, not in MEDIA_ASSET_FALLBACK_IDS. A slot id the convention
-#: lists happen to contain would let a guess pass for a declaration read.
+#: Deliberately named by nothing but the format under test: no entry or alias of
+#: ``core/asset-group-vocabulary.json``, and no member of ``MEDIA_ASSET_FALLBACK_IDS``. A
+#: slot id some other lookup also answers would let it pass for a declaration read.
 DECLARED_ONLY = "the_slot_the_format_named"
 CLICK_URL = "https://advertiser.example.com/landing"
 TRACKER_URL = "https://measure.example.com/imp.gif"
@@ -134,8 +134,8 @@ class TestClickthroughFromTheDeclaration:
         """No role is the pin's third case, where it forbids a guess.
 
         The control for the two above: it is the ROLE being read, not merely the presence of
-        a url slot. ``CLICKTHROUGH_ASSET_IDS`` cannot reach this asset either — its id is in
-        no list — so the answer is None and the url is not invented into a destination.
+        a url slot. No other rung can reach this asset either — its id is in no registry
+        entry — so the answer is None and the url is not invented into a destination.
         """
         spec = _spec(_url_slot(DECLARED_ONLY, None))
         creative = {"assets": {DECLARED_ONLY: {"asset_type": "url", "url": CLICK_URL}}}

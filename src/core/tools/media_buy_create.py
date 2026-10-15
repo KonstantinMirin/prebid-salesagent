@@ -94,6 +94,7 @@ from src.core.helpers.creative_helpers import (
     extract_impression_tracker_url,
     extract_media_url_and_dimensions,
     process_and_upload_package_creatives,
+    unidentified_url_asset_reason,
 )
 from src.core.helpers.pricing_helpers import pricing_info_for
 from src.core.logging_config import log_safe
@@ -542,6 +543,16 @@ def _validate_creatives_before_adapter_call(
                 f"Reference creative {creative.creative_id} missing dimensions (width={width}, height={height})"
             )
 
+        # core/assets/url-asset.json, on a url asset carrying neither a url_type nor a
+        # format-side role: "receivers MUST NOT silently pick a mechanism; they SHOULD
+        # reject the manifest." Refused HERE, before the adapter call, because the
+        # alternative is what this gate exists to prevent: the buy is created, the creative
+        # is pushed with the URL dropped, and the buyer is told the whole thing succeeded.
+        # No response field carries a click destination, so nothing else would ever say so.
+        unidentified = unidentified_url_asset_reason(creative_data, format_spec, creative.creative_id)
+        if unidentified:
+            validation_errors.append(unidentified)
+
     if bad_state:
         # The STATE per creative, not a joined sentence naming the ids: per-creative
         # outcomes are per-ENTITY problems. Same shape and same code as the
@@ -924,6 +935,15 @@ def _build_adapter_asset_from_creative(
             f"Creative {creative.creative_id} missing url/width/height "
             f"(width={width}, height={height}, url={'set' if url else 'missing'}, format={identity.label})"
         )
+
+    # The same refusal the pre-adapter gate makes, for the callers that gate does not run
+    # ahead of: the approval replay and the retroactive push both reach this builder
+    # directly. One producer of the sentence, two refusal channels -- fixing it in the gate
+    # alone would leave those two paths shipping a creative whose URL this seller was never
+    # told the purpose of.
+    unidentified = unidentified_url_asset_reason(creative_data, format_spec, creative.creative_id)
+    if unidentified:
+        return None, unidentified
 
     asset: dict[str, Any] = {
         "creative_id": creative.creative_id,
