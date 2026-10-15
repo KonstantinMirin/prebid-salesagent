@@ -16,10 +16,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from pytest_bdd import given, parsers, then, when
+from pytest_bdd import given, parsers, then
 
-from tests.bdd.steps._outcome_helpers import wire_advisory_errors, wire_entry, wire_field
-from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps._outcome_helpers import wire_advisory_errors, wire_entry
 from tests.factories import PricingOptionFactory, ProductFactory
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 
@@ -114,10 +113,13 @@ def given_declaration_with_v1_ref(ctx: dict, format_kind: str, legacy_id: str) -
 def given_canonical_only_product_with_ref(ctx: dict, format_kind: str, legacy_id: str) -> None:
     """Store a product whose ONLY authored arm is canonical, and which asserts a v1 link.
 
-    The one shape from which a legacy arm can be DERIVED. Its two siblings are the
-    canonical-only product that asserts nothing (which must derive nothing, because the
-    projection runs v1 -> v2 only) and the dual-authored product (which has an authored arm
-    already), so this is spelled as its own Given rather than as a parameter on either.
+    The shape a PROJECTING seller would dual-emit, which is why it is worth storing under a
+    seller that declines to: it is the only fixture where announcing a legacy arm would be
+    permitted (core/product.json's "sellers MAY additionally project"), so it is the only
+    one whose empty arm distinguishes a decision from an accident. Its two siblings are the
+    canonical-only product that asserts nothing (where there is nothing to project in the
+    first place) and the dual-authored product (which has an authored arm already), so this
+    is spelled as its own Given rather than as a parameter on either.
     """
     _store_product(
         ctx,
@@ -130,49 +132,6 @@ def given_canonical_only_product_with_ref(ctx: dict, format_kind: str, legacy_id
         ],
         with_legacy_arm=False,
     )
-
-
-def _canonical_product_asserting(tenant: Any, legacy_id: str) -> Any:
-    """Persist one canonical-only product asserting *legacy_id*, and return the row.
-
-    Takes the TENANT and returns the row rather than taking ``ctx`` and storing under a key
-    the caller names, for the reason the same-shaped helper in
-    ``uc_get_products_format_id_filter`` records: a ``ctx``-first helper that subscripts
-    ``ctx`` with one of its own parameters is the shape ``test_architecture_bdd_ctx_keys``
-    tracks by function name across every step module.
-    """
-    product = ProductFactory(
-        tenant=tenant,
-        format_ids=None,
-        format_options=[
-            {
-                "format_kind": "image",
-                "params": dict(_STORED_IMAGE_PARAMS),
-                "v1_format_ref": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": legacy_id}],
-            }
-        ],
-    )
-    PricingOptionFactory(product=product)
-    return product
-
-
-@given(
-    parsers.parse(
-        "the seller stores two canonically-authored products asserting v1_format_refs to "
-        '"{selected_id}" and "{other_id}"'
-    )
-)
-def given_two_canonical_products_asserting_refs(ctx: dict, selected_id: str, other_id: str) -> None:
-    """Store the product the filter should reach and the counter-example it must not.
-
-    Both are canonical-only, so NEITHER has an authored legacy arm for the filter to match:
-    whichever one the filter selects, it selected through the DERIVED arm. Identical but for
-    the reference each asserts, so a row that fails is reporting on the derivation and on
-    nothing else.
-    """
-    tenant = ctx["tenant"]
-    ctx["named_product"] = _canonical_product_asserting(tenant, selected_id)
-    ctx["other_product"] = _canonical_product_asserting(tenant, other_id)
 
 
 @given(
@@ -244,43 +203,7 @@ def given_declaration_missing_required_member(ctx: dict, missing_member: str) ->
     _store_product(ctx, [complete])
 
 
-# ── When steps ──────────────────────────────────────────────────────
-
-
-@when(parsers.parse('the buyer requests products filtering format_ids by "{legacy_id}"'))
-def when_request_filtered_by_format_id(ctx: dict, legacy_id: str) -> None:
-    """Dispatch get_products carrying the one legacy reference the filter names.
-
-    ``format_ids`` items are format_id OBJECTS (core/product-filters.json $refs
-    core/format-id.json), never bare slugs, so the filter names both members -- and the
-    agent_url half is the one the declarations assert, because a filter naming a different
-    agent would correctly select neither product and the scenario would pass for a reason
-    it does not name.
-    """
-    dispatch_request(
-        ctx,
-        brief="derived legacy arm filter test",
-        filters={"format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": legacy_id}]},
-    )
-
-
 # ── Then steps ──────────────────────────────────────────────────────
-
-
-@then("the announced products are exactly the product whose declaration asserted that reference")
-def then_only_the_asserting_product_announced(ctx: dict) -> None:
-    """An EXACT set, which is what separates the derivation from its two failure modes.
-
-    Containment in either direction passes for one of them: ``>=`` passes on a derivation
-    that put every asserted reference on every product, and ``<=`` passes on no derivation
-    at all, where the filter selects neither.
-    """
-    announced = {product["product_id"] for product in wire_field(ctx, "products")}
-    expected = {ctx["named_product"].product_id}
-    assert announced == expected, (
-        f"the format_ids filter did not reach exactly the product whose declaration asserts that "
-        f"reference: expected {sorted(expected)}, got {sorted(announced)}"
-    )
 
 
 @then(parsers.parse('the announced format option declares format_kind "{format_kind}" and params the seller stored'))
@@ -354,22 +277,6 @@ def then_format_ids_still_announced(ctx: dict) -> None:
     assert format_ids, (
         "the product announced neither half of its format declaration, so it describes no "
         f"format at all: {sorted(product)}"
-    )
-
-
-@then(parsers.parse('the announced product carries format_ids naming "{legacy_id}"'))
-def then_format_ids_name(ctx: dict, legacy_id: str) -> None:
-    """The legacy arm names exactly the v1 format the scenario says it should.
-
-    The whole reference, for the reason ``then_v1_format_ref_announced`` gives: a v1
-    format_id is an OBJECT (core/format-id.json requires agent_url and id), and an arm
-    carrying only the id names a format in nobody's namespace. Equality rather than
-    containment, because a DERIVED arm that carried a second entry nobody asserted would
-    be the synthesis the registry forbids, and containment would not see it.
-    """
-    product = _announced_product(ctx)
-    assert product.get("format_ids") == [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": legacy_id}], (
-        f"the announced format_ids is not the one reference expected: {product.get('format_ids')!r}"
     )
 
 

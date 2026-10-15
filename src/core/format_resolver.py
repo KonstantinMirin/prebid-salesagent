@@ -399,27 +399,38 @@ def announced_legacy_format_arm(
     format_options: Iterable[Mapping[str, Any]] | None,
     product_id: str,
 ) -> LegacyFormatArm:
-    """The deprecated ``format_ids`` a product announces, DERIVED from its declarations.
+    """The deprecated ``format_ids`` a product announces, and the divergence it carries.
 
-    ``canonical-formats.mdx`` § "Deprecated named-format compatibility projection
-    (normative)" gives the producer three rules and this is all three:
+    THIS SELLER DOES NOT PROJECT. A product announces the legacy arm it AUTHORED, or no
+    legacy arm at all; a canonical declaration's ``v1_format_ref`` is never emitted as a
+    ``format_ids`` entry. ``core/product.json`` on ``format_ids`` makes that a choice and
+    not a gap: "sellers MAY additionally project those declarations to ``format_ids`` for
+    legacy buyers" — permissive — while the same sentence makes the authoring rule a MUST
+    ("New products MUST author canonical ``format_options[]``"), the field is "Deprecated in
+    AdCP 3.2; removed in AdCP 4.0", and "buyers MUST prefer ``format_options``". The one
+    read path a projection would serve, ``filters.format_ids``, carries the SAME deprecation
+    and the pin names its replacements ("Use ``format_kinds`` or ``format_option_refs``"),
+    so projecting would feed a sunsetting filter from a sunsetting field. Declining keeps
+    ``format_id`` an INPUT only, which is what this seller operates on ``format_kind``
+    instead of means.
 
-    * "Canonical ``format_options`` are the source of truth. Compatibility ``format_ids``
-      MUST be derived from them rather than maintained as a second authored catalog." So a
-      product that declares a canonical arm and no legacy one announces the PROJECTION of
-      its declarations — the refs they assert, and nothing else.
+    WHAT IT DOES ENFORCE is the MUST in the same sentence: "When both fields are present
+    they MUST describe the same underlying formats." A product whose two AUTHORED arms
+    disagree announces NO legacy arm and carries ``FORMAT_DECLARATION_DIVERGENT``:
+
     * "A producer that cannot guarantee agreement MUST omit the legacy compatibility
-      projection." A product whose two authored arms disagree announces NO legacy arm; the
-      advisory is what keeps that omission from being the "silently pick one shape and
-      discard the other" the divergence rule forbids.
+      projection" (canonical-formats.mdx § "Deprecated named-format compatibility
+      projection (normative)", Producer rules). The advisory is what keeps that omission
+      from being the "silently pick one shape and discard the other" the divergence rule
+      forbids — the seller serves and tells.
     * Agreement, and a product with no canonical arm at all, announce the authored arm
-      unchanged. There is nothing to derive and nothing to disagree with.
+      unchanged. There is nothing to disagree with.
 
-    THE PROJECTION IS A LOOKUP, never a computation, and that is the whole reason this is
-    safe. ``registries/v1-canonical-mapping.json`` is authoritative for v1 -> v2 only and
-    the reverse is forbidden outright, so the derived arm is exactly the set of
-    ``v1_format_ref`` entries the seller ASSERTED on its own declarations. A declaration
-    asserting none projects to nothing — which the storyboard grades directly
+    The refs are still PROJECTED here, through the SDK, because that is how the asserted
+    set is read — but only to compare it against the authored arm, never to emit. The
+    projection is a LOOKUP and never a computation: ``v1-canonical-mapping.json`` is
+    authoritative for v1 -> v2 only, so a declaration asserting no ``v1_format_ref`` yields
+    nothing to compare and nothing to announce. The storyboard grades the absence directly
     (``get_seeded_v2_only_product`` carries ``check: field_absent`` on
     ``products[0].format_ids``: "v2-only product does not invent v1 named-format
     fallbacks").
@@ -427,9 +438,10 @@ def announced_legacy_format_arm(
     DIVERGENCE IS MEASURED AGAINST THE AUTHORED ARM, never the announced one. The
     containment the pin states is ``Product.format_ids[]`` ⊇ the ``v1_format_ref`` entries
     (``core/product-format-declaration.json``; graded by the ``refs_resolve`` check on the
-    storyboard's ``get_seeded_canonical_product``). Read against the ANNOUNCED arm it
-    would hold by construction — the derivation is what puts the asserted refs there — and
-    the advisory could never fire.
+    storyboard's ``get_seeded_canonical_product``). That distinction is load-bearing under
+    a seller that DOES project, where the announced arm holds the asserted refs by
+    construction and the advisory could never fire; keeping the measurement on the authored
+    arm means the rule reads the same whichever side of that choice the seller is on.
 
     Args:
         format_ids: the legacy arm the product authored, in the shape it is held in.
@@ -469,8 +481,11 @@ def announced_legacy_format_arm(
     # FORMAT_DECLARATION_V1_LOSSY_MULTI_SIZE) are consumption-side. Re-minting the lossy
     # one as a producer advisory is salesagent-bj8pl.
     asserted = {format_id_identity(ref) for ref in projected}
+    # ``authored`` and never ``authored or projected``: the asserted refs are read to be
+    # COMPARED, not to be emitted. See the "does not project" paragraph above for why that
+    # is the pin's MAY declined rather than a step left out.
     if not asserted or not authored:
-        return LegacyFormatArm(format_ids=authored or projected, divergence=None)
+        return LegacyFormatArm(format_ids=authored, divergence=None)
 
     missing = asserted - product_format_identities(authored)
     if not missing:

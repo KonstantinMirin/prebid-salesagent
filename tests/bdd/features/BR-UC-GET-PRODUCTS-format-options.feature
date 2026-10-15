@@ -20,11 +20,14 @@ Feature: Canonical format options a seller stores are announced to buyers on the
   # and it is only worth anything if the assertion survives to the buyer, which is what the
   # first scenario grades.
   #
-  # The deprecated arm is DERIVED from those declarations where there is one to derive, and
-  # a product whose two authored arms disagree is served with a non-fatal producer advisory
-  # rather than refused. Both are the producer rules of canonical-formats.mdx § "Deprecated
-  # named-format compatibility projection (normative)"; the advisory's shape is graded by
-  # the canonical_formats storyboard's get_seeded_divergent_product step.
+  # The deprecated arm is NEVER DERIVED from those declarations: projecting a declaration's
+  # v1_format_ref into format_ids is a MAY in core/product.json and this seller declines it,
+  # on a field removed in AdCP 4.0 whose only read path carries the same deprecation. What
+  # the same sentence makes a MUST is that two PRESENT fields "MUST describe the same
+  # underlying formats" — so a product whose two authored arms disagree is served with a
+  # non-fatal producer advisory and no legacy arm, rather than refused. That shape is graded
+  # by the canonical_formats storyboard's get_seeded_divergent_product step, which a
+  # refusing seller fails.
   #
   # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/product.json
   # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/product-format-declaration.json
@@ -55,42 +58,26 @@ Feature: Canonical format options a seller stores are announced to buyers on the
     # way, so the fixture straddled two behaviours and said so nowhere. The third outcome
     # is what pins it: this is the AGREEING case, and it must not advise.
 
-  @T-UC-GET-PRODUCTS-format-options-derived-legacy-arm @format_option_announcement @requires_db
-  Scenario: a canonically-authored product asserting a v1_format_ref is announced on both arms
+  @T-UC-GET-PRODUCTS-format-options-ref-not-projected @format_option_announcement @requires_db
+  Scenario: a canonically-authored product's asserted v1_format_ref is announced but never projected
     Given the seller stores a canonically-authored product for "image" asserting a v1_format_ref to "display_300x250_image"
     When the buyer requests products
     Then the announced format option carries v1_format_ref naming "display_300x250_image"
-    And the announced product carries format_ids naming "display_300x250_image"
+    And the announced product carries no format_ids key at all
     And the response carries no format-declaration advisory
-    # The product stores NO legacy arm, so the format_ids the buyer receives is DERIVED:
-    # "Canonical `format_options` are the source of truth. Compatibility `format_ids` MUST
-    # be derived from them rather than maintained as a second authored catalog"
-    # (canonical-formats.mdx § Deprecated named-format compatibility projection, Producer
-    # rules). The derivation is a LOOKUP of what the seller asserted and never a
-    # computation — the registry is authoritative for v1 -> v2 only — which is why the
-    # canonical-only scenario further down, whose declaration asserts NO v1_format_ref,
-    # correctly announces no format_ids at all: there is nothing to look up, and
-    # synthesizing one is forbidden outright.
+    # THE SELLER DOES NOT PROJECT, and this is the scenario that says so. The product stores
+    # no legacy arm and its declaration asserts a v1 reference, which is precisely the shape
+    # a projecting seller would dual-emit — core/product.json on format_ids: "sellers MAY
+    # additionally project those declarations to `format_ids` for legacy buyers". MAY. The
+    # same field is "Deprecated in AdCP 3.2; removed in AdCP 4.0", "buyers MUST prefer
+    # `format_options`", and the one read path a projection would serve,
+    # `filters.format_ids`, carries the same deprecation and names its own replacements
+    # ("Use `format_kinds` or `format_option_refs`").
     #
-    # The first outcome is what stops this passing vacuously in the other direction: a
-    # response that dropped the declaration and kept only the derived arm would satisfy the
-    # second while having thrown away the authoritative half.
-
-  @T-UC-GET-PRODUCTS-format-options-derived-arm-is-filterable @format_option_announcement @requires_db
-  Scenario: a legacy format_ids filter reaches a canonically-authored product through its derived arm
-    Given the seller stores two canonically-authored products asserting v1_format_refs to "display_300x250_image" and "display_728x90_image"
-    When the buyer requests products filtering format_ids by "display_300x250_image"
-    Then the announced products are exactly the product whose declaration asserted that reference
-    # The consequence of the derivation for the read side, and the reason it is worth
-    # deriving at all: `filters.format_ids` compares the buyer's reference objects against
-    # the product's legacy arm, so before the derivation a canonically-authored product was
-    # unreachable through that filter whatever it asserted. The filter's own code is
-    # unchanged — what changed is the data under it.
-    #
-    # Falsifiable in both directions by one request, the same way the format_id-filter
-    # feature's scenario is. The catalog holds a second canonical product the filter must
-    # NOT select, so a derivation that emitted every asserted ref on every product returns
-    # both and fails, and no derivation at all returns neither and also fails.
+    # So the absence here is a decision, not an omission, and grading it is what stops the
+    # decision being reversed by accident. The first outcome is what stops it passing
+    # vacuously: a response that dropped the declaration too would satisfy "no format_ids"
+    # while telling the buyer nothing at all.
 
   @T-UC-GET-PRODUCTS-format-options-divergent @format_option_announcement @requires_db
   Scenario: a product whose two format arms disagree is served, and the producer says so
