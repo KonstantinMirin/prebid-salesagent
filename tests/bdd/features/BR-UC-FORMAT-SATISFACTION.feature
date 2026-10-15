@@ -186,7 +186,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
 
   # ── The CREATIVE side of the same function ────────────────────────────────────────────
   #
-  # The two scenarios above grade a PACKAGE SELECTOR. These two grade a stored CREATIVE
+  # The two scenarios above grade a PACKAGE SELECTOR. The ones below grade a stored CREATIVE
   # through the same function, on the create path's pre-adapter gate -- one of the four
   # gates the satisfaction function replaced. A creative seeded by canonical kind asserts
   # NO legacy reference, which is precisely the input those four gates disagreed about: the
@@ -194,23 +194,25 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   # looked at format_options[] at all. So before this change a canonical creative was
   # accepted onto any product whatever its closed set said.
   #
-  # A creative passes params=None into the function -- it states no canonical params, because
-  # the stored identity is a kind and an option and a creative's dimensions live on its
-  # assets. So only the CLOSED-SET step can refuse it here, and that is the step these two
-  # scenarios separate. Grading a creative on params needs the manifest's assets read as
-  # params, which is salesagent-ol033.7.
+  # A creative passes params=None into the satisfaction function -- it states no canonical
+  # params, because the stored identity is a kind and an option and a creative's dimensions
+  # live on its assets. So the SATISFACTION function can refuse it only on the CLOSED-SET
+  # step, which is what the first two scenarios separate. The gate's OTHER check, the one
+  # that reads those assets, is a different refusal with a different code and is the third
+  # scenario. Grading a creative's assets as satisfaction PARAMS -- dimensions on the
+  # manifest against dimensions on the declaration -- is neither, and is salesagent-ol033.7.
 
   @T-UC-FORMAT-SATISFACTION-creative-accepted @format_satisfaction @requires_db
   Scenario: a creative whose canonical kind the product publishes is accepted
     Given the seller declares a canonical format option "fixed_300x250"
-    And the buyer assigns a creative identified by canonical kind "image"
+    And the buyer assigns a creative identified by canonical kind "image" with its media asset keyed "image_main"
     When the Buyer Agent sends the create_media_buy request
     Then the buyer receives the media buy
 
   @T-UC-FORMAT-SATISFACTION-creative-refused @format_satisfaction @requires_db
   Scenario: a creative whose canonical kind the product does not publish is refused
     Given the seller declares a canonical format option "fixed_300x250"
-    And the buyer assigns a creative identified by canonical kind "video_hosted"
+    And the buyer assigns a creative identified by canonical kind "video_hosted" with its media asset keyed "image_main"
     When the Buyer Agent sends the create_media_buy request
     Then the buyer is refused UNSUPPORTED_FEATURE naming the packages field
 
@@ -219,6 +221,61 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # -- so a gate that refused every canonical creative would redden the row above and a
     # gate that refused none would redden this one. Measured before the change: both were
     # accepted.
+    #
+    # The asset key is stated on both rows and is the SAME on both, which is what keeps the
+    # kind the only difference. On this row it is also inert: the closed-set refusal is
+    # raised before the asset gate's collected errors are answered, so this creative is
+    # refused for its kind whatever its assets are keyed.
+
+  # ── Whether the seller can READ a canonical creative's assets at all ──────────────────
+  #
+  # The accept row above is only reachable if the seller can find the creative's media
+  # asset, and for a canonical creative that is a separate question from the closed set.
+  # core/product-format-declaration.json's params.slots[] carries
+  # {asset_group_id, asset_type, required}, and each canonical schema states its own list as
+  # the slots DEFAULT -- formats/canonical/image.json defaults to image_main (image) plus
+  # headline/body_text/primary_text/cta (text) and landing_page_url (url). So the
+  # declaration ALREADY SAYS what a canonical creative's assets are called.
+  #
+  # WHAT WAS WRONG BEFORE. extract_media_url_and_dimensions found a creative's media asset
+  # either by asking the LEGACY format spec for its asset_id, or by matching a hardcoded
+  # 9-member MEDIA_ASSET_FALLBACK_IDS allowlist of naming conventions. A creative identified
+  # by its canonical kind asserts no legacy reference, so no spec resolves and the allowlist
+  # was the only path left -- meaning a canonical creative's assets were readable only by
+  # COINCIDENCE of asset-id naming. Measured: the same creative keyed image_main (what the
+  # pin declares) was refused "missing required URL field in assets", and keyed banner_image
+  # (what this seller happened to guess) was accepted. That is salesagent-ol033.16, and it is
+  # why the accept row above used to seed banner_image with a comment apologising for it.
+  #
+  # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/formats/canonical/image.json
+
+  @T-UC-FORMAT-SATISFACTION-creative-asset-unnamed @format_satisfaction @requires_db
+  Scenario: a canonical creative whose media asset no slot names is refused
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the buyer assigns a creative identified by canonical kind "image" with its media asset keyed "banner"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused VALIDATION_ERROR naming the packages field
+
+    # THE CONTROL FOR THE ACCEPT ROW, and the reason that row is not satisfied by a gate
+    # that simply stopped checking. This creative and the accepted one are the same kind,
+    # the same asset, the same product, and differ in ONE character sequence: the key its
+    # media asset is stored under. `banner` is CreativeFactory's own default and is named by
+    # nothing -- not a slot of any of the sixteen canonical kinds, and not a member of the
+    # fallback allowlist either -- so the seller genuinely cannot find a URL or dimensions
+    # for it, and refusing is correct. A fix that made the gate read the declaration would
+    # redden the accept row if it failed and redden this one if it over-reached.
+    #
+    # The CODE differs from its sibling refusal above, and that is graded rather than
+    # incidental: a creative outside the published closed set is UNSUPPORTED_FEATURE, while
+    # a creative the product does publish whose assets cannot be read is VALIDATION_ERROR.
+    # The two have different buyer recoveries -- name another format, versus re-sync this
+    # creative -- so a gate that collapsed them would send the buyer to the wrong fix.
+    #
+    # NOT GRADED HERE, and filed rather than assumed: a canonical audio creative carries no
+    # dimensions at all and this same gate demands them of every creative
+    # (salesagent-bcqev), and a canonical creative's clickthrough slot landing_page_url is
+    # in no allowlist so the click URL is dropped silently (salesagent-7xi64). Both block
+    # stage 6.
 
   @T-UC-FORMAT-SATISFACTION-schema-invalid @format_satisfaction @requires_db
   Scenario: an atomically-incomplete dimension is a SCHEMA refusal, not a satisfaction one

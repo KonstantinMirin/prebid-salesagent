@@ -322,10 +322,28 @@ def process_and_upload_package_creatives(
 # NOT included:
 # - url: Used for clickthrough URLs and trackers (url_type field distinguishes them)
 # - html/javascript/vast/text: These have 'content' field, not 'url' field
-MEDIA_ASSET_TYPES = {"image", "video", "audio"}
+#
+# frozen because it is also the ASSET-TYPE FILTER handed to
+# ``canonical_slot_asset_ids``, which caches on its arguments.
+MEDIA_ASSET_TYPES = frozenset({"image", "video", "audio"})
 
-# Known media asset IDs for fallback when format spec is not available
-# Based on AdCP creative agent format specs + common conventions
+# Asset types that carry dimensions. Audio does not, so a slot of that type contributes a
+# URL and nothing else -- the same split priority 1 has always made, stated once.
+SIZED_ASSET_TYPES = frozenset({"image", "video"})
+
+# Known media asset IDs for a creative whose format spec did NOT resolve and whose
+# canonical kind declares nothing -- a LEGACY reference the registry could not project.
+# Based on AdCP creative agent format specs + common conventions.
+#
+# THE LAST RESORT, and no longer the only one: a creative identified by its canonical kind
+# reads its asset ids off the declaration's slots (priority 2 below), which is what the
+# pin actually says they are. This list is the v1-era stand-in for that and MAY ONLY
+# SHRINK. Measured against the declaration-derived ids at adcp 6.6.0: the slots name
+# ``icon``, ``main_image`` and ``video`` among them, so those three are redundant for any
+# creative carrying a kind -- but ``Creative.format_kind`` is nullable ("a legacy reference
+# only has a kind once something projects it"), and for a creative with no kind this list
+# is still the only path to its media asset. So none of the thirteen is dead yet, and the
+# list shrinks when the kindless row does.
 MEDIA_ASSET_FALLBACK_IDS = {
     # image assets
     "banner_image",
@@ -365,22 +383,90 @@ IMPRESSION_TRACKER_ASSET_IDS = {
 }
 
 
+def _coerce_dimension(raw: Any, axis: str) -> int | None:
+    """One pinned-int read of a creative's declared dimension, or None with the reason said.
+
+    ONE spelling of the coercion, which used to be four: the format-spec branch logged a
+    warning on a value it could not read and the allowlist branch swallowed it with a bare
+    ``pass``, so the same malformed asset was loud or silent depending on which branch found
+    it. A quiet failure here answers the buyer "missing dimensions" and never says that a
+    dimension WAS there and was unreadable.
+    """
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        logger.warning("Invalid %s in creative assets: %r (type=%s)", axis, raw, type(raw).__name__)
+        return None
+
+
+def _media_asset_candidates(format_spec: Any | None, kind: str | None) -> list[tuple[str, bool]]:
+    """Which asset ids could hold this creative's media, in priority order.
+
+    Each entry is ``(asset_id, carries_dimensions)``. THREE sources, and they are tried in
+    this order because they differ in how much they actually know:
+
+    1. A resolved LEGACY format spec, which names its own ``asset_id`` values and their
+       types. Authoritative for the creative it was resolved for.
+    2. The CANONICAL declaration's slots for the kind the creative carries, which
+       ``core/product-format-declaration.json`` states and each canonical schema defaults.
+       Equally authoritative, and the ONLY source for a creative identified by its kind: it
+       asserts no legacy reference, so no spec resolves and there is nothing to ask.
+    3. :data:`MEDIA_ASSET_FALLBACK_IDS`, a guess by naming convention. Last, because it is
+       a guess -- and before this existed it was the only thing left for a canonical
+       creative, which meant its assets were readable by coincidence of naming.
+
+    Sorted within each source so two candidate ids in one creative's assets resolve the same
+    way on every run; the sets above are unordered, and which one won used to depend on hash
+    iteration.
+    """
+    # Lazy import to avoid circular dependencies
+    from adcp.types import ImageFormatAsset as Assets
+    from adcp.utils import get_individual_assets, has_assets
+
+    from src.core.format_satisfaction import canonical_slot_asset_ids
+
+    candidates: list[tuple[str, bool]] = []
+
+    if format_spec is not None and has_assets(format_spec):
+        for asset_spec in get_individual_assets(format_spec):
+            # Type guard: get_individual_assets only returns individual Assets, not repeatable groups
+            if not isinstance(asset_spec, Assets):
+                continue
+            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
+            if asset_type in MEDIA_ASSET_TYPES:
+                candidates.append((asset_spec.asset_id, asset_type in SIZED_ASSET_TYPES))  # type: ignore[attr-defined]
+
+    if kind:
+        sized = canonical_slot_asset_ids(kind, SIZED_ASSET_TYPES)
+        candidates.extend(
+            (asset_id, asset_id in sized) for asset_id in sorted(canonical_slot_asset_ids(kind, MEDIA_ASSET_TYPES))
+        )
+
+    # Dimensions assumed present: a convention name says nothing about its asset's type.
+    candidates.extend((asset_id, True) for asset_id in sorted(MEDIA_ASSET_FALLBACK_IDS))
+    return candidates
+
+
 def extract_media_url_and_dimensions(
-    creative_data: dict[str, Any], format_spec: Any | None
+    creative_data: dict[str, Any], format_spec: Any | None, kind: str | None = None
 ) -> tuple[str | None, int | None, int | None]:
     """Extract media URL and dimensions from creative data.
 
     All production creatives now use AdCP v2.4+ format with data.assets[asset_id]
     containing typed asset objects per the creative format specification.
 
-    Extraction priority:
-    1. Format spec assets with asset_type in {image, video, audio}
-    2. Known media asset IDs (fallback allowlist)
-    3. Root-level 'url', 'width', 'height' fields (legacy/simple creative fallback)
+    Which asset ids are looked at, and in what order, is :func:`_media_asset_candidates`.
+    Whatever those name, the first candidate present in the creative's assets fills each of
+    the three fields, and the root-level fallback below fills whatever is still missing.
 
     Args:
         creative_data: Creative data dict from database
-        format_spec: Format specification with assets (or deprecated assets_required)
+        format_spec: Format specification with assets, when a legacy reference resolved one
+        kind: The creative's canonical ``format_kind``, whose declaration names its slots.
+            ``None`` for a creative carrying a legacy reference nothing projects -- the one
+            row for which the fallback allowlist is still the only path.
 
     Returns:
         Tuple of (url, width, height). Values are None if not found.
@@ -391,108 +477,34 @@ def extract_media_url_and_dimensions(
         - Type validation: width/height must be int or coercible to int
         - Uses adcp.utils.get_individual_assets() for backward compatibility with assets_required
     """
-    # Lazy import to avoid circular dependencies
-    from adcp.types import ImageFormatAsset as Assets
-    from adcp.utils import get_individual_assets, has_assets
-
     url = None
     width = None
     height = None
 
-    # Priority 1: Use format spec to find media assets
-    if creative_data.get("assets") and format_spec and has_assets(format_spec):
-        for asset_spec in get_individual_assets(format_spec):
-            # Type guard: get_individual_assets only returns individual Assets, not repeatable groups
-            if not isinstance(asset_spec, Assets):
+    assets = creative_data.get("assets") or {}
+    if assets:
+        for asset_id, carries_dimensions in _media_asset_candidates(format_spec, kind):
+            asset_obj = assets.get(asset_id)
+            if not isinstance(asset_obj, dict):
                 continue
-            asset_type = str(asset_spec.asset_type).lower()  # type: ignore[attr-defined]
-            if asset_type in MEDIA_ASSET_TYPES:
-                asset_id = asset_spec.asset_id  # type: ignore[attr-defined]
-                if asset_id in creative_data["assets"]:
-                    asset_obj = creative_data["assets"][asset_id]
-                    if isinstance(asset_obj, dict):
-                        # Extract URL
-                        if not url and asset_obj.get("url"):
-                            url = asset_obj["url"]
-                            logger.debug(f"Extracted media URL from format spec asset '{asset_id}'")
+            if not url and asset_obj.get("url"):
+                url = asset_obj["url"]
+                logger.debug("Extracted media URL from creative asset %r", asset_id)
+            if carries_dimensions:
+                width = width or _coerce_dimension(asset_obj.get("width"), "width")
+                height = height or _coerce_dimension(asset_obj.get("height"), "height")
+            if url and width and height:
+                break
 
-                        # Extract dimensions (only for image/video)
-                        if asset_type in ["image", "video"]:
-                            raw_width = asset_obj.get("width")
-                            raw_height = asset_obj.get("height")
-                            if raw_width is not None and not width:
-                                try:
-                                    width = int(raw_width)
-                                except (ValueError, TypeError):
-                                    logger.warning(
-                                        f"Invalid width type in creative assets: {raw_width} (type={type(raw_width)})"
-                                    )
-                            if raw_height is not None and not height:
-                                try:
-                                    height = int(raw_height)
-                                except (ValueError, TypeError):
-                                    logger.warning(
-                                        f"Invalid height type in creative assets: {raw_height} (type={type(raw_height)})"
-                                    )
-
-                        # Stop if we found everything
-                        if url and width and height:
-                            break
-
-    # Priority 2: Fallback to known media asset IDs (allowlist approach)
-    if not url or not width or not height:
-        if creative_data.get("assets"):
-            for asset_id in MEDIA_ASSET_FALLBACK_IDS:
-                if asset_id in creative_data["assets"]:
-                    asset_obj = creative_data["assets"][asset_id]
-                    if isinstance(asset_obj, dict):
-                        # Extract URL if not found yet
-                        if not url and asset_obj.get("url"):
-                            url = asset_obj["url"]
-                            logger.debug(f"Extracted media URL from fallback asset '{asset_id}'")
-
-                        # Extract dimensions if not found yet
-                        if not width or not height:
-                            raw_width = asset_obj.get("width")
-                            raw_height = asset_obj.get("height")
-                            if raw_width is not None and not width:
-                                try:
-                                    width = int(raw_width)
-                                except (ValueError, TypeError):
-                                    pass
-                            if raw_height is not None and not height:
-                                try:
-                                    height = int(raw_height)
-                                except (ValueError, TypeError):
-                                    pass
-
-                        # Stop if we found everything
-                        if url and width and height:
-                            break
-
-    # Priority 3: Fallback to root-level fields for simple creatives without assets
-    # This supports legacy/simple creative formats that don't use the assets structure
+    # Last: root-level fields, for simple creatives that carry no assets structure at all.
     if not url:
         root_url = creative_data.get("url")
         if root_url:
             url = root_url
             logger.debug("Extracted media URL from root-level 'url' field (legacy fallback)")
 
-    if not width:
-        raw_width = creative_data.get("width")
-        if raw_width is not None:
-            try:
-                width = int(raw_width)
-            except (ValueError, TypeError):
-                pass
-
-    if not height:
-        raw_height = creative_data.get("height")
-        if raw_height is not None:
-            try:
-                height = int(raw_height)
-            except (ValueError, TypeError):
-                pass
+    width = width or _coerce_dimension(creative_data.get("width"), "width")
+    height = height or _coerce_dimension(creative_data.get("height"), "height")
 
     return url, width, height
 

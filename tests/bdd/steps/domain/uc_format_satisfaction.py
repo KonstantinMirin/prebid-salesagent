@@ -286,8 +286,12 @@ def given_declaration(ctx: dict, declaration: str) -> None:
     _ensure_request_defaults(ctx)
 
 
-@given(parsers.parse('the buyer assigns a creative identified by canonical kind "{kind}"'))
-def given_canonical_creative(ctx: dict, kind: str) -> None:
+@given(
+    parsers.parse(
+        'the buyer assigns a creative identified by canonical kind "{kind}" with its media asset keyed "{asset_key}"'
+    )
+)
+def given_canonical_creative(ctx: dict, kind: str, asset_key: str) -> None:
     """Seed a creative carrying a CANONICAL identity and assign it to the package.
 
     ``canonical_kind`` rather than ``format``, which is the whole point: a creative seeded
@@ -296,38 +300,38 @@ def given_canonical_creative(ctx: dict, kind: str) -> None:
     it. The factory derives the stored columns through the same production mapping the sync
     path uses, so this row and a synced row cannot differ in shape.
 
-    The asset is keyed ``banner_image`` -- a member of production's own
-    ``MEDIA_ASSET_FALLBACK_IDS`` -- and that choice is forced by a real gap, not a fixture
-    preference. The create path's pre-adapter gate reads a reference creative's URL and
-    dimensions through ``extract_media_url_and_dimensions``, which finds the media asset
-    EITHER by asking the legacy format spec for its ``asset_id`` OR from that allowlist. A
-    canonical creative asserts no legacy reference, so no spec resolves and the allowlist is
-    the only path left: the factory's default key (``banner``) is not in it, and the gate
-    answered "missing required URL field in assets" for every canonical creative whatever
-    its assets said. Measured here, filed as salesagent-ol033.16 against stage 6, whose job
-    is reading a canonical manifest's assets off the declaration's SLOTS rather than off a
-    deprecated format file.
-    """
-    from tests.factories.creative import CreativeFactory
-    from tests.factories.creative_asset import build_assets, image_spec
+    THE ASSET KEY IS A SCENARIO PARAMETER and not a fixture decision, because it is the one
+    axis two of the scenarios below vary. A canonical creative has no format spec to ask for
+    an ``asset_id`` -- it asserts no legacy reference -- so the key under which its media
+    asset is stored is the whole of what the create path's pre-adapter gate has to go on,
+    and whether the gate can read it is the obligation. ``image_main`` is what
+    ``formats/canonical/image.json`` declares (its ``slots`` default), and a key the
+    declaration does not name must still be refused; the feature states both.
 
-    creative = CreativeFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        canonical_kind=kind,
-        approved=True,
-        data={"assets": build_assets(image_spec("banner_image"))},
-    )
-    ctx["env"]._commit_factory_data()
+    This key used to be hardcoded ``banner_image``, a member of this seller's own
+    ``MEDIA_ASSET_FALLBACK_IDS`` guess-list, because nothing read the declaration and the
+    allowlist was the only path a canonical creative had -- so the scenarios graded the
+    closed set and never the asset reader. That was salesagent-ol033.16; the workaround goes
+    with it.
+    """
+    creative = _seed_canonical_creative(ctx, kind=kind, asset_key=asset_key)
     ctx["request_kwargs"]["packages"][0]["creative_ids"] = [creative.creative_id]
 
 
-def _seed_canonical_creative(ctx: dict, *, kind: str | None = None, format_id: str | None = None) -> Any:
+def _seed_canonical_creative(
+    ctx: dict,
+    *,
+    kind: str | None = None,
+    format_id: str | None = None,
+    asset_key: str = "image_main",
+) -> Any:
     """One approved creative carrying the named identity arm, committed. Returns the row.
 
-    The asset key is ``banner_image``, a member of production's own
-    ``MEDIA_ASSET_FALLBACK_IDS``, and that is forced rather than chosen -- see
-    salesagent-ol033.16 and the Given above it.
+    The default asset key is ``image_main``, which ``formats/canonical/image.json`` declares
+    as the ``image`` kind's required image slot -- so a caller that does not care about the
+    key gets the one the pin names rather than a convention this seller invented. The
+    LEGACY-arm callers (``format_id=``) get it too and are unaffected either way: their
+    creative resolves a format spec, which names its own ``asset_id``.
     """
     from tests.factories.creative import CreativeFactory
     from tests.factories.creative_asset import build_assets, image_spec
@@ -337,7 +341,7 @@ def _seed_canonical_creative(ctx: dict, *, kind: str | None = None, format_id: s
         tenant=ctx["tenant"],
         principal=ctx["principal"],
         approved=True,
-        data={"assets": build_assets(image_spec("banner_image"))},
+        data={"assets": build_assets(image_spec(asset_key))},
         **arm,
     )
     ctx["env"]._commit_factory_data()
@@ -869,6 +873,29 @@ def then_no_legacy_formats_to_provide(ctx: dict) -> None:
         "the declaration asserts no v1_format_ref, so there is nothing to project -- yet the "
         f"package carries format_ids_to_provide={package['format_ids_to_provide']!r}"
     )
+
+
+@then("the buyer is refused VALIDATION_ERROR naming the packages field")
+def then_refused_validation_naming_packages(ctx: dict) -> None:
+    """The ASSET gate's refusal: a creative whose media asset the seller could not read.
+
+    A DIFFERENT CODE from the closed-set refusal beside it, and that is the whole reason
+    this Then exists rather than reusing the sibling. The two conditions are not the same
+    and the pinned enum separates them: a creative outside the product's published set is
+    UNSUPPORTED_FEATURE ("pick a format this product publishes"), while a creative whose
+    stored assets do not carry the URL and dimensions the seller needs "violates business
+    rules beyond schema validation" -- VALIDATION_ERROR, correctable by re-syncing the
+    creative. A scenario that accepted either code would not notice a gate answering the
+    buyer "this product cannot do that" about a creative the product publishes.
+
+    The CODE and the FIELD, and deliberately not the reason text. The gate collects
+    free-text ``details.reasons``, and ``assert_wire_error`` has no ``message_substr`` on
+    purpose: pinning the sentence would grade the raise site's wording, and the one thing
+    the sentence carries that the envelope does not -- which creative -- is prose rather
+    than a protocol position. WHICH creative is unambiguous here anyway: the scenario
+    assigns exactly one.
+    """
+    ctx["result"].assert_wire_error("VALIDATION_ERROR", field="packages")
 
 
 @then("the buyer is refused UNSUPPORTED_FEATURE naming the packages field")

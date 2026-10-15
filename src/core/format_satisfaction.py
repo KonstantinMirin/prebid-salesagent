@@ -53,11 +53,12 @@ WHAT THIS MODULE DOES NOT DO, deliberately:
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from enum import Enum, StrEnum
-from typing import Any
+from functools import lru_cache
+from typing import Any, get_args
 
 from adcp.canonical_formats import upgrade_legacy_format_id
 from adcp.canonical_formats.format_options import FormatKindNotInClosedSetError
@@ -350,6 +351,69 @@ def _slot_shortfall(claimed: Any, accepted: Any) -> list[str]:
         if (slot.get("asset_group_id"), slot.get("asset_type")) not in offered:
             missing.append(str(slot.get("asset_group_id")))
     return missing
+
+
+@lru_cache(maxsize=1)
+def declared_slots_by_kind() -> Mapping[str, tuple[Mapping[str, Any], ...]]:
+    """Every canonical kind's declared slots, read off the PINNED UNION'S ARMS.
+
+    ``core/product-format-declaration.json``'s ``params.slots[]`` carries
+    ``{asset_group_id, asset_type, required}``, and each canonical format schema states its
+    own list as the ``slots`` DEFAULT -- ``formats/canonical/image.json`` defaults to
+    ``image_main`` (image) plus ``headline``/``body_text``/``primary_text``/``cta`` (text)
+    and ``landing_page_url`` (url). So what a canonical creative's assets are CALLED is a
+    property of the pin, and this is the one place that reads it.
+
+    Read off the ARM'S FIELD DEFAULT and not off a validated instance, which was the first
+    version of this and had a hole: two of the sixteen arms require a params member
+    (``coordinated_placements.params.components``,
+    ``seller_rendered_stateful_display.params.states``), so a declaration stating only its
+    kind is REFUSED for them -- and ``seller_rendered_stateful_display`` declares four
+    media slots (``state_canvases``, ``imagery``, ``logo``, ``video_main``) that the
+    refusal would have silently dropped. A default is stated by the schema whether or not a
+    sibling member is required, so reading it needs no instance to exist.
+
+    DERIVED, so no spelling of a kind is hand-listed here; the population is asserted by
+    ``tests/unit/test_canonical_declared_slots.py`` against ``CanonicalFormatKind``, which
+    is what catches a codegen reshape that makes this walk return nothing (an empty map is
+    indistinguishable from "no kind declares slots" at every call site).
+
+    Cached because the answer is a function of the pin alone.
+    """
+    by_kind: dict[str, tuple[Mapping[str, Any], ...]] = {}
+    for arm in get_args(get_args(LibraryFormatDeclaration)[0]):
+        kind = arm.model_fields["format_kind"].default
+        params_model = arm.model_fields["params"].annotation
+        slots = getattr(params_model, "model_fields", {}).get("slots")
+        declared = slots.get_default() if slots is not None else None
+        by_kind[str(kind)] = tuple(slot for slot in declared or () if isinstance(slot, Mapping))
+    return by_kind
+
+
+def canonical_slot_asset_ids(kind: str, asset_types: Collection[str]) -> frozenset[str]:
+    """What canonical *kind* calls its assets of *asset_types*, per its declared slots.
+
+    The answer the create-path asset gate needs: a creative identified by its canonical
+    kind asserts no legacy reference, so no format spec resolves for it and there is no
+    ``asset_id`` to ask a spec for. The declaration already says what the ids are.
+
+    The KIND'S vocabulary, not one product's narrowing of it. A product MAY override the
+    default -- the pin's own words are "make ``headline`` required, narrow ``cta`` to a
+    value enum, or remove slots the surface doesn't consume" -- and all three of those
+    narrow WITHIN this vocabulary. A product that invents a NEW media slot id is the one
+    case this does not cover, and it is deliberately not covered here: reading ONE
+    product's effective declaration is the manifest-against-declaration grading, which is
+    a different question with a different input (the product, not the creative).
+
+    Unknown kinds answer empty, which includes ``custom``: that arm's ``params`` is an open
+    dict with no declared slots, because the pin routes a custom shape through a fetchable
+    ``format_schema`` instead.
+    """
+    return frozenset(
+        str(slot["asset_group_id"])
+        for slot in declared_slots_by_kind().get(kind, ())
+        if slot.get("asset_type") in asset_types and slot.get("asset_group_id")
+    )
 
 
 def _range_unsatisfied(claim: Any, low: float, high: float) -> bool:
