@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 from adcp.server.helpers import valid_actions_for_status
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-from adcp.types import LegacyPackageRequest as AdcpPackageRequest
+from adcp.types.legacy import LegacyPackageRequest as AdcpPackageRequest
 from pydantic import BaseModel, ValidationError
 from rich.console import Console
 

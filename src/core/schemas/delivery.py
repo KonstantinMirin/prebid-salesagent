@@ -17,8 +17,6 @@ from adcp.types import (
     DeliveryStatus,  # noqa: F401 — re-exported for backward compat
 )
 from adcp.types import GetMediaBuyDeliveryRequest as LibraryGetMediaBuyDeliveryRequest
-from adcp.types import LegacyGetCreativeDeliveryResponse as LibraryGetCreativeDeliveryResponse
-from adcp.types import LegacyGetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
 from adcp.types import MediaBuyDeliveryStatus as LibraryMediaBuyDeliveryStatus
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
 from adcp.types.domains.core.geo_delivery_metrics import (
@@ -33,6 +31,10 @@ from adcp.types.domains.media_buy.get_media_buy_delivery_response import (
 from adcp.types.domains.media_buy.get_media_buy_delivery_response import (
     MediaBuyDelivery as LibraryMediaBuyDelivery,
 )  # TODO: no stable alias in adcp.types
+
+# The legacy arm from the module that contains only it — see the note in ``_base.py``.
+from adcp.types.legacy import LegacyGetCreativeDeliveryResponse as LibraryGetCreativeDeliveryResponse
+from adcp.types.legacy import LegacyGetMediaBuyDeliveryResponse as LibraryGetMediaBuyDeliveryResponse
 from pydantic import ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode
