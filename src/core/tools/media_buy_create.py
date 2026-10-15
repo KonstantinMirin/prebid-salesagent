@@ -201,6 +201,30 @@ def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package | M
     return getattr(package, "creative_ids", None)
 
 
+def _package_format_snapshots(
+    selector: "SelectorResolution | None",
+    *,
+    product_id: str | None,
+) -> tuple[LibraryPackageFormatSnapshot, ...]:
+    """The snapshot tuple one package records, from the resolution that admitted it.
+
+    ONE spelling for BOTH persistence sites -- the parked-buy write and the executed-buy
+    write -- because they record the same thing from the same source and a second
+    construction would be a second chance to record it differently. The parked path is
+    work item C7's, reached later than the auto path and for the same reason
+    (``core/package.json``: a package "MUST retain and return this checklist").
+
+    Empty when the selector selected nothing: a product narrowing neither arm, or a
+    request naming no selector. The caller turns that into an ABSENT field rather than an
+    empty array, which is what ``formats_to_provide``'s ``minItems: 1`` requires.
+    """
+    from src.core.format_resolver import package_format_snapshot
+
+    if selector is None or selector.selected is None or product_id is None:
+        return ()
+    return (package_format_snapshot(selector.selected, product_id=product_id),)
+
+
 def _legacy_formats_to_provide(
     snapshots: Sequence[LibraryPackageFormatSnapshot],
     request_package: AdcpPackageRequest | PackageRequest | None,
@@ -3140,6 +3164,24 @@ async def _create_media_buy_impl(
                             # ADCP 2.3 object format or other: _pydantic_json_serializer handles it
                             budget_value = req_pkg.budget
 
+                    # The declaration this package's selector SELECTED, from the one
+                    # resolution that ran above this branch. Work item C7 on the path that
+                    # needs it most: ``core/package.json`` requires a package to "retain and
+                    # return this checklist" and says "the live Product is never substituted
+                    # for the package snapshot", and a buy parked for a human has by
+                    # construction the LONGEST window between create and execution -- the
+                    # window in which an operator can republish the product's declarations.
+                    # It was the one path recording neither canonical field, so a
+                    # canonical-only buyer's parked buy recorded nothing at all about what
+                    # creative it needs (salesagent-1dcfo).
+                    #
+                    # Read, not re-resolved: ``_resolve_package_selectors`` already answered
+                    # for every package, and a second resolution could disagree with the one
+                    # that admitted the request.
+                    pending_snapshots = _package_format_snapshots(
+                        selector_resolutions.get(idx), product_id=req_pkg.product_id
+                    )
+
                     # _pydantic_json_serializer on the engine handles Pydantic models,
                     # AnyUrl, enums, and datetimes in JSONType columns automatically
                     package_config = {
@@ -3156,6 +3198,12 @@ async def _create_media_buy_impl(
                         "targeting_overlay": req_pkg.targeting_overlay,
                         "creative_ids": _get_creative_ids(req_pkg),
                         "format_ids": req_pkg.format_ids,
+                        # The same two fields the auto path records, from the same source and
+                        # through the same helper -- so a parked buy and an executed one
+                        # answer one obligation rather than two. ``minItems: 1`` on
+                        # ``formats_to_provide`` is why an empty selection records None.
+                        "formats_to_provide": list(pending_snapshots) or None,
+                        "format_ids_to_provide": _legacy_formats_to_provide(pending_snapshots, req_pkg),
                         "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
                         "impressions": getattr(req_pkg, "impressions", None),  # legacy field, for display
                     }
@@ -3477,11 +3525,9 @@ async def _create_media_buy_impl(
             # neither arm, or the request named no selector -- and records an empty tuple,
             # which keeps ``formats_to_provide`` absent rather than an empty array the pin
             # does not allow (``minItems: 1``).
-            selector = selector_resolutions.get(pkg_index)
-            if selector is not None and selector.selected is not None:
-                from src.core.format_resolver import package_format_snapshot
-
-                pkg_format_snapshots = (package_format_snapshot(selector.selected, product_id=pkg_product.product_id),)
+            pkg_format_snapshots = _package_format_snapshots(
+                selector_resolutions.get(pkg_index), product_id=pkg_product.product_id
+            )
             format_snapshots_by_index.append(pkg_format_snapshots)
 
             # If found and has format_ids, validate and use those

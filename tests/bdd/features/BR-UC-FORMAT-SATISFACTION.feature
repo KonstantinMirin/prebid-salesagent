@@ -470,6 +470,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     And the buyer's package selects "product_option_ref"
     When the Buyer Agent sends the create_media_buy request
     Then the parked package snapshots the "satisfaction_image_mrec" declaration fixed at 300x250
+    And the parked package's deprecated format_ids_to_provide names "display_300x250"
 
     # WHY THE PARKED BUY IS THE CASE THAT MATTERS MOST, not an edge of the auto path:
     # core/package.json requires a package to "retain and return this checklist" and says

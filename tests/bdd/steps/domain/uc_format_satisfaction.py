@@ -1023,3 +1023,34 @@ def then_buy_is_parked(ctx: dict) -> None:
         f"the buy was reported submitted but persisted status={buy.status!r}, "
         "so nothing is actually waiting for an approver"
     )
+
+
+@then(parsers.parse('the parked package\'s deprecated format_ids_to_provide names "{legacy_id}"'))
+def then_parked_legacy_formats_to_provide(ctx: dict, legacy_id: str) -> None:
+    """Assert the PARKED buy's deprecated projection is derived, not echoed, like the auto path's.
+
+    The buyer sent only ``format_option_refs``, so *legacy_id* can have reached the record
+    only through the selected declaration's own ``v1_format_ref`` -- the one legal v2 -> v1
+    direction (``registries/v1-canonical-mapping.json``). Before the manual branch recorded
+    a snapshot there was nothing to derive from and the field was absent, which
+    ``core/package.json`` says a buyer must not read as full coverage
+    ("Absence means legacy readiness was not reported").
+
+    The auto-path sibling asserts the same thing off the WIRE; this one reads the stored
+    row, because a parked buy's envelope carries no package at all.
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    buy = parked_media_buy(ctx)
+    with MediaBuyUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.media_buys is not None
+        configs = [dict(p.package_config or {}) for p in uow.media_buys.get_packages(buy.media_buy_id)]
+    assert len(configs) == 1, f"expected one persisted package on the parked buy, got {len(configs)}"
+    provided = configs[0].get("format_ids_to_provide")
+    assert isinstance(provided, list), (
+        f"the parked buy records format_ids_to_provide={provided!r}; the selected declaration "
+        f"asserts a v1_format_ref, so the projection has a source"
+    )
+    assert [entry.get("id") for entry in provided] == [legacy_id], (
+        f"format_ids_to_provide names {[e.get('id') for e in provided]}, expected exactly [{legacy_id!r}]"
+    )
