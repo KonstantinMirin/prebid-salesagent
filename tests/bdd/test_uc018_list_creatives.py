@@ -112,11 +112,18 @@ from tests.helpers.pinned_schema import validator_for
 # known formats, so an unregistered id would be rejected on that transport.
 _SYNCED_FORMATS = ("display_300x250", "video_640x480", "audio_30s")
 
-# Bind the UC-018 feature. The wired scenarios are @list-after-sync (#1405),
-# @concept-id (#1407), and the @BR-RULE-034 isolation invariants (#1503); the
-# remaining scenarios xfail fast at the conftest _harness_env fixture. Whole-feature
-# binding via scenarios() is the repo convention the CI shard-splitter requires
-# (scripts/ci/shard_split.py).
+# Bind the UC-018 feature. Whole-feature binding via scenarios() is the repo convention
+# the CI shard-splitter requires (scripts/ci/shard_split.py).
+#
+# EVERY scenario here EXECUTES. This comment used to name three wired tags
+# (@list-after-sync #1405, @concept-id #1407, @BR-RULE-034 #1503) and say "the remaining
+# scenarios xfail fast at the conftest _harness_env fixture", which stopped being true when
+# the UC-018 catch-all EnvRoute lost its xfail_reason: that row now builds the same
+# CreativeListEnv as uc018-list and parks nothing. Left as-is it reads as "a new scenario
+# here grades nothing", which is the opposite of the case and the exact misreading that
+# leaves an obligation ungraded on purpose. What a scenario still needs is its STEPS --
+# an unbound step is converted to an xfail by the conftest, and tests/bdd/
+# dormant_scenarios.txt is the shrink-only ledger that catches it.
 scenarios("features/BR-UC-018-list-creatives.feature")
 
 
@@ -1873,6 +1880,235 @@ def when_list_creatives_format_ids_canonical(ctx: dict) -> None:
     drift apart in how the filter is shaped.
     """
     _dispatch_format_ids_filter(ctx)
+
+
+# ── @format-kind: filters.format_kinds, the canonical-library filter ──────────
+#
+# The vocabulary is READ OFF the pin rather than spelled here, so a scenario naming a kind
+# core/canonical-format-kind.json does not define fails at its own Given instead of seeding
+# a kind production refuses and grading the empty answer.
+_CANONICAL_FORMAT_KINDS: frozenset[str] = frozenset(validator_for("core/canonical-format-kind.json").schema["enum"])
+
+
+def _kind_label(kind: str) -> str:
+    """The seeded label of the creative carrying canonical kind *kind*."""
+    return f"creative on canonical kind {kind}"
+
+
+def _legacy_label(format_id: str) -> str:
+    """The seeded label of the creative asserting legacy reference *format_id*."""
+    return f"creative on legacy format_id {format_id}"
+
+
+@given(parsers.parse('the buyer synced creatives on canonical format_kinds "{first}" and "{second}"'))
+def given_creatives_on_canonical_kinds(ctx: dict, first: str, second: str) -> None:
+    """Seed one canonically-identified creative per named kind — a mixed canonical library.
+
+    The two kinds are checked against the PINNED vocabulary before anything is seeded. A
+    kind outside it would be refused by ``CreativeFormatIdentity`` on construction, so the
+    scenario would fail somewhere in the factory with no sign that the SCENARIO named a kind
+    the pin dropped; and if the refusal ever moved, it would seed an unmatchable row and
+    grade "the filter returned nothing" under a sentence promising a library.
+
+    They are also asserted DISTINCT: the whole grader is "one kind in, the other kind out",
+    which a single kind spelled twice satisfies trivially.
+    """
+    named = (first, second)
+    unknown = sorted(set(named) - _CANONICAL_FORMAT_KINDS)
+    assert not unknown, (
+        f"the scenario names format_kinds {unknown} that core/canonical-format-kind.json "
+        f"does not define; the pinned vocabulary is {sorted(_CANONICAL_FORMAT_KINDS)}"
+    )
+    assert first != second, f"the scenario must name two DIFFERENT kinds to partition on, got {first!r} twice"
+
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+    seeded = [
+        _Seeded(
+            _seed_creative(tenant, principal, canonical_kind=kind, name=_kind_label(kind)).creative_id,
+            _kind_label(kind),
+            "approved",
+            (),
+            None,
+        )
+        for kind in named
+    ]
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["library"] = seeded
+
+
+@given(
+    parsers.parse(
+        'the buyer synced a creative on legacy format_id "{projecting}" and one on "{unprojectable}", '
+        "which no registry pattern projects"
+    )
+)
+def given_creatives_on_legacy_ids(ctx: dict, projecting: str, unprojectable: str) -> None:
+    """Seed two legacy-arm creatives: one whose reference projects to a kind, one whose does not.
+
+    Both go through ``_seed_creative``, which derives the stored columns with the same
+    production accessor the sync path runs — including the v1 -> v2 projection. So which of
+    the two ends up with a canonical kind is decided by the seller's own registry order
+    rather than by this fixture, which is what makes the pair falsifiable: a fixture that
+    stamped the kinds itself would grade its own arithmetic.
+
+    The projection is then asserted to have gone BOTH WAYS before the filter runs. Without
+    that, a registry change that started projecting ``audio_30s`` (or stopped projecting
+    ``display_300x250``) would turn this scenario into a vacuous pass — two rows that match
+    or two that do not, with the partition gone and nothing saying so.
+    """
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+    rows = {
+        format_id: _seed_creative(tenant, principal, format_id, name=_legacy_label(format_id))
+        for format_id in (projecting, unprojectable)
+    }
+    kinds = {format_id: CreativeFormatIdentity.from_row(row).kind for format_id, row in rows.items()}
+    assert kinds[projecting] in _CANONICAL_FORMAT_KINDS, (
+        f"the scenario needs {projecting!r} to project to a canonical kind, but the seeded row "
+        f"carries kind={kinds[projecting]!r}; the partition this scenario grades does not exist"
+    )
+    assert kinds[unprojectable] is None, (
+        f"the scenario needs {unprojectable!r} to project to NOTHING, but the seeded row carries "
+        f"kind={kinds[unprojectable]!r}; the fail-closed half of this scenario would pass vacuously"
+    )
+
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["library"] = [
+        _Seeded(row.creative_id, _legacy_label(format_id), "approved", (), None) for format_id, row in rows.items()
+    ]
+    ctx["projected_kind"] = kinds[projecting]
+    # Which row the fail-closed Then excludes is recorded here rather than spelled there, so
+    # the id lives once -- in the scenario -- and the step cannot name a different one.
+    ctx["unprojectable_label"] = _legacy_label(unprojectable)
+
+
+@when(parsers.re(r'the Buyer Agent sends list_creatives with filters\.format_kinds \["(?P<kind>[^"]+)"\]'))
+def when_list_creatives_format_kinds(ctx: dict, kind: str) -> None:
+    """Dispatch ``filters.format_kinds`` naming the one canonical kind the scenario filters on.
+
+    Items are BARE kind strings, not objects: core/creative-filters.json refs
+    core/canonical-format-kind.json, which is a string enum — unlike the deprecated
+    ``format_ids`` beside it, whose items are format_id objects.
+    """
+    dispatch_request(ctx, filters={"format_kinds": [kind]})
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends list_creatives with filters\.format_kinds \["(?P<first>[^"]+)", "(?P<second>[^"]+)"\]'
+    )
+)
+def when_list_creatives_two_format_kinds(ctx: dict, first: str, second: str) -> None:
+    """Dispatch ``filters.format_kinds`` naming two kinds — the union the pin's "any" asks for.
+
+    A separate binding rather than a widened one: the single-kind regex cannot match a
+    two-item array (``[^"]+`` does not cross a quote), so the two sentences stay distinct and
+    the scenario's own text says how many kinds it sends. Order is the scenario's order,
+    which is also what ``filters_applied`` reports back.
+    """
+    dispatch_request(ctx, filters={"format_kinds": [first, second]})
+
+
+@then(parsers.parse('the creatives array should contain both the "{first}" and the "{second}" creative'))
+def then_both_kinds_creatives(ctx: dict, first: str, second: str) -> None:
+    """Both kinds' creatives come back, and nothing else — an intersection returns neither.
+
+    An exact set rather than two containment checks: a seller that returned the whole
+    library would satisfy "both are present" while having ignored the filter entirely,
+    which is the very defect this family grades.
+    """
+    _assert_returned_exactly(
+        ctx, _ids_labelled(ctx, _kind_label(first), _kind_label(second)), f"the {first} and {second} creatives"
+    )
+
+
+@then(parsers.parse('the creatives array should contain exactly the "{kind}" creative, carrying that format_kind'))
+def then_only_the_kinds_creative(ctx: dict, kind: str) -> None:
+    """Exactly the one creative of the filtered kind, and the wire says which kind it is.
+
+    Two assertions, and the second is not redundant: the set check pins WHICH row came back
+    by the id the Given recorded, while the ``format_kind`` read pins what the buyer can
+    actually SEE. A seller that filtered correctly and emitted the wrong kind (or none)
+    passes the first and fails the second.
+    """
+    _assert_returned_exactly(ctx, _ids_labelled(ctx, _kind_label(kind)), f"the {kind} creative")
+    listed = _wire_creatives(ctx)[0]
+    assert listed.get("format_kind") == kind, (
+        f"the returned creative does not report the kind the buyer filtered on: "
+        f"format_kind={listed.get('format_kind')!r}, expected {kind!r}"
+    )
+
+
+@then(parsers.parse('the creatives array should NOT include the "{kind}" creative'))
+def then_not_the_other_kinds_creative(ctx: dict, kind: str) -> None:
+    """The other kind's creative is absent — named by the id the Given seeded it under.
+
+    Keyed on the seeded id rather than on the absence of a ``format_kind`` VALUE on the
+    wire, so an empty array does not satisfy it by accident: ``_ids_labelled`` fails loudly
+    if the Given never seeded the row this sentence names.
+    """
+    excluded = _ids_labelled(ctx, _kind_label(kind))
+    returned = set(_wire_creative_ids(ctx))
+    assert not (returned & excluded), (
+        f"the format_kinds filter leaked the {kind} creative: {sorted(returned & excluded)}"
+    )
+
+
+@then(parsers.parse('query_summary.filters_applied should report format_kinds "{kind}"'))
+def then_filters_applied_names_format_kinds(ctx: dict, kind: str) -> None:
+    """POST-S7: the buyer reads which filters ran, and this one used not to be named at all.
+
+    The defect this grades was precisely a filter that was accepted and left out of
+    ``filters_applied``, so there was nothing in the response to say it had been dropped.
+    """
+    applied = (wire_dict(ctx).get("query_summary") or {}).get("filters_applied") or []
+    expected = f"format_kinds={kind}"
+    assert expected in applied, f"expected {expected!r} among the applied filters, got {applied}"
+
+
+@then(parsers.parse('the creatives array should contain exactly the creative synced on "{format_id}"'))
+def then_only_the_legacy_creative(ctx: dict, format_id: str) -> None:
+    """The legacy-arm creative whose reference projects to the filtered kind, and nothing else."""
+    _assert_returned_exactly(ctx, _ids_labelled(ctx, _legacy_label(format_id)), f"the creative synced on {format_id}")
+
+
+@then("that creative should be listed by format_id, carrying no format_kind")
+def then_legacy_creative_listed_by_format_id(ctx: dict) -> None:
+    """The wire picks ONE arm, and for a legacy creative it is the one the buyer sent.
+
+    This is what stops the scenario above from being read as "the seller emits the projected
+    kind": list-creatives-response.json's item schema declares format_id and format_kind as
+    a oneOf whose arms forbid each other, so a creative synced by format_id is listed by
+    format_id. The kind is the IDENTITY the filter matched on, not a second wire field — and
+    emitting both is a shape the response model refuses outright.
+    """
+    listed = _wire_creatives(ctx)[0]
+    assert listed.get("format_id") is not None, (
+        f"the legacy creative is not listed by the format_id the buyer sent: {sorted(listed)}"
+    )
+    assert listed.get("format_kind") is None, (
+        f"the listed creative carries BOTH arms of the response oneOf: format_kind="
+        f"{listed.get('format_kind')!r} beside format_id={listed.get('format_id')!r}"
+    )
+
+
+@then("the creatives array should NOT include the creative whose format_id projects to no canonical kind")
+def then_unprojectable_creative_excluded(ctx: dict) -> None:
+    """Fail closed: a creative with no canonical identity matches no kind.
+
+    The Given has already asserted that this row's projection genuinely did not resolve, so
+    an exclusion here is the seller declining to guess rather than the fixture agreeing with
+    itself.
+    """
+    excluded = _ids_labelled(ctx, ctx["unprojectable_label"])
+    returned = set(_wire_creative_ids(ctx))
+    assert not (returned & excluded), (
+        f"the filter returned a creative with no canonical kind, so a NULL identity was "
+        f"treated as matching {ctx['projected_kind']!r}: {sorted(returned & excluded)}"
+    )
 
 
 @when(

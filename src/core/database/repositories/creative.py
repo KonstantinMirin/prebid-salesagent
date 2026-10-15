@@ -156,6 +156,7 @@ class CreativeRepository(SessionEffectsMixin):
         has_variables: bool | None = None,
         creative_ids: list[str] | None = None,
         format_ids: list[FormatKey] | None = None,
+        format_kinds: list[str] | None = None,
         created_after: datetime | None = None,
         created_before: datetime | None = None,
         search: str | None = None,
@@ -178,6 +179,10 @@ class CreativeRepository(SessionEffectsMixin):
         ``format_ids`` carries ``FormatKey`` values — the pin's format_id is an object, so
         matching one member alone would return another agent's like-named format, and the key
         is what carries the canonicalization the comparison requires.
+
+        ``format_kinds`` carries bare canonical kinds and is matched against the
+        ``format_kind`` COLUMN, which is the identity — see the where-clause note below for
+        why that is not the same thing as "the creatives that were synced canonically".
         """
         # Build base query - filter by tenant AND principal for security
         stmt = select(Creative).filter_by(
@@ -219,6 +224,29 @@ class CreativeRepository(SessionEffectsMixin):
             # host case, a default port, an IDN form or a trailing slash is the same agent on
             # both sides.
             stmt = stmt.where(Creative.legacy_format_key.in_(format_ids))
+
+        if format_kinds:
+            # The canonical kind is a COLUMN, so this is one IN over the stored identity --
+            # not a projection repeated per row at read time. core/creative-filters.json:
+            # "Filter by canonical format kinds. Returns creatives matching any supplied
+            # kind", with ``format_ids`` beside it marked deprecated and pointing here.
+            #
+            # IT MATCHES BOTH ARMS, which is the whole point and is easy to get wrong. A
+            # creative synced by a legacy ``format_id`` carries the kind that reference
+            # PROJECTS to (``creative_identity_of`` runs the normative v1 -> v2 order and
+            # ``_identity_columns`` stores the result), so a ``display_300x250`` creative
+            # matches ``image`` even though its wire entry carries ``format_id`` and no
+            # ``format_kind`` -- the wire picks one arm (``wire_format_kind``) and the
+            # IDENTITY is what a filter keys on. Narrowing this to canonically-synced rows
+            # would make ``format_kind`` an arm marker, which is the inversion this column
+            # exists to remove.
+            #
+            # A row whose projection did not resolve holds NULL here and therefore matches
+            # nothing, which is the sixth normative step's fail-closed behaviour arriving
+            # for free: ``IN`` is NULL for a NULL left side, and a creative with no
+            # canonical identity is not KNOWN to be any kind. Do not coalesce it to a
+            # default -- that would answer with a fabricated identity.
+            stmt = stmt.where(Creative.format_kind.in_(format_kinds))
 
         # v3.1 concept_ids filter: concepts group related creatives across sizes
         # and formats (e.g. Flashtalking concepts, Celtra campaign folders). The
