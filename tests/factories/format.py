@@ -272,7 +272,28 @@ def resolvable_format_ref(format_id: str) -> dict[str, str]:
     The refusal is shaped after ``tests/integration/test_creative_agent_live.py``'s: say what
     is wrong, say where the authority is, print the remedy.
 
-    WHAT THIS DOES NOT PROMISE: that the format is USABLE, only that it RESOLVES. Membership
+    CLEARING THIS DOOR DOES NOT MEAN THE CREATIVE WILL BE ACCEPTED. Resolvability and
+    satisfaction are two different gates, and ``satisfies()`` never consults the capture at all
+    (measured by rfc-s1-admin on the create path, salesagent-7byez): an id can be
+    SATISFYING BUT UNSERVED -- ``display_300x250`` passes the satisfaction gate and this door
+    refuses it -- or SERVED BUT UNSATISFYING -- ``display_728x90_image`` clears this door and is
+    refused against a 300x250 declaration.
+
+    They cannot be collapsed because acceptance is a DIFFERENT COMPARISON, and which one runs
+    depends on the product's arms: ``_canonical_lane`` PROJECTS a legacy claim through
+    ``upgrade_legacy_format_id`` and grades the upgraded dimensions, so the id need not equal
+    anything, while ``_legacy_lane`` tests whole-identity membership (``claimed in legacy_keys``)
+    with no projection at all. So when a product declares ONLY ``format_ids`` and that arm names
+    a non-catalog id, the two gates are MUTUALLY UNSATISFIABLE: satisfaction demands exactly the
+    id this door forbids. That is not a fixture quirk and must not be relaxed to unblock a row --
+    ``_legacy_lane``'s own docstring records why it is deliberately not widened.
+
+    Consequence for picking an id: read what the scenario ASSERTS first. A scenario asserting a
+    REFUSAL needs only resolvability, so any of the 71 will do -- which is why salesagent-3oo5h
+    was a one-literal fix. A scenario asserting an ACCEPT needs both gates, so the product's arm
+    must be a catalog id too (salesagent-rkuzz is nine rows where it is not).
+
+    WHAT THIS DOES NOT PROMISE EITHER: that the format is USABLE, only that it RESOLVES. Membership
     and derivability are different sets, and they barely overlap -- rfc-gamph measured that 49
     of the 71 captured ids derive dimensions from no available primitive (salesagent-lyh1i).
     The relation is close to INVERSE, measured on the four ids this feature touches:
