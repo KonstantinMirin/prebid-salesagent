@@ -1097,9 +1097,20 @@ class RealRegistryCreativeSyncEnv(CreativeSyncEnv):
 
     Hermetic for the causes worth grading. A refused destination (cloud metadata,
     a reserved literal, a non-https scheme) is refused BEFORE a connection is
-    opened, so no packet leaves and no DNS answer is needed. A scenario that
-    wants a SUCCESSFUL fetch wants plain ``CreativeSyncEnv`` — here the reference
-    agent would be dialled for real.
+    opened, so no packet leaves and no DNS answer is needed.
+
+    AND HERMETIC FOR A SUCCESSFUL FETCH TOO. This paragraph used to end "a scenario
+    that wants a SUCCESSFUL fetch wants plain ``CreativeSyncEnv`` — here the reference
+    agent would be dialled for real", and that was wrong in a way that cost
+    salesagent-3oo5h two wrong readings: it is why the live public host looked like the
+    defect. Under ``ADCP_TESTING`` — every suite sets it, and ``docker-compose.e2e.yml``
+    sets it for the e2e server too — ``RuntimeSettings.reference_formats_only`` selects
+    ``ReferenceFormatsRegistry``, whose ``_operator_formats_override`` answers an
+    OPERATOR reference from the checked-in capture before any fetch is attempted.
+    Measured: the registry this env leaves unpatched IS ``ReferenceFormatsRegistry``,
+    and a reference naming the public identity resolves offline. So what this env buys
+    is the REAL CATALOG in place of the parent's one-format stub, which is how it
+    reproduces in process a sync refusal that otherwise only e2e_rest can see.
 
     TRAP inherited from the same pattern in ``RealResolverProductEnv``:
     ``self.mock["registry"]`` does not exist after ``__enter__``, so any helper

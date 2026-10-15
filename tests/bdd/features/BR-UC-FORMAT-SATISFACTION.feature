@@ -313,7 +313,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   @T-UC-FORMAT-SATISFACTION-sync-lenient-legacy @format_satisfaction_sync @requires_db
   Scenario: lenient validation does soften a deprecated-arm refusal
     Given a packaged product declaring only the deprecated format_ids
-    And the buyer syncs a creative identified by format_id "video_640x480"
+    And the buyer syncs a creative identified by format_id "video_1280x720"
     And the buyer asks for lenient validation
     When the Buyer Agent assigns it to that package
     Then the sync succeeds and records an assignment error for that package

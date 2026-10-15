@@ -7,6 +7,7 @@ from typing import Any
 import factory
 from factory.alchemy import SQLAlchemyModelFactory
 
+from src.core.creative_agent_registry import PUBLIC_DEFAULT_AGENT_URL
 from src.core.database.models import Creative, CreativeAssignment
 from src.core.database.repositories.creative import _identity_columns
 from src.core.format_resolver import creative_identity_of
@@ -20,7 +21,16 @@ from .principal import PrincipalFactory
 
 #: The creative agent a factory-built creative asserts a format from, unless a test names
 #: another one.
-DEFAULT_CREATIVE_AGENT_URL = "https://creative.adcontextprotocol.org"
+#:
+#: DERIVED from production's own constant, not re-typed, because the two must be the same
+#: string for a fixture's reference to behave like a buyer's. It is a federated IDENTITY and
+#: not a destination: ``_is_operator_agent`` counts this url as an agent the deployment
+#: stands behind, so a reference naming it takes ``ReferenceFormatsRegistry``'s catalog
+#: answer under ``ADCP_TESTING`` and ``_connection_agent_url``'s reroute to the pinned
+#: container otherwise. Any OTHER url -- including the dialable ``CREATIVE_AGENT_URL`` the
+#: e2e stack configures -- is a counterparty, judged by the egress seam. So a fixture names
+#: THIS url and lets production decide the transport; it never names the one it can reach.
+DEFAULT_CREATIVE_AGENT_URL = PUBLIC_DEFAULT_AGENT_URL
 
 
 def seeded_format_identity(
