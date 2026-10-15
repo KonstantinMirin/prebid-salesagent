@@ -11,16 +11,28 @@ creative agent-based format discovery per AdCP v2.4.
 import json
 import logging
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from fnmatch import fnmatch
+from types import SimpleNamespace
 from typing import Any
 
-from adcp.canonical_formats import CANONICAL_CREATIVE_AGENT_URL, format_is_supported, load_default_registry
+from adcp.canonical_formats import (
+    CANONICAL_CREATIVE_AGENT_URL,
+    format_is_supported,
+    load_default_registry,
+    project_product_to_v1,
+)
+from adcp.types.canonical_creative import Format as LibraryCanonicalFormat
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from adcp.types.domains.registries.v1_canonical_mapping import V1Pattern as LibraryV1GlobPattern
 from pydantic import ValidationError
 
 from src.core.database.database_session import get_db_session
-from src.core.errors.details import EntityRefDetails
+from src.core.errors.details import (
+    EntityRefDetails,
+    FormatDeclarationDivergenceDetails,
+    FormatOptionDivergenceSummary,
+)
 from src.core.exceptions import AdCPFormatNotFoundError, AdCPSalesAgentError
 from src.core.schemas import (
     CreativeFormatIdentity,
@@ -353,6 +365,132 @@ def format_display(identity: FormatKey) -> str:
     agent_url, format_id = format_key_parts(identity)
     separator = "" if agent_url.endswith("/") else "/"
     return f"{agent_url}{separator}{format_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyFormatArm:
+    """What a product announces on its deprecated ``format_ids`` arm, and the divergence
+    that shaped it.
+
+    Two fields because one decision answers two questions: what to put on the wire, and
+    whether the omission needs explaining. ``convert_product_model_to_schema`` asks once
+    and reads both — it carries ``format_ids`` onto the product and hands ``divergence`` to
+    the caller's accumulator — so the model is read once and the two answers cannot drift.
+
+    ``divergence`` IS the advisory's wire ``details`` rather than a flag the caller then
+    re-derives the specifics behind. The same facts projected twice is how two readers come
+    to disagree about one decision, and nothing downstream could re-derive these anyway:
+    the divergent product no longer announces the arm they describe.
+
+    ``format_ids`` keeps the entries in whatever shape they arrived in (stored documents
+    for an authored arm, ``FormatReferenceStructuredObject`` for a derived one) for the
+    same reason :func:`product_format_identities` takes ``Iterable[Any]``: a product's
+    legacy references are a JSON column to the model layer and a validated list to the
+    schema layer, and coercing here would make this helper the third opinion.
+    """
+
+    format_ids: tuple[Any, ...]
+    divergence: FormatDeclarationDivergenceDetails | None
+
+
+def announced_legacy_format_arm(
+    *,
+    format_ids: Iterable[Any] | None,
+    format_options: Iterable[Mapping[str, Any]] | None,
+    product_id: str,
+) -> LegacyFormatArm:
+    """The deprecated ``format_ids`` a product announces, DERIVED from its declarations.
+
+    ``canonical-formats.mdx`` § "Deprecated named-format compatibility projection
+    (normative)" gives the producer three rules and this is all three:
+
+    * "Canonical ``format_options`` are the source of truth. Compatibility ``format_ids``
+      MUST be derived from them rather than maintained as a second authored catalog." So a
+      product that declares a canonical arm and no legacy one announces the PROJECTION of
+      its declarations — the refs they assert, and nothing else.
+    * "A producer that cannot guarantee agreement MUST omit the legacy compatibility
+      projection." A product whose two authored arms disagree announces NO legacy arm; the
+      advisory is what keeps that omission from being the "silently pick one shape and
+      discard the other" the divergence rule forbids.
+    * Agreement, and a product with no canonical arm at all, announce the authored arm
+      unchanged. There is nothing to derive and nothing to disagree with.
+
+    THE PROJECTION IS A LOOKUP, never a computation, and that is the whole reason this is
+    safe. ``registries/v1-canonical-mapping.json`` is authoritative for v1 -> v2 only and
+    the reverse is forbidden outright, so the derived arm is exactly the set of
+    ``v1_format_ref`` entries the seller ASSERTED on its own declarations. A declaration
+    asserting none projects to nothing — which the storyboard grades directly
+    (``get_seeded_v2_only_product`` carries ``check: field_absent`` on
+    ``products[0].format_ids``: "v2-only product does not invent v1 named-format
+    fallbacks").
+
+    DIVERGENCE IS MEASURED AGAINST THE AUTHORED ARM, never the announced one. The
+    containment the pin states is ``Product.format_ids[]`` ⊇ the ``v1_format_ref`` entries
+    (``core/product-format-declaration.json``; graded by the ``refs_resolve`` check on the
+    storyboard's ``get_seeded_canonical_product``). Read against the ANNOUNCED arm it
+    would hold by construction — the derivation is what puts the asserted refs there — and
+    the advisory could never fire.
+
+    Args:
+        format_ids: the legacy arm the product authored, in the shape it is held in.
+        format_options: the stored canonical declarations, as the JSON column holds them.
+        product_id: the product the advisory would name.
+
+    Raises:
+        pydantic.ValidationError: when a stored declaration is not a valid canonical
+            declaration. Deliberately not absorbed: the conversion already refuses a
+            product carrying a declaration it cannot announce rather than announcing half
+            of it, and a declaration this cannot read is one of those.
+    """
+    authored = tuple(format_ids or [])
+    # The SDK's projection is typed to ``adcp.types.canonical_creative.Format``, which
+    # consumes ``v1_format_ref`` into a PrivateAttr and exposes it as
+    # ``legacy_format_refs``. MEASURED: it refuses both of the other two shapes this
+    # declaration exists in — the stored document (``'dict' object has no attribute
+    # 'format_kind'``) and the generated union arm the DTO declares
+    # (``'ProductFormatDeclaration1' object has no attribute 'legacy_format_refs'``), so
+    # the stored document is validated into the type the helper actually reads
+    # (salesagent-ftj5x).
+    declarations = [LibraryCanonicalFormat.model_validate(document) for document in format_options or []]
+    if not declarations:
+        return LegacyFormatArm(format_ids=authored, divergence=None)
+
+    # ``SimpleNamespace`` because the SDK helper documents its product argument as
+    # duck-typed on ``product_id`` and ``format_options``, and there is no product MODEL
+    # here to hand it — this function takes the two arms precisely so both its readers can
+    # ask without one of them holding a row.
+    projected = tuple(
+        project_product_to_v1(SimpleNamespace(product_id=product_id, format_options=declarations)).format_ids
+    )
+    # The SDK's own advisories are discarded, not forwarded: ``make_sdk_advisory`` stamps
+    # ``source="sdk"`` and an ``sdk_id``, which misattributes an emission the storyboard
+    # grades as ``source="producer"``, and the codes it mints
+    # (FORMAT_DECLARATION_V1_AMBIGUOUS on every declaration asserting no ref,
+    # FORMAT_DECLARATION_V1_LOSSY_MULTI_SIZE) are consumption-side. Re-minting the lossy
+    # one as a producer advisory is salesagent-bj8pl.
+    asserted = {format_id_identity(ref) for ref in projected}
+    if not asserted or not authored:
+        return LegacyFormatArm(format_ids=authored or projected, divergence=None)
+
+    missing = asserted - product_format_identities(authored)
+    if not missing:
+        return LegacyFormatArm(format_ids=authored, divergence=None)
+
+    return LegacyFormatArm(
+        format_ids=(),
+        divergence=FormatDeclarationDivergenceDetails(
+            product_id=product_id,
+            format_ids=sorted(format_display(identity) for identity in product_format_identities(authored)),
+            format_options_summary=[
+                FormatOptionDivergenceSummary(
+                    format_kind=str(declaration.format_kind),
+                    v1_format_ref=[format_display(format_id_identity(ref)) for ref in declaration.legacy_format_refs],
+                )
+                for declaration in declarations
+            ],
+            divergence_reason="v1_format_ref_absent_from_format_ids",
+        ),
+    )
 
 
 def format_accepted_by(requested: FormatRef, supported: FormatRef) -> bool:

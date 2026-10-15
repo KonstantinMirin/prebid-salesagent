@@ -89,6 +89,7 @@ from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.base import AdcpRequest as LibraryAdcpRequest
 from adcp.types.canonical_creative import CanonicalFormatKindStr
 from adcp.types.domains.core.creative_asset import CreativeAsset as LibraryCreativeAsset
+from adcp.types.domains.core.error import Source as LibraryErrorSource
 
 # The GENERATED format reference, reached at its generated path because adcp 9 gives it no
 # public name. ``adcp.types.FormatId`` is gone and both candidate public names --
@@ -291,12 +292,24 @@ class Error(_LibraryError):
         field: str | None = None,
         details: ErrorDetails | None = None,
         retry_after: int | None = None,
+        source: LibraryErrorSource | None = None,
     ) -> "Error":
         """Build an advisory. THE construction surface for one.
 
         There is no ``message``/``suggestion``/``recovery`` parameter, so a call site
         cannot author one -- not "should not", cannot: the name does not exist to pass.
         Those three are resolved from ``code`` by the validator below.
+
+        ``source`` IS a parameter, and deliberately not derived. It says WHO DETECTED the
+        condition -- this seller on emit (``producer``), or a consuming SDK on receipt
+        (``sdk``) -- which is a fact about the emission and not about the code: the pin has
+        several codes "either side MAY emit". ``FORMAT_DECLARATION_DIVERGENT`` is one, and
+        the storyboard grades this seller's own emission of it as ``source: "producer"``
+        (``compliance/.../canonical_formats.yaml``, step ``get_seeded_divergent_product``).
+        Typed to the library enum so a call site cannot spell the value.
+
+        There is no ``sdk_id`` parameter: the pin pairs that field with an ``sdk``-source
+        entry, and this seller emits none. When it does, that is when to add one.
 
         This exists instead of giving ``message`` a default on this subclass. A default
         would have worked at runtime (the before-validator injects the field anyway) and
@@ -314,6 +327,8 @@ class Error(_LibraryError):
             payload["details"] = details.to_wire()
         if retry_after is not None:
             payload["retry_after"] = retry_after
+        if source is not None:
+            payload["source"] = source
         return cls.model_validate(payload)
 
     @classmethod

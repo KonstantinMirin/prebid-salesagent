@@ -64,6 +64,8 @@ __all__ = [
     "EntityRefDetails",
     "ErrorDetails",
     "ErrorProblem",
+    "FormatDeclarationDivergenceDetails",
+    "FormatOptionDivergenceSummary",
     "OutboundDeliveryDetails",
     "ProblemsDetails",
     "ProductRefDetails",
@@ -234,6 +236,47 @@ class ProblemsDetails(ErrorDetails):
     """
 
     problems: list[ErrorProblem] | None = None
+
+
+class FormatOptionDivergenceSummary(BaseModel):
+    """One canonical declaration, as the divergence advisory summarizes it.
+
+    ``v1_format_ref`` holds RENDERED format identities (``format_display``'s
+    ``<canonical agent_url>/<id>``), not the stored reference objects. A reference
+    carries four more parameters the pin says are no part of which format it names, so
+    echoing the object back would invite a buyer to compare on them; the identity is the
+    only part of a reference the divergence is about.
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    format_kind: str
+    v1_format_ref: list[str]
+
+
+class FormatDeclarationDivergenceDetails(ErrorDetails):
+    """``FORMAT_DECLARATION_DIVERGENT``'s details, with the keys the pin names.
+
+    ``enums/error-code.json`` says ``error.details`` SHOULD carry
+    ``{product_id, format_ids, format_options_summary, divergence_reason}``, so those are
+    the four fields and no others. ``format_ids`` is the legacy arm the product AUTHORED
+    — the arm the advisory says disagrees — rendered as identities for the same reason
+    the summary is.
+
+    ``divergence_reason`` is a ``Literal`` over the axes this seller can actually detect,
+    which is one: a v1 reference the canonical arm asserts that the authored legacy arm
+    does not name (``core/product-format-declaration.json``: ``Product.format_ids[]`` ⊇
+    the ``v1_format_ref`` entries). The pin's other axis — v2 ``params`` failing to narrow
+    the referenced v1 format's ``requirements`` — needs that format FETCHED from a
+    catalog, so it is not detectable on this path and is not a member here. Adding it is
+    then a type change mypy fails at the construction site, rather than a string nobody
+    notices is now ambiguous.
+    """
+
+    product_id: str
+    format_ids: list[str]
+    format_options_summary: list[FormatOptionDivergenceSummary]
+    divergence_reason: Literal["v1_format_ref_absent_from_format_ids"]
 
 
 class ProductRefDetails(EntityRefDetails):

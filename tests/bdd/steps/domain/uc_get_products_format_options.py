@@ -16,9 +16,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from pytest_bdd import given, parsers, then
+from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import wire_entry
+from tests.bdd.steps._outcome_helpers import wire_advisory_errors, wire_entry, wire_field
+from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import PricingOptionFactory, ProductFactory
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 
@@ -32,6 +33,7 @@ def _store_product(
     format_options: list[dict[str, Any]] | None,
     *,
     with_legacy_arm: bool = True,
+    legacy_id: str | None = None,
 ) -> None:
     """Persist one product carrying *format_options*, with a pricing option so it announces.
 
@@ -43,14 +45,21 @@ def _store_product(
     line existed.
 
     ``with_legacy_arm=False`` stores a CANONICAL-ONLY product -- ``format_ids`` NULL, which
-    migration 08cd415b3d91 made representable. Expressed as dropping the arm rather than as
-    a ``format_ids`` parameter because the only two shapes any scenario here wants are
-    "both arms" and "canonical only"; a parameter would invite a third caller to pass some
-    other legacy value and grade something no scenario names.
+    migration 08cd415b3d91 made representable.
+
+    ``legacy_id`` names the id the legacy arm carries, for the one scenario whose whole
+    subject is the two arms naming DIFFERENT formats. It defaults to the factory's arm,
+    which is what every other scenario here wants. It used to not exist, on the ground that
+    "the only two shapes any scenario here wants are both arms and canonical only"; the
+    divergence scenario is a third, and it NAMES the value in its own text, so the risk that
+    comment guarded against -- a caller passing some legacy value no scenario names -- is
+    not the shape it takes.
     """
     overrides: dict[str, Any] = {"format_options": format_options}
     if not with_legacy_arm:
         overrides["format_ids"] = None
+    elif legacy_id is not None:
+        overrides["format_ids"] = [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": legacy_id}]
     product = ProductFactory(tenant=ctx["tenant"], **overrides)
     PricingOptionFactory(product=product)
     ctx["product"] = product
@@ -96,6 +105,105 @@ def given_declaration_with_v1_ref(ctx: dict, format_kind: str, legacy_id: str) -
     )
 
 
+@given(
+    parsers.parse(
+        'the seller stores a canonically-authored product for "{format_kind}" asserting a '
+        'v1_format_ref to "{legacy_id}"'
+    )
+)
+def given_canonical_only_product_with_ref(ctx: dict, format_kind: str, legacy_id: str) -> None:
+    """Store a product whose ONLY authored arm is canonical, and which asserts a v1 link.
+
+    The one shape from which a legacy arm can be DERIVED. Its two siblings are the
+    canonical-only product that asserts nothing (which must derive nothing, because the
+    projection runs v1 -> v2 only) and the dual-authored product (which has an authored arm
+    already), so this is spelled as its own Given rather than as a parameter on either.
+    """
+    _store_product(
+        ctx,
+        [
+            {
+                "format_kind": format_kind,
+                "params": dict(_STORED_IMAGE_PARAMS),
+                "v1_format_ref": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": legacy_id}],
+            }
+        ],
+        with_legacy_arm=False,
+    )
+
+
+def _canonical_product_asserting(tenant: Any, legacy_id: str) -> Any:
+    """Persist one canonical-only product asserting *legacy_id*, and return the row.
+
+    Takes the TENANT and returns the row rather than taking ``ctx`` and storing under a key
+    the caller names, for the reason the same-shaped helper in
+    ``uc_get_products_format_id_filter`` records: a ``ctx``-first helper that subscripts
+    ``ctx`` with one of its own parameters is the shape ``test_architecture_bdd_ctx_keys``
+    tracks by function name across every step module.
+    """
+    product = ProductFactory(
+        tenant=tenant,
+        format_ids=None,
+        format_options=[
+            {
+                "format_kind": "image",
+                "params": dict(_STORED_IMAGE_PARAMS),
+                "v1_format_ref": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": legacy_id}],
+            }
+        ],
+    )
+    PricingOptionFactory(product=product)
+    return product
+
+
+@given(
+    parsers.parse(
+        "the seller stores two canonically-authored products asserting v1_format_refs to "
+        '"{selected_id}" and "{other_id}"'
+    )
+)
+def given_two_canonical_products_asserting_refs(ctx: dict, selected_id: str, other_id: str) -> None:
+    """Store the product the filter should reach and the counter-example it must not.
+
+    Both are canonical-only, so NEITHER has an authored legacy arm for the filter to match:
+    whichever one the filter selects, it selected through the DERIVED arm. Identical but for
+    the reference each asserts, so a row that fails is reporting on the derivation and on
+    nothing else.
+    """
+    tenant = ctx["tenant"]
+    ctx["named_product"] = _canonical_product_asserting(tenant, selected_id)
+    ctx["other_product"] = _canonical_product_asserting(tenant, other_id)
+
+
+@given(
+    parsers.parse(
+        'the seller stores a dual-authored product whose format_ids names "{authored_id}" and '
+        'whose declaration asserts "{asserted_id}"'
+    )
+)
+def given_divergent_dual_authored_product(ctx: dict, authored_id: str, asserted_id: str) -> None:
+    """Store the producer bug: both arms authored, and each naming a different v1 format.
+
+    Both ids come from the scenario, so the fixture cannot drift into agreement by
+    inheriting a factory default on one side -- which is exactly how the sibling scenario
+    above came to be divergent without saying so. The declaration's params are the same
+    300x250 every other scenario here stores: the divergence under test is the REFERENCE,
+    and the pin's other axis (params failing to narrow the referenced v1 format) is not
+    detectable without fetching that format.
+    """
+    _store_product(
+        ctx,
+        [
+            {
+                "format_kind": "image",
+                "params": dict(_STORED_IMAGE_PARAMS),
+                "v1_format_ref": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": asserted_id}],
+            }
+        ],
+        legacy_id=authored_id,
+    )
+
+
 @given(parsers.parse('the seller stores a canonically-authored product for "{format_kind}" with no format_ids'))
 def given_canonical_only_product(ctx: dict, format_kind: str) -> None:
     """Store a product whose ONLY format declaration is canonical.
@@ -136,7 +244,43 @@ def given_declaration_missing_required_member(ctx: dict, missing_member: str) ->
     _store_product(ctx, [complete])
 
 
+# ── When steps ──────────────────────────────────────────────────────
+
+
+@when(parsers.parse('the buyer requests products filtering format_ids by "{legacy_id}"'))
+def when_request_filtered_by_format_id(ctx: dict, legacy_id: str) -> None:
+    """Dispatch get_products carrying the one legacy reference the filter names.
+
+    ``format_ids`` items are format_id OBJECTS (core/product-filters.json $refs
+    core/format-id.json), never bare slugs, so the filter names both members -- and the
+    agent_url half is the one the declarations assert, because a filter naming a different
+    agent would correctly select neither product and the scenario would pass for a reason
+    it does not name.
+    """
+    dispatch_request(
+        ctx,
+        brief="derived legacy arm filter test",
+        filters={"format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": legacy_id}]},
+    )
+
+
 # ── Then steps ──────────────────────────────────────────────────────
+
+
+@then("the announced products are exactly the product whose declaration asserted that reference")
+def then_only_the_asserting_product_announced(ctx: dict) -> None:
+    """An EXACT set, which is what separates the derivation from its two failure modes.
+
+    Containment in either direction passes for one of them: ``>=`` passes on a derivation
+    that put every asserted reference on every product, and ``<=`` passes on no derivation
+    at all, where the filter selects neither.
+    """
+    announced = {product["product_id"] for product in wire_field(ctx, "products")}
+    expected = {ctx["named_product"].product_id}
+    assert announced == expected, (
+        f"the format_ids filter did not reach exactly the product whose declaration asserts that "
+        f"reference: expected {sorted(expected)}, got {sorted(announced)}"
+    )
 
 
 @then(parsers.parse('the announced format option declares format_kind "{format_kind}" and params the seller stored'))
@@ -210,4 +354,108 @@ def then_format_ids_still_announced(ctx: dict) -> None:
     assert format_ids, (
         "the product announced neither half of its format declaration, so it describes no "
         f"format at all: {sorted(product)}"
+    )
+
+
+@then(parsers.parse('the announced product carries format_ids naming "{legacy_id}"'))
+def then_format_ids_name(ctx: dict, legacy_id: str) -> None:
+    """The legacy arm names exactly the v1 format the scenario says it should.
+
+    The whole reference, for the reason ``then_v1_format_ref_announced`` gives: a v1
+    format_id is an OBJECT (core/format-id.json requires agent_url and id), and an arm
+    carrying only the id names a format in nobody's namespace. Equality rather than
+    containment, because a DERIVED arm that carried a second entry nobody asserted would
+    be the synthesis the registry forbids, and containment would not see it.
+    """
+    product = _announced_product(ctx)
+    assert product.get("format_ids") == [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": legacy_id}], (
+        f"the announced format_ids is not the one reference expected: {product.get('format_ids')!r}"
+    )
+
+
+@then("the response carries no format-declaration advisory")
+def then_no_format_advisory(ctx: dict) -> None:
+    """Nothing on the advisory channel about this product's format declarations.
+
+    The negative half of the divergence instrument. Without it an implementation that
+    advised on EVERY product carrying both arms would satisfy the divergent scenario, and
+    the advisory would be noise rather than a finding.
+
+    Scoped to the format-declaration codes rather than asserting an empty ``errors[]``: the
+    array is get_products' task-level channel and another obligation is free to use it, so
+    a blanket emptiness assertion would couple this scenario to every future advisory.
+    """
+    advised = [error for error in wire_advisory_errors(ctx) if str(error.get("code", "")).startswith("FORMAT_")]
+    assert not advised, f"the response advises about format declarations when the two arms agree: {advised!r}"
+
+
+@then(
+    parsers.parse('the response carries one FORMAT_DECLARATION_DIVERGENT advisory from the producer naming "{field}"')
+)
+def then_divergence_advised(ctx: dict, field: str) -> None:
+    """The advisory, on a SUCCESS, attributed to the producer, pointing at the product.
+
+    Three obligations in one assertion because the pin states them together for this code:
+    ``errors[]`` is the single mandated surface ("Logger-only is insufficient"),
+    ``error.field`` MUST point at the offending product, and the storyboard's
+    ``get_seeded_divergent_product`` grades ``errors[0].source == "producer"`` -- the seller
+    self-detected on emit, so attributing it to an SDK would name the wrong party.
+
+    ``recovery`` is asserted too, and it is NOT authored anywhere: it is derived from the
+    pinned ``enumMetadata``, which puts this code at ``correctable``. Reading it back is
+    what shows the advisory went through the code table rather than being hand-assembled.
+
+    Exactly one entry, because the pin's multi-hop rule deduplicates by ``(code, field)``
+    and a product announced once cannot honestly be advised about twice.
+    """
+    advised = [error for error in wire_advisory_errors(ctx) if error.get("code") == "FORMAT_DECLARATION_DIVERGENT"]
+    assert len(advised) == 1, (
+        f"expected exactly one FORMAT_DECLARATION_DIVERGENT advisory, got {len(advised)}: {wire_advisory_errors(ctx)!r}"
+    )
+    advisory = advised[0]
+    assert advisory.get("source") == "producer", (
+        f"the advisory is not attributed to the producer that emitted it: {advisory.get('source')!r}"
+    )
+    assert advisory.get("field") == field, (
+        f"the advisory does not point at the offending product: {advisory.get('field')!r}"
+    )
+    assert advisory.get("recovery") == "correctable", (
+        f"the advisory's recovery is not the pinned enumMetadata's: {advisory.get('recovery')!r}"
+    )
+    ctx["format_divergence_advisory"] = advisory
+
+
+@then(parsers.parse('the advisory details name the authored "{authored_id}" and the asserted "{asserted_id}"'))
+def then_divergence_details(ctx: dict, authored_id: str, asserted_id: str) -> None:
+    """The four keys the pin asks of this code's ``details``, carrying BOTH disagreeing arms.
+
+    Graded because an advisory that said only "this product diverges" would leave the
+    operator to go and diff the two arms themselves, which is what
+    ``error.details`` SHOULD carry ``{product_id, format_ids, format_options_summary,
+    divergence_reason}`` exists to prevent ("so buyer SDKs can flag the producer for
+    follow-up").
+
+    Each id is asserted to be in the arm that NAMES it and not in the other. A details
+    block that reported the same arm twice would carry both ids and pass a membership check
+    that did not say which side each came from -- and reporting the asserted ref as though
+    the product had authored it is the specific confusion this advisory exists to clear up.
+    """
+    advisory = ctx["format_divergence_advisory"]
+    details = advisory.get("details")
+    assert isinstance(details, dict), f"the advisory carries no details object: {details!r}"
+    assert details.get("product_id") == ctx["product"].product_id, (
+        f"the details name a different product than the one stored: {details.get('product_id')!r}"
+    )
+    assert details.get("divergence_reason") == "v1_format_ref_absent_from_format_ids", (
+        f"the details do not classify the divergence: {details.get('divergence_reason')!r}"
+    )
+
+    authored_arm = details.get("format_ids")
+    assert authored_arm == [f"{DEFAULT_CREATIVE_AGENT_URL}/{authored_id}"], (
+        f"the details do not report the legacy arm the product authored: {authored_arm!r}"
+    )
+
+    summary = details.get("format_options_summary")
+    assert summary == [{"format_kind": "image", "v1_format_ref": [f"{DEFAULT_CREATIVE_AGENT_URL}/{asserted_id}"]}], (
+        f"the details do not report what the canonical arm asserts: {summary!r}"
     )
