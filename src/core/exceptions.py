@@ -34,6 +34,7 @@ from src.core.errors.details import (
     InvalidStateDetails,
     ProductRefDetails,
     RejectionReasonDetails,
+    SelectorConflictDetails,
     ValidationDetails,
     VersionUnsupportedDetails,
 )
@@ -1433,6 +1434,28 @@ class AdCPCapabilityNotSupportedError(AdCPSalesAgentError[CapabilityRefusalDetai
     """
 
     _code: ClassVar[ErrorCodeT] = ErrorCode.UNSUPPORTED_FEATURE
+
+
+class AdCPConflictingSelectorsError(AdCPSalesAgentError[SelectorConflictDetails]):
+    """A package's format selector routes resolve to different product options (422).
+
+    The refusal ``media-buy/package-request.json`` makes mandatory for an older 3.x
+    request whose co-present routes disagree: "Different format shapes, selected option
+    sets, or incompatible dimensions are rejected with ``CONFLICTING_SELECTORS``; sellers
+    MUST NOT silently ignore the legacy projection."
+
+    NOT the refusal for a route that fails to RESOLVE. That is ``UNSUPPORTED_FEATURE``,
+    and the pin states the ordering as an obligation rather than an implementation
+    choice — step (1) of the same contract, and the storyboard's
+    ``reject_unprojectable_legacy_dual_emission`` ("Resolution failure is reported before
+    selector equivalence and must not be mislabeled ``CONFLICTING_SELECTORS``").
+
+    NOR the refusal when a package names ONE route that does not satisfy the product:
+    "A single resolved route that does not satisfy the product is rejected with
+    ``UNSUPPORTED_FEATURE``."
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.CONFLICTING_SELECTORS
 
 
 class AdCPIdempotencyConflictError(AdCPConflictError):

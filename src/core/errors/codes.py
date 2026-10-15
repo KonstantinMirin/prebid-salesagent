@@ -392,6 +392,16 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
         ErrorCode.PROVENANCE_EMBEDDED_MISSING: 422,
         ErrorCode.PRODUCT_UNAVAILABLE: 422,
         ErrorCode.UNSUPPORTED_FEATURE: 422,
+        # Same band and the same reasoning as NOT_CANCELLABLE above: absent from this map
+        # it fell to the 500 default, which the 5xx band below defines as "the buyer cannot
+        # fix it" -- and the pin classifies this one correctable, with a suggestion the
+        # buyer can act on ("emit one canonical format selector route, or make every
+        # required legacy 3.x compatibility projection select the same product format
+        # contract"). The payload is well-formed and refused on its merits, which is what
+        # this band means and what every CONFLICTING_SELECTORS step in
+        # canonical_formats.yaml says in its own words (negative_path:
+        # payload_well_formed).
+        ErrorCode.CONFLICTING_SELECTORS: 422,
         # 429 — correct, but too often.
         ErrorCode.RATE_LIMITED: 429,
         # 5xx — the buyer cannot fix it. CONFIGURATION_ERROR and

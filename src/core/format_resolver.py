@@ -24,8 +24,12 @@ from adcp.canonical_formats import (
 )
 from adcp.types.canonical_creative import Format as LibraryCanonicalFormat
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
+from adcp.types.domains.core.package_format_snapshot import PackageFormatSnapshot as LibraryPackageFormatSnapshot
+from adcp.types.domains.core.product_format_declaration import (
+    ProductFormatDeclaration as LibraryFormatDeclaration,
+)
 from adcp.types.domains.registries.v1_canonical_mapping import V1Pattern as LibraryV1GlobPattern
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from src.core.database.database_session import get_db_session
 from src.core.errors.details import (
@@ -50,6 +54,13 @@ from src.core.validation_helpers import run_async_in_sync_context
 # What callers may hand the identity helpers: a structured reference, a bare
 # dict off the wire, or a legacy string id.
 FormatRef = str | LibraryFormatId | Mapping[str, Any]
+
+#: The pinned snapshot union, built once. ``core/package-format-snapshot.json`` generates
+#: the same sixteen-arm discriminated union over ``format_kind`` that
+#: ``ProductFormatDeclaration`` does -- it is an ``allOf`` over that schema -- so
+#: validating a declaration's document into THIS adapter is what applies the snapshot's own
+#: conjuncts (the digest/contract pairing rules) rather than only the declaration's.
+_PACKAGE_FORMAT_SNAPSHOT: TypeAdapter[LibraryPackageFormatSnapshot] = TypeAdapter(LibraryPackageFormatSnapshot)
 
 
 logger = logging.getLogger(__name__)
@@ -506,6 +517,118 @@ def announced_legacy_format_arm(
             divergence_reason="v1_format_ref_absent_from_format_ids",
         ),
     )
+
+
+def package_format_snapshot(
+    declaration: Mapping[str, Any] | LibraryFormatDeclaration,
+    *,
+    product_id: str,
+) -> LibraryPackageFormatSnapshot:
+    """The immutable package-time record of ONE selected product format declaration.
+
+    ``core/package-format-snapshot.json`` is "an immutable package-time snapshot of one
+    selected Product format declaration. Product-format fields remain flattened at the
+    root for 3.x compatibility" — structurally it is ``allOf`` over
+    ``core/product-format-declaration.json`` plus a handful of package-only bindings, and
+    the pinned type is the same sixteen-arm discriminated union over ``format_kind``. So
+    the snapshot is BUILT BY VALIDATING the declaration's own document into that union
+    with ``product_id`` added, not by copying field by field: a per-field copy is a second
+    list of what a declaration carries, and it goes stale the next time the pin adds a
+    parameter.
+
+    ``product_id`` is the one binding this seller can make. The pin requires it "whenever
+    ``tracker_execution_contract`` is present" and pairs it with
+    ``product_snapshot_digest``; neither of the other bindings is authored here.
+    ``placement_refs`` is deliberately absent, and the pin says what that means — "omission
+    binds the product-wide common effective contract; it never means an inferred list of all
+    current placements" — which is exactly true of this seller, whose packages bind no
+    placement subset. ``product_snapshot_digest`` is likewise absent rather than computed:
+    it is "required for every contract-bearing snapshot", and a snapshot carrying no
+    ``tracker_execution_contract`` is not one; the pin's own conjunct forbids the sibling
+    digest without the contract.
+
+    WHY THE SHAPE IS A CONTRACT rather than an implementation detail: an adapter reads the
+    selected declaration's ``params`` off this snapshot (``salesagent-ol033.8``), and the
+    whole point of a snapshot is that "the live Product is never substituted for the
+    package snapshot" (``core/package.json`` on ``formats_to_provide``).
+
+    THE SECOND UNION IS NOT STRICTER THAN THE DTO'S, and that is MEASURED rather than
+    argued — which is the whole lesson of :func:`announced_legacy_format_arm` above, where
+    validating a stored declaration into a differently-generated type
+    (``canonical_creative.Format``) answered INTERNAL_ERROR for every product of a tenant
+    because that type refuses a ``custom`` declaration the DTO accepts (salesagent-1d5z4).
+    Validating into a second generated union here is the same move, so it is measured on
+    the wheel the application runs:
+
+    * DERIVED over all sixteen arm pairs, not spot-checked: for every ``format_kind``,
+      ``PackageFormatSnapshot``'s required-field set is a SUBSET of the matching
+      ``ProductFormatDeclaration`` arm's. No kind exists in one union and not the other.
+    * The exact document that caused that incident -- ``{format_kind: "custom", params:
+      {}}``, no ``format_shape`` -- is accepted by BOTH unions and refused only by
+      ``canonical_creative.Format``.
+    * The snapshot schema's one EXTRA written conjunct (a ``tracker_execution_contract``
+      requires ``format_option_id``, ``product_id``, ``tracker_execution_contract_digest``
+      and ``product_snapshot_digest``) is NOT implemented by the generated union: a
+      declaration carrying a valid contract validates with ``product_id`` alone. So the
+      conjunct cannot refuse what this function supplies.
+
+    If a pin bump ever makes the snapshot union refuse a declaration the DTO accepted, the
+    answer is the one that function reached and NOT a try/except here: stop validating into
+    the second type and read the fields off the stored document. Absorbing the error would
+    serve a package with no snapshot at all, which ``core/package.json`` forbids ("MUST
+    retain and return this checklist") and which stage 7's adapters read params off.
+
+    Raises:
+        pydantic.ValidationError: only for a document the DTO's own union would also
+            refuse — i.e. a corrupt row, which ``format_satisfaction.product_declarations``
+            has already dropped before a declaration can be SELECTED and reach here.
+    """
+    document = declaration if isinstance(declaration, Mapping) else dict(declaration)
+    return _PACKAGE_FORMAT_SNAPSHOT.validate_python({**document, "product_id": product_id})
+
+
+def snapshot_legacy_arm(snapshots: Iterable[LibraryPackageFormatSnapshot]) -> tuple[LibraryFormatId, ...]:
+    """The deprecated references *snapshots* project to — the SELLER-ASSERTED ones only.
+
+    ``core/package.json`` on ``format_ids_to_provide``: "**DEPRECATED in 3.2.** Legacy
+    named-format projection of ``formats_to_provide`` retained for older 3.x peers. New
+    sellers emit canonical ``formats_to_provide`` declarations." So the legacy array is a
+    PROJECTION OF THE SNAPSHOT, which is what makes it derived here rather than echoed
+    from the buyer's request — a buyer that named only a canonical route used to receive
+    nothing at all on this field, which is a readiness checklist and whose absence the pin
+    gives a defined meaning to (``format_ids_pending``: "Absence means legacy readiness was
+    not reported and MUST NOT be interpreted as full coverage").
+
+    A READ AND NEVER A COMPUTATION. ``registries/v1-canonical-mapping.json`` is normative
+    that "this registry is authoritative for v1 → v2 projection only. v2 → v1 projection
+    MUST rely on ``v1_format_ref`` on the v2 ``ProductFormatDeclaration`` — sellers assert
+    the v1 pairing explicitly. SDKs MUST NOT synthesize a v1 ``format_id`` from the
+    registry by inverting structural matches." So the only source is the declaration's own
+    ``v1_format_ref``, and a snapshot asserting none projects to nothing — the array is
+    then ABSENT, which is the same answer ``announced_legacy_format_arm`` gives on the
+    product read path for a declaration with no ref.
+
+    NOT THE SAME QUESTION AS THAT DECLINE, and the difference is the pin's. On the product
+    surface ``core/product.json`` makes the projection a MAY in a sentence whose other
+    clauses are MUSTs, nothing in the graded contract distinguishes projecting from
+    declining, and declining emits nothing new. Here the field is the package's own
+    readiness statement, the pin states no MAY over it, the seller already emits it on
+    every created package, and the choice is only WHICH source it derives from: the
+    buyer's echoed input, which is unreadable as a checklist and absent for a canonical-only
+    buyer, or the declaration the seller actually selected.
+
+    Duplicate-free and order-preserving on the canonical identity, because the array is a
+    checklist: two snapshots asserting one reference ask for one creative, not two.
+    """
+    seen: set[FormatKey] = set()
+    arm: list[LibraryFormatId] = []
+    for snapshot in snapshots:
+        for ref in snapshot.v1_format_ref or []:
+            identity = format_id_identity(ref)
+            if identity not in seen:
+                seen.add(identity)
+                arm.append(ref)
+    return tuple(arm)
 
 
 def format_accepted_by(requested: FormatRef, supported: FormatRef) -> bool:

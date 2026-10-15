@@ -28,7 +28,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import wire_absent, wire_entry, wire_field
+from tests.bdd.steps._outcome_helpers import stored_package_config, wire_absent, wire_entry, wire_field
 from tests.factories import PricingOptionFactory, ProductFactory
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.mint import mint
@@ -80,6 +80,34 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "format_option_id": _PRODUCT_OPTION_ID,
             "publisher_domain": _PUBLISHER_DOMAIN,
             "params": {"width": 300, "height": 250},
+        }
+    ],
+    # TWO declarations of ONE kind, which is work item M2's shape and the case
+    # ``core/product-format-declaration.json`` names: ``format_option_id`` is "REQUIRED
+    # when a product contains multiple declarations with the same format_kind". A bare
+    # ``format_kind: image`` selector has to be graded against the declaration its params
+    # satisfy, not against whichever is declared first.
+    "two_image_options": [
+        {
+            "format_kind": "image",
+            "format_option_id": _PRODUCT_OPTION_ID,
+            "params": {"width": 300, "height": 250},
+        },
+        {
+            "format_kind": "image",
+            "format_option_id": "satisfaction_image_leaderboard",
+            "params": {"width": 728, "height": 90},
+        },
+    ],
+    # ``fixed_300x250`` with the ``v1_format_ref`` assertion REMOVED, and nothing else
+    # changed. That one difference decides whether the accepted package's deprecated
+    # ``format_ids_to_provide`` projection has a source at all, which is the pair the two
+    # emission scenarios grade.
+    "fixed_300x250_no_ref": [
+        {
+            "format_kind": "image",
+            "format_option_id": _PRODUCT_OPTION_ID,
+            "params": {"width": 300, "height": 250, "max_file_size_kb": 200},
         }
     ],
 }
@@ -159,9 +187,36 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     # alternative -- satisfaction answering UNSUPPORTED_FEATURE for a schema violation --
     # is exactly the bucket confusion the step exists to prevent.
     "width_without_height": {"format_kind": "image", "params": {"width": 300}},
-    # "Canonical precedence MUST NOT hide the conflict" (step 13) as an input this stage can
-    # grade: a resolving option ref beside an UNDER-SPECIFIED kind route. The kind route is
-    # still resolved and still refused, so precedence is not a short circuit.
+    # A SINGLE legacy route that normalizes and then selects nothing. Measured on the pinned
+    # wheel: ``display_728x90`` upgrades to ``display_image`` + 728x90 and
+    # ``canonical_kind_for`` answers ``image``, so against a product fixing 300x250 the
+    # route resolves and satisfies no declaration -- the pin's "a single resolved route that
+    # does not satisfy the product". The SAME id beside a resolving option ref is the
+    # conflict row below, and the two differ in nothing else.
+    "legacy_display_728x90": {"format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_728x90"}]},
+    # M2's refusal half: a selector satisfying NEITHER image declaration ``two_image_options``
+    # publishes, so the two M2 accept rows cannot be passed by accepting every image.
+    "mismatched_160x600": {"format_kind": "image", "params": {"width": 160, "height": 600}},
+    # --- co-present routes that select DIFFERENT declarations ---
+    # The storyboard's reject_conflicting_dual_emission: the option ref selects the 300x250
+    # declaration, and the registry-backed legacy id normalizes to a 728x90 image the
+    # product does not publish. Both routes resolve, so the refusal is the EQUIVALENCE one.
+    "option_plus_conflicting_legacy": {
+        "format_option_refs": [{"scope": "product", "format_option_id": _PRODUCT_OPTION_ID}],
+        "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_728x90"}],
+    },
+    # The storyboard's reject_conflicting_canonical_routes: two CANONICAL routes, and the
+    # direct one describes a 728x90 image. "Canonical precedence must not hide a conflict
+    # between two resolvable canonical routes."
+    "option_plus_conflicting_direct": {
+        "format_option_refs": [{"scope": "product", "format_option_id": _PRODUCT_OPTION_ID}],
+        "format_kind": "image",
+        "params": {"width": 728, "height": 90},
+    },
+    # The same shape with the params OMITTED rather than wrong: the kind route selects no
+    # declaration (silence does not satisfy an exact dimension) while the option ref selects
+    # one, so the selected option sets differ. Graded UNSUPPORTED_FEATURE until the
+    # equivalence comparison existed; see salesagent-iql3e for why the pin says otherwise.
     "bare_kind_beside_option_ref": {
         "format_option_refs": [{"scope": "product", "format_option_id": _PRODUCT_OPTION_ID}],
         "format_kind": "image",
@@ -476,6 +531,10 @@ def given_selector(ctx: dict, selector: str) -> None:
     packages = ctx["request_kwargs"]["packages"]
     assert len(packages) == 1, f"expected exactly one package to put a selector on, got {len(packages)}"
     packages[0].update(_SELECTORS[selector])
+    # Which selector was sent, for the conflict Then: its refusal must summarize exactly the
+    # arms the buyer supplied, and reading them back off this table is what keeps the
+    # scenario's claim tied to its own input rather than to a restated list.
+    ctx["selector"] = selector
 
 
 # ── Then steps ──────────────────────────────────────────────────────
@@ -616,6 +675,174 @@ def then_refused_unsupported_feature_bare(ctx: dict) -> None:
     pin a value production has no reason to carry.
     """
     ctx["result"].assert_wire_error("UNSUPPORTED_FEATURE")
+
+
+@then("the buyer is refused CONFLICTING_SELECTORS naming the package")
+def then_refused_conflicting_selectors(ctx: dict) -> None:
+    """Assert the equivalence refusal: the code, its pinned recovery, and the PACKAGE pointer.
+
+    The pointer is ``packages[0]`` and not ``packages[0].<arm>``, which is this refusal's
+    own shape rather than a looser assertion: no single arm is at fault, the set of them is,
+    and ``enums/error-code.json``'s entry for the code says so -- "``error.field`` SHOULD
+    point at the conflicting package". Asserting an arm here would pin the pointer of the
+    refusal this one is deliberately NOT: ``option_plus_unprojectable_legacy`` is
+    UNSUPPORTED_FEATURE naming ``format_ids``, and the two must not converge.
+
+    ``assert_wire_error`` defaults ``recovery`` to the pinned enum's classification, which
+    for this code is ``correctable`` -- the buyer's lever is to send one route, or to make
+    the routes agree.
+
+    The DETAILS are asserted too, and they are what stops this passing on a seller that
+    answers the code without having compared anything: the pin asks for "the supplied
+    selector routes and their normalized canonical summaries", so every route the buyer
+    sent must appear, and exactly one of them must name the declaration it selected. A
+    seller that refused before resolving could not fill that in.
+    """
+    result = ctx["result"]
+    result.assert_wire_error("CONFLICTING_SELECTORS", field="packages[0]")
+    # ``wire_error_object`` and not the envelope dict: the envelope WRAPS ``errors[]`` and
+    # ``details`` lives on the error object inside it, which this reader resolves through
+    # the one locator the assertion also uses.
+    error_object = result.wire_error_object() or {}
+    routes = ((error_object.get("details") or {}).get("selector_routes")) or []
+    sent = {arm for arm in ("format_option_refs", "format_kind", "format_ids") if arm in _SELECTORS[ctx["selector"]]}
+    assert {route.get("field") for route in routes} == sent, (
+        f"the refusal summarizes routes {[r.get('field') for r in routes]}, but the buyer sent {sorted(sent)}"
+    )
+    selected = [route.get("selected_option") for route in routes]
+    assert selected.count(_PRODUCT_OPTION_ID) == 1 and None in selected, (
+        f"expected exactly one route to have selected {_PRODUCT_OPTION_ID!r} and another to have selected "
+        f"nothing -- that disagreement IS the refusal -- got {selected!r}"
+    )
+
+
+@then(parsers.parse('the package snapshots the "{option_id}" declaration fixed at {width:d}x{height:d}'))
+def then_package_snapshots_declaration(ctx: dict, option_id: str, width: int, height: int) -> None:
+    """Assert the accepted package carries the SELECTED declaration as a wire snapshot.
+
+    Read off the serialized body: ``core/package.json`` declares ``formats_to_provide`` as
+    an array of ``PackageFormatSnapshot``, whose product-format fields "remain flattened at
+    the root", so the kind, the option id and the params are read where the pin puts them.
+
+    The PARAMS are asserted and not only the option id, because the params are what stage
+    7's adapters read off the snapshot -- an entry naming the right option with the wrong
+    dimensions is the defect a snapshot exists to prevent. ``product_id`` is asserted
+    because the pin pairs it with the snapshot ("Product whose effective selected format
+    was snapshotted") and because it is the binding that makes the record readable without
+    the live product.
+    """
+    package = wire_entry(ctx, "packages", index=0)
+    snapshots = package.get("formats_to_provide")
+    assert isinstance(snapshots, list) and len(snapshots) == 1, (
+        f"expected exactly one package format snapshot on the wire, got {snapshots!r}"
+    )
+    snapshot = snapshots[0]
+    assert snapshot.get("format_option_id") == option_id, (
+        f"the snapshot names option {snapshot.get('format_option_id')!r}, not the selected {option_id!r}"
+    )
+    assert snapshot.get("format_kind") == "image", f"the snapshot names kind {snapshot.get('format_kind')!r}"
+    assert snapshot.get("product_id") == ctx["default_product"].product_id, (
+        f"the snapshot binds product {snapshot.get('product_id')!r}, not the one the selector was graded against"
+    )
+    params = snapshot.get("params") or {}
+    assert (params.get("width"), params.get("height")) == (width, height), (
+        f"the snapshot's dimensions are {params.get('width')}x{params.get('height')}, expected {width}x{height}"
+    )
+    ctx["wire_snapshot"] = snapshot
+
+
+@then("the stored package snapshot names the same declaration")
+def then_stored_snapshot_matches(ctx: dict) -> None:
+    """Assert the PERSISTED row carries the snapshot the response reported.
+
+    THE HALF A RESPONSE CANNOT PROVIDE. ``core/package.json`` requires a package to "retain
+    and return this checklist", and core/package-format-snapshot.json adds "never mutate
+    this snapshot in place" -- so a seller that assembled the snapshot for the reply and
+    stored nothing would satisfy the sibling Then and then answer every later read from the
+    live product, which is the substitution the pin names ("the live Product is never
+    substituted for the package snapshot").
+
+    Compared on the three fields that identify the selection rather than on the whole
+    document: the stored shape is the persistence edge's serialization (nulls included,
+    defaults materialized) and the wire's is ``to_wire``'s, so a whole-document equality
+    would be asserting that two serializers agree about absent optionals.
+    """
+    wire_snapshot = ctx["wire_snapshot"]
+    package_id = wire_entry(ctx, "packages", index=0).get("package_id")
+    assert package_id, "the response package carries no package_id, so the stored row cannot be read back"
+    stored = stored_package_config(ctx, wire_field(ctx, "media_buy_id"), str(package_id))
+    snapshots = stored.get("formats_to_provide")
+    assert isinstance(snapshots, list) and len(snapshots) == 1, (
+        f"expected exactly one persisted package format snapshot, got {snapshots!r}"
+    )
+    snapshot = snapshots[0]
+    stored_identity = (snapshot.get("format_kind"), snapshot.get("format_option_id"), snapshot.get("product_id"))
+    wire_identity = (
+        wire_snapshot.get("format_kind"),
+        wire_snapshot.get("format_option_id"),
+        wire_snapshot.get("product_id"),
+    )
+    assert stored_identity == wire_identity, (
+        f"the stored snapshot names {stored_identity!r} and the response reported {wire_identity!r}"
+    )
+    stored_params = snapshot.get("params") or {}
+    wire_params = wire_snapshot.get("params") or {}
+    assert (stored_params.get("width"), stored_params.get("height")) == (
+        wire_params.get("width"),
+        wire_params.get("height"),
+    ), (
+        f"the stored snapshot's dimensions are {stored_params.get('width')}x{stored_params.get('height')} "
+        f"and the response reported {wire_params.get('width')}x{wire_params.get('height')}"
+    )
+
+
+@then(parsers.parse('the package\'s deprecated format_ids_to_provide names "{legacy_id}"'))
+def then_legacy_formats_to_provide(ctx: dict, legacy_id: str) -> None:
+    """Assert the deprecated projection was DERIVED from the snapshot, not echoed back.
+
+    The buyer's request carries no ``format_ids`` at all in this scenario, so *legacy_id*
+    can only have reached the response through the selected declaration's own
+    ``v1_format_ref`` -- which is the one legal v2 -> v1 direction
+    (``registries/v1-canonical-mapping.json``) and the one source
+    ``format_resolver.snapshot_legacy_arm`` reads.
+    """
+    package = wire_entry(ctx, "packages", index=0)
+    assert package.get("format_ids") is None, (
+        "this scenario only grades a DERIVATION if the buyer sent no legacy arm, and the "
+        f"response echoes format_ids={package.get('format_ids')!r}"
+    )
+    provided = package.get("format_ids_to_provide")
+    assert isinstance(provided, list), f"expected a deprecated format_ids_to_provide array, got {provided!r}"
+    assert [entry.get("id") for entry in provided] == [legacy_id], (
+        f"format_ids_to_provide names {[e.get('id') for e in provided]}, expected exactly [{legacy_id!r}]"
+    )
+
+
+@then("the package carries no deprecated format_ids_to_provide")
+def then_no_legacy_formats_to_provide(ctx: dict) -> None:
+    """Assert the projection is ABSENT when the declaration asserts no legacy reference.
+
+    Absent and not empty: ``core/package.json`` types the field as an array of format
+    references with no empty-array meaning assigned, and an invented reference is what
+    ``registries/v1-canonical-mapping.json`` forbids ("SDKs MUST NOT synthesize a v1
+    ``format_id`` from the registry by inverting structural matches ... SDKs that synthesize
+    unilaterally produce inter-SDK divergence on structurally-equal values").
+
+    Informative only beside this scenario's first Then, which asserts the snapshot IS
+    present on the same response -- an absence assertion alone passes under any perturbation
+    that drops the package entirely.
+
+    Asserted on the ENTRY DICT and not through ``wire_absent``, which is deliberate: its
+    dotted-path resolver walks objects only, so ``"packages.0.format_ids_to_provide"`` hits
+    the list, reads as WIRE_MISSING and would pass whatever the package carried. The key's
+    presence on the entry is the real claim, and ``wire_entry`` has already proved the
+    package is there.
+    """
+    package = wire_entry(ctx, "packages", index=0)
+    assert "format_ids_to_provide" not in package, (
+        "the declaration asserts no v1_format_ref, so there is nothing to project -- yet the "
+        f"package carries format_ids_to_provide={package['format_ids_to_provide']!r}"
+    )
 
 
 @then("the buyer is refused UNSUPPORTED_FEATURE naming the packages field")

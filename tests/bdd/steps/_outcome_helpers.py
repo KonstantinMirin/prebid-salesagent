@@ -304,6 +304,33 @@ def wire_absent(ctx: dict, path: str) -> None:
     assert value is WIRE_MISSING, f"{path!r} unexpectedly present on the wire: {value!r}"
 
 
+def stored_package_config(ctx: dict, media_buy_id: str, package_id: str) -> dict[str, Any]:
+    """The persisted ``package_config`` for one package, through the repository.
+
+    Reached from a UoW rather than a raw ``select()``: the repository's ``get_package``
+    joins through MediaBuy for tenant scoping, so this reads the row the way production
+    reads it and cannot see another tenant's package.
+
+    HERE rather than in one feature's step module because two features now read stored
+    package state for the same reason -- a response-only assertion is echo-satisfiable, so
+    a scenario that claims the seller RECORDED something has to read the record. This
+    module is where that belongs: "the harness owns the session, the repository owns the
+    query, the helper owns the assertion".
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx — conftest must seed one"
+    with MediaBuyUoW(tenant.tenant_id) as uow:
+        assert uow.media_buys is not None
+        row = uow.media_buys.get_package(media_buy_id, package_id)
+        assert row is not None, (
+            f"no persisted package {package_id!r} on media buy {media_buy_id!r}; "
+            "the create reported it but stored nothing"
+        )
+        return dict(row.package_config or {})
+
+
 def _real_wire_error_envelope(ctx: dict) -> dict | None:
     """Read ``TransportResult.wire_error_envelope`` — the ONE attribute-access site.
 
