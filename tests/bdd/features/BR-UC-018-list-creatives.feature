@@ -1041,6 +1041,89 @@ Feature: BR-UC-018 List Creatives
     # genuinely different agent that no canonicalization makes equal and must not.
     # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/format-id.json property=agent_url
 
+  @T-UC-018-filter-by-format-kinds @schema-v3.2 @list-filter @format-kind
+  Scenario Outline: List creatives filtered by filters.format_kinds "<wanted>" returns only the creatives of that canonical kind
+    Given the buyer synced creatives on canonical format_kinds "video_hosted" and "image"
+    When the Buyer Agent sends list_creatives with filters.format_kinds ["<wanted>"]
+    Then the response is compliant with the list_creatives spec
+    And the creatives array should contain exactly the "<wanted>" creative, carrying that format_kind
+    And the creatives array should NOT include the "<other>" creative
+    And query_summary.filters_applied should report format_kinds "<wanted>"
+
+    Examples: each kind in the library is the filtered one in turn
+      | wanted       | other        |
+      | video_hosted | image        |
+      | image        | video_hosted |
+
+    # core/creative-filters.json declares format_kinds as an array of
+    # core/canonical-format-kind.json (minItems 1, uniqueItems true): "Filter by canonical
+    # format kinds. Returns creatives matching any supplied kind." The sibling format_ids
+    # is `deprecated: true` in the same file and points HERE -- "Use `format_kinds` for
+    # canonical libraries" -- so this is the filter a 3.2 buyer is told to send, and the
+    # one the seller accepted and silently ignored: an unfiltered whole-library answer,
+    # with filters_applied not even naming the filter it dropped. That file grants an
+    # explicit "SHOULD ignore" licence to three sales-agent-specific filters
+    # (assigned_to_packages, media_buy_ids, unassigned) and to this one it grants none.
+    #
+    # BOTH rows, swapped, because one row is satisfied by a seller that hardcoded the
+    # kind it happened to be developed against -- and by a seller that returns the whole
+    # library whenever the library has one creative per kind. Swapping which kind is
+    # filtered makes a constant answer wrong in one direction or the other.
+    #
+    # The outcome names three things because any one of them passes vacuously alone. The
+    # exact-set assertion alone would pass on an empty array; the absence assertion alone
+    # would pass on a broken query returning nothing; and filters_applied is the half
+    # that makes the behaviour OBSERVABLE to the buyer (POST-S7) rather than merely
+    # correct by coincidence.
+    # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/creative-filters.json property=format_kinds
+    # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/canonical-format-kind.json
+
+  @T-UC-018-format-kinds-filter-is-a-union @schema-v3.2 @list-filter @format-kind
+  Scenario: A format_kinds filter naming two kinds returns the creatives of both
+    Given the buyer synced creatives on canonical format_kinds "video_hosted" and "image"
+    When the Buyer Agent sends list_creatives with filters.format_kinds ["video_hosted", "image"]
+    Then the response is compliant with the list_creatives spec
+    And the creatives array should contain both the "video_hosted" and the "image" creative
+    And query_summary.filters_applied should report format_kinds "video_hosted,image"
+
+    # The word is ANY: core/creative-filters.json says format_kinds "Returns creatives
+    # matching any supplied kind", so a multi-kind filter is a UNION and not an
+    # intersection. Graded separately from the single-kind rows above because they cannot
+    # see the difference -- a seller that conjoined the kinds (one condition per kind,
+    # ANDed) answers every single-kind request correctly and answers this one with an
+    # empty array, since no creative carries two kinds. minItems is 1, so a multi-kind
+    # array is in-contract traffic rather than an edge case.
+    # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/creative-filters.json property=format_kinds
+
+  @T-UC-018-format-kinds-filter-matches-the-projected-kind @schema-v3.2 @list-filter @format-kind
+  Scenario: A creative synced by a legacy format_id is returned by a format_kinds filter naming the kind that reference projects to
+    Given the buyer synced a creative on legacy format_id "display_300x250" and one on "audio_30s", which no registry pattern projects
+    When the Buyer Agent sends list_creatives with filters.format_kinds ["image"]
+    Then the response is compliant with the list_creatives spec
+    And the creatives array should contain exactly the creative synced on "display_300x250"
+    And that creative should be listed by format_id, carrying no format_kind
+    And the creatives array should NOT include the creative whose format_id projects to no canonical kind
+
+    # The both-arms rule, and it is the one a reasonable reading gets backwards.
+    # registries/v1-canonical-mapping.json is "authoritative for v1 -> v2 projection
+    # only", and this seller runs that order on the way IN: a creative synced by
+    # `display_300x250` stores the kind the reference PROJECTS to (`image`), so it matches
+    # a format_kinds filter naming `image` -- even though its wire entry carries
+    # `format_id` and no `format_kind`, because list-creatives-response.json's item schema
+    # declares the two as a oneOf whose arms forbid each other and the state mirrors the
+    # INPUT. The identity is what a filter keys on; the arm is a wire concern. A seller
+    # that returned only canonically-synced rows here would be treating `format_kind` as
+    # an arm marker instead of as the identity.
+    #
+    # The second creative is the fail-closed half, and it is a REAL row rather than a
+    # constructed one: `audio_30s` is in the registry the A2A path validates against, and
+    # no registry pattern projects it, so its canonical identity is genuinely absent
+    # rather than merely unset. The sixth normative step is to fail closed, so a creative
+    # that is not KNOWN to be any kind matches no kind -- it must not be coalesced to a
+    # default and answered as if it were.
+    # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/creative-filters.json property=format_kinds
+    # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/creative/list-creatives-response.json property=format_kind
+
   @T-UC-018-parameterized-format-id-roundtrip @schema-v3.2 @v3-1 @format-id-object
   Scenario: A creative synced with a parameterized format_id is listed with every declared parameter intact
     Given the buyer synced a creative on a format_id parameterized by width, height and pixel_ratio
