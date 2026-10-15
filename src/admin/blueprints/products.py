@@ -1,6 +1,7 @@
 """Products management blueprint for admin UI."""
 
 import asyncio
+import functools
 import json
 import logging
 import uuid
@@ -8,7 +9,7 @@ from decimal import Decimal
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import joinedload
 
@@ -95,6 +96,73 @@ def _parse_format_entries(formats_parsed: list[dict]) -> list[dict]:
             format_entry["duration_ms"] = float(fmt["duration_ms"])
         entries.append(format_entry)
     return entries
+
+
+@functools.cache
+def _format_options_type() -> TypeAdapter:
+    """The pinned type of a product's ``format_options``, read off the DTO that serves it.
+
+    Read rather than restated. The operator form must refuse exactly what
+    ``convert_product_model_to_schema`` would refuse later, and validating against the
+    same annotation is the only way to guarantee that -- a second spelling of
+    core/product-format-declaration.json here would drift from the pin on the next bump.
+    """
+    from src.core.schemas.product import Product as ProductSchema
+
+    return TypeAdapter(ProductSchema.model_fields["format_options"].annotation)
+
+
+def _parse_authored_format_options(raw: str | None) -> list[dict] | None:
+    """The canonical arm of core/product.json's root anyOf, as the operator authored it.
+
+    Validated at AUTHOR time against the pinned discriminated union. An invalid
+    declaration does not fail on the row -- it fails in
+    ``convert_product_model_to_schema``, which ``get_products`` runs in a loop that
+    re-raises, so one mis-authored product answers INTERNAL_ERROR for the whole tenant's
+    discovery. The validated models are discarded on purpose: the column stores the
+    document and ``product_conversion`` hands that document through untouched, so
+    validating here and storing the original is what keeps the two in agreement.
+
+    Returns ``None`` when the operator authored nothing, so an absent arm is recorded as
+    NULL rather than as ``[]``. The pin gives ``format_options`` ``minItems: 1``, and the
+    deprecated arm is satisfied by its KEY alone -- an empty array asserts a declaration
+    that is not there.
+    """
+    if not raw or not raw.strip():
+        return None
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"format_options is not valid JSON: {e}") from e
+    if not document:
+        return None
+    try:
+        _format_options_type().validate_python(document)
+    except ValidationError as e:
+        first = e.errors()[0]
+        location = "/".join(str(part) for part in first["loc"]) or "format_options"
+        raise ValueError(
+            f"format_options is not a valid canonical format declaration ({location}: {first['msg']})"
+        ) from e
+    return document
+
+
+def _refuse_a_product_with_no_format_arm(format_ids: list | None, format_options: list | None) -> None:
+    """core/product.json's root anyOf, checked once where both arms are visible.
+
+    The pin's ``format_ids`` property says "Products MUST carry ``format_ids``,
+    ``format_options``, or both during the 3.x migration window", so the refusable state
+    is NEITHER arm -- never a missing legacy arm. It is refused at the authoring surface
+    because that is the only place an operator can still fix it: stored, the row passes
+    every column CHECK and then takes the tenant's whole product catalog down at
+    discovery time.
+    """
+    if not format_ids and not format_options:
+        raise ValueError(
+            "A product must declare at least one creative format: select format templates, "
+            "author canonical format_options, or both. New products should author "
+            "format_options -- format_ids is deprecated in AdCP 3.2 and removed in 4.0."
+        )
 
 
 def _format_id_to_display_name(format_id: str) -> str:
@@ -804,6 +872,15 @@ def add_product(tenant_id):
                     flash("Invalid format data submitted. Please try again.", "error")
                     return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
+                # Parse the CANONICAL arm the pin tells new products to author, and refuse
+                # only the state the anyOf actually refuses: neither arm.
+                try:
+                    format_options = _parse_authored_format_options(form_data.get("format_options"))
+                    _refuse_a_product_with_no_format_arm(formats, format_options)
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+
                 # Parse countries - from multi-select
                 countries_list = request.form.getlist("countries")
                 # Only set countries if some were selected; None means all countries
@@ -956,7 +1033,12 @@ def add_product(tenant_id):
                     "tenant_id": tenant_id,
                     "name": form_data["name"],
                     "description": form_data.get("description", ""),
-                    "format_ids": formats,  # Fixed: was "formats", should be "format_ids"
+                    # The two arms of core/product.json's root anyOf, each recorded as
+                    # authored. NULL rather than [] for an arm the operator did not
+                    # author: the column is nullable precisely so an unauthored arm is
+                    # absent rather than present-and-empty.
+                    "format_ids": formats or None,
+                    "format_options": format_options,
                     "delivery_type": delivery_type,
                     "targeting_template": targeting_template,
                     "implementation_config": implementation_config,
@@ -1351,6 +1433,12 @@ def edit_product(tenant_id, product_id):
 
     # Pre-validate formats BEFORE opening database session to avoid session conflicts
     validated_formats = None
+    # The canonical arm, parsed in the same pre-session window and for the same reason.
+    # Presence of the KEY is the operator's intent: the editor is always submitted, so a
+    # blank one clears the arm, while a POST that omits the field entirely leaves the
+    # stored declaration alone.
+    format_options_submitted = "format_options" in request.form
+    authored_format_options = None
     if request.method == "POST":
         # Parse formats - expecting JSON string with FormatReference objects
         # Supports both legacy format {agent_url, format_id} and new parameterized format
@@ -1411,9 +1499,18 @@ def edit_product(tenant_id, product_id):
             flash("Invalid format data submitted. Please try again.", "error")
             return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
 
-        if validated_formats is not None and not validated_formats:
-            flash("No valid formats selected", "error")
-            return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+        if format_options_submitted:
+            try:
+                authored_format_options = _parse_authored_format_options(request.form.get("format_options"))
+            except ValueError as e:
+                flash(str(e), "error")
+                return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
+        # The "No valid formats selected" refusal that used to stand here was a per-arm
+        # check: an empty legacy arm is only an error when the canonical arm is empty too,
+        # which is what _refuse_a_product_with_no_format_arm says. It cannot be decided
+        # here -- an edit that submits one arm leaves the other at its stored value -- so
+        # the anyOf is checked below, once both arms carry their post-edit values.
 
     try:
         with get_db_session() as db_session:
@@ -1459,12 +1556,26 @@ def edit_product(tenant_id, product_id):
 
                 # Apply validated formats (already validated above, outside session)
                 if validated_formats is not None:
-                    product.format_ids = validated_formats
+                    product.format_ids = validated_formats or None
                     logger.info(f"[DEBUG] Updated product.format_ids to: {validated_formats}")
                     # Flag JSONB column as modified so SQLAlchemy generates UPDATE
                     from sqlalchemy.orm import attributes
 
                     attributes.flag_modified(product, "format_ids")
+
+                # Apply the canonical arm (validated above, outside the session)
+                if format_options_submitted:
+                    product.format_options = authored_format_options
+                    from sqlalchemy.orm import attributes
+
+                    attributes.flag_modified(product, "format_options")
+
+                # The anyOf, now that both arms carry their post-edit values.
+                try:
+                    _refuse_a_product_with_no_format_arm(product.format_ids, product.format_options)
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
 
                 # Parse countries - from multi-select
                 countries_list = request.form.getlist("countries")
@@ -1944,6 +2055,9 @@ def edit_product(tenant_id, product_id):
                     if product.format_ids
                     else []
                 ),
+                # The canonical arm, read back as the stored document so the editor shows
+                # what the row actually declares rather than a rendering of it.
+                "format_options": product.format_options,
                 "countries": (
                     product.countries
                     if isinstance(product.countries, list)

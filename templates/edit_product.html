@@ -122,6 +122,8 @@
         <!-- Hidden input to store selected format data -->
         <input type="hidden" id="formats-data" name="formats" value="[]">
 
+        {% include 'components/format_options_editor.html' %}
+
         <!-- Load Format Template Picker JS -->
         <script src="{{ request.script_root }}/static/js/format-template-picker.js"></script>
 
