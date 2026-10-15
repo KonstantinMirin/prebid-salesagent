@@ -27,17 +27,9 @@ import sys
 
 import pytest
 
-_REPO = pathlib.Path(__file__).resolve().parents[2]
+from tests.helpers.run_identity_record import FIXTURE_SHA, write_run_identity
 
-#: The tree every run below claims, unless a test is about not claiming one.
-#:
-#: THE SAME SHA ON BOTH SIDES, and well-formed rather than real. Two runs of one
-#: tree is what each test here is actually about -- they grade suite accounting,
-#: not a delta between trees -- and ``run_identity.ancestry`` answers an equal
-#: pair without consulting git at all, so these stay hermetic and do not rot when
-#: the repo's history moves under them. The ancestry refusal gets its own tests,
-#: against real commits, in ``test_run_identity.py``.
-_SHA = "1111111111111111111111111111111111111111"
+_REPO = pathlib.Path(__file__).resolve().parents[2]
 
 
 def _load_compare_runs():
@@ -56,7 +48,7 @@ def _write_run(
     directory: pathlib.Path,
     reports: dict[str, dict[str, str]],
     declared: list[str] | None = None,
-    commit: str | None = _SHA,
+    commit: str | None = FIXTURE_SHA,
 ) -> pathlib.Path:
     """One run directory: ``<suite>.json`` reports, ``.suites``, and ``meta.json``.
 
@@ -72,21 +64,7 @@ def _write_run(
     if declared is not None:
         (directory / ".suites").write_text(",".join(declared) + "\n")
     if commit is not None:
-        (directory / "meta.json").write_text(
-            json.dumps(
-                {
-                    "schema": 1,
-                    "run": directory.name,
-                    "commit": commit,
-                    "branch": "work/lane",
-                    "detached": False,
-                    "tree": "clean",
-                    "source": "git",
-                    "unidentified_because": None,
-                    "adcp": {"spec_version": "3.2.1", "distribution": "9.0.0b3+sa.test.0"},
-                }
-            )
-        )
+        write_run_identity(directory, commit=commit)
     return directory
 
 

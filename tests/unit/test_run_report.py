@@ -14,39 +14,19 @@ import json
 import pathlib
 
 from scripts.audit.run_report import STORYBOARD_SUBDIR, main, report
-
-#: The tree every run below claims. The SAME sha on both sides of a baseline
-#: pair, and well-formed rather than real: these tests grade what the report
-#: SHOWS, not a delta between trees, and ``run_identity.ancestry`` answers an
-#: equal pair without consulting git -- so they stay hermetic. The refusals get
-#: their own tests in ``test_run_identity.py`` and ``test_compare_runs.py``.
-_SHA = "1111111111111111111111111111111111111111"
+from tests.helpers.run_identity_record import FIXTURE_SHA, write_run_identity
 
 
 def _write_run(
     directory: pathlib.Path,
     reports: dict[str, dict[str, tuple[str, str]]],
     storyboard: dict[str, dict] | None = None,
-    commit: str | None = _SHA,
+    commit: str | None = FIXTURE_SHA,
 ) -> pathlib.Path:
     """``reports``: suite -> {nodeid: (outcome, longrepr)}; ``storyboard``: protocol -> runner summary."""
     directory.mkdir(parents=True, exist_ok=True)
     if commit is not None:
-        (directory / "meta.json").write_text(
-            json.dumps(
-                {
-                    "schema": 1,
-                    "run": directory.name,
-                    "commit": commit,
-                    "branch": "work/lane",
-                    "detached": False,
-                    "tree": "clean",
-                    "source": "git",
-                    "unidentified_because": None,
-                    "adcp": {"spec_version": "3.2.1", "distribution": "9.0.0b3+sa.test.0"},
-                }
-            )
-        )
+        write_run_identity(directory, commit=commit)
     for suite, tests in reports.items():
         payload = {
             "tests": [
