@@ -279,6 +279,51 @@ class FormatDeclarationDivergenceDetails(ErrorDetails):
     divergence_reason: Literal["v1_format_ref_absent_from_format_ids"]
 
 
+class SelectorRouteSummary(BaseModel):
+    """One format selector route the buyer supplied, and what it normalized to.
+
+    BOTH halves in one row, because ``enums/error-code.json``'s
+    ``CONFLICTING_SELECTORS`` entry asks for both and pairing them is the whole
+    information: "``error.details`` SHOULD identify the supplied selector routes and
+    their normalized canonical summaries". A list of supplied routes beside a separate
+    list of summaries would leave the buyer to re-pair them by position.
+
+    ``field`` is the request arm the route was read from (``format_option_refs``,
+    ``format_kind``, ``format_ids``) and ``selector`` the value the buyer put there,
+    rendered — the two together name the route, because one arm may carry several
+    routes. ``format_kind`` and ``selected_option`` are the normalized summary:
+    which canonical shape the route resolved to, and which of the product's
+    ``format_options[]`` entries it then selected. ``selected_option`` is ``None``
+    where the route resolved and selected NOTHING, which is itself a differing
+    selected set and so is a conflict the buyer has to see.
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    field: str
+    selector: str
+    format_kind: str | None = None
+    selected_option: str | None = None
+
+
+class SelectorConflictDetails(EntityRefDetails):
+    """``CONFLICTING_SELECTORS``'s details: every route, and what each one selected.
+
+    One field, because the pin names one thing to carry (see
+    :class:`SelectorRouteSummary`). WHICH package is the inherited
+    ``package_index``/``product_id``; the pointer at the package itself is
+    ``error.field``, which the pin states separately ("``error.field`` SHOULD point at
+    the conflicting package").
+
+    Every route is listed and not only the disagreeing pair. The conflict is a property
+    of the SET — the pin requires "the selected option sets to match", not that two
+    named routes agree — so naming two of three routes would describe a different
+    refusal from the one the seller made.
+    """
+
+    selector_routes: list[SelectorRouteSummary]
+
+
 class ProductRefDetails(EntityRefDetails):
     """A product reference that may name several products at once.
 

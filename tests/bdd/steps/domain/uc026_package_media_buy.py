@@ -12,7 +12,12 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import assert_wire_rejection, payload_or_none, require_payload
+from tests.bdd.steps._outcome_helpers import (
+    assert_wire_rejection,
+    payload_or_none,
+    require_payload,
+    stored_package_config,
+)
 from tests.bdd.steps.generic._table import as_bool
 from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
@@ -287,27 +292,6 @@ def _created_media_buy_id(ctx: dict) -> str:
     media_buy_id = getattr(inner, "media_buy_id", None)
     assert media_buy_id, "create response carries no media_buy_id — nothing to read back"
     return str(media_buy_id)
-
-
-def _stored_package_config(ctx: dict, media_buy_id: str, package_id: str) -> dict[str, Any]:
-    """The persisted ``package_config`` for one package, through the repository.
-
-    Reached from a UoW rather than a raw ``select()``: the repository's ``get_package``
-    joins through MediaBuy for tenant scoping, so this reads the row the way production
-    reads it and cannot see another tenant's package.
-    """
-    from src.core.database.repositories.uow import MediaBuyUoW
-
-    tenant = ctx.get("tenant")
-    assert tenant is not None, "No tenant in ctx — conftest must seed one"
-    with MediaBuyUoW(tenant.tenant_id) as uow:
-        assert uow.media_buys is not None
-        row = uow.media_buys.get_package(media_buy_id, package_id)
-        assert row is not None, (
-            f"no persisted package {package_id!r} on media buy {media_buy_id!r}; "
-            "the create reported it but stored nothing"
-        )
-        return dict(row.package_config or {})
 
 
 def _create_media_buy_for_update(ctx: dict, **pkg_overrides: Any) -> None:
@@ -2196,7 +2180,7 @@ def _assert_requested_package_effects(ctx: dict) -> None:
                     assert package_id, (
                         "response package carries no package_id, so the persisted package_config cannot be read back"
                     )
-                    stored = _stored_package_config(ctx, _created_media_buy_id(ctx), str(package_id))
+                    stored = stored_package_config(ctx, _created_media_buy_id(ctx), str(package_id))
                     assert bool(stored.get("paused")) == bool(value), (
                         f"stored package_config['paused']={stored.get('paused')!r}, expected "
                         f"{value!r} -- the response reported the buyer's ask while the record "
@@ -2904,7 +2888,7 @@ def then_created_with_paused(ctx: dict, paused: str) -> None:
     media_buy_id = _created_media_buy_id(ctx)
     package_id = _pkg_field(pkgs[0], "package_id")
     assert package_id, "created package has no package_id — cannot read back what was stored"
-    stored = _stored_package_config(ctx, media_buy_id, package_id)
+    stored = stored_package_config(ctx, media_buy_id, package_id)
     assert stored.get("paused") == expected, (
         f"stored package_config['paused']={stored.get('paused')!r}, expected {expected}; "
         "this is the record get_media_buys serves paused from, so the next read would "

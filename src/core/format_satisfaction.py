@@ -32,11 +32,16 @@ Graded by ``protocols/media-buy/scenarios/canonical_formats.yaml`` (3.2.3), whos
 selector naming ``format_kind: image`` and no dimensions does not satisfy a product that
 fixes 300x250, and the refusal is ``UNSUPPORTED_FEATURE``.
 
+A PACKAGE's selector may address a format several ways at once, and
+``media-buy/package-request.json``'s "Format selector contract (normative)" states the
+four steps a receiver runs over them: resolve each route independently, derive which
+product declarations each resolved route SELECTS, refuse a disagreement with
+``CONFLICTING_SELECTORS``, and only then apply precedence. :class:`SelectorResolution` is
+those four steps, one property each; :func:`satisfies` is the single-route entry the four
+creative gates use.
+
 WHAT THIS MODULE DOES NOT DO, deliberately:
 
-* It grades ONE claim against one product. Resolving several co-present selector routes
-  on a package and emitting ``CONFLICTING_SELECTORS`` when they disagree is the next
-  stage's (``salesagent-ol033.5``); nothing here arbitrates between routes.
 * It does not derive a creative's params from its assets. A stored creative declares a
   kind and an option, never ``params``, so a creative's claim passes ``params=None`` and
   the params rules are SKIPPED for it -- see :func:`satisfies`. Deriving them from the
@@ -63,8 +68,8 @@ from adcp.types.domains.core.product_format_declaration import (
 )
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from src.core.errors.details import CapabilityRefusalDetails
-from src.core.exceptions import AdCPCapabilityNotSupportedError
+from src.core.errors.details import CapabilityRefusalDetails, SelectorConflictDetails, SelectorRouteSummary
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPConflictingSelectorsError
 from src.core.schemas import CreativeFormatIdentity, FormatOptionIdentity
 
 logger = logging.getLogger(__name__)
@@ -91,16 +96,39 @@ class FormatRefusal(StrEnum):
     unpublished kind means pick another product, an unrouted option ref means name an
     option this product actually publishes, unsatisfied params mean complete the selector,
     an unprojectable legacy reference means this product does not recognise that named
-    format at all, and a legacy reference outside the product's legacy set means a
-    different creative. The wire CODE is not a member here -- a code belongs to an
-    exception class (``docs/design/error-architecture.md``), and the raise site picks it.
+    format at all, a normalizable legacy reference that lands on no published declaration
+    means this product does not sell that shape, and a legacy reference outside the
+    product's legacy set means a different creative. The wire CODE is not a member here --
+    a code belongs to an exception class (``docs/design/error-architecture.md``), and the
+    raise site picks it.
+
+    THE MEMBERS PARTITION INTO THE PIN'S TWO STEPS, and :data:`_RESOLUTION_FAILURES` is
+    that partition written down. ``media-buy/package-request.json`` separates (1) resolving
+    a route to a canonical declaration from (2) deriving which product declarations the
+    resolved route then SELECTS, and the two failures carry different codes on a
+    multi-route package -- so which step a member belongs to is a property of the member,
+    not of the call site.
     """
 
     KIND_NOT_PUBLISHED = "kind_not_published"
     OPTION_NOT_PUBLISHED = "option_not_published"
     PARAMS_NOT_SATISFIED = "params_not_satisfied"
     LEGACY_UNPROJECTABLE = "legacy_unprojectable"
+    LEGACY_NOT_SELECTED = "legacy_not_selected"
     LEGACY_NOT_ACCEPTED = "legacy_not_accepted"
+
+
+#: The two members that are a RESOLUTION failure in ``media-buy/package-request.json``'s
+#: step (1), which names them both: "an unresolved ``format_option_ref`` or a legacy
+#: ``format_id`` that cannot be normalized through the canonical mapping path MUST be
+#: rejected with ``UNSUPPORTED_FEATURE``". Every other member is a step-(2) SELECTION
+#: failure -- the route became a canonical declaration and then selected none of the
+#: product's -- and on a package naming several routes that is a selected-set mismatch
+#: rather than a per-route refusal. ``LEGACY_NOT_ACCEPTED`` is neither: it belongs to the
+#: deprecated lane, which a product declaring ``format_options[]`` never reaches.
+_RESOLUTION_FAILURES: frozenset[FormatRefusal] = frozenset(
+    {FormatRefusal.OPTION_NOT_PUBLISHED, FormatRefusal.LEGACY_UNPROJECTABLE}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -403,12 +431,13 @@ def _unsatisfied_params(claimed: Mapping[str, Any], accepted: Mapping[str, Any])
 def _legacy_route(
     identity: CreativeFormatIdentity,
     declarations: Sequence[LibraryFormatDeclaration],
-) -> LibraryFormatDeclaration | None:
-    """The declaration a retained legacy reference selects, or None when none does.
+    params: Mapping[str, Any] | None,
+) -> FormatSatisfaction:
+    """A retained legacy reference: normalize it, then see which declaration it selects.
 
-    TWO steps, in the pin's order, and both of them run v1 -> v2 only -- the direction
-    ``registries/v1-canonical-mapping.json`` calls "authoritative", the one a seller MUST
-    NOT invert:
+    TWO normalization steps, in the pin's order, and both of them run v1 -> v2 only -- the
+    direction ``registries/v1-canonical-mapping.json`` calls "authoritative", the one a
+    seller MUST NOT invert:
 
     1. The declaration's OWN assertion. ``v1_format_ref[]`` is the seller saying which
        legacy id this canonical declaration projects to, so a match there is a lookup and
@@ -428,23 +457,52 @@ def _legacy_route(
        MUST be normalized to canonical declarations before comparison; do not exact-match
        raw ``(agent_url, id)`` pairs once a ``format_id`` has been projected".
 
-    A reference neither step resolves selects nothing, which is the sixth normative step --
-    fail closed -- and what the storyboard's
-    ``reject_unprojectable_legacy_dual_emission`` expects.
+    THE THREE OUTCOMES, which is what this function answers rather than "the declaration
+    or None". ``media-buy/package-request.json`` separates resolution from selection and
+    gives them different codes, so collapsing them loses the distinction the storyboard's
+    two legacy rejections are built on:
+
+    * one of the steps SELECTS a declaration -- the route resolved and selected it;
+    * the reference NORMALIZES (projected params, or a kind from
+      ``canonical_kind_for``) but lands on no declaration this product publishes -- the
+      route resolved and selected NOTHING, which is ``LEGACY_NOT_SELECTED``. Alone that is
+      "a single resolved route that does not satisfy the product", UNSUPPORTED_FEATURE;
+      beside a route that DID select one it is a selected-set mismatch, and the pin is
+      explicit that "canonical precedence must not hide the dimensional conflict". This is
+      the storyboard's ``reject_conflicting_dual_emission``: measured on the pinned wheel,
+      ``display_728x90`` upgrades to ``display_image`` + 728x90 and
+      ``canonical_kind_for`` answers ``image``, so against a product fixing 300x250 it
+      normalizes and selects nothing;
+    * neither step normalizes it at all -- a RESOLUTION failure, which is the sixth
+      normative step (fail closed) and the storyboard's
+      ``reject_unprojectable_legacy_dual_emission``.
+
+    The middle outcome is the one this function used to lose. Returning ``None`` for both
+    of the last two let :func:`_canonical_lane` fall through to the bare-kind route with
+    ``params=None``, which skips the params grading entirely and accepted any declaration
+    publishing that kind -- so a package naming ``display_728x90`` against the 300x250
+    product resolved to the 300x250 declaration and was accepted (salesagent-t0uoo).
+
+    WHEN THE REFERENCE NORMALIZES TO A KIND AND NOTHING ELSE, the kind route grades it.
+    The registry's two directions do not agree on coverage -- measured,
+    ``canonical_kind_for('display_300x250_image')`` raises while
+    ``upgrade_legacy_format_id`` of it yields 300x250, and ``video_640x480`` is the mirror
+    image -- so a reference can arrive with a kind and no projected params. Grading empty
+    params against a whole declaration would refuse it on dimensions the reference never
+    claimed, so what the normalization produced (a kind) is what is graded.
     """
     from src.core.format_resolver import format_identity_or_none
 
     assertion = identity.assertion
-    if assertion is None:
-        return None
+    assert assertion is not None, "the legacy route is reached only for a claim asserting a reference"
     asserted = identity.legacy
     for declaration in declarations:
         refs = declaration.v1_format_ref or []
         if any(format_identity_or_none(ref) == asserted for ref in refs):
-            return declaration
+            return _graded(declaration, params, exact=True)
 
     upgraded = upgrade_legacy_format_id(assertion)
-    params = {
+    projected = {
         name: value
         for name, value in (
             ("width", upgraded.width),
@@ -453,11 +511,35 @@ def _legacy_route(
         )
         if value is not None
     }
-    if not params:
-        return None
-    return next(
-        (declaration for declaration in declarations if not _unsatisfied_params(params, _declared_params(declaration))),
+    kind = identity.kind
+    if not projected:
+        if kind is None:
+            return FormatSatisfaction(
+                satisfied=False,
+                refusal=FormatRefusal.LEGACY_UNPROJECTABLE,
+                rejected_value=assertion.id,
+                accepted_values=tuple(sorted(_declaration_label(d) for d in declarations)),
+                summary=(f"named format {assertion.id!r} projects to no canonical declaration this product publishes"),
+            )
+        return _kind_route(kind, declarations, params)
+
+    selected = next(
+        (
+            declaration
+            for declaration in declarations
+            if (kind is None or str(declaration.format_kind) == kind)
+            and not _unsatisfied_params(projected, _declared_params(declaration))
+        ),
         None,
+    )
+    if selected is not None:
+        return _graded(selected, params, exact=True)
+    return FormatSatisfaction(
+        satisfied=False,
+        refusal=FormatRefusal.LEGACY_NOT_SELECTED,
+        rejected_value=assertion.id,
+        accepted_values=tuple(sorted(_declaration_label(d) for d in declarations)),
+        summary=(f"named format {assertion.id!r} normalizes to a canonical declaration this product does not publish"),
     )
 
 
@@ -564,6 +646,21 @@ def _kind_route(
     actually holds costs two lines and keeps both the rule and the error where they belong.
     Filed as salesagent-ol033.17, with the same mismatch measured from the runtime side on
     ``find_declaration_by_v1_format_id``.
+
+    EVERY DECLARATION PUBLISHING THE KIND IS A CANDIDATE, which is work item M2. A product
+    may publish several of one kind -- that is the case ``format_option_id`` exists for,
+    "REQUIRED when a product contains multiple declarations with the same format_kind"
+    (``core/product-format-declaration.json``) -- and the pin's step (2) asks which
+    ``format_options[]`` entries the route selects "using directional product
+    satisfaction", so the selection is the one the claim SATISFIES rather than the first
+    one declared. Taking the first refused ``{image, 728x90}`` against a product
+    publishing image 300x250 AND image 728x90, telling the buyer the product cannot do
+    what it published (salesagent-ky23p).
+
+    When none satisfies, the FIRST candidate's refusal is reported. It names the params
+    that failed, which is the buyer's lever; with several candidates the named params are
+    one declaration's rather than a union, and a union would be a sentence this module
+    does not author.
     """
     accepted = [str(declaration.format_kind) for declaration in declarations]
     if kind not in accepted:
@@ -575,8 +672,12 @@ def _kind_route(
             accepted_values=tuple(sorted(set(refused.accepted_kinds))),
             summary=str(refused),
         )
-    selected = next(d for d in declarations if str(d.format_kind) == kind)
-    return _graded(selected, params, exact=False)
+    candidates = [
+        _graded(declaration, params, exact=False)
+        for declaration in declarations
+        if str(declaration.format_kind) == kind
+    ]
+    return next((candidate for candidate in candidates if candidate), candidates[0])
 
 
 def _canonical_lane(
@@ -588,29 +689,19 @@ def _canonical_lane(
 
     The arms are tried in the pin's precedence and are not interchangeable: an exact option
     ref routes to one declaration, a legacy reference projects onto one, and a bare kind
-    only discriminates.
+    only discriminates. EXACTLY ONE arm answers -- a claim asserting a legacy reference is
+    answered by the legacy route whatever else it carries, because the reference is the
+    more specific identity and :func:`_legacy_route` falls back to the kind route itself
+    where the reference normalized to nothing more than a kind. Letting the kind arm
+    answer AFTER the legacy arm declined is what accepted a dimensionally-conflicting
+    reference (salesagent-t0uoo).
     """
     if (option := identity.option) is not None:
         return _option_route(option, declarations, params)
-    if (projected := _legacy_route(identity, declarations)) is not None:
-        return _graded(projected, params, exact=True)
+    if identity.assertion is not None:
+        return _legacy_route(identity, declarations, params)
     if (kind := identity.kind) is not None:
         return _kind_route(kind, declarations, params)
-    if (assertion := identity.assertion) is not None:
-        # A legacy reference that neither projection step resolved, against a product that
-        # DOES declare canonically. The SDK says what that means, in
-        # ``find_declaration_by_v1_format_id``: "None means the request should be rejected
-        # with UNSUPPORTED_FEATURE -- the v1 ``format_id`` is not a recognised entry for
-        # this product". Failing closed is the sixth normative step, and the reference
-        # cannot be rescued by inventing a kind for it: that inversion is the one
-        # ``registries/v1-canonical-mapping.json`` forbids outright.
-        return FormatSatisfaction(
-            satisfied=False,
-            refusal=FormatRefusal.LEGACY_UNPROJECTABLE,
-            rejected_value=assertion.id,
-            accepted_values=tuple(sorted(_declaration_label(d) for d in declarations)),
-            summary=(f"named format {assertion.id!r} projects to no canonical declaration this product publishes"),
-        )
     # The claim names no kind, no option and no reference at all, so there is nothing to
     # compare against a canonical declaration. Satisfied -- and this is the SKIP-VS-REFUSE
     # DIVERGENCE resolved: the create gate skipped here while the update and assignment
@@ -673,9 +764,12 @@ def selector_routes(
     carrying a resolving option ref beside an UNPROJECTABLE legacy id was accepted on the
     option route, and the legacy route was never resolved at all.
 
-    Order matters and is the pin's: the canonical arms first, the deprecated one last.
-    :func:`satisfies_routes` reports the first route that fails to resolve, so the order
-    decides which refusal a buyer sees when more than one route is broken.
+    Order matters and is the pin's -- step (4), "apply precedence: ``format_option_refs``,
+    then ``format_kind`` plus ``params``, then ``format_ids``". So the canonical arms come
+    first and the deprecated one last, and that ordering does two jobs in
+    :class:`SelectorResolution`: it decides which refusal a buyer sees when more than one
+    route is broken, and it names the WINNING route whose declaration the package is
+    accepted on.
 
     The kind a legacy reference projects to is asked of ``format_resolver.canonical_kind_for``
     -- the one implementation of the one direction that resolves -- and an unresolvable
@@ -711,28 +805,140 @@ def selector_routes(
     return tuple(routes)
 
 
-def satisfies_routes(
+@dataclass(frozen=True, slots=True)
+class SelectorResolution:
+    """Every route a selector named, resolved, and the four answers the pin derives.
+
+    ONE stored field -- the (route, verdict) pairs -- and every answer a PROPERTY over
+    them, because the pin states its steps as an ORDER and an order written down twice is
+    an order two readers can disagree about. ``media-buy/package-request.json``'s
+    "Format selector contract (normative)" is the whole of this class:
+
+      (1) independently resolve each present route to canonical declarations, without
+          applying route precedence; an unresolved ``format_option_ref`` or a legacy
+          ``format_id`` that cannot be normalized through the canonical mapping path MUST
+          be rejected with ``UNSUPPORTED_FEATURE``;
+      (2) when every route resolves, derive the product ``format_options[]`` entries
+          selected by each route using directional product satisfaction, and require the
+          selected option sets to match;
+      (3) reject different format shapes, selected option sets, or incompatible dimensions
+          with ``CONFLICTING_SELECTORS``; and only then
+      (4) apply precedence: ``format_option_refs``, then ``format_kind`` plus ``params``,
+          then ``format_ids``.
+
+    plus the single-route rule stated beside them: "A single resolved route that does not
+    satisfy the product is rejected with ``UNSUPPORTED_FEATURE``."
+
+    THE ROUTES ARE A TUPLE OF PAIRS rather than of verdicts because the refusal's details
+    name the route the buyer SUPPLIED as well as what it normalized to
+    (:class:`SelectorConflictDetails`), and a verdict does not carry its own claim.
+    """
+
+    #: One pair per arm the buyer named, in step (4)'s precedence order. Empty where the
+    #: product narrows neither arm, or the package names no selector: both mean the
+    #: selector imposes nothing, which is :meth:`__bool__`'s ``True`` with no selection.
+    routes: tuple[tuple[FormatRoute, FormatSatisfaction], ...] = ()
+
+    @property
+    def unresolved(self) -> FormatSatisfaction | None:
+        """Step (1): the first route that never became a canonical declaration.
+
+        REPORTED BEFORE EVERYTHING ELSE, and the pin states that as an obligation rather
+        than an implementation choice -- the storyboard's
+        ``reject_unprojectable_legacy_dual_emission`` says "Resolution failure is reported
+        BEFORE selector equivalence and must not be mislabeled ``CONFLICTING_SELECTORS``".
+        A seller that compared the routes which DID resolve and answered
+        ``CONFLICTING_SELECTORS`` would emit a plausible-looking refusal with the wrong
+        code, which a scenario asserting only on success could never catch.
+        """
+        return next((verdict for _, verdict in self.routes if verdict.refusal in _RESOLUTION_FAILURES), None)
+
+    @property
+    def conflicting(self) -> bool:
+        """Steps (2) and (3): every route resolved, and the selected option sets disagree.
+
+        The comparison is on the SELECTED DECLARATION, which is what step (2) asks for --
+        "the product ``format_options[]`` entries selected by each route" -- and not on the
+        routes' own shapes. Two routes spelled differently that select the same entry agree;
+        that is the storyboard's ``create_media_buy_with_equivalent_dual_emission``, where a
+        product-local option ref and ``display_300x250_image`` "normalize to the same
+        declaration".
+
+        A ROUTE THAT SELECTED NOTHING COUNTS AS A DIFFERING SET, and that is the pin's
+        reading rather than a choice. ``reject_conflicting_canonical_routes`` sends a
+        resolving option ref beside ``{format_kind: image, params: {width: 728, height:
+        90}}`` to a product publishing ONE image option fixed at 300x250, and grades
+        ``CONFLICTING_SELECTORS`` -- the 728x90 route can select no entry, because there is
+        none to select, so there is no other mechanism by which that step produces that
+        code on that fixture.
+
+        Compared with ``==`` on the pinned declaration models, which compares their field
+        VALUES: two routes landing on the same entry hold the same object here, and a
+        hypothetical pair of byte-identical entries would agree, which is what "the same
+        product format contract" means. ``None`` equals only ``None``.
+        """
+        if self.unresolved is not None or len(self.routes) < 2:
+            return False
+        first = self.routes[0][1].declaration
+        return any(verdict.declaration != first for _, verdict in self.routes[1:])
+
+    @property
+    def unsatisfied(self) -> FormatSatisfaction | None:
+        """The single-route rule: a route that resolved and selected nothing.
+
+        Reached only when nothing failed resolution and no route disagrees with another.
+        With one route that is the pin's "a single resolved route that does not satisfy the
+        product"; with several it is every route agreeing on the empty set, which no
+        comparison can fault and which still satisfies no product declaration.
+        """
+        if self.unresolved is not None or self.conflicting:
+            return None
+        return next((verdict for _, verdict in self.routes if not verdict), None)
+
+    @property
+    def refused(self) -> FormatSatisfaction | None:
+        """The verdict to raise ``UNSUPPORTED_FEATURE`` for, or None. Both lanes, in order.
+
+        ``is not None`` and NEVER ``self.unresolved or self.unsatisfied``, because a
+        refusing :class:`FormatSatisfaction` is FALSY by design -- its ``__bool__`` is
+        "did it satisfy". The ``or`` spelling therefore discards exactly the verdict this
+        property exists to return and falls through to the second lane, which for a single
+        unresolved route is ``None``: measured before the fix, an unpublished
+        ``format_option_ref`` and a package carrying an unprojectable legacy id beside a
+        resolving option ref were both ACCEPTED.
+        """
+        unresolved = self.unresolved
+        return unresolved if unresolved is not None else self.unsatisfied
+
+    @property
+    def selected(self) -> LibraryFormatDeclaration | None:
+        """Step (4): the declaration the WINNING route selected, once the selector is accepted.
+
+        The first route is the winner because :func:`selector_routes` builds them in the
+        pin's precedence order. ``None`` where the selector imposes nothing -- a package
+        naming no format, or a product that narrows neither arm -- which is a real answer
+        and not a missing one: there is no canonical declaration to record for such a
+        package.
+        """
+        return self.routes[0][1].declaration if self.routes and bool(self) else None
+
+    def __bool__(self) -> bool:
+        return self.refused is None and not self.conflicting
+
+
+def resolve_routes(
     routes: Sequence[FormatRoute],
     declarations: Any,
     *,
     legacy_catalog: Iterable[Any] | None = None,
-) -> FormatSatisfaction:
-    """Resolve EVERY route independently, and report a resolution failure before comparing.
+) -> SelectorResolution:
+    """Resolve EVERY route independently. :class:`SelectorResolution` carries the verdict.
 
-    THE ORDER IS THE PIN'S, and step 15 states it as an obligation rather than an
-    implementation choice: "Resolution failure is reported before selector equivalence and
-    must not be mislabeled CONFLICTING_SELECTORS." So every route is resolved first, and
-    the first one that did not resolve is the answer -- a seller that compared the routes
-    that DID resolve and answered ``CONFLICTING_SELECTORS`` would emit a plausible-looking
-    refusal with the wrong code, which a scenario asserting only on success could never
-    catch.
-
-    WHAT THIS DOES NOT DO, and the seam is deliberate and named: when every route resolves,
-    the resolutions are NOT yet compared for equivalence. Steps 13 and 14 want
-    ``CONFLICTING_SELECTORS`` when two resolved routes select different declarations, and
-    that comparison is stage 4's (``salesagent-ol033.5``, work item C3). The shape it needs
-    is here -- every route resolved, each verdict carrying the ``declaration`` it selected --
-    so what remains there is the comparison itself, not a rework of the resolution.
+    Independently, and that word is the pin's: "without applying route precedence". An
+    earlier version resolved until the first route succeeded, and the consequence was the
+    storyboard's step 15 answering success -- a package carrying a resolving option ref
+    beside an UNPROJECTABLE legacy id was accepted on the option route and the legacy
+    route was never resolved at all.
     """
     from src.core.format_resolver import product_format_identities
 
@@ -740,25 +946,28 @@ def satisfies_routes(
     legacy_keys = product_format_identities(legacy_catalog)
     if not declared and not legacy_keys:
         # The product declares neither arm, so it imposes no restriction -- the reading all
-        # four replaced gates already applied to an empty ``format_ids``.
-        return _SATISFIED
+        # four replaced gates already applied to an empty ``format_ids``. No route is
+        # resolved, which is also what makes ``selected`` None: there is no declaration.
+        return SelectorResolution()
 
-    resolutions = [
-        replace(
-            _canonical_lane(route.claim, declared, route.params)
-            if declared
-            else _legacy_lane(route.claim, legacy_keys),
-            field=route.field,
+    # ``routes`` may be empty -- a package naming no format at all. Which arm it SHOULD
+    # have named is the product's business, not this function's: ``core/product.json`` does
+    # not require a package to select a format, and the pre-existing legacy branch handles
+    # an absent selector by deriving the ids from the product.
+    return SelectorResolution(
+        tuple(
+            (
+                route,
+                replace(
+                    _canonical_lane(route.claim, declared, route.params)
+                    if declared
+                    else _legacy_lane(route.claim, legacy_keys),
+                    field=route.field,
+                ),
+            )
+            for route in routes
         )
-        for route in routes
-    ]
-    if not resolutions:
-        # A package naming no format at all. Which arm it SHOULD have named is the product's
-        # business, not this function's: ``core/product.json`` does not require a package to
-        # select a format, and the pre-existing legacy branch handles an absent selector by
-        # deriving the ids from the product.
-        return _SATISFIED
-    return next((resolution for resolution in resolutions if not resolution), resolutions[0])
+    )
 
 
 def satisfies(
@@ -800,9 +1009,20 @@ def satisfies(
 
     THE SINGLE-ROUTE ENTRY, for a claim that addresses a format exactly one way -- which is
     every stored creative, because its identity is columns rather than a request's arms.
-    A package selector may name several and goes through :func:`satisfies_routes`.
+    A package selector may name several and goes through :func:`resolve_routes`.
+
+    The satisfied verdict carries the declaration the one route selected, so a caller that
+    needs the selection rather than the verdict does not have to ask twice.
     """
-    return satisfies_routes((FormatRoute(identity, params),), declarations, legacy_catalog=legacy_catalog)
+    resolution = resolve_routes((FormatRoute(identity, params),), declarations, legacy_catalog=legacy_catalog)
+    # Unreachable by construction: ``conflicting`` needs two routes to disagree, and there
+    # is one. Asserted rather than assumed because this is the one claim the projection
+    # below makes -- a conflict reported as "satisfied" would be a silent acceptance.
+    assert not resolution.conflicting, "a single route cannot conflict with itself"
+    # ``is not None``, never ``or``: a refusing verdict is FALSY, so the ``or`` spelling
+    # would discard every refusal and answer satisfied. See :attr:`SelectorResolution.refused`.
+    refused = resolution.refused
+    return refused if refused is not None else FormatSatisfaction(satisfied=True, declaration=resolution.selected)
 
 
 def canonical_refusal(
@@ -837,6 +1057,71 @@ def canonical_refusal(
             capability=str(verdict.refusal),
             rejected_value=verdict.rejected_value,
             accepted_values=list(verdict.accepted_values),
+            **entity,
+        ),
+        field=field,
+    )
+
+
+def _route_selector(route: FormatRoute) -> str:
+    """The value the buyer put on the arm, rendered, so a refusal can name the route.
+
+    One arm may carry several routes (``format_option_refs`` and ``format_ids`` are both
+    arrays), so the field name alone does not identify which route a summary is about.
+    Rendered rather than echoed as the object: a legacy reference carries four parameters
+    the pin says are no part of which format it names, and
+    ``format_resolver.format_display`` is the one spelling of that identity in this
+    codebase -- the same choice :class:`FormatOptionDivergenceSummary` makes and for the
+    same reason.
+    """
+    from src.core.format_resolver import format_display
+
+    claim = route.claim
+    if claim.option is not None:
+        return claim.option.format_option_id
+    if claim.legacy is not None:
+        return format_display(claim.legacy)
+    return claim.kind or ""
+
+
+def conflicting_selectors(
+    resolution: SelectorResolution,
+    *,
+    field: str,
+    **entity: Any,
+) -> AdCPConflictingSelectorsError:
+    """The ``CONFLICTING_SELECTORS`` to raise when the resolved routes disagree.
+
+    Beside :func:`canonical_refusal` and for the same reason: the details shape is the
+    pin's, so it is written once. ``enums/error-code.json``'s entry for the code states
+    both halves -- "``error.field`` SHOULD point at the conflicting package, and
+    ``error.details`` SHOULD identify the supplied selector routes and their normalized
+    canonical summaries" -- so *field* is the PACKAGE pointer rather than an arm, which is
+    the one way this refusal's pointer differs from every other refusal on this path:
+    no single arm is at fault, the set of them is.
+
+    Every route is summarized, not the disagreeing pair; see
+    :class:`SelectorConflictDetails`.
+    """
+    assert resolution.conflicting, "conflicting_selectors called on a resolution that does not conflict"
+    return AdCPConflictingSelectorsError(
+        details=SelectorConflictDetails(
+            selector_routes=[
+                SelectorRouteSummary(
+                    field=route.field or "",
+                    selector=_route_selector(route),
+                    # The canonical shape the route resolved to. The selected declaration's
+                    # kind when it selected one; otherwise the kind the route itself named,
+                    # which for a legacy reference is what ``canonical_kind_for`` projected.
+                    format_kind=(
+                        str(verdict.declaration.format_kind) if verdict.declaration is not None else route.claim.kind
+                    ),
+                    selected_option=(
+                        _declaration_label(verdict.declaration) if verdict.declaration is not None else None
+                    ),
+                )
+                for route, verdict in resolution.routes
+            ],
             **entity,
         ),
         field=field,

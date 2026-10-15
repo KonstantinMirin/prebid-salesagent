@@ -29,6 +29,8 @@ if TYPE_CHECKING:
 
 from adcp.server.helpers import valid_actions_for_status
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
+from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
+from adcp.types.domains.core.package_format_snapshot import PackageFormatSnapshot as LibraryPackageFormatSnapshot
 from adcp.types.legacy import LegacyPackageRequest as AdcpPackageRequest
 from pydantic import BaseModel, ValidationError
 from rich.console import Console
@@ -196,6 +198,43 @@ def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package | M
         List of creative IDs if present, None otherwise
     """
     return getattr(package, "creative_ids", None)
+
+
+def _legacy_formats_to_provide(
+    snapshots: Sequence[LibraryPackageFormatSnapshot],
+    request_package: AdcpPackageRequest | PackageRequest | None,
+) -> list[LibraryFormatId] | None:
+    """The deprecated ``format_ids_to_provide`` for a package. Derived, not echoed (C7).
+
+    ``core/package.json`` makes this field a projection of its canonical sibling --
+    "Legacy named-format projection of ``formats_to_provide`` retained for older 3.x
+    peers. New sellers emit canonical ``formats_to_provide`` declarations" -- so where the
+    package HAS a canonical snapshot, the snapshot is the source and
+    ``format_resolver.snapshot_legacy_arm`` reads the seller-asserted ``v1_format_ref``
+    off it. That read is the only legal v2 -> v1 direction
+    (``registries/v1-canonical-mapping.json``), and a snapshot asserting no reference
+    projects to nothing, so the array is then ABSENT rather than invented.
+
+    WHAT THIS REPLACES, and why it was wrong rather than merely different: the field was
+    ``format_ids_to_provide=package.format_ids`` -- the buyer's own request arm, echoed
+    back. Two consequences, both measurable from the response alone. A buyer naming only a
+    canonical route received NOTHING on a field whose absence the pin gives a defined
+    meaning to (``format_ids_pending``: "Absence means legacy readiness was not reported
+    and MUST NOT be interpreted as full coverage"); and a buyer naming the legacy route
+    received its own input back, so the field could not disagree with the request and
+    therefore graded nothing about what the seller selected.
+
+    THE DEPRECATED LANE KEEPS THE RECORDED ARM. A product that narrows only ``format_ids``
+    selects no canonical declaration, so there is no snapshot to project and the buyer's
+    own references are what the package is for -- which the epic's charter permits
+    precisely here: "acceptance and recording are the only places ``format_id`` survives
+    as an input".
+    """
+    from src.core.format_resolver import snapshot_legacy_arm
+
+    if snapshots:
+        return list(snapshot_legacy_arm(snapshots)) or None
+    return getattr(request_package, "format_ids", None)
 
 
 def _merge_creative_enrichment(existing_data: dict | None, status: AssetStatus) -> dict:
@@ -3241,6 +3280,22 @@ async def _create_media_buy_impl(
         # CRITICAL: Iterate over req.packages, not products_in_buy, to handle multiple packages with same product_id
         # Example: 2 packages with same product_id but different targeting (US vs CA) must create 2 MediaPackages
         packages: list[MediaPackage] = []
+        # THE PROJECTION IS RECORDED AT ACCEPT, which is work item C6: the declaration each
+        # package's selector SELECTED is snapshotted here, where the selector was graded,
+        # and every later reader -- the persisted ``package_config``, the response's
+        # ``formats_to_provide``, and the legacy array derived from it -- reads this list
+        # rather than asking the product again. ``core/package.json`` requires exactly that
+        # of the field: "immutable canonical creative contracts established for this
+        # package ... the live Product is never substituted for the package snapshot", and
+        # core/package-format-snapshot.json adds "never mutate this snapshot in place".
+        # Recomputing it two loops later would read a product row that may have been edited
+        # in between, which is the substitution the pin forbids.
+        #
+        # Parallel to ``req.packages`` by index, like ``package_pricing_info_by_index``
+        # above it. A package whose product narrows neither format arm, or that names no
+        # selector, records an EMPTY tuple -- there is no canonical declaration to snapshot,
+        # and ``formats_to_provide`` is ``minItems: 1`` so it is then absent rather than [].
+        format_snapshots_by_index: list[tuple[LibraryPackageFormatSnapshot, ...]] = []
         assert req.packages is not None, "packages required - validated earlier"
         # 0-based for the JSON pointer; details keep the human 1-based position.
         for pkg_index, pkg in enumerate(req.packages):  # Iterate over request packages
@@ -3272,6 +3327,9 @@ async def _create_media_buy_impl(
 
             # Determine format_ids to use
             format_ids_to_use: list[FormatId] = []
+            # The declaration this package's selector selects, once it is graded. Declared
+            # here so the index stays aligned with ``req.packages`` whichever branch runs.
+            pkg_format_snapshots: tuple[LibraryPackageFormatSnapshot, ...] = ()
 
             # Use format_ids from request package if provided
             matching_package = pkg  # The package we're iterating over
@@ -3289,21 +3347,35 @@ async def _create_media_buy_impl(
             # ``format_options[]`` "IS the closed set of accepted formats; anything outside
             # the list is rejected at create_media_buy regardless of preference".
             #
-            # EVERY route the package names is resolved, not the first that succeeds.
-            # ``core/product-format-declaration.json``'s step-15 obligation is an ORDERING
-            # one -- "resolution failure is reported before selector equivalence and must
-            # not be mislabeled CONFLICTING_SELECTORS" -- so a package carrying a resolving
-            # option ref beside an unprojectable legacy id is refused on the legacy route
-            # rather than accepted on the option route. Comparing the routes that DO resolve
-            # (steps 13/14, CONFLICTING_SELECTORS) is stage 4's.
+            # EVERY route the package names is resolved, not the first that succeeds, and
+            # the pin's four steps are ``SelectorResolution``'s four properties -- which
+            # refusal a buyer sees is decided there and read here:
+            #
+            #   resolution failure -> UNSUPPORTED_FEATURE, naming the ARM that failed. The
+            #     ordering is an obligation rather than a choice ("Resolution failure is
+            #     reported before selector equivalence and must not be mislabeled
+            #     CONFLICTING_SELECTORS"), so a package carrying a resolving option ref
+            #     beside an unprojectable legacy id is refused on the legacy route.
+            #   routes disagree    -> CONFLICTING_SELECTORS, naming the PACKAGE. "Canonical
+            #     precedence must not hide the dimensional conflict", so precedence (step 4)
+            #     applies only after the selected option sets have been required to match.
+            #   one route, selected nothing -> UNSUPPORTED_FEATURE. "A single resolved route
+            #     that does not satisfy the product is rejected with UNSUPPORTED_FEATURE."
             if matching_package:
-                from src.core.format_satisfaction import canonical_refusal, satisfies_routes, selector_routes
+                from src.core.format_resolver import package_format_snapshot
+                from src.core.format_satisfaction import (
+                    FormatRefusal,
+                    canonical_refusal,
+                    conflicting_selectors,
+                    resolve_routes,
+                    selector_routes,
+                )
 
                 # ``params or {}`` inside ``selector_routes`` is the absent-versus-empty
                 # distinction: a buyer who sent ``format_kind`` and no ``params`` HAS claimed
                 # no dimensions, which is a claim and is graded. (A stored creative passes
                 # ``None`` -- it has not stated its params at all; see ``satisfies``.)
-                selector_verdict = satisfies_routes(
+                selector = resolve_routes(
                     selector_routes(
                         format_kind=matching_package.format_kind,
                         format_option_refs=matching_package.format_option_refs,
@@ -3313,7 +3385,26 @@ async def _create_media_buy_impl(
                     pkg_product.format_options,
                     legacy_catalog=pkg_product.format_ids,
                 )
-                if not selector_verdict:
+                if selector.conflicting:
+                    # The PACKAGE, not an arm: no single arm is at fault, the set of them is,
+                    # and ``enums/error-code.json`` says so for this code ("error.field
+                    # SHOULD point at the conflicting package").
+                    raise conflicting_selectors(
+                        selector,
+                        field=f"{PACKAGES_FIELD}[{pkg_index}]",
+                        product_id=pkg_product.product_id,
+                        package_index=idx,
+                    )
+                selector_verdict = selector.refused
+                # A DEPRECATED-LANE refusal is NOT raised here. ``canonical_refusal``'s own
+                # assert says why -- "the legacy lane raises VALIDATION_ERROR at its site"
+                # -- and that site is the legacy branch forty lines below, which raises
+                # AdCPValidationError with the field and both value lists the scenarios pin.
+                # Raising here instead tripped that assert, and the AssertionError became
+                # AdCPAdapterError: a buyer naming a format a legacy-only product does not
+                # accept was answered SERVICE_UNAVAILABLE, "retry with exponential backoff",
+                # for a request no retry can satisfy (salesagent-n1blr).
+                if selector_verdict is not None and selector_verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED:
                     # The pointer names the ARM that failed, which the verdict carries from
                     # the route it came from -- not the first arm present on the package.
                     assert selector_verdict.field is not None, "a selector route always names its request field"
@@ -3322,6 +3413,14 @@ async def _create_media_buy_impl(
                         field=package_field_path(selector_verdict.field, pkg_index),
                         product_id=pkg_product.product_id,
                     )
+                # C6: recorded HERE, at accept. One snapshot, because one package selects one
+                # declaration -- every route that resolved selected the same one, which is
+                # what ``conflicting`` just required.
+                if selector.selected is not None:
+                    pkg_format_snapshots = (
+                        package_format_snapshot(selector.selected, product_id=pkg_product.product_id),
+                    )
+            format_snapshots_by_index.append(pkg_format_snapshots)
 
             # If found and has format_ids, validate and use those
             if matching_package and matching_package.format_ids:
@@ -3687,6 +3786,19 @@ async def _create_media_buy_impl(
                     request_pkg = req.packages[i] if req.packages and i < len(req.packages) else None
                     impressions = getattr(request_pkg, "impressions", None) if request_pkg else None
 
+                    # C7: the snapshot recorded at accept, PERSISTED. ``core/package.json``
+                    # calls ``formats_to_provide`` the package's "immutable canonical
+                    # creative contracts" and requires a package to "retain and return this
+                    # checklist", so it has to survive the response -- a later read has to
+                    # answer from the row, and the pin forbids answering from the live
+                    # product instead ("the live Product is never substituted for the package
+                    # snapshot"). Read from the index recorded in the package loop rather than
+                    # off ``resp_package``: this loop walks the ADAPTER's packages, which know
+                    # nothing about the buyer's selector.
+                    pkg_snapshots = format_snapshots_by_index[i] if i < len(format_snapshots_by_index) else ()
+                    # The MODELS go in, not dicts. The JSONType column serializes through the
+                    # engine's own pydantic serializer (``database_session.py``), which is the
+                    # persistence edge; a ``model_dump`` here would be a second serializer.
                     package_config = {
                         "package_id": resp_package_id,
                         "name": getattr(resp_package, "name", None),  # Include package name from adapter response
@@ -3695,7 +3807,8 @@ async def _create_media_buy_impl(
                         "targeting_overlay": getattr(resp_package, "targeting_overlay", None),
                         "creative_ids": getattr(resp_package, "creative_ids", None),
                         "creative_assignments": getattr(resp_package, "creative_assignments", None),
-                        "format_ids_to_provide": getattr(resp_package, "format_ids_to_provide", None),
+                        "formats_to_provide": list(pkg_snapshots) or None,
+                        "format_ids_to_provide": _legacy_formats_to_provide(pkg_snapshots, request_pkg),
                         "paused": paused,  # Store paused state (adcp 2.12.0)
                         "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
                         "impressions": impressions,  # Store impressions for display
@@ -4053,13 +4166,17 @@ async def _create_media_buy_impl(
                     adapter_paused = bool(adapter_paused)
 
             # The buyer's fields arrive by construction, the same way as the pending arm
-            # above; the adapter decides the two below.
+            # above; the adapter decides ``package_id`` and ``paused``, and the two format
+            # checklists come from the declaration the selector SELECTED rather than from
+            # anything the buyer sent -- which is what makes them readable as a checklist.
+            pkg_snapshots = format_snapshots_by_index[i] if i < len(format_snapshots_by_index) else ()
             response_packages.append(
                 Package.echoing(
                     package,
                     package_id=adapter_package_id,
                     paused=adapter_paused,
-                    format_ids_to_provide=package.format_ids,
+                    formats_to_provide=list(pkg_snapshots) or None,
+                    format_ids_to_provide=_legacy_formats_to_provide(pkg_snapshots, package),
                 )
             )
 
