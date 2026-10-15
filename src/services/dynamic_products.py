@@ -298,7 +298,27 @@ def create_variant_from_template(
     Returns:
         New Product variant
     """
-    # Copy ALL fields from template
+    # HAZARD, named rather than counted: THIS DICT IS AN ENUMERATION, so a column missing
+    # from it is missing from every variant ever generated, silently and with nothing raised.
+    # The comment above it used to say "Copy ALL fields from template", which was not true of
+    # the code and is the reason the canonical format arm below went unnoticed.
+    #
+    # It is not a hypothetical and it is not fixed by this one addition. The derivation that
+    # settles it -- walk this literal's keys against ``Product.__table__.columns`` -- reports
+    # eleven further omissions, and TWO OF THEM WIDEN AUTHORIZATION rather than merely losing
+    # data: dropping ``property_ids`` sends ``effective_properties`` from the ``by_id`` arm to
+    # ``selection_type: "all"``, i.e. the publisher's whole inventory, and dropping
+    # ``allowed_principal_ids`` turns a principal restriction into visibility for every
+    # principal of the tenant. Both measured on this function, both in salesagent-tq42j.
+    #
+    # The right shape is to DERIVE the copied set from the table and pin an exception set
+    # naming each column a variant must not inherit, so a new column is inherited by default
+    # and an exclusion is a recorded decision -- the precedent is
+    # ``tests/helpers/media_buy_row_stubs.stub_package_row``. That is deliberately NOT done
+    # here: it would begin propagating those two authorization columns, which is a
+    # security-relevant behaviour change needing its own grading, and this change's instrument
+    # grades an adapter's vendor payload. Do not add another name here without asking whether
+    # the enumeration itself is what should go.
     variant_data = {
         "tenant_id": template.tenant_id,
         "product_id": variant_id,
