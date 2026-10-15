@@ -39,7 +39,7 @@ from src.core.exceptions import (
     AdCPNotCancellableError,
     AdCPValidationError,
 )
-from src.core.format_resolver import format_display, product_format_identities
+from src.core.format_satisfaction import FormatRefusal, FormatSatisfaction, canonical_refusal, satisfies
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
 
@@ -471,36 +471,44 @@ def _validate_creatives_for_assignment(
             ),
         )
 
-    # (c) Format compatibility against the package's product.
-    if product is None or not product.format_ids:
-        # No product or no declared formats — no format restriction.
-        return
+    # (c) Format satisfaction against the package's product.
+    if product is None:
+        return  # No product — no format restriction.
 
     display_name = product_name or getattr(product, "name", None) or getattr(product, "product_id", "")
 
-    # Identity is (canonical agent_url, id) per the pinned core/format-id.json, asked of
-    # format_resolver so this path and the sync-creatives assignment path cannot disagree
-    # about whether a creative's format is one the product declares.
-    supported_formats = product_format_identities(product.format_ids)
-    if not supported_formats:
-        return  # No usable format restrictions — allow all.
-
+    # THE ONE satisfaction function, which this path, the two create gates and the
+    # sync-creatives assignment path all ask -- so they cannot disagree about whether a
+    # creative's format is one the product declares. It used to be an inline comparison
+    # against ``product_format_identities`` alone, which could only see the DEPRECATED arm:
+    # a product declaring ``format_options[]`` imposed no restriction here at all, and a
+    # creative carrying no legacy assertion was REFUSED here while the create path skipped
+    # it. ``satisfies`` reads both arms off the product and decides which lane applies.
+    first_refusal: FormatSatisfaction | None = None
     incompatible: list[str] = []
     for creative in creatives_list:
-        # The stored identity, through the ONE row reader. ``legacy`` already carries the
-        # canonical (agent_url, id) pair ``product_format_identities`` matches on, so this no
-        # longer rebuilds a reference out of two columns to hand to the identity helper.
+        # The stored identity, through the ONE row reader, with BOTH arms -- the canonical
+        # kind and option as well as the retained legacy assertion.
         stored = CreativeFormatIdentity.from_row(creative)
-        creative_identity = stored.legacy
-        if creative_identity is None or creative_identity not in supported_formats:
-            display = format_display(creative_identity) if creative_identity else stored.label
-            incompatible.append(f"{creative.creative_id} (format '{display}')")
+        verdict = satisfies(stored, product.format_options, legacy_catalog=product.format_ids)
+        if verdict:
+            continue
+        if verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED:
+            # A canonical refusal is UNSUPPORTED_FEATURE and is raised on the first one:
+            # the product published a closed set, the recovery is to pick a format inside
+            # it, and collecting it beside the legacy problems would answer the buyer one
+            # code for two conditions.
+            #
+            # ``field`` is the caller's pointer -- ``packages[i].creative_ids`` or
+            # ``packages[i].creative_assignments``, whichever array the buyer actually sent.
+            # The two call sites already resolve it and the legacy refusals below already
+            # travel with it; a canonical refusal arriving with ``field=None`` would be the
+            # only refusal on this path that did not say which array it is about.
+            raise canonical_refusal(verdict, field=field, creative_id=creative.creative_id, product_id=display_name)
+        first_refusal = first_refusal or verdict
+        incompatible.append(f"{creative.creative_id} (format '{stored.label}')")
 
-    if incompatible:
-        # Sorted on the key itself, which orders by canonical agent_url and then id. The
-        # explicit ``key=lambda p: p.id`` this replaces ordered by id across agents; nothing
-        # grades the order of this sentence, and every sibling site already sorts plainly.
-        supported_display = ", ".join(format_display(i) for i in sorted(supported_formats))
+    if incompatible and first_refusal is not None:
         # A format outside the product's declared set is a BUSINESS-RULE violation, which
         # adcp 3.1.1's enums/error-code.json codes as VALIDATION_ERROR ("violates business
         # rules beyond schema validation"). It is not CREATIVE_REJECTED: that enum entry
@@ -510,10 +518,16 @@ def _validate_creatives_for_assignment(
         # is what the product does not permit. (#1417 chose CREATIVE_REJECTED as canonical
         # for a rejected creative, which is right for a content-policy outcome and wrong
         # for this one; the class is the authority on the code, so the fix is the class.)
+        #
+        # ``accepted_values`` stays the single joined string this wire has always carried:
+        # the verdict's own tuple is the same set, one entry per format, and switching to it
+        # would change the buyer's document for no obligation anyone named.
         raise AdCPValidationError(
             # FIXME(#2099): the product's DISPLAY NAME is prose, and product_id already
             # identifies it. Preserved for now because removing it changes the wire.
-            details=ValidationDetails(accepted_values=[supported_display], product_id=display_name),
+            details=ValidationDetails(
+                accepted_values=[", ".join(first_refusal.accepted_values)], product_id=display_name
+            ),
         )
 
 

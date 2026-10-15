@@ -22,7 +22,6 @@ from src.core.helpers.creative_helpers import (
     extract_click_url,
     extract_impression_tracker_url,
     extract_media_url_and_dimensions,
-    validate_creative_format_against_product,
 )
 
 __all__ = [
@@ -33,7 +32,6 @@ __all__ = [
     "_normalize_format_value",
     "_validate_creative_assets",
     "_detect_snippet_type",
-    "validate_creative_format_against_product",
     # URL extraction helpers
     "extract_media_url_and_dimensions",
     "extract_click_url",

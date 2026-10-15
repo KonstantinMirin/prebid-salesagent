@@ -20,9 +20,8 @@ from src.core.tenant_context import TenantContext
 if TYPE_CHECKING:
     from adcp.types import AccountReference as LibraryAccountReference
 
-    from src.core.database.models import Product as DBProduct
     from src.core.resolved_identity import ResolvedIdentity
-    from src.core.schemas import PackageRequest, Product
+    from src.core.schemas import PackageRequest
 
 from src.core.errors.details import CreativeRejectionDetails
 
@@ -143,71 +142,6 @@ def _detect_snippet_type(snippet: str) -> str:
         return "javascript"
     else:
         return "html"  # Default
-
-
-def validate_creative_format_against_product(
-    creative_format_id: LibraryFormatId,
-    product: "Product | DBProduct",
-) -> tuple[bool, str | None]:
-    """Validate that a creative's format_id matches the product's supported formats.
-
-    Typed with the PINNED class, not the local subclass. The body reads ``agent_url`` and
-    ``id`` and asks ``format_identity`` for the rest, all of which the library type declares
-    -- and the references that reach here come from both sides: a buyer's request model
-    builds the library class, a stored assertion is revalidated into the local one. Naming
-    the subclass refused the library instance for no behaviour the function uses.
-
-    Args:
-        creative_format_id: FormatId object with agent_url and id fields
-        product: Product or DBProduct object with format_ids field
-
-    Returns:
-        Tuple of (is_valid, error_message):
-        - is_valid: True if creative format matches the product
-        - error_message: Descriptive error message if is_valid is False, None otherwise
-
-    Note:
-        Packages have exactly one product, so this is a binary check (matches or doesn't).
-
-        Identity is asked of ``format_resolver``, never re-decided here. This
-        function used to carry a private ``normalize_url`` doing
-        ``str(url).rstrip("/")``, one of three such copies that disagreed with
-        each other about what "the same agent_url" means; the pinned
-        ``core/format-id.json`` requires the AdCP canonical form, which a trim
-        is not.
-
-    Example:
-        >>> from src.core.schemas import FormatId, Product
-        >>> creative_format = FormatId(agent_url="https://creative.example.com", id="banner_300x250")
-        >>> is_valid, error = validate_creative_format_against_product(creative_format, product)
-        >>> if not is_valid:
-        ...     raise ValueError(error)
-    """
-    from src.core.format_resolver import format_display, format_identity, product_format_identities
-
-    supported = product_format_identities(product.format_ids)
-
-    # Products with no usable format restrictions accept all creatives
-    if not supported:
-        return True, None
-
-    if not creative_format_id.agent_url or not creative_format_id.id:
-        return False, "Creative format_id is missing agent_url or id"
-
-    # STRICT on this side, deliberately: the creative's format_id is a validated model,
-    # not a row read back out of a column, so a failure here is a real defect and should
-    # surface rather than quietly read as "the product does not accept this format".
-    # The product side, which IS column data, uses the tolerant helper.
-    creative_identity = format_identity(creative_format_id)
-    if creative_identity in supported:
-        return True, None
-
-    error_msg = (
-        f"Creative format '{format_display(creative_identity)}' does not match "
-        f"product '{product.name}' ({product.product_id}). "
-        f"Supported formats: {[format_display(i) for i in sorted(supported)]}"
-    )
-    return False, error_msg
 
 
 def process_and_upload_package_creatives(

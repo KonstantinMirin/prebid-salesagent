@@ -484,18 +484,15 @@ def _validate_creatives_before_adapter_call(
             field=PACKAGES_FIELD,
         )
 
-    # --- Format compatibility check: creative format vs product accepted formats ---
-    from src.core.format_resolver import format_display, product_format_identities
+    # --- Format satisfaction: each creative's format against what its product declares ---
+    from src.core.format_satisfaction import FormatRefusal, canonical_refusal, satisfies
 
-    # Build creative_id -> format mapping from fetched creatives. The product declares
-    # ``format_ids``, so only a creative that retains a legacy assertion has anything to
-    # match against it; one identified by its canonical kind is unconstrained here until
-    # products carry ``format_options[]``.
-    creative_format_map: dict[str, FormatKey] = {}
-    for creative in creatives_list:
-        legacy = CreativeFormatIdentity.from_row(creative).legacy
-        if legacy is not None:
-            creative_format_map[creative.creative_id] = legacy
+    # The claim per creative, read through the ONE row reader. Both arms travel, because
+    # ``satisfies`` decides which one applies from what the PRODUCT declares -- this used to
+    # keep only ``legacy`` and so could not see a canonical product at all.
+    creative_identities = {
+        creative.creative_id: CreativeFormatIdentity.from_row(creative) for creative in creatives_list
+    }
 
     # Collect all product_ids from packages that have creatives
     product_ids_needed: set[str] = set()
@@ -508,36 +505,34 @@ def _validate_creatives_before_adapter_call(
         from src.core.database.repositories.product import ProductRepository
 
         products_list = ProductRepository(session, tenant_id).list_by_ids(list(product_ids_needed))
+        products_by_id = {product.product_id: product for product in products_list}
 
-        # Build product_id -> the federation identities it accepts, through the ONE helper.
-        # This read ``fmt.get("id")`` and compared BARE IDS on both sides, so a creative
-        # asserting another agent's like-named format passed a product that does not host it
-        # -- the id-alone matching ``core/format-id.json`` makes canonicalizing the pair a
-        # MUST to prevent. ``product_format_identities`` already absorbs the stored dict
-        # shape (including the pre-v3.1 ``format_id`` key) and is what the sibling check in
-        # ``media_buy_update`` uses, so this is one helper rather than a second spelling.
-        product_format_map: dict[str, set[FormatKey]] = {
-            product.product_id: product_format_identities(product.format_ids) for product in products_list
-        }
-
-        # Check each package's creatives against its product's accepted formats
         for package in packages:
             pkg_creative_ids = _get_creative_ids(package)
-            if not pkg_creative_ids or not package.product_id:
+            product = products_by_id.get(package.product_id) if package.product_id else None
+            if not pkg_creative_ids or product is None:
                 continue
 
-            accepted = product_format_map.get(package.product_id)
-            if accepted is None or not accepted:
-                continue  # Product not found or has no formats — skip format check
-
             for cid in pkg_creative_ids:
-                creative_fmt = creative_format_map.get(cid)
-                if creative_fmt and creative_fmt not in accepted:
-                    validation_errors.append(
-                        f"Creative {cid} has format '{format_display(creative_fmt)}' which is not "
-                        f"accepted by product {package.product_id} "
-                        f"(accepted formats: {sorted(format_display(key) for key in accepted)})"
-                    )
+                claim = creative_identities.get(cid)
+                if claim is None:
+                    continue
+                verdict = satisfies(claim, product.format_options, legacy_catalog=product.format_ids)
+                if verdict:
+                    continue
+                if verdict.refusal is FormatRefusal.LEGACY_NOT_ACCEPTED:
+                    # The deprecated lane, unchanged: collected with the other per-creative
+                    # business-rule problems and answered VALIDATION_ERROR below, which is
+                    # what @T-UC-002-ext-p grades.
+                    validation_errors.append(f"Creative {cid}: {verdict.summary} (product {package.product_id})")
+                    continue
+                # A CANONICAL refusal is not a business-rule problem to collect -- the
+                # product published a closed set and this creative is outside it, which the
+                # pin codes UNSUPPORTED_FEATURE. Raised rather than appended because the
+                # code differs: folding it into ``reasons`` would answer the buyer
+                # VALIDATION_ERROR for a condition whose recovery is "pick a format this
+                # product publishes".
+                raise canonical_refusal(verdict, field=PACKAGES_FIELD, creative_id=cid, product_id=product.product_id)
 
     if validation_errors:
         error_msg = (
@@ -3281,6 +3276,53 @@ async def _create_media_buy_impl(
             # Use format_ids from request package if provided
             matching_package = pkg  # The package we're iterating over
 
+            # --- Canonical format satisfaction for the package's own selector ---
+            #
+            # THE SAME function the creative gates ask, asked here of the PACKAGE's
+            # selector. The legacy branch below has always graded ``format_ids`` against the
+            # product's; the two canonical arms the pin added -- ``format_option_refs`` and
+            # ``format_kind`` + ``params`` -- were ACCEPTED AND IGNORED, so a buyer naming a
+            # bare ``image`` against a product that fixes 300x250 was sold inventory it
+            # cannot fill. That is the storyboard's
+            # ``reject_bare_image_selector_for_fixed_mrec`` step, and
+            # ``core/product-format-declaration.json`` makes the refusal mandatory:
+            # ``format_options[]`` "IS the closed set of accepted formats; anything outside
+            # the list is rejected at create_media_buy regardless of preference".
+            #
+            # EVERY route the package names is resolved, not the first that succeeds.
+            # ``core/product-format-declaration.json``'s step-15 obligation is an ORDERING
+            # one -- "resolution failure is reported before selector equivalence and must
+            # not be mislabeled CONFLICTING_SELECTORS" -- so a package carrying a resolving
+            # option ref beside an unprojectable legacy id is refused on the legacy route
+            # rather than accepted on the option route. Comparing the routes that DO resolve
+            # (steps 13/14, CONFLICTING_SELECTORS) is stage 4's.
+            if matching_package:
+                from src.core.format_satisfaction import canonical_refusal, satisfies_routes, selector_routes
+
+                # ``params or {}`` inside ``selector_routes`` is the absent-versus-empty
+                # distinction: a buyer who sent ``format_kind`` and no ``params`` HAS claimed
+                # no dimensions, which is a claim and is graded. (A stored creative passes
+                # ``None`` -- it has not stated its params at all; see ``satisfies``.)
+                selector_verdict = satisfies_routes(
+                    selector_routes(
+                        format_kind=matching_package.format_kind,
+                        format_option_refs=matching_package.format_option_refs,
+                        params=matching_package.params,
+                        format_ids=matching_package.format_ids,
+                    ),
+                    pkg_product.format_options,
+                    legacy_catalog=pkg_product.format_ids,
+                )
+                if not selector_verdict:
+                    # The pointer names the ARM that failed, which the verdict carries from
+                    # the route it came from -- not the first arm present on the package.
+                    assert selector_verdict.field is not None, "a selector route always names its request field"
+                    raise canonical_refusal(
+                        selector_verdict,
+                        field=package_field_path(selector_verdict.field, pkg_index),
+                        product_id=pkg_product.product_id,
+                    )
+
             # If found and has format_ids, validate and use those
             if matching_package and matching_package.format_ids:
                 from src.core.format_resolver import (
@@ -3753,8 +3795,14 @@ async def _create_media_buy_impl(
                     # - Creatives may be synced before being assigned to products
                     # - A creative may be valid for product A but not product B
                     # - Same creative can be reused across packages if formats align
-                    # Lazy: tests patch src.core.helpers.validate_creative_format_against_product; the call-time import binds the patched object.
-                    from src.core.helpers import validate_creative_format_against_product
+                    #
+                    # The SAME function the pre-adapter gate above asks, and the same one
+                    # update_media_buy and the assignment path ask. It used to be
+                    # ``validate_creative_format_against_product``, a second implementation
+                    # typed to take a legacy ``FormatId`` -- so this site had to skip a
+                    # creative with no retained assertion, while the update and assignment
+                    # sites refused one. One function, one answer.
+                    from src.core.format_satisfaction import FormatRefusal, canonical_refusal, satisfies
 
                     for package in req.packages:
                         pkg_cids = _get_creative_ids(package)
@@ -3773,36 +3821,34 @@ async def _create_media_buy_impl(
                                 for creative_id in pkg_cids:
                                     creative = creatives_by_id.get(creative_id)
                                     if creative:
-                                        # Simple binary check: does creative's format_id match product?
-                                        # The retained assertion IS the reference, stored whole —
-                                        # this used to rebuild one from two columns. A creative
-                                        # identified by its canonical kind asserts no reference, and
-                                        # a product declares only ``format_ids`` today, so there is
-                                        # nothing to compare it against until products carry
-                                        # ``format_options[]``.
                                         stored_identity = CreativeFormatIdentity.from_row(creative)
-                                        if stored_identity.assertion is None:
-                                            continue
-                                        format_is_valid, format_error = validate_creative_format_against_product(
-                                            creative_format_id=stored_identity.assertion,
-                                            product=product_format_check,
+                                        verdict = satisfies(
+                                            stored_identity,
+                                            product_format_check.format_options,
+                                            legacy_catalog=product_format_check.format_ids,
                                         )
 
-                                        if not format_is_valid:
-                                            logger.error(format_error)
+                                        if not verdict:
                                             logger.warning(
                                                 "Creative format validation failure",
                                                 extra={
                                                     "creative_id": creative_id,
                                                     "product_id": package.product_id,
                                                     "creative_format": stored_identity.label,
-                                                    "validation_error": format_error,
+                                                    "validation_error": verdict.summary,
                                                 },
                                             )
                                             ctx_manager.update_workflow_step(
-                                                step.step_id, status="failed", error_message=format_error
+                                                step.step_id, status="failed", error_message=verdict.summary
                                             )
-                                            # A format outside the product's declared set is a
+                                            if verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED:
+                                                raise canonical_refusal(
+                                                    verdict,
+                                                    field=PACKAGES_FIELD,
+                                                    creative_id=creative_id,
+                                                    product_id=package.product_id,
+                                                )
+                                            # A format outside the product's declared LEGACY set is a
                                             # BUSINESS-RULE violation: adcp 3.1.1's error-code enum
                                             # codes that VALIDATION_ERROR, and reserves
                                             # CREATIVE_REJECTED for "Creative failed content policy

@@ -34,7 +34,12 @@ from tests.unit._architecture_helpers import iter_call_expressions
 # Frozen at the current count; can only shrink. New behavioral files with mock
 # constructions fail immediately (force a deliberate cap entry or harness use).
 BEHAVIORAL_MOCK_CONSTRUCTION_CAP: dict[str, int] = {
-    "tests/integration/test_create_media_buy_behavioral.py": 27,
+    # 27 -> 26: test_creative_in_valid_state_assigned_successfully deleted. It graded
+    # ``validate_creative_format_against_product`` directly -- said so in its own docstring
+    # -- and that helper is gone, replaced by the one satisfaction function
+    # (src/core/format_satisfaction.py). Its product was a bare ``MagicMock()``, which
+    # answers every unstubbed attribute with a truthy child, so it graded the mock.
+    "tests/integration/test_create_media_buy_behavioral.py": 26,
     "tests/integration/test_delivery_poll_behavioral.py": 2,
     "tests/integration/test_delivery_webhook_behavioral.py": 0,
     # 44 -> 40: TestAdapterSupportAnnotation deleted (it graded a field no model declares).

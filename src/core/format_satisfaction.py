@@ -1,0 +1,843 @@
+"""Does a named format satisfy what a product declares? Asked here, and only here.
+
+ONE function for the whole question, because the four gates it replaces had four
+answers to it. Each read ``product.format_ids`` through
+:func:`src.core.format_resolver.product_format_identities`, compared legacy identities,
+and did NOTHING AT ALL for a product declaring ``format_options[]`` -- and they did not
+even agree on that nothing: the create gate SKIPPED a creative whose format carried no
+legacy assertion while the update and assignment gates REFUSED one. The two comments at
+``media_buy_create.py`` that recorded the skip as deliberate said it was pending this
+module.
+
+THE AUTHORITY is ``docs/creative/formats.mdx`` § Matching and satisfaction (AdCP 3.2.3,
+the pinned version -- ``adcp.get_adcp_spec_version()``), which states the relation as five
+rules:
+
+* Exact dimensions and durations must match.
+* A requested range must be contained within the accepted range; overlap is insufficient.
+* Required slots must be present with compatible asset types.
+* An exact publisher claim must match both ``publisher_domain`` and ``format_option_id``.
+* Equal ``format_kind`` values alone do not prove compatibility.
+
+and ``core/product-format-declaration.json``'s ``seller_preference``, which makes
+``format_options[]`` a CLOSED SET: "anything outside the list is rejected at
+``create_media_buy`` regardless of preference". That closed-set step is the SDK's --
+``adcp.canonical_formats.format_options.validate_format_kind_in_options`` -- and it is a
+PER-PRODUCT set, not a global vocabulary, so a kind in the pinned enum but absent from
+this product's declarations is still refused.
+
+Graded by ``protocols/media-buy/scenarios/canonical_formats.yaml`` (3.2.3), whose
+``canonical_create_satisfaction`` phase is this module's conformance contract. Its
+``reject_bare_image_selector_for_fixed_mrec`` step is the fifth rule made concrete: a
+selector naming ``format_kind: image`` and no dimensions does not satisfy a product that
+fixes 300x250, and the refusal is ``UNSUPPORTED_FEATURE``.
+
+WHAT THIS MODULE DOES NOT DO, deliberately:
+
+* It grades ONE claim against one product. Resolving several co-present selector routes
+  on a package and emitting ``CONFLICTING_SELECTORS`` when they disagree is the next
+  stage's (``salesagent-ol033.5``); nothing here arbitrates between routes.
+* It does not derive a creative's params from its assets. A stored creative declares a
+  kind and an option, never ``params``, so a creative's claim passes ``params=None`` and
+  the params rules are SKIPPED for it -- see :func:`satisfies`. Deriving them from the
+  manifest's assets is the creative-side stage's job (``salesagent-ol033.7``), and until
+  it lands, grading a creative on params the seller cannot read would refuse spec-legal
+  traffic.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from dataclasses import field as dataclass_field
+from enum import Enum, StrEnum
+from typing import Any
+
+from adcp.canonical_formats import upgrade_legacy_format_id
+from adcp.canonical_formats.format_options import FormatKindNotInClosedSetError
+from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
+from adcp.types.domains.core.format_option_ref import FormatOptionReference as LibraryFormatOptionReference
+from adcp.types.domains.core.product_format_declaration import (
+    ProductFormatDeclaration as LibraryFormatDeclaration,
+)
+from pydantic import BaseModel, TypeAdapter, ValidationError
+
+from src.core.errors.details import CapabilityRefusalDetails
+from src.core.exceptions import AdCPCapabilityNotSupportedError
+from src.core.schemas import CreativeFormatIdentity, FormatOptionIdentity
+
+logger = logging.getLogger(__name__)
+
+#: ONE declaration type, and it is the one ``Product.format_options`` declares: the
+#: SIXTEEN-ARM discriminated union over ``format_kind`` that
+#: ``core/product-format-declaration.json`` generates.
+#:
+#: Both shapes of the column arrive here and this is what makes them one answer. An ORM row
+#: holds DOCUMENTS; a converted product holds the union's arms already. Validating both
+#: into the union is not bookkeeping -- the arm's ``params`` is the PER-KIND canonical
+#: schema, so validating a document applies that schema's own conjuncts (an ``image``
+#: declaring ``width`` and no ``height`` is refused HERE) and fills the parameters the
+#: schema states by default, which is how a stored document and a served model come to
+#: grade identically. Validated per entry, so one unparseable declaration drops itself
+#: rather than the product's whole closed set.
+_DECLARATION: TypeAdapter[LibraryFormatDeclaration] = TypeAdapter(LibraryFormatDeclaration)
+
+
+class FormatRefusal(StrEnum):
+    """Why a claim did not satisfy, at the granularity the raise sites need.
+
+    One member per rule that can fail, because the buyer's correction differs: an
+    unpublished kind means pick another product, an unrouted option ref means name an
+    option this product actually publishes, unsatisfied params mean complete the selector,
+    an unprojectable legacy reference means this product does not recognise that named
+    format at all, and a legacy reference outside the product's legacy set means a
+    different creative. The wire CODE is not a member here -- a code belongs to an
+    exception class (``docs/design/error-architecture.md``), and the raise site picks it.
+    """
+
+    KIND_NOT_PUBLISHED = "kind_not_published"
+    OPTION_NOT_PUBLISHED = "option_not_published"
+    PARAMS_NOT_SATISFIED = "params_not_satisfied"
+    LEGACY_UNPROJECTABLE = "legacy_unprojectable"
+    LEGACY_NOT_ACCEPTED = "legacy_not_accepted"
+
+
+@dataclass(frozen=True, slots=True)
+class FormatSatisfaction:
+    """The verdict, carrying the VALUES a refusal needs and no authored sentence.
+
+    ``accepted_values`` and ``rejected_value`` are the pin's canonical rejection-set keys
+    (``core/error.json``), and they are what the SDK's own
+    ``FormatKindNotInClosedSetError.to_wire_error`` puts in ``details`` -- so a caller can
+    hand them straight to :class:`CapabilityRefusalDetails` without renaming anything.
+
+    ``summary`` is for a LOG LINE and for the one caller that collects per-creative
+    outcomes without raising (the lenient assignment mode). It is never buyer-facing: the
+    buyer-facing sentence is a function of the code through ``CODE_TABLE``.
+
+    ``declaration`` is WHAT THE ROUTE RESOLVED TO, and it is why this is a resolution and
+    not a boolean. The storyboard's steps 11 and 12 require two co-present selector routes
+    to be resolved INDEPENDENTLY and then COMPARED, so a caller has to be able to hold two
+    resolutions side by side and ask whether they named the same declaration -- which a
+    yes/no cannot express. ``compare=False``: the declaration is this route's OUTPUT, not
+    part of the verdict's identity, and keeping it out of ``__eq__``/``__hash__`` means a
+    frozen dataclass carrying an unhashable pydantic model stays hashable.
+    """
+
+    satisfied: bool
+    refusal: FormatRefusal | None = None
+    rejected_value: str | None = None
+    accepted_values: tuple[str, ...] = ()
+    summary: str = ""
+    # ``dataclass_field``, aliased at the import, because this class declares a member
+    # literally named ``field`` below -- the plain ``field`` name would be shadowed by it.
+    declaration: LibraryFormatDeclaration | None = dataclass_field(default=None, compare=False)
+    #: WHICH request field the refused route came from, when the caller supplied one on the
+    #: route. ``core/error.json`` defines ``field`` as the pointer naming the rejected
+    #: request field, and with several routes in play the right pointer is the ARM that
+    #: failed -- a refusal naming ``format_kind`` for an unprojectable ``format_ids`` entry
+    #: sends the buyer to edit a selector they got right. Carried here rather than mapped
+    #: from ``refusal`` at the call site: the route knows its own provenance, and a mapping
+    #: would be a second place that has to agree about which refusal came from which arm.
+    field: str | None = None
+
+    def __bool__(self) -> bool:
+        return self.satisfied
+
+
+_SATISFIED = FormatSatisfaction(satisfied=True)
+
+
+@dataclass(frozen=True, slots=True)
+class FormatRoute:
+    """ONE way a buyer addressed a format, with the narrowing that route carries.
+
+    ``media-buy/package-request.json`` gives a package three independent ways to name a
+    format and permits several at once, and the pin is explicit that co-present routes are
+    resolved SEPARATELY: step 13's "canonical precedence MUST NOT hide the dimensional
+    conflict" only means anything if the legacy route is resolved even when a canonical one
+    already succeeded. So a route is a value, and a claim naming three ways is three routes
+    rather than one merged claim.
+
+    ``params`` rides on the ROUTE and not beside it because it belongs to one route only --
+    a buyer's ``params`` accompanies ``format_kind``, while an option ref and a legacy
+    reference each name a declaration outright and carry no narrowing. Passing params
+    alongside a set of routes would apply the kind route's dimensions to the legacy route's
+    comparison. ``None`` means the route does not state its params at all; see
+    :func:`satisfies`.
+    """
+
+    claim: CreativeFormatIdentity
+    params: Mapping[str, Any] | None = None
+    #: The request field this route was read from, for the refusal's ``field`` pointer.
+    #: ``None`` for a stored creative, whose identity is columns and not a request arm --
+    #: those call sites name their own pointer (``packages``).
+    field: str | None = None
+
+
+def product_declarations(format_options: Any) -> tuple[LibraryFormatDeclaration, ...]:
+    """A product's canonical declarations as the pinned union's arms, whatever shape arrives.
+
+    THE reader of the canonical arm, beside ``format_resolver``'s three readers of the
+    question's other halves. Those three take an ALREADY-CONVERTED product, whose
+    ``format_options`` holds the union's arms; this one is also reached from an ORM row,
+    where it holds documents. Both go through the same validation, which is what makes the
+    stored shape and the served shape ONE answer rather than two -- measured: the first
+    version of this validated into a different generated class whose ``params`` is an
+    untyped dict, every converted declaration failed it, and every scenario in the
+    satisfaction feature passed VACUOUSLY on the resulting empty closed set.
+
+    A declaration the pinned union refuses is DROPPED with a warning rather than raising,
+    the same choice ``format_identity_or_none`` makes about the legacy arm and for the same
+    reason: one corrupt row must not turn a buyer's request into a 500. The consequence is
+    stated rather than hidden -- a product whose declarations are all unparseable declares
+    none, so it imposes no canonical restriction.
+    """
+    declarations = []
+    for entry in format_options or []:
+        try:
+            declarations.append(_DECLARATION.validate_python(entry))
+        except ValidationError:
+            logger.warning("Unusable stored format_options declaration, ignored: %r", entry)
+    return tuple(declarations)
+
+
+def _plain(value: Any) -> Any:
+    """A pinned params value as the plain scalar, list or mapping the rules compare.
+
+    The generated per-kind params model is one level richer than a document: a nested
+    object arrives as a MODEL and ``asset_source`` as an ``AssetSource`` enum member, and
+    neither compares to the mapping or the string a buyer sends. Flattening here means the
+    rules below are written once against plain values instead of each one re-deciding what
+    it was handed.
+
+    This is attribute READING, not serialization: ``Enum.value`` is the declared member and
+    iterating a model yields its live field values. Nothing here coerces to JSON, which is
+    what the serialization boundary bans and what would turn ``300`` into ``"300"`` halfway
+    through a comparison.
+
+    NO ROOTMODEL UNWRAPPING, and that is measured rather than assumed. The scalar wrappers
+    the canonical schemas generate -- ``DurationMsRange`` and its siblings -- subclass
+    ``adcp.types._scalar.ScalarInt`` and therefore ``int``: measured,
+    ``isinstance(DurationMsRange(5000), int)`` is True, ``5000 <= DurationMsRange(5000)``
+    is True, and ``float()`` of one is ``5000.0``. So the value READS directly and a
+    ``.root`` hop would be the accident the no-defensive-RootModel guard names in its own
+    refusal message. A branch doing that hop stood here and the guard caught it.
+    """
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, BaseModel):
+        return {name: _plain(member) for name, member in value}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    return value
+
+
+def _declared_params(declaration: LibraryFormatDeclaration) -> Mapping[str, Any]:
+    """The constraints one declaration states, as plain values keyed by param name."""
+    params = _plain(declaration.params)
+    return params if isinstance(params, Mapping) else {}
+
+
+def _option_identity(declaration: LibraryFormatDeclaration) -> FormatOptionIdentity | None:
+    """The option identity a declaration names, or None when it names no option.
+
+    Built the way ``format_resolver.product_format_option_identities`` builds it, and for
+    the reason stated there: a declaration carries no ``scope`` member, because the
+    declaration schema's own allOf makes ``publisher_domain`` addressable only alongside
+    ``format_option_id`` -- so the domain's PRESENCE is the discriminator, which is what
+    :class:`FormatOptionIdentity` derives its scope from.
+    """
+    if not declaration.format_option_id:
+        return None
+    return FormatOptionIdentity(
+        publisher_domain=declaration.publisher_domain,
+        format_option_id=declaration.format_option_id,
+    )
+
+
+def _declaration_label(declaration: LibraryFormatDeclaration) -> str:
+    """How one declaration is named back to the buyer in ``accepted_values``.
+
+    The option id when the declaration publishes one, because that is the value a buyer
+    puts in ``format_option_refs`` to select it; the kind otherwise, because a bare
+    canonical declaration is selectable only by kind.
+    """
+    return declaration.format_option_id or str(declaration.format_kind)
+
+
+def _is_number(value: Any) -> bool:
+    """Numeric for the params rules -- ``int``/``float`` but NOT ``bool``.
+
+    ``bool`` is an ``int`` subclass in Python, so ``ssl_required: True`` would otherwise be
+    graded as an exact dimension and a claim omitting it refused. The same exclusion the
+    SDK's narrowing check makes, for the same reason.
+    """
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _numeric_range(value: Any) -> tuple[float, float] | None:
+    """*value* as the ``[min, max]`` pair the canonical params use, or None.
+
+    ``duration_ms_range: [5000, 60000]`` is the shape ``formats.mdx`` shows. An ENDPOINT
+    MAY BE NULL AND NULL MEANS UNBOUNDED, which ``core/product-format-declaration.json``
+    states normatively: "a null range endpoint is unbounded: ``[null, 60000]`` means up to
+    60s, and ``[15000, null]`` means at least 15s; ``[null, null]`` is invalid because at
+    least one endpoint must be bounded". Read as an infinity rather than special-cased, so
+    the containment comparison below has one form -- treating a null as a missing range
+    would make ``[null, 60000]`` impose nothing, which is the opposite of what it says.
+    """
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    low, high = value
+    if low is None and high is None:
+        return None
+    if not all(bound is None or _is_number(bound) for bound in (low, high)):
+        return None
+    return (float("-inf") if low is None else float(low), float("inf") if high is None else float(high))
+
+
+def _slot_shortfall(claimed: Any, accepted: Any) -> list[str]:
+    """Required slots of *accepted* that *claimed* does not cover, by group and asset type.
+
+    ``formats.mdx``: "Required slots must be present with compatible asset types" -- so
+    BOTH halves are matched, and a claim offering ``image_main`` as a ``text`` asset does
+    not cover a required ``image_main`` image.
+
+    A claim declaring NO slots is unconstrained here rather than refused, and that is a
+    deliberate CEILING, not the rule: a package selector names a format, and the assets
+    that fill its slots arrive later with the creative. Grading a selector as if it were a
+    manifest would refuse every selector against every declaration that requires anything.
+    The manifest-side grading -- required slots against a creative's actual assets -- is
+    ``salesagent-ol033.7``.
+    """
+    if not isinstance(accepted, (list, tuple)) or not isinstance(claimed, (list, tuple)):
+        return []
+    offered = {(slot.get("asset_group_id"), slot.get("asset_type")) for slot in claimed if isinstance(slot, Mapping)}
+    missing = []
+    for slot in accepted:
+        if not isinstance(slot, Mapping) or not slot.get("required"):
+            continue
+        if (slot.get("asset_group_id"), slot.get("asset_type")) not in offered:
+            missing.append(str(slot.get("asset_group_id")))
+    return missing
+
+
+def _range_unsatisfied(claim: Any, low: float, high: float) -> bool:
+    """Whether *claim* fails containment in ``[low, high]``.
+
+    ``formats.mdx``: "A requested range must be contained within the accepted range;
+    overlap is insufficient" -- so both ends of a claimed range are tested, and a claimed
+    SCALAR is tested for membership. Silence is not a request and so cannot fail one.
+    """
+    if (requested := _numeric_range(claim)) is not None:
+        return requested[0] < low or requested[1] > high
+    return _is_number(claim) and not (low <= claim <= high)
+
+
+def _constraint_unsatisfied(key: str, bound: Any, claim: Any) -> bool:
+    """Whether *claim* fails the single declaration constraint ``key: bound``.
+
+    WHICH RULE APPLIES IS DERIVED FROM THE CONSTRAINT, never from a list of field names.
+    A name list is the defect that dropped ``pixel_ratio`` from the identity parameters,
+    and a params vocabulary is sixteen per-kind schemas wide and grows with the spec:
+
+    * ``max_*`` / ``min_*`` are BOUNDS. A claim satisfies one by being inside it, and a
+      claim that is silent satisfies it -- a cap is permission, not an obligation.
+    * ``*_range`` over two numbers is a RANGE, graded by :func:`_range_unsatisfied`.
+    * any other NUMBER is an exact dimension or duration, and ``formats.mdx`` says those
+      MUST MATCH. Silence does NOT satisfy, which is the whole of
+      ``reject_bare_image_selector_for_fixed_mrec``: a bare ``image`` selector states no
+      width, and a product fixing ``width: 300`` is not satisfied by a claim that declines
+      to say.
+    * any LIST is an allowed SET, and a claim's values must be a subset. Silence satisfies.
+    * anything else (a string, a bool) must be EQUAL when the claim states it, and silence
+      satisfies -- a seller's ``composition_model: "deterministic"`` describes how the
+      seller composes the ad, and a buyer is not obliged to restate it.
+
+    ``slots`` is not graded here: it is the one constraint whose failure names WHICH slot,
+    so it has its own reader (:func:`_slot_shortfall`) and its own caller.
+    """
+    if _is_number(bound) and key.startswith("max_"):
+        return _is_number(claim) and claim > bound
+    if _is_number(bound) and key.startswith("min_"):
+        return _is_number(claim) and claim < bound
+    if (window := _numeric_range(bound)) is not None:
+        return _range_unsatisfied(claim, *window)
+    if _is_number(bound):
+        return not _is_number(claim) or claim != bound
+    if isinstance(bound, (list, tuple, set)):
+        values = claim if isinstance(claim, (list, tuple, set)) else () if claim is None else (claim,)
+        return any(value not in bound for value in values)
+    return claim is not None and claim != bound
+
+
+def _unsatisfied_params(claimed: Mapping[str, Any], accepted: Mapping[str, Any]) -> list[str]:
+    """The declaration's params *claimed* fails, named by key. Empty means it satisfies.
+
+    Directional, as both authorities say compatibility is: only the TARGET's constraints
+    are graded, so a claim carrying a param the declaration does not mention is ignored
+    rather than refused -- which is what lets a buyer send ``max_file_size_kb`` to a
+    declaration that constrains only dimensions.
+
+    ONE PRECEDENCE RULE is stated by the pin and applied here before the per-constraint
+    rules: "Duration precedence is ``duration_ms_exact`` > ``duration_ms_range``"
+    (``core/product-format-declaration.json``). A declaration carrying both states the
+    exact value as its constraint, and grading the range alongside it would let a claim
+    inside the range but unequal to the exact value fail twice, or -- worse, once the
+    exact value is the constraint -- report the range as the thing to fix.
+    """
+    if "duration_ms_exact" in accepted and accepted.get("duration_ms_exact") is not None:
+        accepted = {k: v for k, v in accepted.items() if k != "duration_ms_range"}
+    failures: list[str] = []
+    for key, bound in accepted.items():
+        claim = claimed.get(key)
+        if key == "slots":
+            failures.extend(f"slots.{group}" for group in _slot_shortfall(claim, bound))
+        elif _constraint_unsatisfied(key, bound, claim):
+            failures.append(key)
+    return failures
+
+
+def _legacy_route(
+    identity: CreativeFormatIdentity,
+    declarations: Sequence[LibraryFormatDeclaration],
+) -> LibraryFormatDeclaration | None:
+    """The declaration a retained legacy reference selects, or None when none does.
+
+    TWO steps, in the pin's order, and both of them run v1 -> v2 only -- the direction
+    ``registries/v1-canonical-mapping.json`` calls "authoritative", the one a seller MUST
+    NOT invert:
+
+    1. The declaration's OWN assertion. ``v1_format_ref[]`` is the seller saying which
+       legacy id this canonical declaration projects to, so a match there is a lookup and
+       not a guess. The comparison is ``format_resolver.format_identity``'s ``(agent_url,
+       id)`` pair -- THE one implementation of it in this codebase, including the
+       canonicalization ``core/format-id.json`` makes a MUST before two references may be
+       treated as one. The SDK's ``find_declaration_by_v1_format_id`` answers the same
+       question but reads a ``legacy_format_refs`` property that the generated union arms
+       do not carry (they declare ``v1_format_ref``), so it matches nothing on the type
+       ``Product.format_options`` actually holds -- measured, not assumed.
+    2. The registry's parameterized upgrade. ``display_300x250_image`` upgrades to
+       ``display_image`` + ``width=300`` + ``height=250``, which is what makes the
+       storyboard's ``create_media_buy_with_legacy_mrec_format`` step a satisfaction
+       question rather than a string comparison: the upgraded dimensions are graded against
+       the declaration's params by the same rules a direct canonical selector is. This is
+       the step ``core/product-format-declaration.json`` requires -- "Legacy named formats
+       MUST be normalized to canonical declarations before comparison; do not exact-match
+       raw ``(agent_url, id)`` pairs once a ``format_id`` has been projected".
+
+    A reference neither step resolves selects nothing, which is the sixth normative step --
+    fail closed -- and what the storyboard's
+    ``reject_unprojectable_legacy_dual_emission`` expects.
+    """
+    from src.core.format_resolver import format_identity_or_none
+
+    assertion = identity.assertion
+    if assertion is None:
+        return None
+    asserted = identity.legacy
+    for declaration in declarations:
+        refs = declaration.v1_format_ref or []
+        if any(format_identity_or_none(ref) == asserted for ref in refs):
+            return declaration
+
+    upgraded = upgrade_legacy_format_id(assertion)
+    params = {
+        name: value
+        for name, value in (
+            ("width", upgraded.width),
+            ("height", upgraded.height),
+            ("duration_ms", upgraded.duration_ms),
+        )
+        if value is not None
+    }
+    if not params:
+        return None
+    return next(
+        (declaration for declaration in declarations if not _unsatisfied_params(params, _declared_params(declaration))),
+        None,
+    )
+
+
+def _graded(
+    selected: LibraryFormatDeclaration,
+    params: Mapping[str, Any] | None,
+    *,
+    exact: bool,
+) -> FormatSatisfaction:
+    """*selected* is the declaration the route picked; grade the claim's params against it.
+
+    ``exact`` says whether the ROUTE proved the identity by itself. An exact option ref and
+    a resolved legacy ref each name ONE declaration, so there is nothing left for the claim
+    to narrow and a claim stating no params is complete -- the declaration's constraints the
+    claim is SILENT about are dropped, which still refuses a buyer who names an option and
+    then contradicts it with ``width: 728``. A bare kind proves nothing (``formats.mdx``'s
+    fifth rule is exactly that), so on that route the whole declaration is the obligation
+    and silence about an exact dimension fails.
+
+    Without that distinction ``create_media_buy_with_canonical_format_option`` (an option
+    ref, no params, ACCEPT) and ``reject_bare_image_selector_for_fixed_mrec`` (a kind, no
+    params, REJECT) are the same input -- which is what this module's probe reported before
+    the distinction existed.
+
+    ``params is None`` skips the grading entirely: the claim did not state its params at
+    all, which is every stored creative. See :func:`satisfies`.
+
+    The satisfied verdict CARRIES ``selected``, so a caller holding two route resolutions
+    can ask whether they named the same declaration. That is steps 11 and 12.
+    """
+    resolved = FormatSatisfaction(satisfied=True, declaration=selected)
+    if params is None:
+        return resolved
+    declared = _declared_params(selected)
+    constraints = {k: v for k, v in declared.items() if k in params} if exact else declared
+    if not (failed := _unsatisfied_params(params, constraints)):
+        return resolved
+    return FormatSatisfaction(
+        satisfied=False,
+        refusal=FormatRefusal.PARAMS_NOT_SATISFIED,
+        rejected_value=str(selected.format_kind),
+        accepted_values=tuple(sorted(failed)),
+        summary=(
+            f"selector for {selected.format_kind!r} does not satisfy "
+            f"{_declaration_label(selected)!r} on: {', '.join(sorted(failed))}"
+        ),
+    )
+
+
+def _option_route(
+    option: FormatOptionIdentity,
+    declarations: Sequence[LibraryFormatDeclaration],
+    params: Mapping[str, Any] | None,
+) -> FormatSatisfaction:
+    """An EXACT publisher-or-product option claim, which must match both halves.
+
+    ``formats.mdx``: "An exact publisher claim must match both ``publisher_domain`` and
+    ``format_option_id``". :class:`FormatOptionIdentity` is the type that holds the pair
+    together, so identities are compared and never their parts -- which is what keeps a
+    publisher-catalogue option and a product-local option sharing one ``format_option_id``
+    from being taken for each other. They are different options; the pin's two arms make
+    ``publisher_domain`` required on one and forbidden on the other.
+    """
+    selected = next((d for d in declarations if _option_identity(d) == option), None)
+    if selected is None:
+        return FormatSatisfaction(
+            satisfied=False,
+            refusal=FormatRefusal.OPTION_NOT_PUBLISHED,
+            rejected_value=option.format_option_id,
+            accepted_values=tuple(sorted(_declaration_label(d) for d in declarations)),
+            summary=f"format option {option.format_option_id!r} is not published by this product",
+            declaration=None,
+        )
+    return _graded(selected, params, exact=True)
+
+
+def _kind_route(
+    kind: str,
+    declarations: Sequence[LibraryFormatDeclaration],
+    params: Mapping[str, Any] | None,
+) -> FormatSatisfaction:
+    """A bare canonical kind: the closed-set step, then the full params obligation.
+
+    THE CLOSED-SET RULE AND ITS ERROR ARE THE SDK'S.
+    ``core/product-format-declaration.json``'s ``seller_preference`` is normative that
+    ``format_options[]`` "IS the closed set of accepted formats; anything outside the list
+    is rejected at ``create_media_buy`` regardless of preference", and the SDK states it as
+    ``validate_format_kind_in_options`` raising
+    :class:`FormatKindNotInClosedSetError` -- whose ``format_kind`` + ``accepted_kinds``
+    members are what its own ``to_wire_error`` turns into ``details.rejected_value`` +
+    ``details.accepted_values``. That error is raised here, so the wire shape is the SDK's
+    and so is the ``accepted`` set: the PRODUCT's kinds, not the pinned vocabulary's, which
+    is what makes a kind in the sixteen but absent here still a refusal.
+
+    THE COMPARISON runs here rather than inside the SDK function, and that is forced, not
+    preferred. The SDK helper is typed ``Iterable[Format]`` --
+    ``adcp.types.canonical_creative.Format``, whose ``params`` is an untyped dict -- while
+    ``Product.format_options`` holds the SIXTEEN-ARM
+    ``ProductFormatDeclaration`` union, whose ``params`` is the typed per-kind model. mypy
+    rejects the call outright (``Argument 2 ... has incompatible type``), and so does its
+    sibling ``find_declaration_by_kind``. The alternatives were a ``type: ignore`` (the
+    ratchet only shrinks) or a ``cast`` asserting a class relationship that does not exist;
+    the comparison itself is ``wanted in accepted``, so stating it over the type the seller
+    actually holds costs two lines and keeps both the rule and the error where they belong.
+    Filed as salesagent-ol033.17, with the same mismatch measured from the runtime side on
+    ``find_declaration_by_v1_format_id``.
+    """
+    accepted = [str(declaration.format_kind) for declaration in declarations]
+    if kind not in accepted:
+        refused = FormatKindNotInClosedSetError(kind, accepted)
+        return FormatSatisfaction(
+            satisfied=False,
+            refusal=FormatRefusal.KIND_NOT_PUBLISHED,
+            rejected_value=refused.format_kind,
+            accepted_values=tuple(sorted(set(refused.accepted_kinds))),
+            summary=str(refused),
+        )
+    selected = next(d for d in declarations if str(d.format_kind) == kind)
+    return _graded(selected, params, exact=False)
+
+
+def _canonical_lane(
+    identity: CreativeFormatIdentity,
+    declarations: Sequence[LibraryFormatDeclaration],
+    params: Mapping[str, Any] | None,
+) -> FormatSatisfaction:
+    """Grade a claim against a product that declares ``format_options[]``.
+
+    The arms are tried in the pin's precedence and are not interchangeable: an exact option
+    ref routes to one declaration, a legacy reference projects onto one, and a bare kind
+    only discriminates.
+    """
+    if (option := identity.option) is not None:
+        return _option_route(option, declarations, params)
+    if (projected := _legacy_route(identity, declarations)) is not None:
+        return _graded(projected, params, exact=True)
+    if (kind := identity.kind) is not None:
+        return _kind_route(kind, declarations, params)
+    if (assertion := identity.assertion) is not None:
+        # A legacy reference that neither projection step resolved, against a product that
+        # DOES declare canonically. The SDK says what that means, in
+        # ``find_declaration_by_v1_format_id``: "None means the request should be rejected
+        # with UNSUPPORTED_FEATURE -- the v1 ``format_id`` is not a recognised entry for
+        # this product". Failing closed is the sixth normative step, and the reference
+        # cannot be rescued by inventing a kind for it: that inversion is the one
+        # ``registries/v1-canonical-mapping.json`` forbids outright.
+        return FormatSatisfaction(
+            satisfied=False,
+            refusal=FormatRefusal.LEGACY_UNPROJECTABLE,
+            rejected_value=assertion.id,
+            accepted_values=tuple(sorted(_declaration_label(d) for d in declarations)),
+            summary=(f"named format {assertion.id!r} projects to no canonical declaration this product publishes"),
+        )
+    # The claim names no kind, no option and no reference at all, so there is nothing to
+    # compare against a canonical declaration. Satisfied -- and this is the SKIP-VS-REFUSE
+    # DIVERGENCE resolved: the create gate skipped here while the update and assignment
+    # gates refused, so one buyer input had two answers depending on which tool received
+    # it. One function means one answer, and the permissive one is the only one the seller
+    # can justify today: refusing would refuse on params it cannot yet read (see the module
+    # docstring).
+    return _SATISFIED
+
+
+def _legacy_lane(
+    identity: CreativeFormatIdentity,
+    legacy_keys: set[Any],
+) -> FormatSatisfaction:
+    """Grade a claim against a product that declares only the deprecated ``format_ids``.
+
+    Whole federation identities compared, exactly as the four replaced gates compared them.
+    INSIDE this module rather than beside it, which is the point: the two lanes read the
+    same claim and cannot drift into disagreeing about which one applies.
+
+    NOT widened to compare the claim's KIND against the product's refs projected to kinds.
+    The projection direction is legal, but ``formats.mdx`` says equal ``format_kind`` alone
+    does not prove compatibility, and two legacy ids a buyer must keep apart
+    (``display_300x250_image`` and ``display_728x90_image``) project to the same kind -- so
+    that comparison would accept a creative the product does not take.
+    """
+    from src.core.format_resolver import format_display
+
+    accepted = tuple(sorted(format_display(key) for key in legacy_keys))
+    if (claimed := identity.legacy) is None or claimed in legacy_keys:
+        return _SATISFIED
+    return FormatSatisfaction(
+        satisfied=False,
+        refusal=FormatRefusal.LEGACY_NOT_ACCEPTED,
+        rejected_value=format_display(claimed),
+        accepted_values=accepted,
+        summary=(f"format {format_display(claimed)!r} is not one this product accepts ({', '.join(accepted)})"),
+    )
+
+
+def selector_routes(
+    *,
+    format_kind: str | None,
+    format_option_refs: Sequence[LibraryFormatOptionReference] | None,
+    params: Mapping[str, Any] | None,
+    format_ids: Sequence[LibraryFormatId] | None,
+) -> tuple[FormatRoute, ...]:
+    """Every route a PACKAGE's format selector names, as separate routes.
+
+    ``media-buy/package-request.json`` gives a package three independent ways to name a
+    format and permits several at once. ONE ROUTE PER ARM, not one merged claim: the pin
+    requires co-present routes to be resolved INDEPENDENTLY (steps 11 and 12) and says
+    outright that "canonical precedence MUST NOT hide the dimensional conflict" (step 13),
+    which is only possible if the legacy route is still resolved after a canonical one has
+    succeeded. A merged claim can answer yes/no once; it cannot answer "these two routes
+    named different declarations".
+
+    An earlier version of this DID merge them -- it took the first of each arm and folded
+    them into one identity -- and the consequence was step 15 answering success: a package
+    carrying a resolving option ref beside an UNPROJECTABLE legacy id was accepted on the
+    option route, and the legacy route was never resolved at all.
+
+    Order matters and is the pin's: the canonical arms first, the deprecated one last.
+    :func:`satisfies_routes` reports the first route that fails to resolve, so the order
+    decides which refusal a buyer sees when more than one route is broken.
+
+    The kind a legacy reference projects to is asked of ``format_resolver.canonical_kind_for``
+    -- the one implementation of the one direction that resolves -- and an unresolvable
+    reference leaves ``kind`` as ``None`` rather than guessing, exactly as
+    ``creative_identity_of`` does for a creative. The legacy route is then refused against a
+    canonical product (``LEGACY_UNPROJECTABLE``) instead of read as "no claim".
+    """
+    from src.core.format_resolver import canonical_kind_for
+
+    routes: list[FormatRoute] = []
+    # Distinct loop names for the two arms, deliberately: one ``reference`` reused across
+    # both narrowed to the option-ref type and mypy then rejected the legacy arm's three
+    # uses of it. The arms carry different pinned types and the names say which.
+    for option_ref in format_option_refs or []:
+        routes.append(
+            FormatRoute(
+                CreativeFormatIdentity(option=FormatOptionIdentity.of_reference(option_ref)),
+                field="format_option_refs",
+            )
+        )
+    if format_kind is not None:
+        # The ONE route ``params`` belongs to: a buyer's params accompany ``format_kind``.
+        routes.append(FormatRoute(CreativeFormatIdentity(kind=format_kind), params=params or {}, field="format_kind"))
+    for legacy_ref in format_ids or []:
+        kind: str | None = None
+        try:
+            kind = canonical_kind_for(legacy_ref)
+        except ValueError:
+            logger.debug(
+                "No canonical projection for package selector %r; the reference is its only identity", legacy_ref
+            )
+        routes.append(FormatRoute(CreativeFormatIdentity.of_legacy(legacy_ref, kind=kind), field="format_ids"))
+    return tuple(routes)
+
+
+def satisfies_routes(
+    routes: Sequence[FormatRoute],
+    declarations: Any,
+    *,
+    legacy_catalog: Iterable[Any] | None = None,
+) -> FormatSatisfaction:
+    """Resolve EVERY route independently, and report a resolution failure before comparing.
+
+    THE ORDER IS THE PIN'S, and step 15 states it as an obligation rather than an
+    implementation choice: "Resolution failure is reported before selector equivalence and
+    must not be mislabeled CONFLICTING_SELECTORS." So every route is resolved first, and
+    the first one that did not resolve is the answer -- a seller that compared the routes
+    that DID resolve and answered ``CONFLICTING_SELECTORS`` would emit a plausible-looking
+    refusal with the wrong code, which a scenario asserting only on success could never
+    catch.
+
+    WHAT THIS DOES NOT DO, and the seam is deliberate and named: when every route resolves,
+    the resolutions are NOT yet compared for equivalence. Steps 13 and 14 want
+    ``CONFLICTING_SELECTORS`` when two resolved routes select different declarations, and
+    that comparison is stage 4's (``salesagent-ol033.5``, work item C3). The shape it needs
+    is here -- every route resolved, each verdict carrying the ``declaration`` it selected --
+    so what remains there is the comparison itself, not a rework of the resolution.
+    """
+    from src.core.format_resolver import product_format_identities
+
+    declared = product_declarations(declarations)
+    legacy_keys = product_format_identities(legacy_catalog)
+    if not declared and not legacy_keys:
+        # The product declares neither arm, so it imposes no restriction -- the reading all
+        # four replaced gates already applied to an empty ``format_ids``.
+        return _SATISFIED
+
+    resolutions = [
+        replace(
+            _canonical_lane(route.claim, declared, route.params)
+            if declared
+            else _legacy_lane(route.claim, legacy_keys),
+            field=route.field,
+        )
+        for route in routes
+    ]
+    if not resolutions:
+        # A package naming no format at all. Which arm it SHOULD have named is the product's
+        # business, not this function's: ``core/product.json`` does not require a package to
+        # select a format, and the pre-existing legacy branch handles an absent selector by
+        # deriving the ids from the product.
+        return _SATISFIED
+    return next((resolution for resolution in resolutions if not resolution), resolutions[0])
+
+
+def satisfies(
+    identity: CreativeFormatIdentity,
+    declarations: Any,
+    *,
+    params: Mapping[str, Any] | None = None,
+    legacy_catalog: Iterable[Any] | None = None,
+) -> FormatSatisfaction:
+    """Whether the format *identity* names satisfies what a product declares.
+
+    Args:
+        identity: the claim -- a stored creative's identity
+            (:meth:`CreativeFormatIdentity.from_row`) or a package's format selector. The
+            arms are not interchangeable and are tried in the pin's precedence: an exact
+            option ref routes to one declaration, a legacy assertion projects, and a bare
+            kind only discriminates.
+        declarations: the product's canonical arm -- ``format_options``, as the stored
+            documents or as converted models. Both arrive; :func:`product_declarations`
+            absorbs the difference.
+        params: the canonical narrowing the claim carries, and the ABSENT/EMPTY distinction
+            is load-bearing. ``None`` means the claim does not state its params, which is
+            true of every stored creative (the columns are ``format_kind`` and
+            ``format_option_ref``; a creative's dimensions live on its assets) -- the params
+            rules are skipped. A MAPPING, including ``{}``, means the claim states these and
+            no others, which is true of a package selector: a buyer who sends
+            ``format_kind`` and no ``params`` has claimed no dimensions, and that claim is
+            graded. Collapsing the two would make
+            ``reject_bare_image_selector_for_fixed_mrec`` and
+            ``create_media_buy_with_canonical_format_option`` the same input.
+        legacy_catalog: the product's deprecated arm -- ``format_ids``, as stored. Read
+            through ``format_resolver.product_format_identities``, so one corrupt entry is
+            dropped rather than raised.
+
+    Returns:
+        A :class:`FormatSatisfaction`. Satisfied when the product declares NEITHER arm,
+        which is the reading all four replaced gates already applied to an empty
+        ``format_ids``: a product that has not narrowed itself imposes no restriction.
+
+    THE SINGLE-ROUTE ENTRY, for a claim that addresses a format exactly one way -- which is
+    every stored creative, because its identity is columns rather than a request's arms.
+    A package selector may name several and goes through :func:`satisfies_routes`.
+    """
+    return satisfies_routes((FormatRoute(identity, params),), declarations, legacy_catalog=legacy_catalog)
+
+
+def canonical_refusal(
+    verdict: FormatSatisfaction,
+    *,
+    field: str | None = None,
+    **entity: Any,
+) -> AdCPCapabilityNotSupportedError:
+    """The ``UNSUPPORTED_FEATURE`` to raise for a CANONICAL refusal. One shape, five sites.
+
+    Here rather than at each raise site because the shape is identical at all of them and
+    the pin fixes it: ``core/error.json`` names ``rejected_value`` + ``accepted_values`` as
+    the canonical rejection-set keys "rather than seller-specific variants observed in the
+    wild", and the SDK's own ``FormatKindNotInClosedSetError.to_wire_error`` builds exactly
+    that pair for exactly this condition. Five hand-written copies of it would be five
+    chances to pick a different key, which is the defect ``CapabilityRefusalDetails`` was
+    introduced to end.
+
+    Not used for :attr:`FormatRefusal.LEGACY_NOT_ACCEPTED`. That refusal is already graded
+    as ``VALIDATION_ERROR`` -- "violates business rules beyond schema validation" --
+    with per-site details the scenarios pin, and converging its code is not this change.
+
+    ``entity`` names which thing the refusal is about (``creative_id``, ``product_id``,
+    ``package_id``), passed through to :class:`CapabilityRefusalDetails`, which inherits
+    those fields from ``EntityRefDetails``.
+    """
+    assert verdict.refusal is not None and verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED, (
+        f"canonical_refusal called on {verdict.refusal!r}; the legacy lane raises VALIDATION_ERROR at its site"
+    )
+    return AdCPCapabilityNotSupportedError(
+        details=CapabilityRefusalDetails(
+            capability=str(verdict.refusal),
+            rejected_value=verdict.rejected_value,
+            accepted_values=list(verdict.accepted_values),
+            **entity,
+        ),
+        field=field,
+    )

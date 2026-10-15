@@ -123,6 +123,26 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # deletion reddens the `missing` assertion instead. The pin is what converts that
         # silent dormancy into a failure.
         "get-products-canonical-format-filters",
+        # BR-UC-FORMAT-SATISFACTION: the ONLY grading of whether a canonical format
+        # declaration CONSTRAINS a buyer, as opposed to merely reaching one (which is the
+        # four rows above). Two Scenario Outlines plus two creative scenarios, across the
+        # five formats.mdx satisfaction rules, the closed-set rule, and the step-15 ordering
+        # obligation. Pinned in the change that registered the route, for the reason the row
+        # above it was not: the scenarios carry their own @format_satisfaction identity tag,
+        # so detect_uc returns None, no coarse uc bucket claims them, and deleting the route
+        # row sends every one of them to "No harness wired for None" -- an auto-xfail at
+        # fixture setup that grades nothing while reading green. No count is written here on
+        # purpose: the Examples tables grow, and a number in a comment that nothing derives
+        # goes stale the first time a row is added.
+        "format-satisfaction",
+        # Its sibling, and the THIRD of the three paths the stage-3 bead grades ("BDD
+        # scenarios run against CREATE, UPDATE and ASSIGNMENT paths"): the sync_creatives
+        # assignment gate, which needs CreativeSyncEnv rather than the media-buy env and so
+        # carries its own tag. Pinned for the identical reason -- its own identity tag means
+        # no coarse uc bucket claims it, so deleting the route row would auto-xfail every
+        # scenario including the two that grade the lenient-mode asymmetry, which nothing
+        # else in the suite observes.
+        "format-satisfaction-sync",
         # local-reporting-cadence-refusal's three scenarios, which dispatch a real
         # create_media_buy and carry their own @reporting_cadence identity tag — so
         # detect_uc claims none of them and deleting the row would auto-xfail all three
