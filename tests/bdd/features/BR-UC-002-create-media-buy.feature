@@ -616,6 +616,164 @@ Feature: BR-UC-002 Create Media Buy
     And the error should include "suggestion" field
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
+
+  # --- A canonical creative's click destination reaches the ad server ---
+  #
+  # The sibling above grades that the upload HAPPENS and that its failure reaches the buyer.
+  # These grade what the upload CARRIES, which is a separate obligation and an unobserved
+  # one: the click destination has no response field, so a seller that drops it answers the
+  # buyer success and ships an ad nobody can click. Nothing reports that.
+  #
+  # core/assets/url-asset.json states the receiver's rule normatively: "`url_type` declares
+  # the mechanism a receiver uses to invoke the URL ... Senders SHOULD include `url_type` on
+  # every URL asset. When `url_type` is absent, receivers SHOULD fall back to the format's
+  # `url-asset-requirements.role` ... When neither `url_type` nor a format-side `role` is
+  # available, receivers MUST NOT silently pick a mechanism; they SHOULD reject the manifest."
+  # core/asset-group-vocabulary.json, which marks itself normative, declares
+  # `landing_page_url` as "Click-through destination URL for the ad" with six aliases, and
+  # describes itself as codifying a shared vocabulary "for the most common slot ROLES" --
+  # which is what makes resolving an asset_group_id through it a role lookup and not a guess.
+  #
+  # WHAT WAS WRONG BEFORE. extract_click_url matched a hardcoded CLICKTHROUGH_ASSET_IDS list
+  # of guessed names. Measured against that registry it overlapped in two of six members and
+  # did not contain `landing_page_url` -- the id fourteen of the sixteen canonical kinds
+  # declare -- so the declared click destination was dropped on every canonical creative.
+  #
+  # STORYBOARD. Partly graded, and the graded part decides the design rather than this
+  # obligation. Three files under dist/compliance/3.1.1 carry `landing_page_url`
+  # (universal/canonical-format-validate-input.yaml and native_in_feed.yaml under both
+  # protocols/creative and domains/creative), and in every one the asset is
+  # {asset_type: "url", url: ...} with NO `url_type` and the graded expectation is
+  # ACCEPTANCE. So the registry lookup is mandatory: without it those fixtures carry neither
+  # signal and the SHOULD would demand rejecting the pin's own scenarios. The obligation
+  # these scenarios grade -- that the destination REACHES THE AD SERVER, and that an
+  # unidentified one is refused -- is ungraded there, under the media-buy protocol or any
+  # other.
+  #
+  # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.1.1/core/assets/url-asset.json
+  # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.1.1/core/asset-group-vocabulary.json
+  # @source repo=adcp ref=v3.2.3 path=dist/compliance/3.1.1/universal/canonical-format-validate-input.yaml
+
+  # The tag carries the `T-UC-002-ext-` prefix because this IS an extension scenario and it
+  # needs exactly what the other ext scenarios need: the create chain plus
+  # dispatch_mode="create", so the shared When dispatches the request the Givens built. That
+  # prefix is what the uc002-ext env route keys on, so no new wiring is added. Without it the
+  # scenario lands on the uc002-not-wired catch-all, which xfails at FIXTURE SETUP -- it
+  # would dispatch nothing and grade nothing while appearing in the corpus, which is the
+  # dormancy this feature's own comments record twice.
+  @T-UC-002-ext-canonical-clickthrough @extension @creative @post-f2
+  Scenario Outline: a canonical creative's declared click destination reaches the ad server - <signal>
+    Given a valid create_media_buy request with a canonical creative signalling its clickthrough by "<signal>"
+    And the account exists and is active
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And the ad server receives that creative with its clickthrough URL
+
+    Examples:
+      | signal                        |
+      | url_type                      |
+      | the canonical slot name alone |
+
+    # THE TWO RUNGS, as inputs, and the rows differ in exactly one thing: which single
+    # signal the url asset carries.
+    #   url_type                      -> the pin's first step, what senders SHOULD do. Keyed
+    #                                    `mystery`, a non-canonical asset_group_id the
+    #                                    registry explicitly permits, so ONLY this rung can
+    #                                    answer.
+    #   the canonical slot name alone -> keyed `landing_page_url` with no url_type, so ONLY
+    #                                    the registry lookup can answer. A seller that
+    #                                    implemented the first rung alone passes the row
+    #                                    above and reddens here.
+    # BOTH Thens on each row, because either alone is satisfiable by the wrong behaviour: the
+    # buy succeeding says nothing about what the ad server got (that is the silence this
+    # grades), and the upload assertion alone would pass on a seller that uploaded a creative
+    # for a buy it then failed to create.
+
+  @T-UC-002-ext-canonical-clickthrough-unnamed @extension @creative @post-f2
+  Scenario: a url asset the manifest never identifies is not guessed to be the clickthrough
+    Given a valid create_media_buy request with a canonical creative signalling its clickthrough by "nothing the pin recognises"
+    And the account exists and is active
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And the ad server receives that creative with no clickthrough
+
+    # core/assets/url-asset.json at the GOVERNING version: "When neither `url_type` nor a
+    # format-side role is available, receivers MUST NOT silently pick a mechanism." This
+    # creative carries a perfectly good URL under an asset_group_id the registry does not
+    # define, so the seller has been told a URL exists and has NOT been told what it is for,
+    # and it must not ship as the click destination.
+    #
+    # THE CONTROL for the outline above, and the reason those two rows are not satisfied by a
+    # reader that returns the first url asset it finds. Without this row the registry lookup
+    # is indistinguishable from a re-invented guess list.
+    #
+    # THE BUY STILL SUCCEEDS, deliberately. At 3.1.1 the sentence continued "; they SHOULD
+    # reject the manifest" and this scenario demanded VALIDATION_ERROR; that clause was
+    # REMOVED by 3.2.3, and a version dropping a remedy is declining to require it. Refusing
+    # would make this seller stricter than the spec on a buyer-facing path, and the costs are
+    # not symmetric -- reject the manifest and the buyer loses the buy, return no clickthrough
+    # and they lose a clickthrough. Measured, so the change is on spec grounds and not test
+    # grounds: the refusal reddened no graded storyboard step, because the seven
+    # dist/compliance/3.2.3 fixtures that ship a url asset with no `url_type` all key it
+    # `landing_page_url`, which the registry rung identifies.
+    #
+    # WHAT THE SELLER STILL OWES is that this is not SILENT, and that part is not graded here
+    # because it cannot be yet: the sentence naming the asset goes to the log, since
+    # CreateMediaBuySuccess declares no `errors[]` for the advisory lane and the `warnings[]`
+    # array that is the right carrier takes a code from a closed three-member enum with no
+    # member meaning this. The sentence itself is graded by
+    # tests/unit/test_url_asset_identification.py; the wire gap is filed.
+    # POST-F2: Buyer knows what the seller did with the manifest
+
+  # --- A canonical audio buy is accepted, dimensions and all ---
+
+  @T-UC-002-ext-canonical-audio @extension @creative @post-f2
+  Scenario: a canonical audio creative carries no dimensions and the buy is still accepted
+    Given a valid create_media_buy request with a canonical audio creative
+    And the account exists and is active
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And the ad server receives that creative with its media URL
+
+    # The pre-adapter asset gate demanded a width and a height of every creative whatever its
+    # kind. An audio asset has neither -- formats/canonical/audio_hosted.json declares
+    # `audio_main` as asset_type "audio" -- so a canonical audio_hosted creative resolved its
+    # URL, correctly produced no dimensions, and was refused VALIDATION_ERROR however
+    # correctly its manifest was authored.
+    #
+    # The manifest deliberately carries ONLY `audio_main`. The kind also declares
+    # `companion_image`, and including one would supply dimensions and hide the obligation.
+    # That is also why the fix cannot be "does this kind declare a sized slot": audio_hosted
+    # does, so that predicate refuses this very manifest.
+    #
+    # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.2.3/formats/canonical/audio_hosted.json
+
+  # --- A product may rename the slot its media arrives in ---
+
+  @T-UC-002-ext-canonical-product-slots @extension @creative @post-f2
+  Scenario: a product that renames the canonical media slot can still be bought
+    Given a valid create_media_buy request whose product renames the canonical media slot
+    And the account exists and is active
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And the ad server receives that creative with its media URL
+
+    # core/product-format-declaration.json: "Products MAY override the default -- make
+    # headline required, narrow cta to a value enum, or remove slots the surface doesn't
+    # consume." Those three narrow WITHIN the kind's vocabulary, so a kind-only reader is a
+    # safe superset for them. The same schema also shows a declaration REPLACING the list
+    # outright -- its audio_hosted example declares `script` and `offering_ref`, which no
+    # kind declares -- and a product that renames a MEDIA slot that way names an id the
+    # kind's vocabulary does not contain.
+    #
+    # THE ASSET ID IS THE CONTROL. `hero_shot` is named by no slot of any canonical kind, no
+    # member of MEDIA_ASSET_FALLBACK_IDS, and no entry or alias of
+    # core/asset-group-vocabulary.json. So there is no source other than the product's own
+    # declaration that could tell the seller where this creative's media is: the scenario
+    # reddens unless that declaration was consulted, which a demonstration keyed to a name
+    # some other list also carries could not establish.
+    #
+    # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.2.3/core/product-format-declaration.json
     # --- ext-r: Account Not Found ---
 
   @T-UC-002-ext-r @extension @ext-r @error @post-f1 @post-f2 @post-f3

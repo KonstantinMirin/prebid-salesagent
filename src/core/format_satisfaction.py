@@ -409,9 +409,43 @@ def canonical_slot_asset_ids(kind: str, asset_types: Collection[str]) -> frozens
     dict with no declared slots, because the pin routes a custom shape through a fetchable
     ``format_schema`` instead.
     """
+    return _slot_asset_ids(declared_slots_by_kind().get(kind, ()), asset_types)
+
+
+def declaration_slot_asset_ids(declaration: LibraryFormatDeclaration, asset_types: Collection[str]) -> frozenset[str]:
+    """What ONE PRODUCT's declaration calls its assets of *asset_types*, as resolved.
+
+    The question :func:`canonical_slot_asset_ids` deliberately does not answer. That one
+    reads the KIND's vocabulary, which is a superset for the three overrides the pin names
+    as examples ("make ``headline`` required, narrow ``cta`` to a value enum, or remove
+    slots the surface doesn't consume") because all three narrow WITHIN it. It is NOT a
+    superset for the fourth case the pin also shows: ``core/product-format-declaration.json``
+    carries an ``audio_hosted`` example whose ``slots`` is ``[{asset_group_id: "script"},
+    {asset_group_id: "offering_ref"}]``, REPLACING the kind's default list outright. A
+    product that renames or adds a MEDIA slot that way names an asset id no kind declares,
+    and a kind-only reader cannot find the creative's media at all.
+
+    Reads the declaration's own ``params.slots``, which needs no new machinery: a VALIDATED
+    declaration carries the arm's field default when it states no override, so a product
+    that overrides nothing answers exactly what the kind answers (measured: a declaration
+    stating only ``{format_kind: "image", params: {width, height}}`` yields image_main,
+    headline, body_text, primary_text, cta, landing_page_url -- the arm's default list).
+    That is what makes consulting this strictly safer than consulting the kind rather than
+    a second, divergent answer.
+    """
+    slots = _declared_params(declaration).get("slots")
+    return _slot_asset_ids(tuple(slot for slot in slots or () if isinstance(slot, Mapping)), asset_types)
+
+
+def _slot_asset_ids(slots: tuple[Mapping[str, Any], ...], asset_types: Collection[str]) -> frozenset[str]:
+    """The ``asset_group_id`` of each slot whose ``asset_type`` is in *asset_types*.
+
+    One projection, shared by the kind-keyed and declaration-keyed readers above, so the
+    two cannot come to disagree about what counts as a slot of a given type.
+    """
     return frozenset(
         str(slot["asset_group_id"])
-        for slot in declared_slots_by_kind().get(kind, ())
+        for slot in slots
         if slot.get("asset_type") in asset_types and slot.get("asset_group_id")
     )
 
