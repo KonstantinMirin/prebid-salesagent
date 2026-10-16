@@ -724,7 +724,7 @@ class CapabilityDeclarations(BaseModel):
             return
         self._reject(
             "request_signing.covers_content_digest",
-            "A verifier that advertises request signing under must advertise "
+            "A verifier that advertises request signing must advertise "
             "covers_content_digest 'required': every accepted signature on a request with a "
             "body covers content-digest. 'either' and 'forbidden' are 3.0/3.1 compatibility "
             "postures that must not be advertised as a 3.2 signing posture; a deployment that "

@@ -162,7 +162,7 @@ def _refuse_a_product_with_no_format_arm(format_ids: list | None, format_options
         raise ValueError(
             "A product must declare at least one creative format: select format templates, "
             "author canonical format_options, or both. New products should author "
-            "format_options -- format_ids is deprecated in and removed in 4.0."
+            "format_options -- format_ids is deprecated and scheduled for removal."
         )
 
 

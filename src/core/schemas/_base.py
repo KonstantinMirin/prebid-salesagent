@@ -1587,7 +1587,7 @@ class AffectedPackage(LibraryPackage):
     Extends adcp library Package with internal tracking fields.
     Note: In AdCP 2.12.0+, affected_packages uses the full Package type.
 
-    Library Package required fields (the pinned SDK):
+    Library Package required fields:
     - package_id: Publisher's package identifier
     - paused: Boolean indicating whether package is paused (replaces old status enum)
     """

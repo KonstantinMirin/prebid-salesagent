@@ -4094,7 +4094,7 @@ async def _create_media_buy_impl(
                         "creative_assignments": getattr(resp_package, "creative_assignments", None),
                         "formats_to_provide": list(pkg_snapshots) or None,
                         "format_ids_to_provide": _legacy_formats_to_provide(pkg_snapshots, request_pkg),
-                        "paused": paused,  # Store paused state (the pinned SDK)
+                        "paused": paused,  # Store paused state
                         "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
                         "impressions": impressions,  # Store impressions for display
                     }
