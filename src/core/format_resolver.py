@@ -684,6 +684,48 @@ def _asserted_refs(
     return tuple(pairs)
 
 
+def resolved_dimensions(
+    ref: FormatRef,
+    *,
+    fallback: tuple[int | None, int | None, float | None] = (None, None, None),
+) -> tuple[int | None, int | None, float | None]:
+    """The width, height and duration *ref* delivers at, falling back to *fallback*.
+
+    THE ONE RULE for "which dimensions apply to this format reference", because the two
+    places that need it are one logical operation with one parameter substituted -- the
+    FALLBACK SOURCE -- and not two policies:
+
+    * ``_create_media_buy_impl``'s request path passes the PRODUCT's catalogue entry for the
+      same federation identity, because a buyer may name a format without sizing it;
+    * the approval path passes the recorded SNAPSHOT's ``params``, via
+      :func:`snapshot_adapter_format_ids`.
+
+    THE REFERENCE'S OWN DIMENSIONS WIN, and the fallback answers only when it does not state
+    both. That reads as "always overwrite" on the approval path and as "the buyer's sizing is
+    respected" on the create path, but it is the same sentence: an asserted ``v1_format_ref``
+    carries no width or height at all (measured: ``{id: display_300x250, width: None, height:
+    None}``), so the fallback is simply the only source there.
+
+    Duration is resolved independently of the pair, because a video reference can carry a
+    duration without a size and a fallback can supply one the reference lacks.
+
+    WHAT THIS REPLACED, since the shape is the point: the create path had THREE branches
+    constructing a ``FormatId``, and two of them -- "the request stated its dimensions" and
+    "neither the request nor the product stated them" -- were character-for-character
+    identical, both passing the request's own values. So the three-way branch expressed a
+    two-way decision and the duplicate ratchet would have refused a fourth copy of it on the
+    approval path (CLAUDE.md § DRY).
+    """
+    own = (getattr(ref, "width", None), getattr(ref, "height", None), getattr(ref, "duration_ms", None))
+    if own[0] is not None and own[1] is not None:
+        return own
+
+    width, height, duration = fallback
+    if width is not None or height is not None:
+        return width, height, duration if duration is not None else own[2]
+    return own
+
+
 def snapshot_adapter_format_ids(
     snapshots: Iterable[LibraryPackageFormatSnapshot],
 ) -> tuple[LibraryFormatId, ...]:
@@ -720,19 +762,31 @@ def snapshot_adapter_format_ids(
     does, not when the first does.
     """
     return tuple(
-        ref.model_copy(
-            update={
-                name: value
-                for name, value in (
-                    ("width", _plain_param(snapshot, "width")),
-                    ("height", _plain_param(snapshot, "height")),
-                    ("duration_ms", _plain_param(snapshot, "duration_ms")),
-                )
-                if value is not None
-            }
+        _with_dimensions(
+            ref,
+            resolved_dimensions(
+                ref,
+                fallback=(
+                    _plain_param(snapshot, "width"),
+                    _plain_param(snapshot, "height"),
+                    _plain_param(snapshot, "duration_ms"),
+                ),
+            ),
         )
         for snapshot, ref in _asserted_refs(snapshots)
     )
+
+
+def _with_dimensions(ref: LibraryFormatId, dimensions: tuple[int | None, int | None, float | None]) -> LibraryFormatId:
+    """*ref* carrying *dimensions*, as the same class it arrived as.
+
+    ``model_copy`` rather than a constructor so the reference keeps its own type: the
+    approval path is handed the pinned ``FormatReferenceStructuredObject`` off a snapshot and
+    the local ``FormatId`` subclass refuses its own library parent on validation, which is
+    the adoption trap recorded on ``package_format_snapshot``.
+    """
+    width, height, duration = dimensions
+    return ref.model_copy(update={"width": width, "height": height, "duration_ms": duration})
 
 
 def _plain_param(snapshot: LibraryPackageFormatSnapshot, name: str) -> Any:

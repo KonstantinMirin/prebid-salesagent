@@ -3601,6 +3601,7 @@ async def _create_media_buy_impl(
                     format_display,
                     format_identity_or_none,
                     product_format_identities,
+                    resolved_dimensions,
                 )
 
                 # Validate that requested formats are supported by product.
@@ -3648,47 +3649,32 @@ async def _create_media_buy_impl(
                     if fmt_identity:
                         product_format_dimensions[fmt_identity] = (fmt.width, fmt.height, fmt.duration_ms)
 
-                # Process request format_ids, merging dimensions from product if missing
+                # Process request format_ids, merging dimensions from the product where the
+                # buyer named a format without sizing it. ONE rule, asked of
+                # ``format_resolver.resolved_dimensions``, which the approval path's
+                # ``snapshot_adapter_format_ids`` asks the same question of with the recorded
+                # snapshot's ``params`` as its fallback instead of the product's catalogue.
+                # Two fallback SOURCES, one policy -- so one function, per CLAUDE.md § DRY.
+                #
+                # THE THREE BRANCHES THIS REPLACED EXPRESSED A TWO-WAY DECISION: "the request
+                # stated its dimensions" and "neither the request nor the product stated them"
+                # both constructed the request's own width, height and duration_ms, character
+                # for character. Only the middle case differed.
                 for req_fmt in matching_package.format_ids:
                     req_fmt_identity = format_identity_or_none(req_fmt)
-                    # Check if request format has dimensions
-                    if req_fmt.width is not None and req_fmt.height is not None:
-                        # Request has dimensions, convert to our FormatId type
-                        format_ids_to_use.append(
-                            FormatId(
-                                agent_url=req_fmt.agent_url,
-                                id=req_fmt.id,
-                                width=req_fmt.width,
-                                height=req_fmt.height,
-                                duration_ms=req_fmt.duration_ms,
-                            )
+                    product_dims = product_format_dimensions.get(req_fmt_identity) if req_fmt_identity else None
+                    width, height, duration_ms = resolved_dimensions(
+                        req_fmt, fallback=product_dims or (None, None, None)
+                    )
+                    format_ids_to_use.append(
+                        FormatId(
+                            agent_url=req_fmt.agent_url,
+                            id=req_fmt.id,
+                            width=width,
+                            height=height,
+                            duration_ms=duration_ms,
                         )
-                    else:
-                        # Try to get dimensions from product's format_ids
-                        product_dims = product_format_dimensions.get(req_fmt_identity) if req_fmt_identity else None
-                        if product_dims and (product_dims[0] is not None or product_dims[1] is not None):
-                            # Merge dimensions from product
-                            format_ids_to_use.append(
-                                FormatId(
-                                    agent_url=req_fmt.agent_url,
-                                    id=req_fmt.id,
-                                    width=product_dims[0],
-                                    height=product_dims[1],
-                                    duration_ms=product_dims[2] if product_dims[2] is not None else req_fmt.duration_ms,
-                                )
-                            )
-                        else:
-                            # No dimensions in product either, convert to our FormatId type
-                            # GAM adapter will try regex extraction from format_id string
-                            format_ids_to_use.append(
-                                FormatId(
-                                    agent_url=req_fmt.agent_url,
-                                    id=req_fmt.id,
-                                    width=req_fmt.width,
-                                    height=req_fmt.height,
-                                    duration_ms=req_fmt.duration_ms,
-                                )
-                            )
+                    )
 
             # Fallback to product's formats if no request format_ids
             if not format_ids_to_use:
