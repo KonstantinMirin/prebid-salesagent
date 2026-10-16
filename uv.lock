@@ -74,8 +74,8 @@ wheels = [
 
 [[package]]
 name = "adcp"
-version = "9.0.0b3+sa.8qela.bf0228b68"
-source = { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-bf0228b68/adcp-9.0.0b3%2Bsa.8qela.bf0228b68-py3-none-any.whl" }
+version = "9.0.0b3+sa.8qela.f33d4fc71"
+source = { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-f33d4fc71/adcp-9.0.0b3%2Bsa.8qela.f33d4fc71-py3-none-any.whl" }
 dependencies = [
     { name = "a2a-sdk" },
     { name = "cryptography" },
@@ -96,7 +96,7 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 wheels = [
-    { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-bf0228b68/adcp-9.0.0b3%2Bsa.8qela.bf0228b68-py3-none-any.whl", hash = "sha256:1e7115d69d69e092d8e8587c507616a580f0c5dbca11ea7d37150c7d7e1fe0d8" },
+    { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-f33d4fc71/adcp-9.0.0b3%2Bsa.8qela.f33d4fc71-py3-none-any.whl", hash = "sha256:0abf7a57735696fc573c42adbf5d74221b8f7d8a3df85d22210bc8bc055af310" },
 ]
 
 [package.metadata]
@@ -249,7 +249,7 @@ requires-dist = [
     { name = "a2a-cli", specifier = ">=0.2.0" },
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=1.0.1" },
     { name = "a2wsgi", specifier = ">=1.10.0" },
-    { name = "adcp", url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-bf0228b68/adcp-9.0.0b3%2Bsa.8qela.bf0228b68-py3-none-any.whl" },
+    { name = "adcp", url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-f33d4fc71/adcp-9.0.0b3%2Bsa.8qela.f33d4fc71-py3-none-any.whl" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "allure-pytest", marker = "extra == 'ui-tests'", specifier = "==2.16.0" },
     { name = "authlib", specifier = ">=1.6.12" },

@@ -159,7 +159,7 @@ dev = [
 # generated src/adcp/_schemas/, so the error-code table fails at import. Percent-encode the
 # local version segment as %2B in the URL while it stays literal in the filename, and read the
 # URL off the GitHub API rather than composing it. docs/adcp-spec-version.md has the rest.
-adcp = { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-bf0228b68/adcp-9.0.0b3%2Bsa.8qela.bf0228b68-py3-none-any.whl" }
+adcp = { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-f33d4fc71/adcp-9.0.0b3%2Bsa.8qela.f33d4fc71-py3-none-any.whl" }
 
 [tool.ruff]
 line-length = 120
