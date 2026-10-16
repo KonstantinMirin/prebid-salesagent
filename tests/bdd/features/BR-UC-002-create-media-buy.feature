@@ -746,7 +746,34 @@ Feature: BR-UC-002 Create Media Buy
     # That is also why the fix cannot be "does this kind declare a sized slot": audio_hosted
     # does, so that predicate refuses this very manifest.
     #
-    # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.1.1/formats/canonical/audio_hosted.json
+    # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.2.3/formats/canonical/audio_hosted.json
+
+  # --- A product may rename the slot its media arrives in ---
+
+  @T-UC-002-ext-canonical-product-slots @extension @creative @post-f2
+  Scenario: a product that renames the canonical media slot can still be bought
+    Given a valid create_media_buy request whose product renames the canonical media slot
+    And the account exists and is active
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And the ad server receives that creative with its media URL
+
+    # core/product-format-declaration.json: "Products MAY override the default -- make
+    # headline required, narrow cta to a value enum, or remove slots the surface doesn't
+    # consume." Those three narrow WITHIN the kind's vocabulary, so a kind-only reader is a
+    # safe superset for them. The same schema also shows a declaration REPLACING the list
+    # outright -- its audio_hosted example declares `script` and `offering_ref`, which no
+    # kind declares -- and a product that renames a MEDIA slot that way names an id the
+    # kind's vocabulary does not contain.
+    #
+    # THE ASSET ID IS THE CONTROL. `hero_shot` is named by no slot of any canonical kind, no
+    # member of MEDIA_ASSET_FALLBACK_IDS, and no entry or alias of
+    # core/asset-group-vocabulary.json. So there is no source other than the product's own
+    # declaration that could tell the seller where this creative's media is: the scenario
+    # reddens unless that declaration was consulted, which a demonstration keyed to a name
+    # some other list also carries could not establish.
+    #
+    # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.2.3/core/product-format-declaration.json
     # --- ext-r: Account Not Found ---
 
   @T-UC-002-ext-r @extension @ext-r @error @post-f1 @post-f2 @post-f3

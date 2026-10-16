@@ -2513,6 +2513,61 @@ def given_request_canonical_audio_creative(ctx: dict) -> None:
     _seed_auto_approval(ctx)
 
 
+#: A media slot id named by NOTHING except the product declaration under test: no slot of
+#: any canonical kind, no member of MEDIA_ASSET_FALLBACK_IDS, no entry or alias of
+#: core/asset-group-vocabulary.json. If the seller finds this asset, it read the product's
+#: effective declaration — there is no other source that could have told it the name.
+PRODUCT_RENAMED_MEDIA_SLOT = "hero_shot"
+
+
+@given("a valid create_media_buy request whose product renames the canonical media slot")
+def given_request_product_renames_the_media_slot(ctx: dict) -> None:
+    """A product whose declaration REPLACES the kind's slot list, and a creative keyed to it.
+
+    ``core/product-format-declaration.json`` permits this outright -- its own
+    ``audio_hosted`` example declares ``script`` and ``offering_ref``, neither of which any
+    kind declares -- so the kind's vocabulary is NOT a superset of what a product may name.
+    A seller reading only the kind looks for ``image_main``, finds nothing, and refuses a
+    buy whose manifest matches the product's own published declaration exactly.
+
+    The creative is a canonical ``image`` keyed :data:`PRODUCT_RENAMED_MEDIA_SLOT`, with
+    dimensions because an image slot is a sized type. The product publishes one declaration
+    naming only that slot, which is also what makes this a control rather than a
+    demonstration: every other way the seller could find a media asset is excluded by the
+    name, so the scenario reddens unless the product declaration was actually consulted.
+    """
+    from tests.factories.creative import CreativeFactory
+    from tests.factories.creative_asset import build_assets, image_spec
+
+    _ensure_request_defaults(ctx)
+    env = ctx["env"]
+    creative = CreativeFactory(
+        creative_id="cr-product-renamed-slot",
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        canonical_kind="image",
+        approved=True,
+        data={"assets": build_assets(image_spec(PRODUCT_RENAMED_MEDIA_SLOT))},
+    )
+    env._commit_factory_data()
+    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    product = ctx.get("default_product")
+    if product is not None:
+        product.format_options = [
+            *(product.format_options or []),
+            {
+                "format_kind": "image",
+                "params": {
+                    "width": 300,
+                    "height": 250,
+                    "slots": [{"asset_group_id": PRODUCT_RENAMED_MEDIA_SLOT, "asset_type": "image", "required": True}],
+                },
+            },
+        ]
+        env._commit_factory_data()
+    _seed_auto_approval(ctx)
+
+
 @given("the ad server rejects the creative upload")
 def given_ad_server_rejects_creative_upload(ctx: dict) -> None:
     """ext-q: make the adapter raise on the creative-upload call.

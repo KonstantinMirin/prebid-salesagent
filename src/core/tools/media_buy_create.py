@@ -408,6 +408,67 @@ def _get_format_spec_sync(agent_url: str, format_id: str, *, provenance: UrlProv
     return fetch_format_spec(agent_url, format_id, provenance=provenance)
 
 
+def _resolved_format_verdicts(
+    session: "Session",
+    tenant_id: str,
+    packages: "Sequence[MediaPackage] | Sequence[AdcpPackageRequest]",
+    creatives_list: "Sequence[Any]",
+) -> list[tuple[str, str, Any]]:
+    """``(product_id, creative_id, verdict)`` for every creative-in-a-package pair.
+
+    Each verdict is a ``FormatSatisfaction``, and it carries two things this function's
+    callers need separately: whether the product ACCEPTS the creative's format, and the
+    product declaration the route RESOLVED TO. The second is what names the creative's asset
+    ids, because ``core/product-format-declaration.json`` lets a product replace the kind's
+    slot list outright.
+
+    Extracted so there is ONE resolution. It used to sit inline in the gate, below the asset
+    loop, which is why the asset reader could only ask the KIND what a creative's assets are
+    called -- the product's answer had not been computed yet. Returned as an ordered list of
+    pairs rather than a map keyed by creative, because a creative may appear in several
+    packages against different products and each pairing gets its own verdict; collapsing
+    them would silently pick one product's answer for another product's package.
+
+    Both arms of the claim travel. ``satisfies`` decides which one applies from what the
+    PRODUCT declares, so keeping only the legacy arm -- as this once did -- cannot see a
+    canonical product at all.
+    """
+    from src.core.format_satisfaction import satisfies
+
+    product_ids_needed = {
+        package.product_id for package in packages if _get_creative_ids(package) and package.product_id
+    }
+    if not product_ids_needed:
+        return []
+
+    from src.core.database.repositories.product import ProductRepository
+
+    products_by_id = {
+        product.product_id: product
+        for product in ProductRepository(session, tenant_id).list_by_ids(list(product_ids_needed))
+    }
+    identities = {creative.creative_id: CreativeFormatIdentity.from_row(creative) for creative in creatives_list}
+
+    verdicts: list[tuple[str, str, Any]] = []
+    for package in packages:
+        pkg_creative_ids = _get_creative_ids(package)
+        product = products_by_id.get(package.product_id) if package.product_id else None
+        if not pkg_creative_ids or product is None:
+            continue
+        for cid in pkg_creative_ids:
+            claim = identities.get(cid)
+            if claim is None:
+                continue
+            verdicts.append(
+                (
+                    product.product_id,
+                    cid,
+                    satisfies(claim, product.format_options, legacy_catalog=product.format_ids),
+                )
+            )
+    return verdicts
+
+
 def _validate_creatives_before_adapter_call(
     packages: "Sequence[MediaPackage] | Sequence[AdcpPackageRequest]",
     tenant_id: str,
@@ -472,6 +533,25 @@ def _validate_creatives_before_adapter_call(
             field=PACKAGES_FIELD,
         )
 
+    # --- Format satisfaction, RESOLVED FIRST because the asset loop needs its answer ---
+    #
+    # ``satisfies`` returns the declaration the route RESOLVED TO, and that declaration is
+    # what names the creative's asset ids: ``core/product-format-declaration.json`` lets a
+    # product REPLACE the kind's slot list outright, so a product that renames a media slot
+    # names an id the kind's vocabulary does not contain and the asset reader below cannot
+    # find the media at all without it.
+    #
+    # COMPUTED HERE AND ACTED ON LATER, in two halves on purpose. The verdicts are needed
+    # before the asset loop; the REFUSALS they imply must still fire after it, because the
+    # order in which this function raises is itself graded -- a terminal-state creative
+    # answers GONE ahead of any format refusal, and that precedence would invert if the
+    # refusals moved up with the computation. One computation, consumed twice.
+    creative_verdicts = _resolved_format_verdicts(session, tenant_id, packages, creatives_list)
+    declarations_by_creative: dict[str, tuple[Any, ...]] = {}
+    for _product_id, cid, verdict in creative_verdicts:
+        if verdict.declaration is not None:
+            declarations_by_creative[cid] = (*declarations_by_creative.get(cid, ()), verdict.declaration)
+
     # Validate each creative has required fields
     validation_errors = []
     # Terminal-state creatives are collected separately: the pinned enum codes
@@ -532,7 +612,8 @@ def _validate_creatives_before_adapter_call(
 
         # Only validate reference creatives (formats we can directly use)
         # Extract URL and dimensions using shared helper
-        url, width, height = extract_media_url_and_dimensions(creative_data, format_spec, identity.kind)
+        declarations = declarations_by_creative.get(str(creative.creative_id), ())
+        url, width, height = extract_media_url_and_dimensions(creative_data, format_spec, identity.kind, declarations)
 
         if not url:
             validation_errors.append(
@@ -544,7 +625,9 @@ def _validate_creatives_before_adapter_call(
         # audio_main as asset_type "audio" -- so demanding them of every creative refuses a
         # canonical audio buy however correctly its manifest is authored. The declaration
         # says which slots are sized; the gate asks it rather than re-deriving the rule.
-        if media_asset_requires_dimensions(creative_data, format_spec, identity.kind) and (not width or not height):
+        if media_asset_requires_dimensions(creative_data, format_spec, identity.kind, declarations) and (
+            not width or not height
+        ):
             validation_errors.append(
                 f"Reference creative {creative.creative_id} missing dimensions (width={width}, height={height})"
             )
@@ -585,55 +668,26 @@ def _validate_creatives_before_adapter_call(
             field=PACKAGES_FIELD,
         )
 
-    # --- Format satisfaction: each creative's format against what its product declares ---
-    from src.core.format_satisfaction import FormatRefusal, canonical_refusal, satisfies
+    # The refusals those verdicts imply, acted on HERE rather than where they were computed,
+    # for the precedence reason stated at the computation.
+    from src.core.format_satisfaction import FormatRefusal, canonical_refusal
 
-    # The claim per creative, read through the ONE row reader. Both arms travel, because
-    # ``satisfies`` decides which one applies from what the PRODUCT declares -- this used to
-    # keep only ``legacy`` and so could not see a canonical product at all.
-    creative_identities = {
-        creative.creative_id: CreativeFormatIdentity.from_row(creative) for creative in creatives_list
-    }
-
-    # Collect all product_ids from packages that have creatives
-    product_ids_needed: set[str] = set()
-    for package in packages:
-        pkg_creative_ids = _get_creative_ids(package)
-        if pkg_creative_ids and package.product_id:
-            product_ids_needed.add(package.product_id)
-
-    if product_ids_needed:
-        from src.core.database.repositories.product import ProductRepository
-
-        products_list = ProductRepository(session, tenant_id).list_by_ids(list(product_ids_needed))
-        products_by_id = {product.product_id: product for product in products_list}
-
-        for package in packages:
-            pkg_creative_ids = _get_creative_ids(package)
-            product = products_by_id.get(package.product_id) if package.product_id else None
-            if not pkg_creative_ids or product is None:
-                continue
-
-            for cid in pkg_creative_ids:
-                claim = creative_identities.get(cid)
-                if claim is None:
-                    continue
-                verdict = satisfies(claim, product.format_options, legacy_catalog=product.format_ids)
-                if verdict:
-                    continue
-                if verdict.refusal is FormatRefusal.LEGACY_NOT_ACCEPTED:
-                    # The deprecated lane, unchanged: collected with the other per-creative
-                    # business-rule problems and answered VALIDATION_ERROR below, which is
-                    # what @T-UC-002-ext-p grades.
-                    validation_errors.append(f"Creative {cid}: {verdict.summary} (product {package.product_id})")
-                    continue
-                # A CANONICAL refusal is not a business-rule problem to collect -- the
-                # product published a closed set and this creative is outside it, which the
-                # pin codes UNSUPPORTED_FEATURE. Raised rather than appended because the
-                # code differs: folding it into ``reasons`` would answer the buyer
-                # VALIDATION_ERROR for a condition whose recovery is "pick a format this
-                # product publishes".
-                raise canonical_refusal(verdict, field=PACKAGES_FIELD, creative_id=cid, product_id=product.product_id)
+    for product_id, cid, verdict in creative_verdicts:
+        if verdict:
+            continue
+        if verdict.refusal is FormatRefusal.LEGACY_NOT_ACCEPTED:
+            # The deprecated lane, unchanged: collected with the other per-creative
+            # business-rule problems and answered VALIDATION_ERROR below, which is
+            # what @T-UC-002-ext-p grades.
+            validation_errors.append(f"Creative {cid}: {verdict.summary} (product {product_id})")
+            continue
+        # A CANONICAL refusal is not a business-rule problem to collect -- the
+        # product published a closed set and this creative is outside it, which the
+        # pin codes UNSUPPORTED_FEATURE. Raised rather than appended because the
+        # code differs: folding it into ``reasons`` would answer the buyer
+        # VALIDATION_ERROR for a condition whose recovery is "pick a format this
+        # product publishes".
+        raise canonical_refusal(verdict, field=PACKAGES_FIELD, creative_id=cid, product_id=product_id)
 
     if validation_errors:
         error_msg = (
@@ -875,11 +929,20 @@ def _build_adapter_asset_from_creative(
     package_assignments: list[PackageAssignmentDict],
     *,
     tenant_id: str,
+    declarations: "Sequence[Any]" = (),
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Build the asset dict for adapter.creatives_manager.add_creative_assets.
 
     Returns (asset, None) on success, (None, error_message) when url/width/height
     cannot be extracted. Shared by execute_approved_media_buy and push_creative_to_existing_buy.
+
+    ``declarations`` are the product declarations this creative's format RESOLVED TO, and
+    they are what name its asset ids when a product replaced the kind's slot list (see
+    :func:`_resolved_format_verdicts`). Defaulted to empty because two of the three callers
+    do not have them: the approval replay and the retroactive push reach this builder from
+    a creative and a media buy rather than from a request's packages, so finding the product
+    there is a different lookup. Those two keep the kind-only reading, and that remaining
+    gap is filed rather than left unsaid.
     """
     creative_data = creative.data or {}
     format_spec = None
@@ -944,14 +1007,14 @@ def _build_adapter_asset_from_creative(
             # historical resilience: log and build from raw creative data.
             logger.warning(log_safe(f"[ASSET] Could not load format spec for {creative.creative_id}: {e}"))
 
-    url, width, height = extract_media_url_and_dimensions(creative_data, format_spec, identity.kind)
+    url, width, height = extract_media_url_and_dimensions(creative_data, format_spec, identity.kind, declarations)
     click_url = extract_click_url(creative_data, format_spec)
     impression_tracker_url = extract_impression_tracker_url(creative_data, format_spec)
 
     # Same rule as the pre-adapter gate, for the callers it does not run ahead of: an
     # unsized media slot (audio) owes no dimensions, and refusing it here would refuse a
     # canonical audio creative on the approval replay and the retroactive push.
-    needs_dimensions = media_asset_requires_dimensions(creative_data, format_spec, identity.kind)
+    needs_dimensions = media_asset_requires_dimensions(creative_data, format_spec, identity.kind, declarations)
     if not url or (needs_dimensions and (not width or not height)):
         return None, (
             f"Creative {creative.creative_id} missing url/width/height "
@@ -4233,8 +4296,21 @@ async def _create_media_buy_impl(
                                     pkg_assignments: list[PackageAssignmentDict] = [
                                         {"package_id": response_package_id, "weight": 100}
                                     ]
+                                    # The declarations this creative resolved to against THIS
+                                    # package's product, through the same resolver the
+                                    # pre-adapter gate uses -- so a product that renamed its
+                                    # media slot is read the same way on both paths.
                                     asset, build_err = _build_adapter_asset_from_creative(
-                                        creative, pkg_assignments, tenant_id=tenant.tenant_id
+                                        creative,
+                                        pkg_assignments,
+                                        tenant_id=tenant.tenant_id,
+                                        declarations=[
+                                            verdict.declaration
+                                            for _pid, _cid, verdict in _resolved_format_verdicts(
+                                                session, tenant.tenant_id, [package], [creative]
+                                            )
+                                            if verdict.declaration is not None
+                                        ],
                                     )
                                     if build_err:
                                         raise AdCPValidationError(

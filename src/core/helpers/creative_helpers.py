@@ -16,7 +16,7 @@ count as one -- a comment that invalidates the number it describes.
 import json
 import logging
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from importlib.resources import files
 from typing import TYPE_CHECKING, Any
@@ -778,7 +778,9 @@ def _coerce_dimension(raw: Any, axis: str) -> int | None:
         return None
 
 
-def _media_asset_candidates(format_spec: Any | None, kind: str | None) -> list[tuple[str, bool]]:
+def _media_asset_candidates(
+    format_spec: Any | None, kind: str | None, declarations: "Sequence[Any]" = ()
+) -> list[tuple[str, bool]]:
     """Which asset ids could hold this creative's media, in priority order.
 
     Each entry is ``(asset_id, carries_dimensions)``. THREE sources, and they are tried in
@@ -786,11 +788,19 @@ def _media_asset_candidates(format_spec: Any | None, kind: str | None) -> list[t
 
     1. A resolved LEGACY format spec, which names its own ``asset_id`` values and their
        types. Authoritative for the creative it was resolved for.
-    2. The CANONICAL declaration's slots for the kind the creative carries, which
+    2. The PRODUCT DECLARATIONS this creative's format actually resolved to, when the caller
+       knows them. ``core/product-format-declaration.json`` lets a product REPLACE the
+       kind's slot list outright -- its own ``audio_hosted`` example declares ``script`` and
+       ``offering_ref``, neither of which any kind declares -- so a product that renames or
+       adds a media slot names an id source 3 cannot produce.
+    3. The CANONICAL declaration's slots for the kind the creative carries, which
        ``core/product-format-declaration.json`` states and each canonical schema defaults.
-       Equally authoritative, and the ONLY source for a creative identified by its kind: it
-       asserts no legacy reference, so no spec resolves and there is nothing to ask.
-    3. :data:`MEDIA_ASSET_FALLBACK_IDS`, a guess by naming convention. Last, because it is
+       The ONLY source for a creative identified by its kind when no product declaration
+       reached here: it asserts no legacy reference, so no spec resolves and there is
+       nothing to ask. Kept BESIDE source 2 rather than replaced by it, because a creative
+       is graded against one product per package and the gate's question is only "where
+       could its media be".
+    4. :data:`MEDIA_ASSET_FALLBACK_IDS`, a guess by naming convention. Last, because it is
        a guess -- and before this existed it was the only thing left for a canonical
        creative, which meant its assets were readable by coincidence of naming.
 
@@ -799,13 +809,20 @@ def _media_asset_candidates(format_spec: Any | None, kind: str | None) -> list[t
     iteration.
     """
     # Lazy import to avoid circular dependencies
-    from src.core.format_satisfaction import canonical_slot_asset_ids
+    from src.core.format_satisfaction import canonical_slot_asset_ids, declaration_slot_asset_ids
 
     candidates: list[tuple[str, bool]] = []
 
     for asset_id, asset_type, _requirements in declared_slots(format_spec):
         if asset_type in MEDIA_ASSET_TYPES:
             candidates.append((asset_id, asset_type in SIZED_ASSET_TYPES))
+
+    for declaration in declarations:
+        sized = declaration_slot_asset_ids(declaration, SIZED_ASSET_TYPES)
+        candidates.extend(
+            (asset_id, asset_id in sized)
+            for asset_id in sorted(declaration_slot_asset_ids(declaration, MEDIA_ASSET_TYPES))
+        )
 
     if kind:
         sized = canonical_slot_asset_ids(kind, SIZED_ASSET_TYPES)
@@ -819,7 +836,10 @@ def _media_asset_candidates(format_spec: Any | None, kind: str | None) -> list[t
 
 
 def extract_media_url_and_dimensions(
-    creative_data: dict[str, Any], format_spec: Any | None, kind: str | None = None
+    creative_data: dict[str, Any],
+    format_spec: Any | None,
+    kind: str | None = None,
+    declarations: "Sequence[Any]" = (),
 ) -> tuple[str | None, int | None, int | None]:
     """Extract media URL and dimensions from creative data.
 
@@ -846,12 +866,15 @@ def extract_media_url_and_dimensions(
         - Type validation: width/height must be int or coercible to int
         - Uses adcp.utils.get_individual_assets() for backward compatibility with assets_required
     """
-    url, width, height, _sized = _read_media_assets(creative_data, format_spec, kind)
+    url, width, height, _sized = _read_media_assets(creative_data, format_spec, kind, declarations)
     return url, width, height
 
 
 def media_asset_requires_dimensions(
-    creative_data: dict[str, Any], format_spec: Any | None, kind: str | None = None
+    creative_data: dict[str, Any],
+    format_spec: Any | None,
+    kind: str | None = None,
+    declarations: "Sequence[Any]" = (),
 ) -> bool:
     """Does this creative owe the ad server a width and a height?
 
@@ -877,12 +900,12 @@ def media_asset_requires_dimensions(
     stopped calling the stubbed name would leave those tests silently unmocked. The shared
     implementation is :func:`_read_media_assets`; there is one rule, not two.
     """
-    _url, _width, _height, sized = _read_media_assets(creative_data, format_spec, kind)
+    _url, _width, _height, sized = _read_media_assets(creative_data, format_spec, kind, declarations)
     return sized
 
 
 def _read_media_assets(
-    creative_data: dict[str, Any], format_spec: Any | None, kind: str | None
+    creative_data: dict[str, Any], format_spec: Any | None, kind: str | None, declarations: "Sequence[Any]"
 ) -> tuple[str | None, int | None, int | None, bool]:
     """``(url, width, height, the url's slot carries dimensions)`` — the one media read.
 
@@ -898,7 +921,7 @@ def _read_media_assets(
 
     assets = _manifest_assets(creative_data)
     if assets:
-        for asset_id, carries_dimensions in _media_asset_candidates(format_spec, kind):
+        for asset_id, carries_dimensions in _media_asset_candidates(format_spec, kind, declarations):
             asset_obj = assets.get(asset_id)
             if not isinstance(asset_obj, dict):
                 continue
