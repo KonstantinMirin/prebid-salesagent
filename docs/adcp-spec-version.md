@@ -13,11 +13,14 @@ day of false guard failures in which the docs were right and the guard was
 comparing wrongly, and a guard that keeps four copies agreeing is machinery that
 exists only because the copies do. Both are gone.
 
-> **The vendored trees below still sit at `3.1.1`.** The SDK bump moved the pin;
-> re-vendoring the pinned schema tree and the trust-root fixtures, and repointing
-> the compliance-tree citations below, is the remaining half of the bump and is
-> not done. Treat every `3.1.1` path below as naming what is currently vendored,
-> not what the pin targets.
+> **Every command below derives the version. None states it.** An earlier revision of
+> this page carried a caveat that the vendored trees "still sit at" an older version and
+> told the reader to treat the paths below as naming what was vendored. That caveat
+> outlived the fact it described — the vendored tree is re-vendored at the pin, which
+> `tests/unit/test_adcp_spec_version.py` grades — and because it was the only place
+> stating which version was current, it went on giving agents the wrong answer after it
+> stopped being true. A dated caveat is a prose copy of the pin wearing a disclaimer, and
+> it rots the same way.
 
 ## Verifying the current target
 
@@ -48,9 +51,12 @@ prose: there is none left to read.
 `github.com/adcontextprotocol/adcp`, read at the pinned tag only:
 
 ```bash
-git -C ~/projects/adcp show v3.1.1:dist/schemas/3.1.1/<path>      # type shapes
-git -C ~/projects/adcp show v3.1.1:dist/compliance/3.1.1/<path>   # graded storyboards
-git -C ~/projects/adcp show v3.1.1:docs/<path>                    # prose
+# Derive the version once; never type it. This is the only correct spelling.
+SPEC=$(uv run python -c 'import adcp; print(adcp.get_adcp_spec_version())')
+
+git -C ~/projects/adcp show "v$SPEC:dist/schemas/$SPEC/<path>"     # type shapes
+git -C ~/projects/adcp show "v$SPEC:dist/compliance/$SPEC/<path>"  # graded storyboards
+git -C ~/projects/adcp show "v$SPEC:docs/<path>"                   # prose
 ```
 
 Note the asymmetry in that third line, because it is the one that has been copied
@@ -59,8 +65,14 @@ does not: `dist/docs/` stops at `3.1.0`, so `dist/docs/3.1.1/` resolves at no ta
 is read from the repository-root `docs/` tree at the pinned ref, which is what makes the
 ref rather than the path carry the version.
 
-Verify a citation resolves before you rely on it — `git cat-file -e v3.1.1:<path>` exits
-non-zero when it does not.
+The version appears TWICE in the first two commands — once as the tag, once as a path
+segment — and they must agree. A pinned tag combined with an older bundle's path still
+resolves, because the spec repo keeps every version-numbered root, so it reads the wrong
+schema and reports no error. That is the most expensive form of this mistake.
+
+Verify a citation resolves before you rely on it — `git cat-file -e "v$SPEC:<path>"` exits
+non-zero when it does not. Resolving is necessary, not sufficient: check the path's own
+version segment against `$SPEC` too.
 
 The checked-out working tree of that repo is **not** the pinned version. The
 installed `adcp` SDK is a cross-check, never the authority — it can diverge
