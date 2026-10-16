@@ -394,25 +394,26 @@ def given_canonical_creative(ctx: dict, kind: str, asset_key: str) -> None:
     ctx["request_kwargs"]["packages"][0]["creative_ids"] = [creative.creative_id]
 
 
-def _seed_canonical_creative(
-    ctx: dict,
-    *,
-    kind: str | None = None,
-    format_id: str | None = None,
-    asset_key: str = "image_main",
-) -> Any:
-    """One approved creative carrying the named identity arm, committed. Returns the row.
+def _seed_canonical_creative(ctx: dict, *, kind: str, asset_key: str = "image_main") -> Any:
+    """One approved creative carrying the named CANONICAL kind, committed. Returns the row.
 
     The default asset key is ``image_main``, which ``formats/canonical/image.json`` declares
     as the ``image`` kind's required image slot -- so a caller that does not care about the
-    key gets the one the pin names rather than a convention this seller invented. The
-    LEGACY-arm callers (``format_id=``) get it too and are unaffected either way: their
-    creative resolves a format spec, which names its own ``asset_id``.
+    key gets the one the pin names rather than a convention this seller invented.
+
+    CANONICAL ONLY. This grew a ``format_id`` arm for a legacy caller and then lost that
+    caller, and the dead parameter is removed rather than left: it built a creative carrying
+    a legacy reference WITHOUT routing it through ``resolvable_format_ref``, the door that
+    refuses a reference the pinned capture does not serve. A bypass sitting beside a new
+    door is how the door gets routed around later by someone who finds the simpler
+    parameter -- and this change exists precisely because an unserved id went unnoticed for
+    months. A legacy-arm caller goes through ``given_sync_legacy_creative``, which uses the
+    door.
     """
     from tests.factories.creative import CreativeFactory
     from tests.factories.creative_asset import build_assets, image_spec
 
-    arm: dict[str, Any] = {"canonical_kind": kind} if kind is not None else {"format": format_id}
+    arm: dict[str, Any] = {"canonical_kind": kind}
     creative = CreativeFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],

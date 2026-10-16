@@ -2531,15 +2531,94 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # boundary as VALIDATION_ERROR. The feature outcomes were reconciled to
         # match production and the scenarios now pass on a2a/mcp/rest.
         # One reason, two rows' worth of entries: the two outlines exhibit the SAME fixture
-        # gap on their inline-upload rows, so the sentence is named once rather than written
-        # twice (a second copy is a second thing to correct when the fixture is fixed).
-        _UC002_INLINE_FORMAT_FIXTURE = (
-            "salesagent-tpr3: inline-creative upload. The seeded product advertises format id "
-            "'display_300x250', which no agent serves (the reference catalog has "
-            "display_300x250_image) — a test-fixture gap measured in both directions, not a "
-            "seller gap. These three rows graduate when tpr3 reconciles the id; the ticket is "
-            "named here so they cannot become permanent"
-        )
+        # GRADUATED: the nine inline-upload rows of the two creative-asset outlines, and the
+        # shared _UC002_INLINE_FORMAT_FIXTURE reason with them. They graduated on exactly the
+        # condition that reason named -- "These rows graduate when tpr3 reconciles the id" --
+        # which this change is: the seeded product arm now carries display_300x250_image, the
+        # id the pinned capture serves, and the per-id format-spec stub that made the old
+        # synthetic id resolvable in process is deleted.
+        #
+        # GRADUATION RECORD, per .claude/rules/workflows/xpass-graduation.md, for all nine
+        # together because they share ONE cause and ONE routing entry pair -- the protocol's
+        # "one at a time" is about not sweeping unrelated xpasses into a bulk delete, and
+        # these nine are one finding with nine nodeids:
+        #
+        #   ROUTING   two entries in _UC002_VALIDATION_XFAIL below, keyed
+        #             ("T-UC-002-partition-creative-asset", {"uploads_only","both_paths"})
+        #             and ("T-UC-002-boundary-creative-asset", {"upload with format"}),
+        #             both strict=True.
+        #   WHY NOT A WEAK PASS  strict=True is what proves it. A non-strict marker hides a
+        #             weak scenario because failing and passing both read as xfail/xpass; a
+        #             STRICT one turns the pass into a hard FAILED, which is how these nine
+        #             announced themselves (9 XPASS, 9 FAILED, zero silent). The scenarios
+        #             assert creative validation PASSES and then that the buy is created, so
+        #             a vacuous pass would need the dispatch to succeed while seeding nothing
+        #             -- and the rows that do NOT graduate here (the library-reference rows of
+        #             the same outlines) stayed green throughout, which is the control.
+        #   OBLIGATION RE-VERIFIED  the scenarios demand that a resolvable creative whose
+        #             identity matches the product's arm passes the pre-adapter gate. Nothing
+        #             in the pin changed; what changed is that the fixture can now satisfy
+        #             both halves at once. Previously it could not: a referenced creative must
+        #             be RESOLVABLE (id in the capture) and ACCEPTED (identity equal to the
+        #             arm, compared whole), and with the arm on the synthetic id the only id
+        #             satisfying the second failed the first.
+        #   PRODUCTION TRACED  no production change. The seller was right in both directions
+        #             all along -- it answered VALIDATION_ERROR "unknown format ... must be
+        #             registered with the creative agent" for the unserved id, and
+        #             "not one this product accepts" when only the creative moved. The reason
+        #             string said so too ("not a seller gap").
+        #   SIBLING TRANSPORTS  all three in-process transports graduate together (a2a, mcp,
+        #             rest), which is expected: the marker was transport-independent. The
+        #             e2e_rest rows of these outlines are the six this change exists to turn
+        #             green and are measured in-network, not here.
+        #
+        # THE NINE NODEIDS, enumerated so membership is re-checkable without re-running
+        # anything. All under tests/bdd/test_uc002_create_media_buy.py, each verified
+        # individually as XPASS by nodeid (9 XPASS in the run, 9 rows leaving the xfail set,
+        # same nine):
+        #
+        #   test_creative_asset_boundary_validation__boundary_point
+        #     [a2a-valid inline upload-upload with format-creative validation passes]
+        #     [mcp-valid inline upload-upload with format-creative validation passes]
+        #     [rest-valid inline upload-upload with format-creative validation passes]
+        #   test_creative_asset_partition_validation__partition
+        #     [a2a-both_paths-creative validation passes]
+        #     [a2a-uploads_only-creative validation passes]
+        #     [mcp-both_paths-creative validation passes]
+        #     [mcp-uploads_only-creative validation passes]
+        #     [rest-both_paths-creative validation passes]
+        #     [rest-uploads_only-creative validation passes]
+        #
+        # WHICH ENVIRONMENT THE XPASS WAS OBSERVED IN, stated because it is a condition on
+        # the claim and not a footnote. Measured locally, same tree, three repeats each:
+        #
+        #   CREATIVE_AGENT_URL unset  -> 3 failed / 252 passed; the nine XPASS. Format
+        #       resolution is served from the committed capture under ADCP_TESTING and
+        #       nothing is dialled. One row (mcp-both_paths) failed in 1 of 4 runs, and ONLY
+        #       in the run that reached the live public host (4 connection-attempt failures,
+        #       30 host mentions; the clean runs had 0 of each) -- so that was the harness
+        #       going networked on a missing env var, not the scenario.
+        #   CREATIVE_AGENT_URL=agent.localhost:9443 -> 12 failed / 243 passed, IDENTICAL
+        #       across three runs, and the nine fail `inline-cr-001: Configuration error`.
+        #       That is salesagent-ol033.18's signature exactly: AdCPConfigurationError is
+        #       the mapped form of an outbound refusal, the egress gateway refuses that
+        #       destination, and SSL_CERT_FILE alone does not fix it.
+        #
+        # So BOTH local configurations are known-broken in documented ways and neither is
+        # the authoritative environment. The nine XPASS in the hermetic one; their verdict in
+        # the environment the in-network runner builds is NOT established here and is the
+        # thing to confirm before this graduation is relied on.
+        #
+        # NOTE WHAT SELECTED THEM, because it is the quiet half: the deleted entries keyed on
+        # Examples ROW-ID SUBSTRINGS ("uploads_only", "both_paths", "upload with format"),
+        # not on the format id any step reads. So this routing is de-routed by renaming an
+        # Examples row and NOT by changing a fixture's format id -- these nine graduated
+        # because they started PASSING, which is the only reason that counts, and no row
+        # label was touched. A fixture change that renames a row would drop a marker with no
+        # error at all; that hazard is filed separately.
+        #
+        # The two entries are deleted below rather than left with a corrected reason: a
+        # marker whose condition is met is not a marker.
         _UC002_VALIDATION_XFAIL: list[tuple[str, set[str], str]] = [
             # GRADUATED: the two daily-spend-cap entries are gone. Their reason -- "production
             # raises plain ValueError -> code=validation_error, no suggestion. Spec expects
@@ -2608,6 +2687,23 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # rows seed their creative through given_media_buy._create_approved_creative,
             # whose default fmt is the BARE id, so moving only the product inverts the
             # product-vs-creative compatibility check for every one of them.
+            #
+            # THOSE SIX ROW LABELS ARE EXACTLY THE SIX THAT FAIL ON e2e_rest, which nobody
+            # had connected to this comment. Read off box run innet_161026_2101 (commit
+            # 72e80051d): the six bdd_e2e failures in this module are `valid library
+            # reference / assignment cr-001`, `weight = 0 (paused)`, `weight = 100 (max)`,
+            # `assignments_only`, `assignment_with_weight_zero` and
+            # `assignment_with_placement_targeting` -- this list, label for label. They fail
+            # with VALIDATION_ERROR "Creative ... has unknown format 'display_300x250' ...
+            # must be registered with the creative agent" (`::1` and `upload` appear ZERO
+            # times in that artifact; the SSRF rows carrying `::1` all PASS).
+            #
+            # So the in-process and e2e_rest symptom sets are DISJOINT and the stub is what
+            # splits them: these six resolve `display_300x250` through the per-id stub in
+            # process and so PASS there, failing only where resolution is real; the nine
+            # INLINE-UPLOAD rows graduated above are the other half of the same root. One
+            # cause, two symptom sets, and this comment had already enumerated one of them
+            # from the in-process side months before the box run named the other.
             # So the bare id is a shared fixture CONSTANT, not three sites: ~10 more in
             # tests/bdd/steps/generic/given_media_buy.py (including an @T-UC-002-ext-g step
             # that ASSERTS the literal, and an ext-q Given that adds the catalog id to the
@@ -2616,10 +2712,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # MediaBuyDualEnv SUBCLASSES MediaBuyCreateEnv, so the UC-003 and UC-026 products
             # move with it. That is the scope tpr3 actually has.
             #
-            # So the three rows keep a marker, with a reason that names the fixture and the
-            # ticket instead of inventing a seller gap.
-            ("T-UC-002-partition-creative-asset", {"uploads_only", "both_paths"}, _UC002_INLINE_FORMAT_FIXTURE),
-            ("T-UC-002-boundary-creative-asset", {"upload with format"}, _UC002_INLINE_FORMAT_FIXTURE),
+            # GRADUATED — the two entries that stood here are gone; the record is at the top
+            # of this block. The analysis above is kept because it is the measurement that
+            # made the graduation possible, and because its central claim turned out to be
+            # exactly right: "the bare id is a shared fixture CONSTANT, not three sites". The
+            # reconciliation moved the harness arm, deleted the per-id spec stub, and moved
+            # the creative-side defaults in given_media_buy (fmt AND asset_key together,
+            # since the capture declares banner_image rather than the stub's `primary`).
+            #
+            # One correction to it, since it is load-bearing for anyone reading this next:
+            # the earlier attempt it describes as REVERTED ("24 passed / 23 failed") moved
+            # only the PRODUCT arm and the spec name. The creative-side defaults have to move
+            # in the same change — that is what inverted the product-vs-creative check for
+            # every library-reference row, and it is why the full move lands instead.
         ]
         if any(t.startswith("T-UC-002") for t in marker_names):
             for tag, substrings, reason in _UC002_VALIDATION_XFAIL:
@@ -6826,9 +6931,10 @@ ENV_ROUTES: list[EnvRoute] = [
                 # ``ctx["principal"]`` through CreativeFactory, read ``ctx["default_product"]``
                 # for the format a mismatch has to mismatch, and hang creative_ids / inline
                 # creatives on the request defaults — then dispatch_mode="create" makes the
-                # shared When dispatch exactly what they built. 45 of their 54 items PASS on
-                # this row; the nine that do not are the three inline-upload rows, kept on a
-                # row-keyed marker whose reason is at ``_UC002_INLINE_FORMAT_FIXTURE``.
+                # shared When dispatch exactly what they built. All 54 of their items PASS on
+                # this row now. Nine of them used to carry a row-keyed strict xfail for the
+                # seeded-format fixture gap; that gap is reconciled and the nine graduated —
+                # the record is with the _UC002_VALIDATION_XFAIL block.
                 or "T-UC-002-partition-creative-asset" in m
                 or "T-UC-002-boundary-creative-asset" in m
             ),

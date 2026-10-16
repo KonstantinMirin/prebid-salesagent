@@ -2050,14 +2050,23 @@ def _add_creative_ids_to_package(ctx: dict, creative_ids: list[str]) -> None:
 
 
 def _create_approved_creative(
-    ctx: dict, creative_id: str, fmt: str = "display_300x250", asset_key: str = "primary"
+    ctx: dict, creative_id: str, fmt: str = "display_300x250_image", asset_key: str = "banner_image"
 ) -> Any:
     """Create an approved Creative in the DB and return it.
 
     Uses CreativeFactory with the tenant/principal from harness context.
-    The default asset key "primary" matches the harness format spec's
-    asset_id; scenarios seeding a real reference-catalog format pass the
-    format's actual asset_id (e.g. "banner_image" for display_300x250_image).
+
+    THE FORMAT AND THE ASSET KEY MOVE TOGETHER and are not independent defaults. The
+    previous pair -- ``display_300x250`` keyed ``primary`` -- named the harness's own
+    format-spec STUB: the id is absent from the pinned capture, and ``primary`` was the
+    stub's asset_id. With the stub gone, both halves have to come from the capture, which
+    declares ``banner_image`` (image, required) and ``click_url`` (url, required) for
+    ``display_300x250_image``.
+
+    Only ``banner_image`` is seeded, which is survivable TODAY and is worth saying why:
+    nothing validates a creative's assets against the resolved spec, so a missing required
+    ``click_url`` costs nothing here. That gap is #767; when it lands, this default needs
+    the url asset too. The pre-existing ``cr-upload-ok`` call site made the same trade.
     """
     from tests.factories.creative import CreativeFactory
 
@@ -2074,7 +2083,7 @@ def _create_approved_creative(
     return creative
 
 
-def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x250") -> None:
+def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x250_image") -> None:
     """Add inline creative dicts to the first package's 'creatives' field.
 
     Builds creative payloads matching the product's accepted format, through
@@ -2103,7 +2112,9 @@ def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x
                         "agent_url": "https://creative.adcontextprotocol.org",
                         "id": fmt_id,
                     },
-                    assets=build_assets(image_spec("primary", url=f"https://example.com/banner-{i + 1}.png")),
+                    # Keyed by the asset_id the CAPTURE declares for this format, not by the
+                    # deleted stub's ``primary``. See _create_approved_creative.
+                    assets=build_assets(image_spec("banner_image", url=f"https://example.com/banner-{i + 1}.png")),
                 )
             )
         pkg["creatives"] = creatives
@@ -2157,7 +2168,7 @@ def given_creative_partition(ctx: dict, partition: str) -> None:
 
     elif partition == "format_mismatch":
         # Creative with format that doesn't match the product's supported formats
-        creative = _create_approved_creative(ctx, "cr-badfmt-001", fmt="video_640x480")
+        creative = _create_approved_creative(ctx, "cr-badfmt-001", fmt="video_1280x720")
         _add_creative_ids_to_package(ctx, [creative.creative_id])
 
     elif partition == "missing_required_assets":
@@ -2210,7 +2221,7 @@ def given_creative_boundary(ctx: dict, config: str) -> None:
 
     elif config == "wrong format":
         # Creative with mismatched format
-        creative = _create_approved_creative(ctx, "cr-wrongfmt", fmt="video_640x480")
+        creative = _create_approved_creative(ctx, "cr-wrongfmt", fmt="video_1280x720")
         _add_creative_ids_to_package(ctx, [creative.creative_id])
 
     elif config == "weight=0":
@@ -2270,15 +2281,21 @@ def given_package_references_missing_creative(ctx: dict, creative_id: str) -> No
 def given_creative_format_mismatch(ctx: dict) -> None:
     """ext-p: seed an approved creative whose format is absent from the product.
 
-    The default product accepts ``display_300x250``; this creative carries
-    ``video_640x480``. The pre-adapter creative validation in the create path
-    rejects the format mismatch with CREATIVE_REJECTED on the wire.
+    The default product accepts ``display_300x250_image``; this creative carries
+    ``video_1280x720``. The pre-adapter creative validation in the create path rejects the
+    format mismatch with CREATIVE_REJECTED on the wire.
+
+    BOTH ids are in the pinned capture, which is what makes this partition grade the
+    MISMATCH. It used to carry ``video_640x480``, absent from the capture, so the creative
+    could be refused for not EXISTING rather than for not matching -- a partition passing
+    for a reason other than the one it is named after. ``video_1280x720`` is present and
+    still mismatches an image product, so the intent survives and the vacuity does not.
 
     Auto-approval is seeded because the CREATIVE_REJECTED raise lives on the
     auto path; the live-server default (human_review_required=True) would take
     the PENDING path, which emits VALIDATION_ERROR for the same condition.
     """
-    creative = _create_approved_creative(ctx, "cr-fmt-mismatch", fmt="video_640x480")
+    creative = _create_approved_creative(ctx, "cr-fmt-mismatch", fmt="video_1280x720")
     _add_creative_ids_to_package(ctx, [creative.creative_id])
     _seed_auto_approval(ctx)
 
@@ -2321,11 +2338,31 @@ def given_inline_creative_missing_url(ctx: dict) -> None:
     assert creatives, "No inline creatives on package — wire the inline-creatives Given first"
     declared = []
     for creative in creatives:
-        primary = creative.get("assets", {}).get("primary")
-        assert primary is not None, "Inline creative has no primary asset to clear the URL on"
+        # The asset the INLINE-CREATIVE Given actually seeded, found by looking for a url
+        # rather than by a hardcoded key. That key used to be ``primary`` -- the deleted
+        # harness stub's asset_id -- and is now ``banner_image``, which is what the pinned
+        # capture declares for display_300x250_image. Reading it off the seeded assets keeps
+        # this step correct across that move instead of pinning a second copy of the key: a
+        # hardcoded key here and the Given's key there are two places to change, and this
+        # step's assertion failing is how we learned they had diverged.
+        assets = creative.get("assets") or {}
+        bearing = [k for k, a in assets.items() if isinstance(a, dict) and "url" in a]
+        assert bearing, f"Inline creative has no url-bearing asset to clear the URL on; assets={list(assets)}"
+        # REFUSES rather than picking. A finder that silently chooses among candidates
+        # answers a different question than it was asked, and two url-bearing assets is not
+        # hypothetical here -- the pinned capture declares banner_image (image, with a url)
+        # AND click_url (url) for display_300x250_image, so a fixture that grows the second
+        # one would otherwise have this step blank whichever came first and still pass. The
+        # scenario is about ONE blanked URL; if there are two, the scenario has to say which.
+        assert len(bearing) == 1, (
+            f"Inline creative has {len(bearing)} url-bearing assets ({bearing}); this step "
+            f"blanks exactly one and will not choose for you — have the Given seed one, or "
+            f"name the asset in the scenario"
+        )
+        target = assets[bearing[0]]
         # Empty, not absent: an absent url would fail as a MISSING field, and the
         # scenario is about a URL the buyer supplied and left blank.
-        primary["url"] = ""
+        target["url"] = ""
         declared.append(
             malformed(
                 "empty_string",
@@ -2345,17 +2382,24 @@ def given_inline_creative_missing_url(ctx: dict) -> None:
 def given_creative_format_not_generative(ctx: dict) -> None:
     """ext-g: assert the inline creative uses a non-generative reference format.
 
-    Generative formats (those with output_format_ids) skip URL validation, so
-    the missing-URL rejection only fires for reference formats. The default
-    inline creative uses ``display_300x250`` (a reference format with no
-    output_format_ids), satisfying this precondition.
+    Generative formats (those with output_format_ids) skip URL validation, so the
+    missing-URL rejection only fires for reference formats. The default inline creative uses
+    ``display_300x250_image``, which satisfies this precondition on BOTH halves -- and the
+    id this used to assert satisfied neither.
+
+    MEASURED against tests/fixtures/creative_formats/reference_formats.json, 71 formats:
+    ``display_300x250`` is ABSENT from the capture entirely, so calling it "a reference
+    format with no output_format_ids" was false twice over -- it is not a reference format
+    the agent serves, and a format that does not exist has no output_format_ids to lack.
+    ``display_300x250_image`` IS in the capture and carries no ``output_format_ids`` key
+    (64 of the 71 carry none), so the docstring is now true rather than aspirational.
     """
     kwargs = ctx.get("request_kwargs", {})
     for pkg in kwargs.get("packages", []):
         for creative in pkg.get("creatives") or []:
             fmt = creative.get("format_id", {})
             fmt_id = fmt.get("id") if isinstance(fmt, dict) else fmt
-            assert fmt_id == "display_300x250", (
+            assert fmt_id == "display_300x250_image", (
                 f"Inline creative format '{fmt_id}' is not the expected non-generative reference format"
             )
 

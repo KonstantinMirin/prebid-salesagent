@@ -568,7 +568,7 @@ def given_creatives_exist_in_library(ctx: dict) -> None:
             creative_id=cid,
             tenant=ctx["tenant"],
             principal=ctx["principal"],
-            format="display_300x250",
+            format="display_300x250_image",
             approved=True,
             data={"assets": {"primary": {"url": "https://example.com/banner.png", "width": 300, "height": 250}}},
         )
@@ -668,7 +668,7 @@ def given_package_update_inline_creatives(ctx: dict) -> None:
             name="Inline Creative 1",
             format_id={
                 "agent_url": "https://creative.adcontextprotocol.org",
-                "id": "display_300x250",
+                "id": "display_300x250_image",
             },
             assets=build_assets(image_spec("primary", url="https://example.com/banner-1.png")),
         )
@@ -1652,7 +1652,7 @@ def given_package_existing_creatives(ctx: dict, package_id: str, assignments: st
             creative_id=cid,
             tenant=ctx["tenant"],
             principal=ctx["principal"],
-            format="display_300x250",
+            format="display_300x250_image",
             approved=True,
             data={"assets": {"primary": {"url": f"https://example.com/{cid}.png", "width": 300, "height": 250}}},
         )
@@ -1704,7 +1704,7 @@ def given_creative_update_mode(ctx: dict, mode: str) -> None:
                     creative_id=cid,
                     tenant=ctx["tenant"],
                     principal=ctx["principal"],
-                    format="display_300x250",
+                    format="display_300x250_image",
                     approved=True,
                     data={
                         "assets": {"primary": {"url": f"https://example.com/{cid}.png", "width": 300, "height": 250}}
@@ -1730,7 +1730,7 @@ def given_creative_update_mode(ctx: dict, mode: str) -> None:
                     creative_id=cid,
                     tenant=ctx["tenant"],
                     principal=ctx["principal"],
-                    format="display_300x250",
+                    format="display_300x250_image",
                     approved=True,
                     data={
                         "assets": {"primary": {"url": f"https://example.com/{cid}.png", "width": 300, "height": 250}}
@@ -1785,7 +1785,7 @@ def given_all_creatives_valid(ctx: dict) -> None:
                 creative_id=cid,
                 tenant=ctx["tenant"],
                 principal=ctx["principal"],
-                format="display_300x250",
+                format="display_300x250_image",
                 approved=True,
             )
 
@@ -1840,7 +1840,7 @@ def given_creative_assignments_with_state(ctx: dict, creative_state: str) -> Non
             creative_id=cid,
             tenant=ctx["tenant"],
             principal=ctx["principal"],
-            format="display_300x250",
+            format="display_300x250_image",
             approved=True,
             data={"assets": {"primary": {"url": f"https://example.com/{cid}.png", "width": 300, "height": 250}}},
         )
@@ -1849,7 +1849,7 @@ def given_creative_assignments_with_state(ctx: dict, creative_state: str) -> Non
             creative_id=cid,
             tenant=ctx["tenant"],
             principal=ctx["principal"],
-            format="display_300x250",
+            format="display_300x250_image",
             approved=False,
             data={"assets": {"primary": {"url": f"https://example.com/{cid}.png", "width": 300, "height": 250}}},
         )
@@ -1923,7 +1923,7 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
         creative_id=cid,
         tenant=ctx["tenant"],
         principal=ctx["principal"],
-        format="display_300x250",
+        format="display_300x250_image",
         approved=True,
         data={"assets": {"primary": {"url": f"https://example.com/{cid}.png", "width": 300, "height": 250}}},
     )

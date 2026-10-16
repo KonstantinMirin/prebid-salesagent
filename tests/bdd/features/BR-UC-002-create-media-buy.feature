@@ -324,7 +324,7 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the response contains error code INVALID_REQUEST
-    And the response error field is packages[0].creatives[0].assets.primary.url
+    And the response error field is packages[0].creatives[0].assets.banner_image.url
     # The two Thens that stood here — "the operation should fail" and "the error should
     # include \"suggestion\" field" — were satisfied by ANY error, so this scenario
     # reported green while saying nothing about which refusal arrived. It stayed green
@@ -339,6 +339,16 @@ Feature: BR-UC-002 Create Media Buy
     # directly and no `image` member, so what the buyer sent at `assets.primary` is
     # `{asset_type, url, width, height}` and the only conformant path to the blank URL is
     # the one above (salesagent-lkgmg).
+    #
+    # THE `banner_image` SEGMENT IS THE FIXTURE'S OWN ASSET KEY, not a spec constant — it
+    # moves whenever the inline-creative Given moves, and it has moved once: it read
+    # `primary` while the harness carried a per-id format-spec stub whose asset_id was
+    # `primary`. With the stub deleted the fixture keys its asset the way the pinned capture
+    # declares it for display_300x250_image, so the pointer follows. WHAT IS GRADED here is
+    # unchanged by that: the path must be over the buyer's own document, with no union-arm
+    # or discriminator-tag segments. A future fixture move updates this segment and nothing
+    # else; if a change wants to alter the SHAPE of the path, that is a different claim and
+    # needs the salesagent-lkgmg reasoning re-done.
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
