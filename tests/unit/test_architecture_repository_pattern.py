@@ -304,9 +304,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
         "test_trigger_still_blocks_manual_deletion_of_last_pricing_option",
     ),
     ("tests/integration/test_product_deletion_with_trigger.py", "test_product_deletion_with_multiple_pricing_options"),
-    # tests/integration/test_product_format_validation.py
-    ("tests/integration/test_product_format_validation.py", "tenant_with_prereqs"),
-    ("tests/integration/test_product_format_validation.py", "app_client"),
     # tests/integration/test_product_formats_update.py
     ("tests/integration/test_product_formats_update.py", "sample_product"),
     # tests/integration/test_product_multiple_format_ids.py
@@ -1123,13 +1120,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
         "tests/integration/test_product_deletion_with_trigger.py",
         "test_trigger_still_blocks_manual_deletion_of_last_pricing_option",
     ),
-    ("tests/integration/test_product_format_validation.py", "app_client"),
-    ("tests/integration/test_product_format_validation.py", "tenant_with_prereqs"),
-    ("tests/integration/test_product_format_validation.py", "test_agent_down_saves_without_validation"),
-    ("tests/integration/test_product_format_validation.py", "test_empty_agent_rejects_format_ids"),
-    ("tests/integration/test_product_format_validation.py", "test_invalid_format_ids_rejected"),
-    ("tests/integration/test_product_format_validation.py", "test_partial_failure_validates_against_available"),
-    ("tests/integration/test_product_format_validation.py", "test_valid_format_ids_accepted"),
     ("tests/integration/test_product_formats_update.py", "sample_product"),
     ("tests/integration/test_product_formats_update.py", "test_product_countries_update_with_flag_modified"),
     ("tests/integration/test_product_formats_update.py", "test_product_formats_update_with_flag_modified"),
