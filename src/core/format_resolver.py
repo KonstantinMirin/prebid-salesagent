@@ -117,11 +117,28 @@ def format_identity(ref: FormatRef) -> FormatKey:
     search to the reference agent. Match on :func:`format_ref_id` there instead —
     ``get_format``'s no-``agent_url`` branch does exactly that.
     """
+    return format_id_identity(format_reference(ref))
+
+
+def format_reference(ref: FormatRef) -> LibraryFormatId:
+    """A format reference as the validated MODEL, in any shape it arrives in.
+
+    The shape normalization :func:`format_identity` used to do inline, lifted out because
+    two questions are asked of a reference and only one of them wants the identity KEY.
+    "Which catalog format does this name?" is answered by the key, which drops the
+    parameters on purpose (see :func:`get_format`). "Does this conform to what the product
+    sells?" is answered by the reference itself, parameters included -- a template pinned to
+    300x250 is not the one pinned to 728x90.
+
+    Returning the model rather than re-validating per caller is what keeps the second
+    question from growing its own normalization: the ``agent_url`` default and the wire-dict
+    validation are stated once, here.
+    """
     if isinstance(ref, str):
-        ref = LibraryFormatId.model_validate({"agent_url": CANONICAL_CREATIVE_AGENT_URL, "id": ref})
-    elif isinstance(ref, Mapping):
-        ref = LibraryFormatId.model_validate({"agent_url": CANONICAL_CREATIVE_AGENT_URL, **ref})
-    return format_id_identity(ref)
+        return LibraryFormatId.model_validate({"agent_url": CANONICAL_CREATIVE_AGENT_URL, "id": ref})
+    if isinstance(ref, Mapping):
+        return LibraryFormatId.model_validate({"agent_url": CANONICAL_CREATIVE_AGENT_URL, **ref})
+    return ref
 
 
 def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
@@ -262,6 +279,18 @@ def format_identity_or_none(entry: Any) -> FormatKey | None:
     # shape only. A model already carries a validated ``agent_url`` and ``id`` (both
     # required on the library type), so it is handed on as the model it is and never
     # dumped here — business logic does not serialize a model to inspect it.
+    reference = format_reference_or_none(entry)
+    return None if reference is None else format_id_identity(reference)
+
+
+def format_reference_or_none(entry: Any) -> LibraryFormatId | None:
+    """A STORED format reference as the validated model, or None if it is not one.
+
+    The stored-shape absorption and the fail-soft that :func:`format_identity_or_none`
+    documents, stopping one step earlier so a caller can have the reference rather than its
+    key. Everything that docstring says about ``None`` and about absent fields applies here
+    and is not restated.
+    """
     try:
         ref: Any = entry
         if isinstance(ref, Mapping):
@@ -271,7 +300,7 @@ def format_identity_or_none(entry: Any) -> FormatKey | None:
             ref.pop("format_id", None)
             if "id" not in ref:
                 return None
-        return format_identity(ref)
+        return format_reference(ref)
     except (ValidationError, ValueError, TypeError, AttributeError):
         logger.warning("Unusable stored format reference, ignored: %r", entry)
         return None
@@ -282,9 +311,34 @@ def product_format_identities(format_ids: Iterable[Any] | None) -> set[FormatKey
 
     Empty means the product imposes no format restriction — the same reading
     an empty column has, and the reading every caller already applied.
+
+    These are TEMPLATE keys and are the wrong value to decide ACCEPTANCE with: two products
+    restricting to different sizes of one template produce the identical set, so the
+    restriction is not merely unread but unrepresentable. :func:`product_format_references`
+    is the acceptance side. This one remains correct for the filter sites, which ask which
+    catalog format a reference names.
     """
     identities = (format_identity_or_none(entry) for entry in format_ids or [])
     return {identity for identity in identities if identity is not None}
+
+
+def product_format_references(format_ids: Iterable[Any] | None) -> tuple[LibraryFormatId, ...]:
+    """The format references a product's declared ``format_ids`` accept, parameters included.
+
+    The ACCEPTANCE half of what :func:`product_format_identities` asks, and separate from it
+    because the pin makes them different questions.
+    ``core/product-format-declaration.json``, under "Format matching vs satisfaction
+    (normative)": "do not exact-match raw ``(agent_url, id)`` pairs once a ``format_id`` has
+    been projected", and "when this declaration specifies fixed constraints such as
+    ``width``, ``height`` ... a buyer request or creative manifest MUST declare and satisfy
+    those constraints".
+
+    A TUPLE and not a set: a reference is a pydantic model whose equality folds in the
+    parameters, so a set would be well-defined but would also silently collapse nothing and
+    buy nothing. Order is the stored order, which is what a refusal lists back to the buyer.
+    """
+    references = (format_reference_or_none(entry) for entry in format_ids or [])
+    return tuple(reference for reference in references if reference is not None)
 
 
 def product_format_kinds(format_options: Iterable[Any] | None) -> set[str]:

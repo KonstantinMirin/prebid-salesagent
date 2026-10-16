@@ -26,7 +26,7 @@ Usage::
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import get_args
+from typing import Any, get_args
 
 import factory
 from adcp.types import FormatAssetUnion, RepeatableAssetGroup, Responsive
@@ -253,8 +253,24 @@ def pick_reference_formats(predicate: Callable[[Format], bool], min_count: int =
     return matches
 
 
-def resolvable_format_ref(format_id: str) -> dict[str, str]:
+def resolvable_format_ref(format_id: str, **parameters: int) -> dict[str, Any]:
     """A creative's claimed legacy reference, CHECKED against the catalog that answers it.
+
+    ``parameters`` carries the reference's own parameterizing fields, which is what turns a
+    TEMPLATE reference into a reference to one VARIANT -- ``core/format-id.json``: an id "used
+    alone, references a template format. When combined with dimension/duration fields, creates
+    a parameterized format ID for a specific variant." They are spread onto the reference
+    rather than nested beside it, because the pin declares them on the reference object.
+
+    The accepted names come from production's own ``_FORMAT_ID_PARAMETERS``, which derives them
+    off the pinned model. Two hand-written lists of these fields have each already dropped
+    ``pixel_ratio`` -- that constant exists because of the first, and the SDK's
+    ``format_is_supported`` still compares only three of the four. Importing it rather than
+    re-deriving is what keeps this from being the third chance to omit one.
+
+    Catalog membership is a property of the ID ALONE, so parameters do not widen or narrow the
+    check below: a variant of a served template is served. What they DO change is acceptance,
+    which this door still does not promise -- see the next paragraph but one.
 
     THE door for authoring a ``format_id`` a creative claims. A claimed reference is the one
     format literal in a fixture that production RESOLVES over the wire -- ``_validation.py``
@@ -326,7 +342,17 @@ def resolvable_format_ref(format_id: str) -> dict[str, str]:
             "does not carry -- the in-process registry mock resolves anything, so it would "
             "read green here and fail only on e2e_rest."
         )
-    return {"agent_url": AGENT_URL, "id": format_id}
+    from src.core.schemas._base import _FORMAT_ID_PARAMETERS
+
+    if unknown := set(parameters) - _FORMAT_ID_PARAMETERS:
+        raise ValueError(
+            f"{sorted(unknown)} are not parameterizing fields of a format reference. "
+            f"core/format-id.json declares {sorted(_FORMAT_ID_PARAMETERS)} beside agent_url and id, "
+            "read off the pinned model rather than listed here. A reference carries its parameters "
+            "on itself, so a field the pin does not declare would be silently dropped by the "
+            "accepted-shape strip instead of refused."
+        )
+    return {"agent_url": AGENT_URL, "id": format_id, **parameters}
 
 
 def _category_of(fmt: Format) -> str | None:
