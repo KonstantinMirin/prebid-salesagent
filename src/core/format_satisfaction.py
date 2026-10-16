@@ -812,32 +812,106 @@ def _canonical_lane(
 
 def _legacy_lane(
     identity: CreativeFormatIdentity,
-    legacy_keys: set[Any],
+    legacy_references: tuple[LibraryFormatId, ...],
 ) -> FormatSatisfaction:
     """Grade a claim against a product that declares only the deprecated ``format_ids``.
 
-    Whole federation identities compared, exactly as the four replaced gates compared them.
-    INSIDE this module rather than beside it, which is the point: the two lanes read the
-    same claim and cannot drift into disagreeing about which one applies.
+    DIRECTIONAL SATISFACTION, not identity membership, and the distinction is the pin's.
+    ``core/product-format-declaration.json`` states it under "Format matching vs
+    satisfaction (normative)": "do not exact-match raw ``(agent_url, id)`` pairs once a
+    ``format_id`` has been projected", and "when this declaration specifies fixed
+    constraints such as ``width``, ``height``, ``duration_ms_exact``, or
+    ``duration_ms_range``, a buyer request or creative manifest MUST declare and satisfy
+    those constraints ... a broad product MAY accept a more specific creative".
+
+    This used to be ``claimed in legacy_keys`` over template keys, which is the comparison
+    that clause forbids -- and the keys drop the parameters, so a product restricting itself
+    to 300x250 and one restricting itself to nothing built the identical accepted set and a
+    728x90 creative was accepted (salesagent-4764o, reproduced at the wire: the assignment
+    was created with no error). Adding the parameters to the key would still have been the
+    forbidden comparison, only narrower.
+
+    ``adcp.canonical_formats.format_is_supported`` IS this rule and is called rather than
+    reimplemented: it upgrades BOTH sides first -- which is the clause's "legacy named
+    formats MUST be normalized to canonical declarations before comparison" -- then requires
+    the claim to match every parameter the product fixed, while a parameter the product
+    leaves open permits anything. ``pixel_ratio`` is compared HERE because the SDK's field
+    loop names only three of the four; see :func:`_pixel_ratio_unsatisfied`.
+
+    ``identity.assertion`` is the input even though it is declared ``compare=False``. That
+    flag means a reference is never compared BY RAW SPELLING -- the same agent respelled is
+    the same agent -- and it is not a prohibition on this call: ``format_is_supported``
+    canonicalizes ``agent_url`` on both sides itself (verified: a trailing slash still
+    matches). Comparing the key instead is what lost the parameters.
 
     NOT widened to compare the claim's KIND against the product's refs projected to kinds.
     The projection direction is legal, but ``formats.mdx`` says equal ``format_kind`` alone
     does not prove compatibility, and two legacy ids a buyer must keep apart
     (``display_300x250_image`` and ``display_728x90_image``) project to the same kind -- so
-    that comparison would accept a creative the product does not take.
+    that comparison would accept a creative the product does not take. The pin's unit is the
+    DECLARATION, kind plus parameters, at which granularity those two separate cleanly.
     """
-    from src.core.format_resolver import format_display
+    from adcp.canonical_formats import format_is_supported
 
-    accepted = tuple(sorted(format_display(key) for key in legacy_keys))
-    if (claimed := identity.legacy) is None or claimed in legacy_keys:
+    accepted = tuple(sorted(_reference_display(reference) for reference in legacy_references))
+    claimed = identity.assertion
+    if claimed is None or any(
+        format_is_supported(claimed, reference) and not _pixel_ratio_unsatisfied(claimed, reference)
+        for reference in legacy_references
+    ):
         return _SATISFIED
+    # ``claimed`` is not None past the guard above, so the display takes the reference with no
+    # narrowing cast and no fallback: a ``format_display(identity.legacy)`` branch here would be
+    # unreachable, and the ``type: ignore`` it needed is what the ratchet refused.
+    rejected = _reference_display(claimed)
     return FormatSatisfaction(
         satisfied=False,
         refusal=FormatRefusal.LEGACY_NOT_ACCEPTED,
-        rejected_value=format_display(claimed),
+        rejected_value=rejected,
         accepted_values=accepted,
-        summary=(f"format {format_display(claimed)!r} is not one this product accepts ({', '.join(accepted)})"),
+        summary=(f"format {rejected!r} is not one this product accepts ({', '.join(accepted)})"),
     )
+
+
+def _pixel_ratio_unsatisfied(claimed: LibraryFormatId, supported: LibraryFormatId) -> bool:
+    """Whether the product fixes a ``pixel_ratio`` the claim does not match.
+
+    The one parameter ``format_is_supported`` does not read. Its field loop is the literal
+    ``("width", "height", "duration_ms")`` while ``core/format-id.json`` declares a fourth,
+    and calls it "**Required** intrinsic-pixel density for a parameterized visual format" --
+    so a product requiring a 2x asset accepts a 1x one. Measured on the pin
+    (9.0.0b3+sa.8qela.bf0228b68): against a product fixing ``pixel_ratio=2``, a claim
+    stating 2, a claim stating 1, and a claim stating nothing all answered True. The field is
+    not merely unenforced on silence; it is never read, so a CONTRADICTING value passes too
+    and both cases are refused here.
+
+    The same omission shape this repo already fixed in itself: ``_FORMAT_ID_PARAMETERS``
+    exists because three of the four were once copied by name. Two independent
+    implementations, one hand-written list each, the same field missing from both. This
+    supplement goes away when the SDK reads the field; it is deliberately a parameter check
+    beside the call rather than a reimplementation of the call.
+    """
+    required = supported.pixel_ratio
+    return required is not None and claimed.pixel_ratio != required
+
+
+def _reference_display(reference: LibraryFormatId) -> str:
+    """How a format REFERENCE is spelled to a buyer: the identity, plus what parameterizes it.
+
+    ``format_display`` renders an identity KEY and so cannot show the parameters, which is
+    precisely what a mis-sized refusal has to say -- "display_image is not one this product
+    accepts (display_image)" names the same string twice and tells the buyer nothing. The
+    parameter names come off the model, not a list, for the reason
+    ``_FORMAT_ID_PARAMETERS`` exists.
+    """
+    from src.core.format_resolver import format_display
+    from src.core.schemas._base import _FORMAT_ID_PARAMETERS, format_id_identity
+
+    shown = format_display(format_id_identity(reference))
+    parameters = sorted(
+        (name, value) for name in _FORMAT_ID_PARAMETERS if (value := getattr(reference, name)) is not None
+    )
+    return f"{shown} ({', '.join(f'{name}={value}' for name, value in parameters)})" if parameters else shown
 
 
 def selector_routes(
@@ -1038,11 +1112,11 @@ def resolve_routes(
     beside an UNPROJECTABLE legacy id was accepted on the option route and the legacy
     route was never resolved at all.
     """
-    from src.core.format_resolver import product_format_identities
+    from src.core.format_resolver import product_format_references
 
     declared = product_declarations(declarations)
-    legacy_keys = product_format_identities(legacy_catalog)
-    if not declared and not legacy_keys:
+    legacy_references = product_format_references(legacy_catalog)
+    if not declared and not legacy_references:
         # The product declares neither arm, so it imposes no restriction -- the reading all
         # four replaced gates already applied to an empty ``format_ids``. No route is
         # resolved, which is also what makes ``selected`` None: there is no declaration.
@@ -1059,7 +1133,7 @@ def resolve_routes(
                 replace(
                     _canonical_lane(route.claim, declared, route.params)
                     if declared
-                    else _legacy_lane(route.claim, legacy_keys),
+                    else _legacy_lane(route.claim, legacy_references),
                     field=route.field,
                 ),
             )
