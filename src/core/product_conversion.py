@@ -423,14 +423,22 @@ def convert_product_model_to_schema(
     product_data["description"] = product_model.description
     product_data["delivery_type"] = product_model.delivery_type
 
-    # format_ids: the LEGACY half of core/product.json's root anyOf, DERIVED from the
-    # canonical declarations where there are any and resolved through effective_format_ids
-    # otherwise, so an inventory profile still supplies it.
+    # format_ids: the LEGACY half of core/product.json's root anyOf.
     #
-    # Which of the three outcomes a product gets -- the authored arm, the projection of its
-    # declarations, or no arm at all because the two disagree -- is decided in ONE place,
-    # `announced_legacy_format_arm`, which carries the producer rules and the citations for
-    # them. Nothing is decided here; this carries the answer.
+    # Which of the three outcomes a product gets -- the authored arm, no arm at all because
+    # the two arms disagree, or no arm because it never authored one -- is decided in ONE
+    # place, `announced_legacy_format_arm`, which carries the producer rules and the
+    # citations for them. Nothing is decided here; this carries the answer.
+    #
+    # TWO DIFFERENT INPUTS, and the difference is the whole of salesagent-ym571. What the
+    # product SERVES resolves through `effective_format_ids`, so a linked inventory profile
+    # still supplies the arm for the legacy products that depend on it. What the divergence
+    # comparison JUDGES is `format_ids`, the product's OWN column, because divergence asks
+    # whether THIS product's seller authored a legacy arm that disagrees with THIS product's
+    # declarations. A shared profile's catalogue is not this product's authored arm, and
+    # substituting it made the seller invent the half it then reported on -- a
+    # canonically-authored product (own column NULL) was accused of divergence purely for
+    # being profile-linked, against a row the operator cannot fix from the product.
     #
     # Omitted rather than emitted empty, deliberately. The field is "Deprecated in AdCP;
     # removed in AdCP 4.0" and is absent from the schema's root `required` list, so a
@@ -440,6 +448,7 @@ def convert_product_model_to_schema(
     # format at all.
     legacy_arm = announced_legacy_format_arm(
         format_ids=product_model.effective_format_ids,
+        authored_format_ids=product_model.format_ids,
         format_options=product_model.format_options,
         product_id=product_model.product_id,
     )

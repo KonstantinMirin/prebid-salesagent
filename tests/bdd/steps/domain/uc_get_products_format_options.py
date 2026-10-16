@@ -21,6 +21,7 @@ from pytest_bdd import given, parsers, then
 from tests.bdd.steps._outcome_helpers import wire_advisory_errors, wire_entry
 from tests.factories import PricingOptionFactory, ProductFactory
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
+from tests.factories.inventory_profile import InventoryProfileFactory
 
 #: The params a stored "image" declaration carries. Concrete values, so an announcement that
 #: substituted defaults for what the seller stored is visible rather than plausible.
@@ -132,6 +133,47 @@ def given_canonical_only_product_with_ref(ctx: dict, format_kind: str, legacy_id
         ],
         with_legacy_arm=False,
     )
+
+
+@given(
+    parsers.parse(
+        "the seller stores a canonically-authored product linked to an inventory profile whose "
+        'format_ids names "{profile_id}", asserting a v1_format_ref to "{asserted_id}"'
+    )
+)
+def given_profile_linked_canonical_product(ctx: dict, profile_id: str, asserted_id: str) -> None:
+    """Store the shape that was falsely accused of divergence (salesagent-ym571).
+
+    THE PRODUCT'S OWN ``format_ids`` IS NULL. The legacy arm the comparison used to judge it
+    against came from the LINKED PROFILE, a row other products also use, so the product was
+    accused of a disagreement it could not have authored and an operator could not fix from
+    it.
+
+    The two ids differ by construction and both come from the scenario, so the fixture cannot
+    drift into agreement and pass for the boring reason.
+
+    ``inventory_profile_id`` is the profile's INTEGER primary key, not its string business key
+    ``profile_id`` -- ``products.inventory_profile_id`` FKs ``inventory_profiles.id``, and
+    passing the business key raises ``invalid input syntax for type integer``.
+    """
+    profile = InventoryProfileFactory(
+        tenant=ctx["tenant"],
+        format_ids=[{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": profile_id}],
+    )
+    product = ProductFactory(
+        tenant=ctx["tenant"],
+        inventory_profile_id=profile.id,
+        format_ids=None,
+        format_options=[
+            {
+                "format_kind": "image",
+                "params": dict(_STORED_IMAGE_PARAMS),
+                "v1_format_ref": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": asserted_id}],
+            }
+        ],
+    )
+    PricingOptionFactory(product=product)
+    ctx["product"] = product
 
 
 @given("the seller stores a dual-authored product whose declaration is a custom format with no format_shape")

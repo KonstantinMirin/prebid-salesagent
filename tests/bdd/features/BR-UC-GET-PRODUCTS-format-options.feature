@@ -112,6 +112,35 @@ Feature: Canonical format options a seller stores are announced to buyers on the
     # products at all and fails both, and the third catches a seller that invented a
     # divergence it had no basis for.
 
+  @T-UC-GET-PRODUCTS-format-options-profile-linked @format_option_announcement @requires_db
+  Scenario: a canonically-authored product is not accused of divergence for being profile-linked
+    Given the seller stores a canonically-authored product linked to an inventory profile whose format_ids names "display_300x250_image", asserting a v1_format_ref to "display_728x90_image"
+    When the buyer requests products
+    Then the announced format option carries v1_format_ref naming "display_728x90_image"
+    And the response carries no format-declaration advisory
+    # THE REGRESSION TEST for salesagent-ym571, a false-positive advisory in this stage's own
+    # landed deliverable. The product's OWN format_ids column is NULL -- it is canonically
+    # authored, the shape the pin tells new products to use -- so it has nothing to diverge
+    # FROM and must never be accused. It was accused anyway, because the conversion fed the
+    # comparison `effective_format_ids`, which substitutes the LINKED PROFILE's column
+    # (models.py:561-563), so the "nothing authored, nothing to compare" short-circuit never
+    # saw the product's real arm. The seller invented the legacy half and then reported on it.
+    #
+    # That property's own docstring argues at length that None and [] are DIFFERENT FACTS --
+    # "A canonically-authored product has no legacy arm at all, and that is a different fact
+    # from 'an empty legacy arm'" -- and the profile branch two lines below it destroys
+    # exactly that distinction for every profile-linked product. The docstring is the
+    # argument against the code beneath it.
+    #
+    # Divergence is now judged on the product's OWN column and nothing substituted into it.
+    # What the product SERVES still resolves through the profile, so the legacy products that
+    # depend on a shared catalogue keep their arm.
+    #
+    # The first outcome is what stops this passing vacuously: a seller that dropped the
+    # declaration would satisfy "no advisory" while serving the product undescribed. What it
+    # deliberately does NOT assert is the absence of a format_ids arm -- a profile-linked
+    # canonical product still serves the profile's, and that residual is salesagent-8qeix.
+
   @T-UC-GET-PRODUCTS-format-options-divergent @format_option_announcement @requires_db
   Scenario: a product whose two format arms disagree is served, and the producer says so
     Given the seller stores a dual-authored product whose format_ids names "display_300x250_image" and whose declaration asserts "display_728x90_image"

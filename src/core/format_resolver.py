@@ -443,6 +443,7 @@ class LegacyFormatArm:
 def announced_legacy_format_arm(
     *,
     format_ids: Iterable[Any] | None,
+    authored_format_ids: Iterable[Any] | None,
     format_options: Iterable[Mapping[str, Any]] | None,
     product_id: str,
 ) -> LegacyFormatArm:
@@ -460,6 +461,20 @@ def announced_legacy_format_arm(
     so projecting would feed a sunsetting filter from a sunsetting field. Declining keeps
     ``format_id`` an INPUT only, which is what this seller operates on ``format_kind``
     instead of means.
+
+    SERVING AND JUDGING TAKE DIFFERENT INPUTS, and conflating them was salesagent-ym571.
+    ``format_ids`` is what the product SERVES, resolved through the caller's
+    ``effective_format_ids`` so a linked inventory profile still supplies the arm for the
+    legacy products that depend on it. ``authored_format_ids`` is what the comparison
+    JUDGES: the product's OWN column, and nothing substituted into it. Divergence asks
+    whether THIS product's seller authored a legacy arm disagreeing with THIS product's
+    declarations, and a shared profile's catalogue is not that — feeding it in made the
+    seller invent the half it then reported on, so a canonically-authored product (own
+    column NULL, nothing to disagree with by construction) was accused of divergence purely
+    for being profile-linked, against a row no operator can fix from the product.
+
+    The caller passing the same value twice is correct and is the common case: a product
+    with no inventory profile serves exactly what it authored.
 
     WHAT IT DOES ENFORCE is the MUST in the same sentence: "When both fields are present
     they MUST describe the same underlying formats." A product whose two AUTHORED arms
@@ -515,23 +530,26 @@ def announced_legacy_format_arm(
         format_options: the stored canonical declarations, as the JSON column holds them.
         product_id: the product the advisory would name.
     """
-    authored = tuple(format_ids or [])
-    # NOTHING TO COMPARE AGAINST, so nothing to read. A product with no authored legacy arm
-    # cannot disagree with its own declarations, and under a seller that declines to project
-    # it announces no legacy arm either — so the canonically-authored case, which is the
-    # common one and every storyboard canonical fixture, returns without touching
-    # ``format_options`` at all.
+    served = tuple(format_ids or [])
+    authored = tuple(authored_format_ids or [])
+    # NOTHING TO COMPARE AGAINST, so nothing to read. A product that authored no legacy arm
+    # cannot disagree with its own declarations, whatever a linked profile supplies on its
+    # behalf — so the canonically-authored case, which is the common one and every
+    # storyboard canonical fixture, returns without touching ``format_options`` at all. It
+    # still SERVES what it resolves to: dropping the profile's arm here would unserve the
+    # legacy products that depend on it, which is salesagent-8qeix and not this function's
+    # call to make.
     if not authored:
-        return LegacyFormatArm(format_ids=(), divergence=None)
+        return LegacyFormatArm(format_ids=served, divergence=None)
 
     declared = [(_declaration_kind(d), _asserted_legacy_identities(d)) for d in format_options or []]
     asserted = {identity for _, identities in declared for identity in identities}
     if not asserted:
-        return LegacyFormatArm(format_ids=authored, divergence=None)
+        return LegacyFormatArm(format_ids=served, divergence=None)
 
     missing = asserted - product_format_identities(authored)
     if not missing:
-        return LegacyFormatArm(format_ids=authored, divergence=None)
+        return LegacyFormatArm(format_ids=served, divergence=None)
 
     return LegacyFormatArm(
         format_ids=(),
