@@ -44,6 +44,16 @@ from tests.factories.mint import mint
 #: exactly as they do for every other create scenario. The canonical arm is what varies.
 _LEGACY_ARM: list[dict[str, str]] = [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250"}]
 
+#: THE SAME legacy entry, SIZED. Every other product fixture in this module leaves the
+#: deprecated arm's width and height unset, which is why nothing here could grade the
+#: dimension-precedence rule: with no dimensions on the product's catalogue entry, "the
+#: buyer's own sizing wins" and "the product's entry fills in" give the SAME answer, so
+#: inverting the rule changed nothing (salesagent-49m16, measured: 0 of 8759 nodeids).
+#: The conjunction needed a fixture, and this is it.
+_LEGACY_ARM_SIZED: list[dict[str, Any]] = [
+    {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250", "width": 300, "height": 250}
+]
+
 #: The option id the product publishes, and the id a publisher-scoped declaration publishes
 #: under its own domain. Named once so a selector row and its declaration cannot drift.
 _PRODUCT_OPTION_ID = "satisfaction_image_mrec"
@@ -133,6 +143,14 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     # the defect, not the refusal: `bare_kind_beside_option_ref` below now grades that
     # two-route shape deliberately, and this one grades step 10 as written.
     "legacy_display_300x250": {"format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250"}]},
+    # The SAME deprecated id the seller publishes, sized EXPLICITLY by the buyer and
+    # differently from the seller's catalogue entry. ``core/format-id.json`` carries
+    # width/height on the reference for exactly this parameterized case, and the two halves
+    # of the dimension rule give different answers here -- which is what makes the pair of
+    # scenarios below able to fail.
+    "legacy_sized_728x90": {
+        "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250", "width": 728, "height": 90}]
+    },
     "contained_range": {"format_kind": "video_hosted", "params": {"duration_ms_range": [10000, 30000]}},
     "covering_slots": {
         "format_kind": "video_hosted",
@@ -293,6 +311,42 @@ def given_declaration(ctx: dict, declaration: str) -> None:
     refusal is attributable to the rule rather than to an arm the product never declared.
     """
     _store_declaring_product(ctx, declaration, with_legacy_arm=True)
+
+
+@given(parsers.parse("the seller publishes only a deprecated format sized {width:d}x{height:d}"))
+def given_legacy_only_sized_product(ctx: dict, width: int, height: int) -> None:
+    """Store a LEGACY-ONLY product whose deprecated entry CARRIES its dimensions.
+
+    The fixture the dimension-precedence rule needs, and it is deliberately neither of this
+    module's other two shapes. Dual-arm will not do: a legacy selector normalizes through
+    ``upgrade_legacy_format_id``, so a buyer sizing ``display_300x250`` at 728x90 against a
+    product whose declaration FIXES 300x250 is refused by satisfaction before any dimension
+    is resolved -- correctly, and it would grade the refusal rather than the precedence.
+    With no ``format_options`` the product narrows no canonical set, so the selector is
+    accepted and the create path's dimension resolution is what decides what the ad server
+    is asked to traffic.
+
+    Legacy-only is spec-legal for the 3.x window -- ``core/product.json``: "Products MUST
+    carry ``format_ids``, ``format_options``, or both during the 3.x migration window" --
+    and is the population this rule still serves.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+
+    entry = dict(_LEGACY_ARM_SIZED[0]) | {"width": width, "height": height}
+    product = ProductFactory(
+        tenant=ctx["tenant"],
+        product_id=f"satisfaction_legacy_{width}x{height}",
+        delivery_type="non_guaranteed",
+        format_ids=[entry],
+        format_options=None,
+        property_tags=["all_inventory"],
+    )
+    ctx["default_pricing_option"] = PricingOptionFactory(
+        product=product, pricing_model="cpm", currency="USD", is_fixed=True
+    )
+    ctx["default_product"] = product
+    ctx.pop("request_kwargs", None)
+    _ensure_request_defaults(ctx)
 
 
 @given(parsers.parse('the seller declares a canonical format option "{declaration}" and no format_ids'))
@@ -1032,6 +1086,39 @@ def then_parked_package_snapshots(ctx: dict, option_id: str, width: int, height:
     assert (params.get("width"), params.get("height")) == (width, height), (
         f"the recorded snapshot's dimensions are {params.get('width')}x{params.get('height')}, "
         f"expected {width}x{height}"
+    )
+
+
+@then(parsers.parse("the ad server is asked to traffic a {width:d}x{height:d} package"))
+def then_adapter_trafficks_dimensions(ctx: dict, width: int, height: int) -> None:
+    """Assert what the CREATE handed the ad server, read off the adapter boundary.
+
+    The create-path sibling of :func:`then_adapter_asked_for_dimensions`, separate rather
+    than shared because the two read a different call: that one grades an APPROVAL replay
+    and asserts an approval ran first, while this one grades the create that the When
+    dispatched. A shared step would have to branch on which ran, which is the silent-env
+    shape the BDD guards forbid.
+
+    THE ADAPTER BOUNDARY IS THE ONLY OBSERVABLE FOR THIS, and that bounds the transports.
+    The trafficked SIZE appears in no response field -- ``formats_to_provide`` and
+    ``format_ids_to_provide`` carry the package's creative CONTRACT, which is a different
+    fact from the dimensions the line item is created at. So this reads the mock, and the
+    scenarios using it are in-process only, exactly like the approval sibling.
+    """
+    from tests.bdd.steps._outcome_helpers import is_e2e
+
+    assert not is_e2e(ctx), (
+        "this step reads the in-process adapter mock; the trafficked dimension has no wire "
+        "observable, so a scenario using it must not be routed to a live transport"
+    )
+    adapter = ctx["env"].mock["adapter"].return_value
+    calls = adapter.create_media_buy.call_args_list
+    assert calls, "the create never reached the ad server, so there is nothing to grade"
+    media_packages = calls[-1].kwargs.get("packages") or calls[-1].args[1]
+    dimensions = [(f.width, f.height) for pkg in media_packages for f in (pkg.format_ids or [])]
+    assert (width, height) in dimensions, (
+        f"the ad server was asked to traffic {dimensions!r}, which does not include the "
+        f"{width}x{height} this scenario requires"
     )
 
 
