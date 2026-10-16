@@ -3211,8 +3211,9 @@ class IntegrationEnv(BaseTestEnv):
         """
         from sqlalchemy import select
 
+        from src.core.database.models import AdapterConfig as DBAdapterConfig
         from src.core.database.models import Principal, Tenant
-        from tests.factories import PrincipalFactory, TenantFactory
+        from tests.factories import AdapterConfigFactory, PrincipalFactory, TenantFactory
 
         tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()
         if tenant is None:
@@ -3227,6 +3228,24 @@ class IntegrationEnv(BaseTestEnv):
         ).first()
         if principal is None:
             principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
+
+        # AN ``adapter_config`` ROW, because EVERY production tenant has one and a fixture
+        # without one is state production cannot be in. Every creation path writes it --
+        # ``admin/blueprints/public.py`` (signup), the tenant management API,
+        # ``scripts/setup/setup_tenant.py`` and ``scripts/setup/init_database.py`` -- and the
+        # only ``delete(AdapterConfig)`` drops the tenant in the same transaction.
+        #
+        # ITS ABSENCE WAS A TRANSPORT DIVERGENCE. ``helpers/adapter_helpers.get_adapter``
+        # reads the row, and with none it took a different branch for a SANDBOX account than
+        # for any other, so two uc002 account-reference rows failed on e2e_rest only while
+        # passing on the three in-process transports -- which patch the adapter and so could
+        # not see it (salesagent-6d07f, salesagent-8mynh). The posture column is left at its
+        # own server default (``false``); this seeds the ROW's existence, which is the fact
+        # production guarantees, and states no policy a scenario did not ask for.
+        adapter_config = self._session.scalars(select(DBAdapterConfig).filter_by(tenant_id=self._tenant_id)).first()
+        if adapter_config is None:
+            AdapterConfigFactory(tenant=tenant, adapter_type="mock")
+            self._commit_factory_data()
 
         # NO account is seeded here, deliberately. Seeding one for every tenant made
         # UC-011's account-LISTING scenarios wrong -- "0 accounts visible" saw one -- which
