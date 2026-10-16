@@ -423,14 +423,23 @@ def convert_product_model_to_schema(
     product_data["description"] = product_model.description
     product_data["delivery_type"] = product_model.delivery_type
 
-    # format_ids: the LEGACY half of core/product.json's root anyOf, DERIVED from the
-    # canonical declarations where there are any and resolved through effective_format_ids
-    # otherwise, so an inventory profile still supplies it.
+    # format_ids: the LEGACY half of core/product.json's root anyOf.
     #
-    # Which of the three outcomes a product gets -- the authored arm, the projection of its
-    # declarations, or no arm at all because the two disagree -- is decided in ONE place,
-    # `announced_legacy_format_arm`, which carries the producer rules and the citations for
-    # them. Nothing is decided here; this carries the answer.
+    # Which of the three outcomes a product gets -- the authored arm, no arm at all because
+    # the two arms disagree, or no arm because it never authored one -- is decided in ONE
+    # place, `announced_legacy_format_arm`, which carries the producer rules and the
+    # citations for them. Nothing is decided here; this carries the answer.
+    #
+    # THREE INPUTS ABOUT ONE ARM, and the distinctions are the whole of salesagent-ym571.
+    # `effective_format_ids` is what the product SERVES, so a linked inventory profile still
+    # supplies the arm for the legacy products that depend on it. `format_ids` is the
+    # product's OWN column, which says whether the served arm is the product's to answer
+    # for. `inventory_profile_id` names the row it came from when it is not.
+    #
+    # The defect that made this three values instead of one: the comparison was fed the
+    # resolved arm alone, so a canonically-authored product (own column NULL) was reported
+    # divergent against a shared profile's catalogue, and the advisory named the PRODUCT for
+    # a mismatch no operator can fix there.
     #
     # Omitted rather than emitted empty, deliberately. The field is "Deprecated in AdCP;
     # removed in AdCP 4.0" and is absent from the schema's root `required` list, so a
@@ -440,8 +449,14 @@ def convert_product_model_to_schema(
     # format at all.
     legacy_arm = announced_legacy_format_arm(
         format_ids=product_model.effective_format_ids,
+        authored_format_ids=product_model.format_ids,
         format_options=product_model.format_options,
         product_id=product_model.product_id,
+        # The profile's BUSINESS key, not its integer primary key: this reaches an advisory
+        # an operator reads, and `profile_id` is what the admin surface shows them.
+        # Read through the relationship rather than off `inventory_profile_id`, so the value
+        # and the arm it attributes come from the same row `effective_format_ids` resolved.
+        inventory_profile_id=(product_model.inventory_profile.profile_id if product_model.inventory_profile else None),
     )
     if legacy_arm.format_ids:
         product_data["format_ids"] = list(legacy_arm.format_ids)

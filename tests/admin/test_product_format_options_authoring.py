@@ -299,3 +299,82 @@ def test_the_edit_form_refuses_clearing_the_last_declared_arm(operator, seller, 
     row = _stored(factory_session, tenant_id, "canonical_product")
     assert row.format_options == [IMAGE_DECLARATION], "the refused edit left the declaration in place"
     assert row.format_ids is None
+
+
+# ── A4 completion (salesagent-ol033.6): format_ids is no longer AUTHORED here ────────
+#
+# The tests above grade that the canonical arm CAN be authored (work item A4-minimal,
+# salesagent-ol033.2.1). These grade that the legacy arm can no longer be, which is the
+# other half: the pin deprecates format_ids in 3.2, removes it in 4.0 and says "Do not
+# author a new product from format_ids alone", and this epic's charter keeps format_id an
+# INPUT only -- acceptance and recording.
+#
+# Not authored is NOT dropped. The column persists and a product that already carries a
+# legacy arm keeps it, which is what the second and third tests here grade.
+
+
+def test_the_create_form_stores_no_legacy_arm_even_when_one_is_submitted(operator, seller, factory_session):
+    """A submitted ``formats`` payload is IGNORED rather than stored.
+
+    Submitting one is the discriminating input. A test that posted an empty ``formats``
+    would pass identically before and after the authoring was removed, because the old
+    handler also stored nothing for an empty picker -- so it would grade nothing. This
+    posts a well-formed legacy reference, the shape the old picker produced, and requires
+    the row to come back with no legacy arm at all.
+    """
+    tenant, tag_selection = seller
+    tenant_id = tenant.tenant_id
+
+    response = operator.post(
+        f"/tenant/{tenant_id}/products/add",
+        data=_create_form(
+            tag_selection,
+            product_id="legacy_submitted",
+            formats=json.dumps(
+                [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]
+            ),
+            format_options=json.dumps([IMAGE_DECLARATION]),
+        ),
+    )
+
+    assert response.status_code in (301, 302), response.data[:2000]
+    row = _stored(factory_session, tenant_id, "legacy_submitted")
+    assert row is not None, "the operator form stored no product"
+    # NULL, not [] -- an empty array satisfies the deprecated anyOf branch by its key.
+    assert row.format_ids is None, f"a submitted legacy arm was authored anyway: {row.format_ids!r}"
+    # Paired POSITIVE, so this cannot pass by the whole POST having been refused.
+    assert row.format_options == [IMAGE_DECLARATION]
+
+
+def test_editing_a_legacy_product_leaves_its_stored_arm_untouched(operator, seller, factory_session):
+    """An edit is not how an existing legacy product loses its only format declaration.
+
+    The hazard this guards is specific and was live: the edit handler used to write
+    ``product.format_ids = validated_formats or None`` from the picker's hidden input,
+    which the form always submitted. Remove the picker and leave that write, and every
+    edit of a legacy product silently NULLs the one arm it has -- then the conversion
+    refuses the row and get_products answers INTERNAL_ERROR for the whole tenant.
+
+    The edit changes the NAME only, so nothing in the payload mentions formats at all.
+    """
+    tenant, _ = seller
+    tenant_id = tenant.tenant_id
+    stored_arm = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]
+    ProductFactory(
+        tenant=tenant,
+        product_id="legacy_product",
+        format_ids=stored_arm,
+        format_options=None,
+    )
+    factory_session.commit()
+
+    response = operator.post(
+        f"/tenant/{tenant_id}/products/legacy_product/edit",
+        data=_edit_form(name="Renamed Legacy Product"),
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200, response.data[:2000]
+    row = _stored(factory_session, tenant_id, "legacy_product")
+    assert row.format_ids == stored_arm, f"the edit changed the stored legacy arm: {row.format_ids!r}"
+    assert row.name == "Renamed Legacy Product", "the edit did not take effect, so the arm survived vacuously"
