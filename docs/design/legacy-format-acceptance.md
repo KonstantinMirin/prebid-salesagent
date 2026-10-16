@@ -81,24 +81,45 @@ template it parameterizes).
 
 ## One upstream gap to cover locally
 
-`format_is_supported`'s field loop is a hand-written list of three, and
-`core/format-id.json` declares four parameterizing fields. `pixel_ratio` is omitted:
+`core/format-id.json` declares four parameterizing fields. `format_is_supported` compares
+three, and the loop is a literal — quoted rather than described, from
+`9.0.0b3+sa.8qela.bf0228b68`:
+
+```python
+for field in ("width", "height", "duration_ms"):
+```
+
+So `pixel_ratio` is not merely unenforced on silence; it is **never read**, and a contradicting
+value passes exactly as silence does. All three rows measured against a product fixing
+`pixel_ratio=2` (a 600x500 asset for a 300x250 render):
 
 ```
-product REQUIRES pixel_ratio=2 (a 600x500 asset for a 300x250 render)
-  creative states pixel_ratio=2 -> True
-  creative states NOTHING       -> True     <-- should be False
+creative states pixel_ratio=2 -> True
+creative states pixel_ratio=1 -> True     <-- should be False
+creative states NOTHING       -> True     <-- should be False
 ```
 
-The pin calls that field "**Required** intrinsic-pixel density for a parameterized visual
-format", so a product requiring a 2x asset currently accepts a 1x one. This is the same defect
-shape this repo already fixed in itself — `schemas/_base.py`'s `_FORMAT_ID_PARAMETERS` exists
-because "three of the four parameters were copied by name, so a creative synced with a pixel
-ratio came back as a different format than the buyer sent". Two independent implementations, one
-hand-written list each, the same field missing from both.
+**The 1x row is the correction.** An earlier version of this table listed only the silence case
+while the paragraph below it asserted "a product requiring a 2x asset currently accepts a 1x
+one" — true, and not shown. A table that lists one of two failing cases stops the next reader
+from checking the other, and the local supplement has to refuse both, so both are now measured
+here and graded by a scenario each.
 
-Disposition: file upstream, and compare `pixel_ratio` beside the SDK call until it lands. Derive
-the compared field set from `LibraryFormatId.model_fields` rather than writing a fourth list.
+The pin calls the field "**Required** intrinsic-pixel density for a parameterized visual
+format". This is the same defect shape this repo already fixed in itself —
+`schemas/_base.py`'s `_FORMAT_ID_PARAMETERS` exists because "three of the four parameters were
+copied by name, so a creative synced with a pixel ratio came back as a different format than
+the buyer sent". Two independent implementations, one hand-written list each, the same field
+missing from both.
+
+Disposition, now implemented: `_pixel_ratio_unsatisfied` compares the field beside the SDK call
+and refuses a mismatch AND silence; the accepted names come from `_FORMAT_ID_PARAMETERS` rather
+than a fourth list. Filing upstream is still open, and is outward-facing.
+
+Both failing rows are graded — `@T-UC-FORMAT-SATISFACTION-sync-density-mismatched` and
+`-sync-density-silent`. They exist because removing the supplement reddened NOTHING when it was
+first written: the clause was correct per the pin and unfalsifiable by the suite, which is this
+document's own subject one field over.
 
 ## What stays ours, and why
 
@@ -165,6 +186,25 @@ question. Check for the instrument before building one.
 - **No `check_narrows` substitution** — not a conformant satisfaction check.
 - **No upstream filing yet** — two issues are ready (`legacy_format_refs` field name,
   `pixel_ratio` omission) and filing is outward-facing, so it needs a decision.
-- **No tests yet**, by instruction — the design was settled first. The next step is a
-  parameterized-reference scenario shown RED: no such row exists anywhere in the scenario set
-  today, which is why all of this is true with the suite green.
+
+## Implemented
+
+`b125d6ce4` (the comparison) and `65fc152fa` (the scenarios), merged at `6102651ed`. What the
+design did not predict, recorded because each changed the work:
+
+- **A name-encoded id cannot express the defect.** `upgrade_legacy_format_id` rewrites a
+  reference's parameters from its NAME, so `display_300x250_image @ 728x90` upgrades to
+  `display_image @ 300x250` and `format_is_supported` answers True. The scenario had to use a
+  TEMPLATE id plus parameters. A row built on the id this document uses as its own example
+  would have passed before and after the fix.
+- **The wire-level accept, which this document left derived.** Measured on all three
+  in-process transports before the fix: `status=completed`, `assigned_to=['pkg_001']`,
+  `assignment_errors=None`. A 300x250 product created an assignment for a 728x90 creative.
+- **The refusal is `VALIDATION_ERROR`, not `UNSUPPORTED_FEATURE`.** `canonical_refusal`
+  asserts it is never called for `LEGACY_NOT_ACCEPTED`, because the deprecated lane raises
+  `AdCPValidationError` at its own site. The first draft of the scenarios asserted the
+  canonical lane's code against the deprecated lane's refusal.
+- **The refusal has to NAME the size.** A template-key accepted set could only ever render
+  `<agent>/display_image` — the same string whether the product restricts to 300x250 or to
+  nothing — so `_reference_display` renders the identity plus its parameters, and the Then
+  grades the dimensions rather than only the code.
