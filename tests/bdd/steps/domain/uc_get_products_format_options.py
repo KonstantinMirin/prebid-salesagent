@@ -251,6 +251,20 @@ def given_product_without_declarations(ctx: dict) -> None:
     _store_product(ctx, None)
 
 
+@given("the seller stores a product declaring neither format arm")
+def given_product_with_no_format_arm(ctx: dict) -> None:
+    """Store the one state core/product.json's root anyOf forbids: both halves absent.
+
+    The CONJUNCTION of the two Givens either side of it, each of which stores a product the
+    pin permits. It is reachable rather than hypothetical: both columns are nullable after
+    migration 08cd415b3d91 and neither CHECK constraint rejects NULL, while the admin
+    refuses to AUTHOR the shape (``_refuse_a_product_with_no_format_arm``), so this grades
+    the READ path against a row that arrived some other way -- which is the case
+    ``src/core/tools/products.py`` calls "data corruption or migration issue".
+    """
+    _store_product(ctx, None, with_legacy_arm=False)
+
+
 @given(parsers.parse("the seller stores a canonical format option with no {missing_member}"))
 def given_declaration_missing_required_member(ctx: dict, missing_member: str) -> None:
     """Store a declaration missing a member ``required`` names, which no DB constraint covers.

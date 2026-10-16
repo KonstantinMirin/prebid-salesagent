@@ -236,3 +236,46 @@ Feature: Canonical format options a seller stores are announced to buyers on the
       | missing a required member |
       | with no params            |
       | with no format_kind       |
+
+  @T-UC-GET-PRODUCTS-format-options-no-arm @format_option_announcement @requires_db
+  Scenario: a product declaring neither format arm is refused, not served undescribed
+    # core/product.json's root anyOf: "Products MUST carry `format_ids`, `format_options`,
+    # or both during the 3.x migration window". Each half is individually optional, so the
+    # one state the MUST forbids is the CONJUNCTION of their absence -- which is why it is
+    # the easiest clause in this feature to leave ungraded. The two scenarios above store a
+    # product missing one arm in each direction and both are legal; neither can see this.
+    #
+    # THE SAME CHECK USED TO FIRE ON AN ABSENT format_ids ALONE, which made the canonical
+    # shape unservable -- the defect the canonical-only scenario above exists to prevent
+    # regressing. The two are a pair: that one asserts ONE arm is enough, this one asserts
+    # ZERO arms is not, and a seller satisfying either alone is wrong in a way the other
+    # scenario cannot report.
+    #
+    # INTERNAL_ERROR on the same reasoning as the outline above: it is the seller's own row
+    # that is wrong and there is nothing the buyer can correct.
+    #
+    # WHAT THIS GRADES IS THE OBLIGATION, NOT ONE REFUSAL, and that distinction was measured
+    # rather than reasoned. The anyOf is enforced TWICE, in order: product_conversion's own
+    # check fires first (its message names both arms and the inventory profile, which is the
+    # operator-facing value it adds), and the PINNED MODEL backstops it -- disabling the
+    # application check leaves the row refused by the generated Product itself, verbatim
+    # "Product requires at least one of these field groups: Named-format product |
+    # Canonical-format product [type=anyOf]". So this scenario cannot attribute the refusal
+    # to either layer, and it does not try to; what it asserts is that a product declaring
+    # neither arm never reaches a buyer.
+    #
+    # FIRE-PROBED at the producer of the value the Then actually reads -- the error code,
+    # minted where products.py turns a conversion failure into AdCPInternalError. Making
+    # that branch skip the product instead reddens this row on all three in-process
+    # transports AND the six rows of the outline above, which share that producer, while the
+    # other 21 stay green. Probing the application's anyOf check instead reddens NOTHING,
+    # because of the backstop above -- recorded because that is the probe a reader would
+    # reach for first, and it proves the wrong thing.
+    #
+    # The fixture seeds a pricing option deliberately: a product with none is refused by the
+    # same conversion with the same envelope, and no raise site authors buyer-visible text,
+    # so the wire cannot tell those causes apart either. That cause is excluded BY
+    # CONSTRUCTION rather than by the Then.
+    Given the seller stores a product declaring neither format arm
+    When the buyer requests products
+    Then the response contains error code INTERNAL_ERROR
