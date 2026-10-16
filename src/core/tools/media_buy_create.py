@@ -668,8 +668,22 @@ def _validate_creatives_before_adapter_call(
             field=PACKAGES_FIELD,
         )
 
-    # The refusals those verdicts imply, acted on HERE rather than where they were computed,
-    # for the precedence reason stated at the computation.
+    # The refusals those verdicts imply, acted on HERE rather than where they were computed.
+    #
+    # DO NOT MOVE THIS UP TO JOIN ITS COMPUTATION. The ``bad_state`` raise above answers a
+    # terminal-state creative GONE, and it sits between the computation and this block.
+    # Hoisting these refusals would let a creative that is BOTH terminal-state and
+    # format-refused answer UNSUPPORTED_FEATURE instead — the wrong answer, because what a
+    # buyer can act on for a creative in ``error``/``rejected`` is its STATE, not the
+    # product's format set.
+    #
+    # AND NOTHING GRADES THAT ORDER, which is why this comment is here rather than a test
+    # being here. Measured, not assumed: hoisting this block above the ``bad_state`` raise
+    # and running tests/bdd/test_uc002_create_media_buy.py plus tests/unit/test_media_buy.py
+    # reddens NOTHING (3 failed / 350 passed, and the 3 are a pre-existing account-sandbox
+    # family that fails at the baseline too). So the inversion is silent today. The missing
+    # scenario — one creative that is both terminal-state and outside its product's set — is
+    # filed; until it exists, this paragraph is the only thing standing in the way.
     from src.core.format_satisfaction import FormatRefusal, canonical_refusal
 
     for product_id, cid, verdict in creative_verdicts:
