@@ -922,8 +922,12 @@ def add_product(tenant_id):
                 if adapter_type == "google_ad_manager":
                     # Parse GAM-specific fields from unified form
                     gam_config_service = GAMProductConfigService()
+                    # ``None`` for the legacy arm: a product created here has none. The
+                    # seeder takes ``format_options`` so it can derive its placeholder from
+                    # the canonical declarations (cd0d9921f), which is the arm this surface
+                    # authors.
                     base_config = gam_config_service.generate_default_config(
-                        delivery_type, formats, format_options=format_options
+                        delivery_type, None, format_options=format_options
                     )
 
                     # Add ad unit/placement targeting if provided
@@ -1012,8 +1016,13 @@ def add_product(tenant_id):
                 else:
                     # For other adapters, use simple config
                     gam_config_service = GAMProductConfigService()
+                    # ``None`` for the legacy arm, because a product created here has no
+                    # legacy arm to hand over. ``generate_default_config`` declares
+                    # ``formats`` optional and takes ``format_options`` precisely so the
+                    # seeder can derive its sizes from the canonical declarations
+                    # (cd0d9921f), which is the only arm this surface authors.
                     implementation_config = gam_config_service.generate_default_config(
-                        delivery_type, formats, format_options=format_options
+                        delivery_type, None, format_options=format_options
                     )
 
                 # Parse targeting template from form (includes custom targeting key-value pairs)
