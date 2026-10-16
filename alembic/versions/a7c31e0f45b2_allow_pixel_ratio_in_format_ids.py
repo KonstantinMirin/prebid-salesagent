@@ -25,6 +25,7 @@ Create Date: 2026-10-16
 
 """
 
+import re
 from collections.abc import Sequence
 
 from alembic import op
@@ -38,14 +39,27 @@ depends_on: str | Sequence[str] | None = None
 
 #: The six properties ``core/format-id.json`` declares. Retyped here because PL/pgSQL
 #: cannot read the pinned schema, and that is exactly how this function drifted from the
-#: spec in the first place -- so the list is paired with a test that compares it against
-#: the pin and fails when the spec adds a seventh
-#: (tests/unit/test_format_id_sql_allowlist_matches_the_pin.py).
+#: spec in the first place.
+#:
+#: NOTHING DETECTS THE SPEC ADDING A SEVENTH PROPERTY. Measured: no test compares this
+#: list against the pin. The e2e_rest rows grade the BEHAVIOUR -- a creative at the wrong
+#: asset density is refused, and one silent about density is refused by a product that
+#: fixes one (BR-UC-FORMAT-SATISFACTION.feature:421 and :428) -- so a seller authoring a
+#: seventh property gets refused by this function and finds out then. Two earlier attempts
+#: at a drift detector were removed: one asserted the migration's source text with a
+#: regex, the other mutated a module-scoped database to test alembic. Neither graded the
+#: spec. If a third is written it reads the pin and this constant and touches no database.
 _ALLOWED = "ARRAY['agent_url', 'id', 'width', 'height', 'duration_ms', 'pixel_ratio']"
 
 
-def _function(allowed_keys: str, allowed_text: str, with_pixel_ratio: bool) -> str:
-    """The validator, parameterised only by its allowlist and the pixel_ratio clause."""
+def _function(allowed_keys: str, with_pixel_ratio: bool) -> str:
+    """The validator, parameterised only by its allowlist and the pixel_ratio clause.
+
+    The refusal message renders the SAME array it enforces. It used to take the prose list as
+    a second parameter, hand-typed at both call sites, so updating the array alone would have
+    left the message naming a set the function no longer refused on.
+    """
+    allowed_text = ", ".join(re.findall(r"'([^']+)'", allowed_keys))
     pixel_ratio_clause = (
         """
             -- Validate pixel_ratio if present (must be positive number)
@@ -157,21 +171,9 @@ def _function(allowed_keys: str, allowed_text: str, with_pixel_ratio: bool) -> s
 
 def upgrade() -> None:
     """Allow the pinned ``pixel_ratio`` property, validated like its three siblings."""
-    op.execute(
-        _function(
-            _ALLOWED,
-            "agent_url, id, width, height, duration_ms, pixel_ratio",
-            with_pixel_ratio=True,
-        )
-    )
+    op.execute(_function(_ALLOWED, with_pixel_ratio=True))
 
 
 def downgrade() -> None:
     """Restore the five-property allowlist, rejecting ``pixel_ratio`` again."""
-    op.execute(
-        _function(
-            "ARRAY['agent_url', 'id', 'width', 'height', 'duration_ms']",
-            "agent_url, id, width, height, duration_ms",
-            with_pixel_ratio=False,
-        )
-    )
+    op.execute(_function("ARRAY['agent_url', 'id', 'width', 'height', 'duration_ms']", with_pixel_ratio=False))
