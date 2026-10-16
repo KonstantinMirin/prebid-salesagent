@@ -1410,24 +1410,26 @@ def execute_approved_media_buy(
                     # the buyer had already bought -- and the wait is exactly when that
                     # happens (salesagent-zoo82).
                     #
-                    # THE SNAPSHOTS THEMSELVES NOW TRAVEL, which is stage 7's upgrade of the
-                    # projection this used to build (``salesagent-ol033.8``, E1). The carrier
-                    # gained ``formats_to_provide``, so the declaration's ``params`` reach the
-                    # adapter first-class and the deleted ``snapshot_adapter_format_ids`` --
-                    # which merged those dimensions onto the asserted references because the
-                    # carrier could only hold references -- has nothing left to do. Its stated
-                    # ceiling goes with it: a canonical-only declaration asserting no
-                    # ``v1_format_ref`` could not be NAMED in ``format_ids`` at all, and now
-                    # does not need to be.
+                    # THE SNAPSHOTS THEMSELVES ALSO TRAVEL, which is stage 7's addition
+                    # (``salesagent-ol033.8``, E1): the carrier gained ``formats_to_provide``,
+                    # so the declaration's ``params`` reach a snapshot-reading adapter
+                    # first-class. The GAM order manager is the one that reads it.
                     #
-                    # The legacy arm is still carried for the adapters that read only it, as
-                    # the references the seller ASSERTED and nothing more
-                    # (``registries/v1-canonical-mapping.json`` forbids synthesizing a v1 id
-                    # from the registry, so there is no other source).
-                    from src.core.format_resolver import snapshot_legacy_arm
+                    # BOTH ARMS, AND THE LEGACY ONE CARRIES DIMENSIONS. Stage 7 briefly
+                    # dropped the dimension merge here on the reasoning that the canonical arm
+                    # had superseded it. It had, FOR GAM. This carrier goes to every adapter
+                    # and GAM is the only one reading the snapshot, so for the mock, Kevel,
+                    # Triton and Broadstreet the legacy arm is still the only channel a
+                    # dimension has -- approving a parked buy handed the ad server
+                    # ``[(None, None)]``, and the scenario grading it
+                    # (``BR-UC-FORMAT-SATISFACTION``, "approving a parked buy executes the
+                    # recorded snapshot") went red on all four transports. The projection is
+                    # deletable when the LAST adapter reads the snapshot, not when the first
+                    # one does.
+                    from src.core.format_resolver import snapshot_adapter_format_ids
 
                     recorded = _PACKAGE_FORMAT_SNAPSHOTS.validate_python(package_config.get("formats_to_provide") or [])
-                    asserted = snapshot_legacy_arm(recorded)
+                    asserted = snapshot_adapter_format_ids(recorded)
 
                     # Convert formats to FormatId objects with comprehensive validation
                     format_ids_list: list[FormatId] = []
@@ -3719,6 +3721,7 @@ async def _create_media_buy_impl(
                     format_display,
                     format_identity_or_none,
                     product_format_identities,
+                    resolved_dimensions,
                 )
 
                 # Validate that requested formats are supported by product.
@@ -3766,47 +3769,32 @@ async def _create_media_buy_impl(
                     if fmt_identity:
                         product_format_dimensions[fmt_identity] = (fmt.width, fmt.height, fmt.duration_ms)
 
-                # Process request format_ids, merging dimensions from product if missing
+                # Process request format_ids, merging dimensions from the product where the
+                # buyer named a format without sizing it. ONE rule, asked of
+                # ``format_resolver.resolved_dimensions``, which the approval path's
+                # ``snapshot_adapter_format_ids`` asks the same question of with the recorded
+                # snapshot's ``params`` as its fallback instead of the product's catalogue.
+                # Two fallback SOURCES, one policy -- so one function, per CLAUDE.md § DRY.
+                #
+                # THE THREE BRANCHES THIS REPLACED EXPRESSED A TWO-WAY DECISION: "the request
+                # stated its dimensions" and "neither the request nor the product stated them"
+                # both constructed the request's own width, height and duration_ms, character
+                # for character. Only the middle case differed.
                 for req_fmt in matching_package.format_ids:
                     req_fmt_identity = format_identity_or_none(req_fmt)
-                    # Check if request format has dimensions
-                    if req_fmt.width is not None and req_fmt.height is not None:
-                        # Request has dimensions, convert to our FormatId type
-                        format_ids_to_use.append(
-                            FormatId(
-                                agent_url=req_fmt.agent_url,
-                                id=req_fmt.id,
-                                width=req_fmt.width,
-                                height=req_fmt.height,
-                                duration_ms=req_fmt.duration_ms,
-                            )
+                    product_dims = product_format_dimensions.get(req_fmt_identity) if req_fmt_identity else None
+                    width, height, duration_ms = resolved_dimensions(
+                        req_fmt, fallback=product_dims or (None, None, None)
+                    )
+                    format_ids_to_use.append(
+                        FormatId(
+                            agent_url=req_fmt.agent_url,
+                            id=req_fmt.id,
+                            width=width,
+                            height=height,
+                            duration_ms=duration_ms,
                         )
-                    else:
-                        # Try to get dimensions from product's format_ids
-                        product_dims = product_format_dimensions.get(req_fmt_identity) if req_fmt_identity else None
-                        if product_dims and (product_dims[0] is not None or product_dims[1] is not None):
-                            # Merge dimensions from product
-                            format_ids_to_use.append(
-                                FormatId(
-                                    agent_url=req_fmt.agent_url,
-                                    id=req_fmt.id,
-                                    width=product_dims[0],
-                                    height=product_dims[1],
-                                    duration_ms=product_dims[2] if product_dims[2] is not None else req_fmt.duration_ms,
-                                )
-                            )
-                        else:
-                            # No dimensions in product either, convert to our FormatId type
-                            # GAM adapter will try regex extraction from format_id string
-                            format_ids_to_use.append(
-                                FormatId(
-                                    agent_url=req_fmt.agent_url,
-                                    id=req_fmt.id,
-                                    width=req_fmt.width,
-                                    height=req_fmt.height,
-                                    duration_ms=req_fmt.duration_ms,
-                                )
-                            )
+                    )
 
             # Fallback to product's formats if no request format_ids
             if not format_ids_to_use:
