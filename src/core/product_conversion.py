@@ -456,7 +456,20 @@ def convert_product_model_to_schema(
         # an operator reads, and `profile_id` is what the admin surface shows them.
         # Read through the relationship rather than off `inventory_profile_id`, so the value
         # and the arm it attributes come from the same row `effective_format_ids` resolved.
-        inventory_profile_id=(product_model.inventory_profile.profile_id if product_model.inventory_profile else None),
+        #
+        # THE FK COLUMN IS TESTED FIRST, and that order is the whole fix for a
+        # DetachedInstanceError this caused. `inventory_profile` is a RELATIONSHIP, so
+        # touching it on a detached row triggers a lazy load and raises; the FK is an
+        # ordinary column that is always loaded, so a product with no profile -- the
+        # overwhelming majority, and what a repository test hands back after its session
+        # closes -- never reaches the relationship at all. This is the idiom
+        # `effective_format_ids` and its three siblings already use (models.py:561, :583,
+        # :650, :669); writing the traversal without it was the defect.
+        inventory_profile_id=(
+            product_model.inventory_profile.profile_id
+            if product_model.inventory_profile_id and product_model.inventory_profile
+            else None
+        ),
     )
     if legacy_arm.format_ids:
         product_data["format_ids"] = list(legacy_arm.format_ids)
