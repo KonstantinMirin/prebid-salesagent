@@ -47,7 +47,7 @@ def find_account(repo: AccountRepository, account_ref: AccountReference, princip
         AdCPAccountSetupRequiredError, AdCPAccountSuspendedError,
         AdCPAccountPaymentRequiredError: the account's status blocks operations.
     """
-    # No ``.root``: adcp 9 ships ``AccountReference`` as the two-arm union itself, not as a
+    # No ``.root``: the pinned SDK ships ``AccountReference`` as the two-arm union itself, not as a
     # RootModel wrapping it, so the value IS the variant. ``core/account-ref.json`` is a
     # oneOf over objects, which is what a RootModel wrapper around an object union was
     # always misrepresenting (adcp-client-python#1077).

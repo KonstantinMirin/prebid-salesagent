@@ -158,7 +158,7 @@ def _apply_list_account_filters(db_accounts: list[DBAccount], req: ListAccountsR
 
     account_filter = req.account
     if account_filter is not None:
-        # account_filter IS the variant when present -- adcp 9's AccountReference is the
+        # account_filter IS the variant when present -- the pinned SDK's AccountReference is the
         # two-arm union itself, so there is no ``.root`` to unwrap.
         db_accounts = [a for a in db_accounts if _matches_account_ref(a, account_filter)]
 
@@ -475,7 +475,7 @@ _APPLIED = _Disposition("applied")
 #: Why ``preferred_reporting_protocol`` is a DECLARED no-op rather than a
 #: rejection. Named because both modes cite it identically.
 _ADCP_32_UNIMPLEMENTED_CITATION = (
-    "AdCP 3.2 sync-accounts-request.json#/properties/accounts/items — seven settable fields "
+    "sync-accounts-request.json#/properties/accounts/items — seven settable fields "
     "arrived with the 3.2.1 pin (currency, timezone, operator_unit, operator_identity, "
     "destination_billing_entity, reporting_delivery_configs, revision) and this seller "
     "implements NONE of them: measured, the Account table carries no column for any of the "
@@ -585,7 +585,7 @@ _FIELD_POLICY: dict[str, _FieldPolicy] = {
             "local_extension",
             "v3.1.1 sync-accounts-request.json#/properties/accounts/items/additionalProperties — "
             "not a sync_accounts property at all; the spec's governance surface is sync_governance "
-            "(dist/compliance/3.1.1/domains/governance/index.yaml). Accepted on the provisioning branch "
+            "(dist/compliance/<pin>/domains/governance/index.yaml). Accepted on the provisioning branch "
             "only because that is how governed accounts are seeded today; retire with sync_governance.",
         ),
         resolve=_resolve_governance_agents,
@@ -594,7 +594,7 @@ _FIELD_POLICY: dict[str, _FieldPolicy] = {
         provisioning=_Disposition("ignored_by_design", _PREFERRED_PROTOCOL_CITATION),
         settings_update=_Disposition("ignored_by_design", _PREFERRED_PROTOCOL_CITATION),
     ),
-    # The seven AdCP 3.2 additions, each a declared no-op. See the citation.
+    # The seven additions, each a declared no-op. See the citation.
     "currency": _FieldPolicy(
         provisioning=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
         settings_update=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
@@ -636,7 +636,7 @@ def resolve_account_currency_modes() -> list[AccountCurrencyMode]:
 
     3.2.1 ``get-adcp-capabilities-response.json``
     #/properties/account/properties/supported_account_currency_modes is "required for
-    sellers implementing AdCP 3.2 advertiser-account provisioning", and tells buyers to
+    sellers implementing advertiser-account provisioning", and tells buyers to
     "treat absence as an older seller whose currency mode is not discoverable, not as
     support for either mode". This seller DOES provision advertiser accounts, so silence
     makes it read as pre-3.2 — which is why :data:`_ADCP_32_UNIMPLEMENTED_CITATION` can
@@ -1065,7 +1065,7 @@ def _check_notification_configs(configs: Iterable[NotificationConfig] | None) ->
         # delegates its URL half to reject_unsafe_webhook_registration_url, which
         # runs over the same shared address predicate.
         #
-        # The refusal CAUSE is deliberately dropped rather than reported: AdCP 3.1.1 L1
+        # The refusal CAUSE is deliberately dropped rather than reported: L1
         # Security Considerations forbid echoing internal hostnames or addresses back to
         # the party that supplied the URL, and the buyer already gets the field pointer.
         # `exc.field` is the gate's own pointer -- it is built from this prefix, so
@@ -1074,7 +1074,7 @@ def _check_notification_configs(configs: Iterable[NotificationConfig] | None) ->
         #
         # ``declared_by`` names the pinned schema this document actually came from,
         # and it is load-bearing rather than documentation. The gate's
-        # correlation-id refusal (AdCP 3.2.1 L3/webhooks.mdx :141) derives its own
+        # correlation-id refusal (L3/webhooks.mdx :141) derives its own
         # applicability from ``declared_by.model_fields``, and
         # ``core/notification-config.json`` declares NO ``operation_id`` -- an
         # account-level subscription has no such field, so there is nothing for its
@@ -1176,7 +1176,7 @@ def _process_settings_update_entry(
     """
     if entry.account is None:
         raise AdCPConfigurationError()
-    ref = entry.account  # adcp 9: the union itself, no RootModel wrapper to unwrap
+    ref = entry.account  # the pinned SDK: the union itself, no RootModel wrapper to unwrap
     existing = _resolve_settings_update_target(ref, repo)
 
     if existing is None:
@@ -1357,7 +1357,7 @@ def _challenge_signing(tenant_id: str) -> ChallengeSigning | None:
 
     ``seller_agent_url`` is a PUBLISHED ``agents[]`` entry of ours, taken from
     :func:`agent_endpoint_urls` and never composed here: a receiver matches it
-    byte-for-byte against our brand.json (security.mdx @ v3.1.1 :1104 step 5) and then
+    byte-for-byte against our brand.json (security.mdx :1104 step 5) and then
     resolves that entry's ``jwks_uri``.
 
     It does NOT vary by the transport the registration arrived on, and deliberately so.
@@ -1646,7 +1646,7 @@ async def _sync_accounts_impl(
     # the identical resolve/validate/write code, and each entry's reads see the
     # earlier entries' writes as flushed rows -- the in-request memory a preview
     # previously had to fake with a parallel state machine
-    # (sync-accounts-request.json#/properties/dry_run @ v3.1.1).
+    # (sync-accounts-request.json#/properties/dry_run).
     with AccountUoW(tenant_id, dry_run=dry_run) as uow:
         assert uow.accounts is not None
         repo = uow.accounts

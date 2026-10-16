@@ -96,7 +96,7 @@ verbatim is still right — it is what lets ``sign=strategy.build_auth_headers``
 work with no adapter — but the trade is real, and widening the callback later
 means diverging from the SDK.
 
-Spec grounding: AdCP 3.1.1, ``building/by-layer/L1/security.mdx``, "Webhook URL
+Spec grounding: ``building/by-layer/L1/security.mdx``, "Webhook URL
 validation (SSRF)". Before any outbound fetch to a counterparty-controlled URL a
 fetcher MUST (1) reject non-HTTPS in production, (2) reject reserved ranges,
 (3) pin the connection to the validated IP, (4) refuse to follow redirects,
@@ -319,7 +319,7 @@ class OperatorEndpoint:
 
     ``name`` identifies the ROLE this deployment stands behind (e.g. "the
     creative agent", "Kevel"), never an address: a refusal naming an endpoint
-    the buyer did not choose would disclose network topology (AdCP 3.1.1,
+    the buyer did not choose would disclose network topology (AdCP,
     security.mdx point 6), so the constructor refuses anything that looks like
     one rather than relying on every call site to remember not to pass one.
     """

@@ -406,7 +406,7 @@ class Product(Base, JSONValidatorMixin):
     #
     # The two arms are NOT equally available to a new product, and nothing here should be
     # read as saying so. The pin's permission to carry either lives in the `format_ids`
-    # PROPERTY description, which time-boxes it: "Deprecated in AdCP 3.2; removed in AdCP
+    # PROPERTY description, which time-boxes it: "Deprecated in AdCP; removed in AdCP
     # 4.0. ... Products MUST carry format_ids, format_options, or both during the 3.x
     # migration window. New products MUST author canonical format_options[]; sellers MAY
     # additionally project those declarations to format_ids for legacy buyers. When both
@@ -485,7 +485,7 @@ class Product(Base, JSONValidatorMixin):
     # Type hint: reporting capabilities dict
     reporting_capabilities: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
-    # AdCP 3.6.0 product fields
+    # product fields
     property_targeting_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     signal_targeting_allowed: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     # Type hint: CatalogMatch object (matching criteria for product catalogs)
@@ -841,7 +841,7 @@ class Principal(Base, JSONValidatorMixin):
     #: The displayable head of the token, so an operator can tell tokens apart.
     token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
     # RFC 9421 (#1291 B1): the counterparty's own AdCP agent URL, from onboarding.
-    # This is the ONLY legitimate source for it — security.mdx @ v3.1.1 §"agent_url
+    # This is the ONLY legitimate source for it — security.mdx §"agent_url
     # derivation" forbids taking the signer's agent URL from a header, a body field or any
     # other self-assertion, because that would let the signer choose which brand.json (and
     # therefore which key set) it is verified against. NULL means we cannot resolve a key
@@ -1005,7 +1005,7 @@ class Creative(Base):
     tenant_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     principal_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    # THE FORMAT IDENTITY. AdCP 3.2 is canonical-first and the projection between the two
+    # THE FORMAT IDENTITY. The spec is canonical-first and the projection between the two
     # identities runs ONE WAY -- v1 -> v2 resolves through a normative order, and a seller
     # MUST NOT synthesize a v1 ``format_id`` by inverting a structural match -- so
     # ``format_kind`` is the identity every layer shares and the deprecated ``format_id`` is
@@ -1314,7 +1314,7 @@ class AgentAccountAccess(Base):
 
 
 # Statuses in which the seller has NOT yet committed to running the buy. The
-# AdCP 3.1.1 `confirmed_at` field ("when the seller committed to this media buy")
+# `confirmed_at` field ("when the seller committed to this media buy")
 # carries no commitment instant for these — on get_media_buys it is serialized as
 # PRESENT-AND-NULL, because the pinned item schema types it {"type": ["string",
 # "null"]} AND lists it in `required`. "Absent" is only true of the create
@@ -1544,13 +1544,13 @@ class MediaBuy(Base):
     start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
-    # Monotonic optimistic-concurrency counter (AdCP 3.1.1 `revision`). Starts at
+    # Monotonic optimistic-concurrency counter (`revision`). Starts at
     # 1 on create; bumped by MediaBuyRepository on every successful mutation.
     # Persisted rather than derived: buyers treat it as a concurrency token, so it
     # MUST strictly increase, and anything derived from timestamps collides when
     # two updates land inside the clock resolution.
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
-    # The instant the seller COMMITTED to running the buy (AdCP 3.1.1
+    # The instant the seller COMMITTED to running the buy (AdCP.1
     # `confirmed_at`), written once. Distinct from approved_at only in intent —
     # on the manual-approval path it IS the approval instant, while on the
     # synchronous auto-approve path a successful create_media_buy response is
@@ -1652,7 +1652,7 @@ class IdempotencyAttempt(Base):
     spec-defined scope tuples are implemented as written; extra dimensions may
     exist as columns but never in uniqueness/lookup semantics.)
 
-    AdCP 3.0.1 idempotency: retrying a mutating tool call with the same
+    idempotency: retrying a mutating tool call with the same
     idempotency_key must return the ORIGINAL success response byte-for-byte
     (marked `replayed: true`), and errors are NEVER cached — a retry after an
     error re-executes. This table is the verbatim success cache: it stores the
@@ -3028,7 +3028,7 @@ class ReplayNonce(Base):
     it. ``"C"`` is byte-for-byte comparison.
 
     **No ``tenant_id``, no FK — a decision, not an oversight.** The RFC 9421 signature base
-    covers ``@authority`` as a MANDATORY component (AdCP 3.1.1;
+    covers ``@authority`` as a MANDATORY component (AdCP;
     ``test-vectors/request-signing/negative/006-missing-covered-component.json`` is
     literally "Covered components missing @authority"), so a nonce captured against tenant
     A's virtual host cannot verify against tenant B's — cross-tenant replay dies at verifier

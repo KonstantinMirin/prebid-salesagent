@@ -44,7 +44,7 @@ AssignmentMap = dict[str, dict[str, AssignmentTerms]]
 
 
 def _normalise_assignments(entries: list[Any]) -> AssignmentMap:
-    """The AdCP 3.1 assignment ARRAY, as the internal ``{creative_id: {package_id: terms}}`` map.
+    """The assignment ARRAY, as the internal ``{creative_id: {package_id: terms}}`` map.
 
     Entries arrive TYPED (adcp ``Assignment``) from every transport whose shape is derived
     from the DTO, and as raw dicts from callers that build the list by hand. Both must work.

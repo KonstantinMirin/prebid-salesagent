@@ -74,7 +74,7 @@ if TYPE_CHECKING:
 # (see docs/decisions/adr-010-graded-wire-fields-are-functions-of-the-code.md), so a
 # raise site cannot make one of them disagree with the pin.
 #
-# That openness is the PIN's own words, not this module's preference. AdCP 3.1.1
+# That openness is the PIN's own words, not this module's preference. AdCP.1
 # ``core/error.json`` types ``error.code`` as a bare ``string`` (minLength 1,
 # maxLength 64) and states: "the standard codes published in
 # ``enums/error-code.json`` are documentary, and senders MAY emit codes outside
@@ -112,7 +112,7 @@ if TYPE_CHECKING:
 # reading of :class:`AdCPConfigurationError`.
 
 
-# The pinned spec bounds retry_after: AdCP 3.1.1 ``core/error.json`` →
+# The pinned spec bounds retry_after: ``core/error.json`` →
 # ``retry_after`` is ``{"type": "number", "minimum": 1, "maximum": 3600}`` and its
 # description reads "Sellers MUST return values between 1 and 3600. Clients MUST
 # clamp values outside this range." Never emit more even when the underlying wait
@@ -216,7 +216,7 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
             exception it caught, or nothing.
             See the class note below.
 
-    Message provenance (AdCP 3.1.1 ``transport-errors.mdx`` § Security
+    Message provenance (``transport-errors.mdx`` § Security
     Considerations / Seller Requirements, lines 659-670): "Error responses
     flow through LLM context. Every field is client-facing. Implementations
     MUST NOT include: internal service names, hostnames, or IP addresses;
@@ -574,7 +574,6 @@ class AdCPRequestSignatureAgentNotInBrandJsonError(AdCPRequestSignatureError):
 
     Discovery, step 7. The brand.json fetched at the signer's trust root carries no ``agents[]`` entry whose ``url`` matches the counterparty this request claims, so no ``jwks_uri`` can be read from it and no key can be resolved.
 
-    Wire code ``request_signature_agent_not_in_brand_json``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON
@@ -585,7 +584,6 @@ class AdCPRequestSignatureAlgNotAllowedError(AdCPRequestSignatureError):
 
     Checklist step 4. ``alg`` is not one of the profile's permitted values -- ``rsa-pss-sha512`` is the corpus's example -- so the signature is refused before any key is resolved for it.
 
-    Wire code ``request_signature_alg_not_allowed``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_ALG_NOT_ALLOWED
@@ -596,7 +594,6 @@ class AdCPRequestSignatureBrandJsonAmbiguousError(AdCPRequestSignatureError):
 
     Discovery, step 7. Two or more ``agents[]`` entries answer to the counterparty's URL, so which ``jwks_uri`` governs is undecidable and the walk refuses rather than choosing.
 
-    Wire code ``request_signature_brand_json_ambiguous``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_AMBIGUOUS
@@ -607,7 +604,6 @@ class AdCPRequestSignatureBrandJsonMalformedError(AdCPRequestSignatureError):
 
     Discovery, step 7. The trust root answered, but with something that is not a well-formed brand.json, so the ``agents[]`` entry the walk needs cannot be located.
 
-    Wire code ``request_signature_brand_json_malformed``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_MALFORMED
@@ -618,7 +614,6 @@ class AdCPRequestSignatureBrandJsonUnreachableError(AdCPRequestSignatureError):
 
     Discovery, step 7, and TRANSIENT: the document may be reachable later, so the same request may succeed on a retry once the signer's trust root is serving.
 
-    Wire code ``request_signature_brand_json_unreachable``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_UNREACHABLE
@@ -629,7 +624,6 @@ class AdCPRequestSignatureBrandJsonUrlMissingError(AdCPRequestSignatureError):
 
     Discovery, step 7. ``identity.brand_json_url`` is absent or is not an ``https://`` URL, so the chain from the counterparty's agent URL to its keys has no second hop.
 
-    Wire code ``request_signature_brand_json_url_missing``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_BRAND_JSON_URL_MISSING
@@ -640,7 +634,6 @@ class AdCPRequestSignatureBrandOriginMismatchError(AdCPRequestSignatureError):
 
     Discovery, step 7. brand.json and the agent it describes must share an origin -- the Brand Agent variant has no ``authorized_operators[]`` escape hatch -- so a cross-origin pair cannot anchor a key.
 
-    Wire code ``request_signature_brand_origin_mismatch``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_BRAND_ORIGIN_MISMATCH
@@ -651,7 +644,6 @@ class AdCPRequestSignatureCapabilitiesUnreachableError(AdCPRequestSignatureError
 
     Discovery, step 7, and TRANSIENT: the first hop of the walk failed, so nothing downstream of it was even attempted. The same request may succeed once the counterparty is serving.
 
-    Wire code ``request_signature_capabilities_unreachable``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE
@@ -662,7 +654,6 @@ class AdCPRequestSignatureComponentsIncompleteError(AdCPRequestSignatureError):
 
     Checklist step 6. A mandatory covered component is missing from ``Signature-Input`` -- ``@authority``, or ``content-digest`` where this agent's ``covers_content_digest`` is ``required``.
 
-    Wire code ``request_signature_components_incomplete``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_COMPONENTS_INCOMPLETE
@@ -673,7 +664,6 @@ class AdCPRequestSignatureComponentsUnexpectedError(AdCPRequestSignatureError):
 
     Checklist step 6, the mirror of ``components_incomplete``: the signature covers ``content-digest`` while this agent's ``covers_content_digest`` is ``forbidden``.
 
-    Wire code ``request_signature_components_unexpected``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_COMPONENTS_UNEXPECTED
@@ -684,7 +674,6 @@ class AdCPRequestSignatureDigestMismatchError(AdCPRequestSignatureError):
 
     Checklist step 11, which runs AFTER the signature verifies: the header was covered and its bytes are authentic, but the digest it asserts is not the hash of the received body.
 
-    Wire code ``request_signature_digest_mismatch``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_DIGEST_MISMATCH
@@ -695,7 +684,6 @@ class AdCPRequestSignatureHeaderMalformedError(AdCPRequestSignatureError):
 
     Checklist step 1, the earliest refusal there is. It fires for a ``Signature-Input`` that is not parseable RFC 8941, a ``Signature`` with no matching ``Signature-Input``, a duplicated label, an unquoted string parameter, and a multi-valued field where the profile permits one.
 
-    Wire code ``request_signature_header_malformed``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_HEADER_MALFORMED
@@ -706,7 +694,6 @@ class AdCPRequestSignatureInvalidError(AdCPRequestSignatureError):
 
     Checklist step 10, the cryptographic check itself. Everything before it passed: the headers parsed, the window held, the algorithm was permitted, and a key was resolved and found usable.
 
-    Wire code ``request_signature_invalid``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_INVALID
@@ -717,7 +704,6 @@ class AdCPRequestSignatureJwksUnavailableError(AdCPRequestSignatureError):
 
     Discovery, step 7, and TRANSIENT: the third hop failed. brand.json named a ``jwks_uri`` and that document did not answer.
 
-    Wire code ``request_signature_jwks_unavailable``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_JWKS_UNAVAILABLE
@@ -728,7 +714,6 @@ class AdCPRequestSignatureJwksUntrustedError(AdCPRequestSignatureError):
 
     Discovery, step 7. The ``jwks_uri`` resolves somewhere a key may not be read from -- keys come from ``<agent origin>/.well-known/jwks.json`` (docs/design/signature-architecture.md § "Resolve a counterparty's public key") -- so its contents are not admissible however well-formed the document is. It is also the code for a ``jwks_uri`` the trust boundary refuses outright: an authority that will not canonicalize, or an SSRF-banned host.
 
-    Wire code ``request_signature_jwks_untrusted``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_JWKS_UNTRUSTED
@@ -739,7 +724,6 @@ class AdCPRequestSignatureKeyOriginMismatchError(AdCPRequestSignatureError):
 
     Checklist step 7's consistency check: the origin a key was actually fetched from is byte-matched against the counterparty's declared ``identity.key_origins``, and they disagree.
 
-    Wire code ``request_signature_key_origin_mismatch``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_KEY_ORIGIN_MISMATCH
@@ -750,7 +734,6 @@ class AdCPRequestSignatureKeyOriginMissingError(AdCPRequestSignatureError):
 
     Checklist step 7. Without ``identity.key_origins`` there is nothing for the consistency check to anchor to, and an unanchored key is refused rather than admitted.
 
-    Wire code ``request_signature_key_origin_missing``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_KEY_ORIGIN_MISSING
@@ -761,7 +744,6 @@ class AdCPRequestSignatureKeyPurposeInvalidError(AdCPRequestSignatureError):
 
     Checklist step 8. The JWK resolved but is scoped elsewhere -- ``adcp_use`` naming a different purpose, ``key_ops`` without ``verify``, or an ``alg``/``kty``/``crv`` combination that is not internally consistent.
 
-    Wire code ``request_signature_key_purpose_invalid``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_KEY_PURPOSE_INVALID
@@ -772,7 +754,6 @@ class AdCPRequestSignatureKeyRevokedError(AdCPRequestSignatureError):
 
     Checklist step 9, which runs BEFORE the cryptographic verify on purpose: a revoked key must be refused as revoked, not as invalid, however well its signature would have verified.
 
-    Wire code ``request_signature_key_revoked``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_KEY_REVOKED
@@ -783,7 +764,6 @@ class AdCPRequestSignatureKeyUnknownError(AdCPRequestSignatureError):
 
     Checklist step 7. The counterparty resolved, but its JWKS holds no entry for the ``keyid`` the signature names.
 
-    Wire code ``request_signature_key_unknown``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_KEY_UNKNOWN
@@ -794,7 +774,6 @@ class AdCPRequestSignatureParamsIncompleteError(AdCPRequestSignatureError):
 
     Checklist step 2. ``Signature-Input`` parsed, but ``created``, ``expires``, ``nonce`` or ``keyid`` is missing, so the window and replay checks have nothing to read.
 
-    Wire code ``request_signature_params_incomplete``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_PARAMS_INCOMPLETE
@@ -805,7 +784,6 @@ class AdCPRequestSignatureRateAbuseError(AdCPRequestSignatureError):
 
     Checklist step 9a. One keyid holds its configured number of unexpired nonces, which is either abuse or a misconfigured signer; either way the next request is refused before it is verified.
 
-    Wire code ``request_signature_rate_abuse``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_RATE_ABUSE
@@ -816,7 +794,6 @@ class AdCPRequestSignatureReplayedError(AdCPRequestSignatureError):
 
     Checklist step 12, the last one. The signature was valid and the digest matched -- and the nonce was already claimed inside its window, so accepting it again would accept a replay.
 
-    Wire code ``request_signature_replayed``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_REPLAYED
@@ -827,7 +804,6 @@ class AdCPRequestSignatureRequiredError(AdCPRequestSignatureError):
 
     Checklist step 0, the pre-check, and the one code in the family a buyer earns by doing nothing wrong except not signing. It is also what a request registering webhook credentials earns regardless of ``required_for``, per security.mdx's escalation rule.
 
-    Wire code ``request_signature_required``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_REQUIRED
@@ -838,7 +814,6 @@ class AdCPRequestSignatureRevocationStaleError(AdCPRequestSignatureError):
 
     Checklist step 9, and TRANSIENT: the list could not be refreshed inside its grace window, so whether this key is revoked is unknown and the fail-closed answer is to refuse.
 
-    Wire code ``request_signature_revocation_stale``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_REVOCATION_STALE
@@ -849,7 +824,6 @@ class AdCPRequestSignatureTagInvalidError(AdCPRequestSignatureError):
 
     Checklist step 3. ``tag`` must be ``adcp/request-signing/v1``; a signature scoped to another profile is not one this verifier may accept, however valid it is under that profile.
 
-    Wire code ``request_signature_tag_invalid``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_TAG_INVALID
@@ -860,7 +834,6 @@ class AdCPRequestSignatureWindowInvalidError(AdCPRequestSignatureError):
 
     Checklist step 5. It covers all three window faults: ``expires`` already past, ``expires`` at or before ``created``, and a window wider than the profile's 300-second maximum.
 
-    Wire code ``request_signature_window_invalid``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_WINDOW_INVALID
@@ -871,9 +844,8 @@ class AdCPRequestBodyMalformedError(AdCPRequestSignatureError):
 
     Checklist step 14, and the one code in the family whose name carries no ``signature`` infix because the spec names it that way: the signature IS valid and what is wrong is the document it covers -- duplicate object keys, invalid UTF-8, or not JSON at all. ``recovery: correctable`` in the pin's own ``enums/request-signing-error-code.json``, whose suggestion is "emit strict unambiguous JSON without duplicate keys and re-sign the body".
 
-    New with adcp 9 / AdCP 3.2.1: it is the 29th member of ``REQUEST_TO_WEBHOOK_CODE``, so it earns a class like every other member rather than being named on the base (CLAUDE.md pattern #10 -- a code with no subclass is a gap).
+    New with the pinned SDK / AdCP: it is the 29th member of ``REQUEST_TO_WEBHOOK_CODE``, so it earns a class like every other member rather than being named on the base (CLAUDE.md pattern #10 -- a code with no subclass is a gap).
 
-    Wire code ``request_body_malformed``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_BODY_MALFORMED
@@ -884,7 +856,6 @@ class AdCPRequestTargetUriMalformedError(AdCPRequestSignatureError):
 
     Parse-time, before the checklist: the authority or path cannot be reduced to the canonical ``@target-uri`` the signature base is built over, so there is no well-defined string to verify against.
 
-    Wire code ``request_target_uri_malformed``.
     """
 
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_TARGET_URI_MALFORMED
@@ -1112,7 +1083,7 @@ class AdCPTenantUndefinedError(AdCPSalesAgentError[ErrorDetails]):
 
     A PLATFORM code, because AdCP defines none for this and the spec's vocabulary is open
     (``core/error.json``; ``error-handling.mdx:845`` "sellers MAY return platform-specific
-    codes"). AdCP 3.1.1 is silent on tenant addressing -- a request is addressed to an
+    codes"). The spec is silent on tenant addressing -- a request is addressed to an
     agent's URL and the mapping from that to a seller is this seller's own concern -- so
     there is no published code to collapse this onto, and collapsing it would throw away the
     one distinction a buyer can act on.
@@ -1227,7 +1198,7 @@ class AdCPInternalError(AdCPSalesAgentError[EntityRefDetails]):
     on did not hold. The buyer cannot fix it by changing anything, and recovery is transient
     because the inconsistency may be a race that a retry resolves.
 
-    INTERNAL_ERROR is a platform code (AppErrorCode), legal on the wire because AdCP 3.1.1's
+    INTERNAL_ERROR is a platform code (AppErrorCode), legal on the wire because AdCP.1's
     code vocabulary is open, and classified in CODE_TABLE like every other code this seller
     emits.
     """
@@ -1246,7 +1217,7 @@ class AdCPUrlNotAllowedError(AdCPValidationError):
     constraints"; VALIDATION_ERROR is "invalid field values or violates business rules
     beyond schema validation"), and a schema-valid https URI refused by a deny-list is the
     second. The pinned spec then applies it to this exact vector:
-    ``dist/docs/3.1.0/learning/specialist/security.mdx:84`` has the practitioner register
+    ``dist/docs/<pin>/learning/specialist/security.mdx:84`` has the practitioner register
     ``https://169.254.169.254/latest/meta-data/`` and "observe that the agent refuses it
     synchronously with a ``VALIDATION_ERROR`` on ``notification_configs[].url``".
 
@@ -1463,7 +1434,7 @@ class AdCPIdempotencyConflictError(AdCPConflictError):
 
     Recovery=correctable: the buyer can fix this and resend — either replay the
     ORIGINAL bytes under the same key, or mint a fresh idempotency_key for the
-    new payload. This matches the AdCP 3.0.1 prose example envelope and the
+    new payload. This matches the prose example envelope and the
     conformance storyboard's stated expectation. The SDK's
     ``STANDARD_ERROR_CODES`` table classifies the code ``terminal`` and is
     simply wrong about it: nothing here reads that table, and ``recovery`` is
@@ -1701,7 +1672,7 @@ class AdcpFailure(Exception):
         self.response = response
 
 
-# Canonical buyer-facing suggestions from error-code.json enumMetadata (AdCP 3.1.1):
+# Canonical buyer-facing suggestions from error-code.json enumMetadata (AdCP):
 # each code carries its own default hint, so a VALIDATION_ERROR must not borrow
 # INVALID_REQUEST's text.
 
@@ -1739,7 +1710,7 @@ def adcp_error_for(exc: Exception, field: str | None = None, *, document: Any = 
 
     Every branch keeps its type mapping and carries NO text: an untyped exception's
     string has no provenance guarantee (it may be a DB DSN, a stack fragment, or an
-    upstream response body -- AdCP 3.1.1 transport-errors.mdx Security Considerations
+    upstream response body -- transport-errors.mdx Security Considerations
     MUST-NOT list), and the code's own table sentence is what the buyer sees. The
     original exception is still logged in full server-side by the transport
     boundary's record_boundary_error() / audit logger. This function logs nothing:
@@ -1756,7 +1727,7 @@ def adcp_error_for(exc: Exception, field: str | None = None, *, document: Any = 
     # three frames later.
     #
     # ``internal_detail`` carries the SDK exception itself, never its text: it holds the
-    # checklist step and a diagnostic sentence, which AdCP 3.1.1 transport-errors.mdx
+    # checklist step and a diagnostic sentence, which transport-errors.mdx
     # § Security Considerations keeps out of a buyer-facing field. Same rule as every other
     # branch here -- a type mapping and no text.
     if isinstance(exc, SignatureVerificationError):

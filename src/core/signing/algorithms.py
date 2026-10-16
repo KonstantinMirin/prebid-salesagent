@@ -21,7 +21,7 @@ purpose:
   hand-copied literal: migration ``e381618812f1`` exists because a hand-written
   CHECK froze while a spec enum grew and a spec-valid value then IntegrityError'd
   on INSERT (#1521). ``tests/unit/test_signing_alg_parity.py`` pins the constant
-  against the AdCP 3.1.1 algorithms enum, so an SDK bump that gains or loses a
+  against the algorithms enum, so an SDK bump that gains or loses a
   value fails loudly instead of drifting.
 
 * ``MINTABLE_PURPOSES`` — a deliberate NARROWING below the SDK's accepted set,
@@ -111,7 +111,7 @@ def request_signing_profile() -> SigningProfileVersion:
     requires exactly that: callers "must derive this from trusted endpoint configuration,
     never an unbound request-body field." At the 3.2.1 pin this answers ``"3.2"``.
 
-    Spec grounding — AdCP 3.2.1, ``docs/building/by-layer/L1/security.mdx``
+    Spec grounding — ``docs/building/by-layer/L1/security.mdx``
     §"Request-profile binary value encoding": "Base64URL characters (``-`` and ``_``) are
     not valid inside 3.2 request ``sf-binary`` and MUST be rejected as
     ``request_signature_header_malformed``", and "A 3.2 request verifier MUST NOT
@@ -153,7 +153,7 @@ def _refuse_alg(alg: str) -> NoReturn:
             capability="signing_alg",
             rejected_value=alg,
             accepted_values=list(SIGNING_ALG_VALUES),
-            tracked_by="the AdCP 3.1.1 signing algorithm profile (adcp.signing.crypto.ALLOWED_ALGS)",
+            tracked_by="the signing algorithm profile (adcp.signing.crypto.ALLOWED_ALGS)",
         ),
     ) from None
 
@@ -222,7 +222,7 @@ def mint_kid(tenant_id: str, now: datetime) -> str:
     ONE generator, here with the other signing value-sets, so the admin route and
     the ops script cannot grow two kid shapes.
 
-    security.mdx @ v3.1.1 (Agent key publication) requires a ``kid`` "Unique
+    security.mdx (Agent key publication) requires a ``kid`` "Unique
     within the JWKS. MUST NOT collide with any other entry's kid regardless of
     ``adcp_use``". ``UNIQUE(tenant_id, kid)`` is the backstop for that, not the
     generator — and the SDK's own default kid documents itself as

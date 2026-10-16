@@ -376,7 +376,7 @@ class CreativeAgentRegistry:
 
         Routes through ``call_operator_mcp_tool`` — a real MCP handshake, IP-pinned,
         redirect-refusing — rather than ``adcp.ADCPMultiAgentClient``, whose own
-        httpx stack no egress policy of ours could reach (adcp 6.6.0 exposes no
+        httpx stack no egress policy of ours could reach (the pinned SDK exposes no
         transport injection point; upstream adcp-client-python#1004).
         ``_connection_agent_url`` applies HERE
         (the pinned-container alias for the public default agent); a
@@ -394,7 +394,7 @@ class CreativeAgentRegistry:
         raises rather than downgrade, so this call site states what it wants signed
         and never how.
 
-        Spec grounding for signing THIS dial: pinned AdCP 3.1.1,
+        Spec grounding for signing THIS dial: pinned AdCP,
         ``docs/building/by-layer/L1/security.mdx`` §Request signing (the
         ``adcp/request-signing/v1`` profile). :1043 restricts the operation a
         signature may be attributed to to names "defined by the AdCP protocol
@@ -542,7 +542,7 @@ class CreativeAgentRegistry:
         Its one caller today is every fetch of a COUNTERPARTY-SUPPLIED
         ``agent_url`` (always a :class:`CounterpartyUrl`), because the SDK client
         dials through its own httpx stack that no policy of ours can reach —
-        adcp 6.6.0 exposes no transport knob (upstream adcp-client-python#1004).
+        the pinned SDK exposes no transport knob (upstream adcp-client-python#1004).
         Measured: a buyer URL sent down the SDK path put 3 real requests on the
         wire against a destination egress policy forbids. Here the seam owns
         address, TLS, redirect and retry, so the request either goes to an

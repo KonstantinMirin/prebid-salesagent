@@ -162,7 +162,7 @@ def _refuse_a_product_with_no_format_arm(format_ids: list | None, format_options
         raise ValueError(
             "A product must declare at least one creative format: select format templates, "
             "author canonical format_options, or both. New products should author "
-            "format_options -- format_ids is deprecated in AdCP 3.2 and removed in 4.0."
+            "format_options -- format_ids is deprecated in and removed in 4.0."
         )
 
 
@@ -267,7 +267,7 @@ def get_creative_formats(
 
         formats_list.append(format_dict)
 
-    # Sort by name (type field was removed from Format in adcp 3.12)
+    # Sort by name (type field was removed from Format in the pinned SDK)
     formats_list.sort(key=lambda x: x["name"])
 
     logger.info(f"get_creative_formats: Returning {len(formats_list)} formatted formats")

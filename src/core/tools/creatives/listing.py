@@ -226,7 +226,7 @@ def _items_from_assets(assets: Any) -> list[CreativeItem] | None:
             url_value = getattr(candidate, "url", None)
             content = getattr(candidate, "content", None)
             if url_value is not None:
-                # The ARM, not a wrapper: adcp 9 ships ``CreativeItem`` as the union of
+                # The ARM, not a wrapper: the pinned SDK ships ``CreativeItem`` as the union of
                 # its two arms rather than a RootModel over them.
                 items.append(
                     MediaItem(
@@ -546,7 +546,7 @@ def _list_creatives_impl(
             try:
                 status_enum = CreativeStatus(db_creative.status)
             except ValueError:
-                # A stored status that is not a CreativeStatus member. AdCP 3.1.1
+                # A stored status that is not a CreativeStatus member. AdCP.1
                 # list-creatives-response.json makes `status` REQUIRED on every item and
                 # $refs a CLOSED 6-member enum with no `unknown`, so some value must be
                 # emitted — every choice makes some claim, which is why the errors[]

@@ -1,6 +1,6 @@
 """The RFC 9421 transport error taxonomy, as codes this seller can put on the wire.
 
-AdCP 3.1.1 ``security.mdx`` § Transport error taxonomy:
+``security.mdx`` § Transport error taxonomy:
 
     Stable codes returned in ``WWW-Authenticate: Signature error="<code>"`` on 401, and
     surfaced by SDK verifiers as typed errors.
@@ -19,7 +19,7 @@ it, ``failure_response`` renders it, and ``AuthChallengeResponder`` — the ONE 
 lifts it to 401 and writes the challenge from the code it reads off the FINISHED body. So
 the specific code has to survive into the envelope, because the renderer has nothing else
 to read. A generic ``AUTH_INVALID`` would pass our tests and fail conformance:
-``dist/compliance/3.1.1/universal/signed-requests.yaml`` grades the challenge string
+``dist/compliance/<pin>/universal/signed-requests.yaml`` grades the challenge string
 byte-for-byte.
 
 That is legal, and the spec says so directly: ``core/error.json`` types ``error.code`` as a
@@ -53,7 +53,7 @@ from src.core.errors._entry import CodeEntry, CodeGroup, Recovery
 #: At ``adcp==6.6.0`` it omitted ``request_target_uri_malformed`` ->
 #: ``webhook_target_uri_malformed``, so this merged that one row in locally (upstream fix:
 #: adcp-client-python PR #987 / fbab8f44) and said the addition would disappear by itself
-#: when the pin advanced past the fix. adcp 9 carries it, so it has: the table is 29 rows
+#: when the pin advanced past the fix. the pinned SDK carries it, so it has: the table is 29 rows
 #: from the SDK and nothing local.
 _TAXONOMY: Final = dict(REQUEST_TO_WEBHOOK_CODE)
 
@@ -119,7 +119,7 @@ else:
 #: the SDK published the VOCABULARY (``_TAXONOMY``, above) and not the classification:
 #: ``enums/error-code.json``'s ``enumMetadata`` carried ``{recovery, suggestion}`` for the
 #: 92 codes ``_load_published_codes`` reads and for none of these — measured, not assumed.
-#: adcp 9 pins AdCP 3.2.1, which ships a SECOND file,
+#: the pinned SDK pins which ships a SECOND file,
 #: ``_schemas/3.2/enums/request-signing-error-code.json``, whose ``enumMetadata``
 #: classifies all 29 (``3.1`` has no such file; measured on both bundles). That is
 #: adcontextprotocol/adcp#7647 landing, which ``_build_code_table``'s docstring already
@@ -153,7 +153,7 @@ _RECOVERY: Final[Mapping[str, Recovery]] = MappingProxyType(
         # The buyer signs, or re-signs, and sends it again. Every one of these is a fault
         # in what the CALLER put on the wire.
         "request_signature_required": Recovery.CORRECTABLE,
-        # adcp 9 / AdCP 3.2.1, checklist step 14: the signature IS valid and the signed
+        # the pinned SDK / checklist step 14: the signature IS valid and the signed
         # body is not strict, unambiguous JSON. Classified from the pin, not from prose --
         # ``_schemas/3.2/enums/request-signing-error-code.json``'s enumMetadata gives this
         # code ``recovery: "correctable"`` with the suggestion "emit strict unambiguous JSON
@@ -217,7 +217,7 @@ def _recovery_for(code: str) -> Recovery:
 #: What a buyer is TOLD, per recovery class. One sentence each rather than 28, because the
 #: distinguishing information is the CODE — which is on the wire, twice (``error.code`` and
 #: the challenge) — and because a buyer-facing message must not narrate which checklist step
-#: refused: AdCP 3.1.1 ``transport-errors.mdx`` § Security Considerations forbids putting
+#: refused: ``transport-errors.mdx`` § Security Considerations forbids putting
 #: internal detail in a client-facing field, and "your nonce was already claimed" is a
 #: verifier-internal fact an unauthenticated caller should not be able to probe for.
 _TEXT: Final[dict[Recovery, tuple[str, str]]] = {

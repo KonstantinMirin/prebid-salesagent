@@ -204,7 +204,7 @@ def _signature_credential(
     Raises ``AdCPRequestSignatureError`` when the verifier refuses.
 
     A verified signature establishes exactly one fact — "the request was issued by the agent
-    whose ``jwks_uri`` contains the ``keyid``" (security.mdx @ v3.1.1 § Agent identity) — and
+    whose ``jwks_uri`` contains the ``keyid``" (security.mdx § Agent identity) — and
     names that agent by the ``agents[]`` entry the verifier already used to fetch the JWKS. It
     is a publication coordinate the verifier controlled end to end, never a buyer-asserted
     field, so looking a principal up by it is exactly as sound as looking one up by a token
@@ -435,7 +435,7 @@ def _resolve_identity(
     # verified inside the tenant the request reached, never looked up across tenants.
     #
     # IT ALSO COMES BEFORE EVERY REFUSAL, which is the ordering the composition rule forces.
-    # security.mdx @ v3.1.1 :1268 makes ``request_signature_required`` the answer an
+    # security.mdx :1268 makes ``request_signature_required`` the answer an
     # UNAUTHENTICATED caller earns on a ``required_for`` operation, and "unauthenticated" is
     # defined at :1224 to include a caller presenting a bearer this seller does not accept.
     # Whether the operation is in that bucket is SELLER data, so it cannot be known before the
@@ -592,7 +592,7 @@ def identity_of(tenant_id: str, principal_id: str, account_id: str | None = None
         raise AdCPConfigurationError()
     if account_id is None:
         return ResolvedIdentity(principal=principal, tenant=tenant)
-    # The ARM, not a wrapper: adcp 9's AccountReference IS the two-arm union.
+    # The ARM, not a wrapper: the pinned SDK's AccountReference IS the two-arm union.
     account_ref = AccountReferenceById(account_id=account_id)
     return AccountIdentity(principal=principal, tenant=tenant, account=_load_account(account_ref, tenant_id, principal))
 

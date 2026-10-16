@@ -19,7 +19,7 @@ carry.
 
 Why the parameter is OPT-IN and defaults to ``None`` — this is the surviving half of
 the argument this paragraph used to make for signing nothing at all. An RFC 9421
-signature attributes to a NAMED operation, and AdCP 3.1.1
+signature attributes to a NAMED operation, and AdCP.1
 (building/by-layer/L1/security.mdx:1043) is explicit about which names are legal:
 
     "Operation names in `required_for` / `supported_for` are AdCP protocol

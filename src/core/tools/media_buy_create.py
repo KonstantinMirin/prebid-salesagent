@@ -149,9 +149,9 @@ from src.services.targeting_capabilities import (
 # --- Helper Functions ---
 
 
-# NOTE: _sanitize_package_status() removed in adcp 2.12.0 migration
+# NOTE: _sanitize_package_status() removed in the pinned SDK migration
 # Package.status enum was replaced with Package.paused boolean field
-# See: adcp 2.12.0 changelog
+# See: the pinned SDK changelog
 
 
 def _advertised_reporting_frequencies(products: Sequence[Any]) -> set[str]:
@@ -1984,7 +1984,7 @@ def _validate_pricing_model_selection(
         raise AdCPConfigurationError(details=ConfigurationDetails(product_id=product.product_id))
 
     # Which pricing option to use. pricing_option_id is the pin's only selector
-    # (media-buy/package-request.json /required, AdCP 3.1.1); the legacy pricing_model
+    # (media-buy/package-request.json /required, AdCP); the legacy pricing_model
     # alias that used to be consulted as a fallback is gone with the field.
     pricing_option_id = package.pricing_option_id
 
@@ -2568,14 +2568,14 @@ async def _create_media_buy_impl(
             raise AdCPValidationError(field="start_time")
 
         # Handle 'asap' start_time (AdCP v1.7.0).
-        # No ``.root``: the DTO declares ``start_time`` as the plain union, and adcp 9 ships
+        # No ``.root``: the DTO declares ``start_time`` as the plain union, and the pinned SDK ships
         # no ``StartTiming`` RootModel to unwrap.
         raw_start_time = req.start_time
         if raw_start_time == "asap":
             computed_start_time: datetime = now
         else:
             # Ensure start_time is timezone-aware for comparison
-            # Handle case where StartTiming.root is an ISO string (adcp 2.16.0+)
+            # Handle case where StartTiming.root is an ISO string (the pinned SDK+)
             if isinstance(raw_start_time, str):
                 computed_start_time = datetime.fromisoformat(raw_start_time)
             elif isinstance(raw_start_time, datetime):
@@ -4061,7 +4061,7 @@ async def _create_media_buy_impl(
                         raise AdCPAdapterError()
 
                     # Store full package config as JSON
-                    # Get paused state from adapter response (adcp 2.12.0: replaced status enum with paused bool)
+                    # Get paused state from adapter response (the pinned SDK: replaced status enum with paused bool)
                     paused = getattr(resp_package, "paused", False)  # Default to False (not paused) if not present
 
                     # Get pricing info for this package if available
@@ -4094,7 +4094,7 @@ async def _create_media_buy_impl(
                         "creative_assignments": getattr(resp_package, "creative_assignments", None),
                         "formats_to_provide": list(pkg_snapshots) or None,
                         "format_ids_to_provide": _legacy_formats_to_provide(pkg_snapshots, request_pkg),
-                        "paused": paused,  # Store paused state (adcp 2.12.0)
+                        "paused": paused,  # Store paused state (the pinned SDK)
                         "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
                         "impressions": impressions,  # Store impressions for display
                     }
@@ -4247,7 +4247,7 @@ async def _create_media_buy_impl(
                                                     product_id=package.product_id,
                                                 )
                                             # A format outside the product's declared LEGACY set is a
-                                            # BUSINESS-RULE violation: adcp 3.1.1's error-code enum
+                                            # BUSINESS-RULE violation: the pinned SDK's error-code enum
                                             # codes that VALIDATION_ERROR, and reserves
                                             # CREATIVE_REJECTED for "Creative failed content policy
                                             # review". The creative is fine; the ASSIGNMENT is what
@@ -4415,7 +4415,7 @@ async def _create_media_buy_impl(
                                 f"Creatives will need to be associated via sync_creatives."
                             )
 
-        # Per AdCP 3.1.1 (media-buy/package-request.json) creatives live on each PackageRequest, not at
+        # Per (media-buy/package-request.json) creatives live on each PackageRequest, not at
         # request level. Inline creative submission to the adapter happens via the
         # package-level inline creative flow (process_and_upload_package_creatives
         # earlier in this function and req.packages[].creatives).
@@ -4488,7 +4488,7 @@ async def _create_media_buy_impl(
             # whole point: the previous default reported "now" for it.
             confirmed_at=persisted_confirmed_at,
             revision=persisted_revision,
-            # AdCP 3.1 preferred status; mirrors deprecated `status`. Lifecycle on
+            # preferred status; mirrors deprecated `status`. Lifecycle on
             # the wire, from the same single source that drives valid_actions
             # (spec 3.1.1 create-media-buy-response.json;
             # pending_creatives_to_start.yaml step create_buy_no_creatives
@@ -4552,7 +4552,7 @@ async def _create_media_buy_impl(
             }
             slack_notifier = get_slack_notifier(notifier_config)
 
-            # Per AdCP 3.1.1, creatives live on each PackageRequest. Count creatives across
+            # Per creatives live on each PackageRequest. Count creatives across
             # all request packages for the notification.
             notification_creatives_count = sum(len(pkg.creatives) for pkg in (req.packages or []) if pkg.creatives)
             success_details = {

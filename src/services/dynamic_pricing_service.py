@@ -274,7 +274,7 @@ class DynamicPricingService:
                 price_guidance=price_guidance_obj,
                 min_spend_per_package=None,
             )
-            # The MEMBER, unwrapped: Product.pricing_options holds the arms from adcp 9 on
+            # The MEMBER, unwrapped: Product.pricing_options holds the arms from the pinned SDK on
             # (the SDK deleted the RootModel wrapper), so appending one keeps the list
             # homogeneous with what conversion builds.
             product.pricing_options.append(new_option)

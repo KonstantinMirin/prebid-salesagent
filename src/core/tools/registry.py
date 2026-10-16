@@ -187,7 +187,7 @@ class ToolSpec[Req: BuyerRequest, Id: PublicIdentity]:
         refuses a rejected credential on every row. What this policy decides is the ABSENT
         credential only -- a protected tool refuses it (AUTH_MISSING), a public tool serves
         the caller anonymously, which is the case
-        ``dist/compliance/3.1.1/universal/security.yaml`` sets aside ("public tasks like
+        ``dist/compliance/<pin>/universal/security.yaml`` sets aside ("public tasks like
         get_adcp_capabilities return 200 without credentials by design").
         """
         if issubclass(_declared_identity_type(self.impl), ResolvedIdentity):
@@ -213,7 +213,7 @@ _TOOLS: dict[str, ToolSpec] = {
         impl=_get_products_impl,
         rest=RestBinding("POST", "/products"),
     ),
-    # DEPRECATED FOR A SALES AGENT AT AdCP 3.2, and this row is a COMPATIBILITY SURFACE
+    # DEPRECATED FOR A SALES AGENT AT and this row is a COMPATIBILITY SURFACE
     # rather than the model to extend. ``docs/creative/sales-agent-creative-capabilities.mdx``
     # states why: "An agent-global format list cannot express product-, placement-,
     # account-, or inventory-specific deliverability. For that reason, sales-agent

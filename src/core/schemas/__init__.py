@@ -27,7 +27,7 @@ from src.core.schemas.creative import CreativeAssetRequest as _CreativeAssetRequ
 _PackageRequest.model_rebuild(_types_namespace={"CreativeAssetRequest": _CreativeAssetRequest})
 _GetMediaBuysPackage.model_rebuild(_types_namespace={"CreativeApproval": _CreativeApproval})
 
-# adcp 6.6 ships its model tree with deferred pydantic-core builds (forward refs unresolved
+# the pinned SDK ships its model tree with deferred pydantic-core builds (forward refs unresolved
 # at class creation), so shared leaf types (ReportingPeriod, PushNotificationConfig,
 # ExtensionObject, ...) stay ``__pydantic_complete__ is False`` with a ``MockValSer`` serializer
 # until something validates them as a *top-level* target. Pydantic only auto-heals a model

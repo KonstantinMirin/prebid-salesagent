@@ -77,7 +77,7 @@ from src.core.schemas import Error
 # platform default (industry-standard single-touch attribution).
 PLATFORM_DEFAULT_ATTRIBUTION_MODEL = AttributionModel.last_touch
 
-# adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
+# the pinned SDK: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
 # Adapters are typed to accept schemas.ReportingPeriod, so we use that here.
 
@@ -211,7 +211,7 @@ def get_media_buy_delivery(
         # Per-buy adapter failures degrade (UC-004): record an advisory error and continue
         # with the other buys instead of aborting the whole multi-buy request.
         adapter_errors: list[Error] = []
-        # THE BUYER'S HALF OF THE SUPPRESSED REPORTING STREAM. AdCP 3.2.1
+        # THE BUYER'S HALF OF THE SUPPRESSED REPORTING STREAM. AdCP.1
         # ``L3/webhooks.mdx`` :666 asks for two things of a ``reporting_webhook``
         # registered without a correlation id — "Flag the missing value for the buyer
         # and suppress scheduled sends" — and :667 names THIS read as where the buyer
@@ -550,7 +550,7 @@ def get_media_buy_delivery(
         # rejected/canceled/failed buy from being promised a next report that
         # will never come (next_expected_at is "only present ... when
         # notification_type is not 'final'" per
-        # get-media-buy-delivery-response.json @ v3.1-04f59d2d5).
+        # get-media-buy-delivery-response.json-04f59d2d5).
         #
         # UNGRADED: the schema/storyboard describe "final" narrowly as "the
         # campaign completes" (optimization-reporting.mdx §Publisher Commitment).
@@ -605,7 +605,7 @@ def get_media_buy_delivery(
 
         attribution_window = _resolve_attribution_window(req, campaign_length_days)
 
-        # Derived quotients — top-level aggregated_totals scalars per the AdCP 3.1
+        # Derived quotients — top-level aggregated_totals scalars per the
         # response schema (media-buy/get-media-buy-delivery-response.json defines
         # roas as "total conversion_value / total spend" and cost_per_acquisition
         # as "total spend / total conversions"). Conformance-ungraded on this

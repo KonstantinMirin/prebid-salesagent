@@ -3,7 +3,7 @@
 Owns the ``pricing_info`` projection a package row stores.
 
 NO ROOTMODEL UNWRAP. Both functions below opened with
-``getattr(pricing_option, "root", pricing_option)`` for the wrapper adcp 2.14.0 shipped,
+``getattr(pricing_option, "root", pricing_option)`` for the wrapper the pinned SDK shipped,
 and neither kind of argument they receive has a ``root`` attribute, so both hops returned
 their own argument.
 

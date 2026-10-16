@@ -495,7 +495,7 @@ class TritonDigital(AdServerAdapter):
             from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 
             # The vendor's URL/response body is an upstream API response from a
-            # seller-internal integration; AdCP 3.1.1 transport-errors.mdx
+            # seller-internal integration; transport-errors.mdx
             # § Security Considerations forbids it on the buyer wire. The mapper
             # keeps it off: it names only the OperatorEndpoint role and chains the
             # OutboundError as ``__cause__`` for the log, never the buyer envelope.

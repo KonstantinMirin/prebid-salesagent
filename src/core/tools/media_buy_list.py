@@ -99,7 +99,7 @@ class _MediaBuyData:
     # the build loop a projector: it cannot recompute what it was handed, because it no
     # longer holds anything to recompute it from.
     wire_status: MediaBuyStatus
-    # Spec-required on media_buys[] at AdCP 3.1.1; carried through this row object so
+    # Spec-required on media_buys[] at AdCP; carried through this row object so
     # the response is built from persisted values rather than defaults.
     confirmed_at: datetime | None
     revision: int
@@ -373,7 +373,7 @@ def _get_media_buys_impl(
                 packages=response_packages,
                 created_at=buy.created_at,
                 updated_at=buy.updated_at,
-                # Both spec-required on media_buys[] at AdCP 3.1.1, and both read
+                # Both spec-required on media_buys[] at and both read
                 # straight off the persisted columns rather than defaulted here.
                 # Neither is produced at this site: MediaBuyRepository owns both
                 # writes — `_stamp_confirmation_if_needed` writes confirmed_at once,

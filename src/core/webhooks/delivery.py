@@ -180,7 +180,7 @@ def build_webhook_envelope(
 ) -> McpWebhookPayload:
     """THE shape of every AdCP webhook this seller POSTs.
 
-    One builder for both senders. AdCP 3.1.1 ``L3/webhooks.mdx`` :217 separates the wire
+    One builder for both senders. ``L3/webhooks.mdx`` :217 separates the wire
     ENVELOPE from the task-specific ``result`` and says the result "is not valid as the
     top-level POST body by itself"; :308 makes the envelope a function of the registration
     CHANNEL, and every registration this seller accepts arrives through the AdCP one. So
@@ -212,8 +212,8 @@ def build_webhook_envelope(
         # ``None``. core/push-notification-config.json leaves ``operation_id`` optional on
         # the REGISTRATION while core/mcp-webhook-payload.json makes it required on the
         # ENVELOPE, and the spec forbids recovering it by parsing the receiver URL -- so a
-        # registration without one names no deliverable webhook. adcp 6.6.0 typed the
-        # parameter ``str | None`` and built a schema-invalid body; adcp 9 types it ``str``
+        # registration without one names no deliverable webhook. the pinned SDK typed the
+        # parameter ``str | None`` and built a schema-invalid body; the pinned SDK types it ``str``
         # and refuses. This is the same refusal, raised by the seller with the reason.
         #
         # TYPED, not ``ValueError``. It used to be a bare ``ValueError`` carrying the
@@ -221,7 +221,7 @@ def build_webhook_envelope(
         # an arbitrary runtime fault: both held an ``except Exception`` whose job was to
         # keep a transport failure from breaking the work around it, so a DELIBERATE
         # refusal with a buyer-correctable cause went into the same log-and-continue as
-        # a dropped socket. ``AdCPInvalidRequestError`` is the code AdCP 3.2.1
+        # a dropped socket. ``AdCPInvalidRequestError`` is the code AdCP.1
         # ``L3/webhooks.mdx`` :141 names for this condition, and being a typed refusal
         # is what lets each sender give it the shape its own route is owed: the
         # registration gate answers the buyer, the scheduler suppresses the stream.

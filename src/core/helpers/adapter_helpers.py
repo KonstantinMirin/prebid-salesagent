@@ -109,7 +109,7 @@ def request_signer_for_tenant(*, tenant_id: str | None) -> SignMcpAttempt | None
     * an ACTIVE ``request_signing`` key exists for the tenant at *now*; and
     * the tenant's canonical origin is publishable (``https://``). A signature
       no conformant receiver could ever resolve a key for is worse than sending
-      nothing (security.mdx @ pinned AdCP 3.1.1 :1226) -- the same gate
+      nothing (security.mdx @ pinned :1226) -- the same gate
       :func:`~src.core.signing.posture.webhook_signing_posture` applies in the
       webhook direction (C1). Deliberately parallel to it rather than shared:
       that one answers what posture to ADVERTISE and returns a posture block;
@@ -334,7 +334,7 @@ def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdMan
     account is answered by the simulating adapter whatever ad server the tenant
     configured, and the short-circuit sits above every live branch so a sandbox
     account cannot reach a live ad server by construction rather than by a check
-    each adapter remembers to make. Pinned AdCP 3.1.1
+    each adapter remembers to make. Pinned AdCP.1
     ``docs/media-buy/advanced-topics/sandbox.mdx``:
 
     * :11 "Sandbox is account-level, not per-request. Once a request references a

@@ -237,7 +237,7 @@ def format_identity_or_none(entry: Any) -> FormatKey | None:
     Two things separate this from :func:`format_identity`. It absorbs the ONE
     shape variance a persisted reference has — ``Product.format_ids`` is
     ``list[FormatId]`` in the schema but a JSON ``list[dict]`` in the column,
-    and rows predating the AdCP v3.1 rename key the id as ``format_id`` rather
+    and rows predating the rename key the id as ``format_id`` rather
     than ``id`` — and it answers ``None`` instead of raising when the value is
     not a usable reference at all. A ``None`` field is read as ABSENT, so a
     reference carrying ``agent_url: None`` takes the same canonical-agent
@@ -454,7 +454,7 @@ def announced_legacy_format_arm(
     not a gap: "sellers MAY additionally project those declarations to ``format_ids`` for
     legacy buyers" — permissive — while the same sentence makes the authoring rule a MUST
     ("New products MUST author canonical ``format_options[]``"), the field is "Deprecated in
-    AdCP 3.2; removed in AdCP 4.0", and "buyers MUST prefer ``format_options``". The one
+    AdCP; removed in AdCP 4.0", and "buyers MUST prefer ``format_options``". The one
     read path a projection would serve, ``filters.format_ids``, carries the SAME deprecation
     and the pin names its replacements ("Use ``format_kinds`` or ``format_option_refs``"),
     so projecting would feed a sunsetting filter from a sunsetting field. Declining keeps

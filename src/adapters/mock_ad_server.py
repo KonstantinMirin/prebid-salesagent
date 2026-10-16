@@ -6,7 +6,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# adcp 3.6.0: BrandManifest removed from CreateMediaBuyRequest; now uses BrandReference (brand field)
+# the pinned SDK: BrandManifest removed from CreateMediaBuyRequest; now uses BrandReference (brand field)
 from pydantic import Field
 
 from src.adapters.base import (
@@ -623,7 +623,7 @@ class MockAdServer(AdServerAdapter):
 
         # Keyword-based test orchestration (check brand.domain for test instructions)
         # Keywords: [REJECT:reason], [DELAY:N], [ASYNC], [HITL:Nm:outcome], [ERROR:msg], [QUESTION:text]
-        # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
+        # the pinned SDK: brand_manifest → brand (BrandReference with domain field)
         scenario = None
         test_message = None
         if request.brand:

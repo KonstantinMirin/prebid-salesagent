@@ -124,7 +124,7 @@ class RequestSigningPosture(LibraryRequestSigning):
         makes it conditionally REQUIRED and fixes its value in one if/then: IF
         ``request_signing.supported === true`` and the document speaks 3.2 or later, THEN
         ``request_signing`` requires ``covers_content_digest`` with ``{"const": "required"}``.
-        security.mdx says it in words -- "AdCP 3.2 verifiers that advertise request-signing
+        security.mdx says it in words -- "verifiers that advertise request-signing
         support MUST advertise ``covers_content_digest: "required"``" -- and the field's own
         description says what the other two values are now for: ``either`` and ``forbidden``
         are 3.0/3.1 compatibility postures that "MUST NOT be advertised as a 3.2 signing
@@ -157,7 +157,7 @@ class RequestSigningPosture(LibraryRequestSigning):
         """Which enforcement bucket the AdCP *operation* this request invoked falls in.
 
         ONE namespace and TWO buckets, which is every bucket a tenant can declare. The
-        cross-namespace rule (security.mdx @ v3.1.1 :1053 -- "Verifiers MUST NOT
+        cross-namespace rule (security.mdx :1053 -- "Verifiers MUST NOT
         cross-namespace match ... the two buckets are matched against disjoint envelope
         fields") is therefore kept by there being no second namespace to cross into,
         rather than by a check.
@@ -212,7 +212,7 @@ def agent_level_posture() -> RequestSigningPosture:
     ``supported`` is ``SigningConfig.verifier_enabled`` and every bucket is EMPTY. Both
     halves are the pin's, not a convenience:
 
-    * v3.1.1 ``get-adcp-capabilities-response.json`` defines ``request_signing.supported``
+    * ``get-adcp-capabilities-response.json`` defines ``request_signing.supported``
       as "Whether this agent VERIFIES RFC 9421 signatures on incoming requests" — an
       AGENT-level fact. The verifier runs inside ``_resolve_identity``, which every
       transport reaches, so a literal ``false`` UNDER-declares something true, which is
@@ -417,7 +417,7 @@ class WebhookSigningPosture(LibraryWebhookSigning):
       ``#/properties/webhook_signing/profile``: the value "MUST match the ``tag=``
       parameter … so receivers can statically validate the declared profile against
       the on-wire tag").
-    * ``algorithms`` is the set we WILL SIGN WITH (security.mdx @ v3.1.1 :1419), so
+    * ``algorithms`` is the set we WILL SIGN WITH (security.mdx :1419), so
       :func:`webhook_signing_posture` derives it from the tenant's ACTIVE key rows —
       never from ``SIGNING_ALG_VALUES``, which is the ALLOWED set. A tenant holding
       one ed25519 key that declared both algorithms would promise one it never emits.
@@ -442,8 +442,8 @@ class WebhookSigningPosture(LibraryWebhookSigning):
         beside it. (Re-declaring it would also owe the schema-inheritance guard an
         allowlist row for a redeclaration that introduces a default.)
 
-        The ``supported`` guard is a spec obligation, not a nicety. In AdCP 3.1.1
-        (``dist/schemas/3.1.1/bundled/protocol/get-adcp-capabilities-response.json``)
+        The ``supported`` guard is a spec obligation, not a nicety. In AdCP.1
+        (``dist/schemas/<pin>/bundled/protocol/get-adcp-capabilities-response.json``)
         ``webhook_signing.required`` is ``["supported"]`` alone, ``profile`` is
         optional, and its description fixes its meaning: *"Identifier of the
         webhook-signing profile version the agent emits. Value MUST match the
@@ -488,7 +488,7 @@ def origin_is_publishable(origin: str | None) -> bool:
 
     The two constraints are irreconcilable on such a host, so the honest answer is to
     claim nothing: every signature we emitted there would be one no conformant receiver
-    can resolve a key for (security.mdx @ v3.1.1 :1226). That makes this a gate on the
+    can resolve a key for (security.mdx :1226). That makes this a gate on the
     SHARED posture object rather than on the advertise side alone — see
     :func:`webhook_signing_posture`, and the same predicate gates the outbound request
     signer in ``src.core.helpers.adapter_helpers.request_signer_for_tenant``.

@@ -56,7 +56,7 @@ from adcp.types import ListTasksResponse as LibraryListTasksResponse
 # The six media-buy response ARMS, and why three of them are reached at a generated path
 # while two are reached by a public Legacy* name.
 #
-# adcp 9 repoints the unprefixed ``adcp.types.aliases`` names at the 3.2 canonical response
+# the pinned SDK repoints the unprefixed ``adcp.types.aliases`` names at the 3.2 canonical response
 # models (``adcp.types.canonical_creative.*``) and publishes ``Legacy*`` names for the 3.1.1
 # generated arms. That set is INCOMPLETE: it carries LegacyUpdateMediaBuyErrorResponse and
 # LegacyUpdateMediaBuySuccessResponse, and NO LegacyCreateMediaBuy*Response and no
@@ -75,7 +75,7 @@ from adcp.types.canonical_creative import CanonicalFormatKindStr
 from adcp.types.domains.core.creative_asset import CreativeAsset as LibraryCreativeAsset
 from adcp.types.domains.core.error import Source as LibraryErrorSource
 
-# The GENERATED format reference, reached at its generated path because adcp 9 gives it no
+# The GENERATED format reference, reached at its generated path because the pinned SDK gives it no
 # public name. ``adcp.types.FormatId`` is gone and both candidate public names --
 # ``LegacyFormatId`` and ``LegacyFormatReferenceStructuredObject`` -- resolve to
 # ``adcp.types.legacy.LegacyFormatId``, a SUBCLASS that narrows ``duration_ms`` from float
@@ -142,7 +142,7 @@ from adcp.types.domains.protocol.list_tasks_response import Task as LibraryTaskS
 # THE LEGACY ARM IS IMPORTED FROM ``adcp.types.legacy``, NOT FROM THE ``adcp.types`` FACADE,
 # and that is the whole mechanism keeping these bases right.
 #
-# adcp 9 (AdCP 3.2) repoints the unprefixed public names at the CANONICAL models and publishes
+# the pinned SDK (AdCP) repoints the unprefixed public names at the CANONICAL models and publishes
 # ``Legacy*`` for the 3.1.1 generated ones. Both arms are reachable from ``adcp.types``, so
 # there the arm is carried by the ``Legacy`` prefix — ``Format`` is the canonical format
 # DECLARATION (eleven fields: format_kind, params, format_option_id, …) while ``LegacyFormat``
@@ -245,7 +245,7 @@ from pydantic_core import ValidationError as PydanticCoreValidationError
 class Error(_LibraryError):
     """Advisory error whose graded fields are FUNCTIONS OF ``code``, not inputs.
 
-    The SDK types ``code`` as ``str`` — correctly, because AdCP 3.1.1 makes the
+    The SDK types ``code`` as ``str`` — correctly, because makes the
     error-code vocabulary open. That openness is a wire contract, not a licence
     for this seller to emit a code it never defined. Narrowing the field here
     makes an out-of-vocabulary advisory unconstructible, at every site, whatever
@@ -421,7 +421,7 @@ def canonical_agent_url(agent_url: object) -> str:
     The algorithm is not reimplemented here. It comes from the PINNED SDK
     (``adcp.signing.canonical``), reached through ``src.core.signing.canonical``, the ONE
     seam over it. The SDK is measured at 37/37 against the published conformance vectors.
-    A verbatim copy of adcp 7.0.2 used to stand in that position, because the then-pinned
+    A verbatim copy of the pinned SDK used to stand in that position, because the then-pinned
     6.6.0 failed 14 of those vectors; the 9.0.0b1 pin retired it.
 
     ``producer_target_uri`` and not the seam's ``canonical_target_uri``: they differ on
@@ -491,7 +491,7 @@ FormatKey = NewType("FormatKey", str)
 def format_id_identity(format_id: LibraryFormatId) -> FormatKey:
     """Return the federation identity of a FormatId: its canonical ``agent_url`` and ``id``.
 
-    AdCP v3.1 makes ``format_id`` an object whose identity is BOTH ``agent_url`` and
+    makes ``format_id`` an object whose identity is BOTH ``agent_url`` and
     ``id`` (``core/format-id.json`` requires ``[agent_url, id]``; the ``list_formats``
     storyboard step matches product/format references with ``match_keys: [agent_url,
     id]``, ``scope.equals: $agent_url``, ``on_out_of_scope: warn``). Comparing on
@@ -1116,7 +1116,7 @@ class BuyerRequest:
         # a deployment needed the forward-compatible boundary WITHOUT claiming production (the
         # storyboard conformance agent, docker-compose.e2e.yml): the top-level ``extra``
         # relaxed and this validator did not, so the five read tools rejected the
-        # ``idempotency_key`` AdCP 3.1 puts on every task request — measured as three
+        # ``idempotency_key`` puts on every task request — measured as three
         # ``read_tool_idempotency`` checks regressing with the wire mode reading ``ignore``.
         if rejected and get_pydantic_extra_mode() == "forbid":
             raise AdCPInvalidRequestError(
@@ -1170,12 +1170,12 @@ class SalesAgentBaseModel(LibraryAdCPBaseModel):
 def _mirror_media_buy_status(model: Any) -> Any:
     """Backfill the deprecated body-level ``status`` from the domain ``media_buy_status``.
 
-    AdCP 3.1 create-/update-media-buy-response adds ``media_buy_status`` as the
+    create-/update-media-buy-response adds ``media_buy_status`` as the
     PREFERRED domain-status field on the RESPONSE BODY (a ``MediaBuyStatus`` value)
     and DEPRECATES the body-level ``status`` (removed in 3.2). This validator only
     backfills whichever of the two BODY fields is set onto the other, so the
     deprecated body ``status`` still carries the domain value during the deprecation
-    window. Both body fields are typed ``MediaBuyStatus | None`` on the adcp 5.7
+    window. Both body fields are typed ``MediaBuyStatus | None`` on the the pinned SDK
     library base (``CreateMediaBuySuccessResponse`` / ``UpdateMediaBuySuccessResponse``).
 
     This does NOT govern the WIRE top-level ``status``. On the flattened envelope,
@@ -1393,7 +1393,7 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
     ``ProtocolEnvelope`` is a base, and ``status``, ``task_id``, ``message``, ``context_id``
     and the rest are declared rather than attached by whichever transport happens to run.
 
-    AdCP spec 3.0.0 ``error-handling.mdx`` allows non-fatal errors on the
+    ``error-handling.mdx`` allows non-fatal errors on the
     success envelope ("populate only the payload... MUST NOT populate
     ``adcp_error``"). The ``errors`` field below carries per-package
     advisories like ``UNSUPPORTED_FEATURE`` for fields the seller persists but
@@ -1412,7 +1412,7 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
     # reason to retain a sender's unknown keys and no reason to refuse them either.
     model_config = ConfigDict(extra="ignore")
 
-    # adcp 6.6 (spec 3.1.1) made these required on the success envelope. ``status`` is
+    # the pinned SDK (spec 3.1.1) made these required on the success envelope. ``status`` is
     # REQUIRED and typed ``Literal["completed"]`` by the SDK parent, because this is the
     # success branch and the branch's schema makes the value a const. A local
     # ``CompletedTaskStatusMixin`` used to declare that field and supply its default; it is
@@ -1460,7 +1460,7 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
     #
     # The suppression records an SDK/SPEC DIVERGENCE, not our convenience: we extend the
     # SDK's class, and that class does not account for the null case its own pinned
-    # schema permits. The suppression this carried is GONE: adcp 9 types the parent field
+    # schema permits. The suppression this carried is GONE: the pinned SDK types the parent field
     # so the redeclaration is a plain narrowing mypy accepts, and the type-ignore ratchet
     # shrinks by one rather than carrying an approved exception.
     confirmed_at: AwareDatetime | None
@@ -1511,16 +1511,6 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
     # serializes, so every construction of THIS class is the buyer's envelope and must
     # pass the row's values.
 
-    # account/sandbox/creative_deadline/valid_actions/context: inherited from the
-    # adcp 6.6 parent, which re-added all five typed (Account, AwareDatetime,
-    # list[MediaBuyValidAction], ContextObject) — the SDK-5.7-era local
-    # redeclarations were deleted as stale (PR #1567 round-3; same cleanup
-    # Product/SyncCreativeResult got, exemplar 5a8953a46). Pinned by
-    # test_adcp_contract.py::test_create_media_buy_success_inherits_parent_typed_annotations.
-    # buyer_ref: the SDK-5.7 parent wrongly declared it (removed from AdCP 3.1
-    # create-media-buy-response; SDK bug adcontextprotocol/adcp-client-python#950,
-    # excluded here by #1417); adcp 6.6 no longer declares it, so no override needed.
-
     # Non-fatal advisories — see class docstring for the spec basis.
     errors: list[Error] | None = Field(
         default=None,
@@ -1530,12 +1520,12 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
 
     @model_validator(mode="after")
     def _dual_emit_media_buy_status(self):
-        """AdCP 3.1: backfill the deprecated BODY ``status`` from the domain ``media_buy_status``.
+        """AdCP: backfill the deprecated BODY ``status`` from the domain ``media_buy_status``.
 
         Deprecation-window compat only. The WIRE top-level ``status`` is a PROTOCOL
         ``TaskStatus`` (``submitted`` / ``completed``) set by ``TaskResultEnvelope._serialize``
         — a different namespace from ``media_buy_status`` (GA 3.1.0 model, divergent).
-        NOTE: adcp 5.7 types this body ``status`` as ``MediaBuyStatus | None``; the wire
+        NOTE: the pinned SDK types this body ``status`` as ``MediaBuyStatus | None``; the wire
         top-level protocol value never lands on this body field (the envelope owns it), so no
         enum widening is needed here — the SDK type is not authoritative for the wire status.
         See ``_mirror_media_buy_status`` and docs/adcp-spec-version.md "`status` vs `media_buy_status` on media-buy responses".
@@ -1597,7 +1587,7 @@ class AffectedPackage(LibraryPackage):
     Extends adcp library Package with internal tracking fields.
     Note: In AdCP 2.12.0+, affected_packages uses the full Package type.
 
-    Library Package required fields (adcp 2.12.0):
+    Library Package required fields (the pinned SDK):
     - package_id: Publisher's package identifier
     - paused: Boolean indicating whether package is paused (replaces old status enum)
     """
@@ -1623,7 +1613,7 @@ class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySucces
     envelope fields alongside its branch fields. See ``CreateMediaBuySuccess``.
 
     Carries an optional ``errors`` field for non-fatal advisories on the
-    same basis as ``CreateMediaBuySuccess`` (AdCP 3.0.0 error-handling
+    same basis as ``CreateMediaBuySuccess`` (error-handling
     "non-fatal in payload" rule). Used today for per-package
     ``UNSUPPORTED_FEATURE`` notices when ``property_list`` is persisted but
     not yet compiled by the adapter.
@@ -1634,7 +1624,7 @@ class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySucces
     # ``workflow_step_id`` into an extra that serialized to the buyer.
     model_config = ConfigDict(extra="ignore")
 
-    # adcp 6.6 (spec 3.1.1) made status/revision required on the update success envelope.
+    # the pinned SDK (spec 3.1.1) made status/revision required on the update success envelope.
     # status is REQUIRED and typed Literal["completed"] by the SDK parent, because this is the
     # success branch and the branch's schema makes the value a const. A local
     # CompletedTaskStatusMixin used to declare the field and supply its default; it is
@@ -1678,11 +1668,6 @@ class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySucces
     # Pydantic allows subclass override at runtime but mypy doesn't recognize this
     affected_packages: list[AffectedPackage] | None = None
 
-    # buyer_ref: the SDK-5.7 parent wrongly declared it (removed from AdCP 3.1
-    # update-media-buy-response; SDK bug adcontextprotocol/adcp-client-python#950,
-    # excluded here by #1417); adcp 6.6 no longer declares it, so no override needed
-    # — the create side lost its twin in the 6.6 bump and this one was missed.
-
     # Non-fatal advisories — see class docstring for the spec basis.
     errors: list[Error] | None = Field(
         default=None,
@@ -1692,12 +1677,12 @@ class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySucces
 
     @model_validator(mode="after")
     def _dual_emit_media_buy_status(self):
-        """AdCP 3.1: backfill the deprecated BODY ``status`` from the domain ``media_buy_status``.
+        """AdCP: backfill the deprecated BODY ``status`` from the domain ``media_buy_status``.
 
         Deprecation-window compat only. The WIRE top-level ``status`` is a PROTOCOL
         ``TaskStatus`` (``submitted`` / ``completed``) set by ``TaskResultEnvelope._serialize``
         — a different namespace from ``media_buy_status`` (GA 3.1.0 model, divergent).
-        NOTE: adcp 5.7 types this body ``status`` as ``MediaBuyStatus | None``; the wire
+        NOTE: the pinned SDK types this body ``status`` as ``MediaBuyStatus | None``; the wire
         top-level protocol value never lands on this body field (the envelope owns it), so no
         enum widening is needed here — the SDK type is not authoritative for the wire status.
         See ``_mirror_media_buy_status`` and docs/adcp-spec-version.md "`status` vs `media_buy_status` on media-buy responses".
@@ -1834,7 +1819,7 @@ class TaskStatus(StrEnum):
 # PricingModel is now imported from adcp.types (adcp library)
 # Library uses lowercase member names: .cpm, .vcpm, .cpc, .cpcv, .cpv, .cpp, .flat_rate
 
-# PriceGuidance is now imported from adcp.types.stable (adcp 2.7.0+)
+# PriceGuidance is now imported from adcp.types.stable (the pinned SDK+)
 # The library version has the same fields and behavior as our previous local class
 
 
@@ -1969,11 +1954,11 @@ class FormatReference(SalesAgentBaseModel):
 
 
 # ``ProductFormatDeclaration`` was declared here: a narrowing subclass that added
-# ``format_kind`` and ``params``, because adcp 6.6.0 generated only the shared base
+# ``format_kind`` and ``params``, because the pinned SDK generated only the shared base
 # properties of the ``oneOf`` and dropped both when parsing a creative agent's catalog.
-# Its docstring named its own deletion condition -- "8.0 (AdCP 3.2) generates the union.
+# Its docstring named its own deletion condition -- "8.0 (AdCP) generates the union.
 # Delete this class when the SDK pin carries the fix
-# (adcontextprotocol/adcp-client-python#1275)". adcp 9 carries it:
+# (adcontextprotocol/adcp-client-python#1275)". the pinned SDK carries it:
 # ``LegacyFormat.canonical_parameters`` is a ``CanonicalParameters`` RootModel over the
 # generated per-kind arms, each with its own required ``format_kind`` and typed ``params``,
 # which is strictly more than the two hand-added fields expressed. So the class is gone and
@@ -1992,8 +1977,8 @@ class Format(LibraryFormat):
     """
 
     # ``canonical_parameters`` is INHERITED. It was redeclared here only to narrow it to
-    # the local ProductFormatDeclaration subclass, which existed only because adcp 6.6.0's
-    # generated type lost format_kind and params. adcp 9 generates the per-kind union, so
+    # the local ProductFormatDeclaration subclass, which existed only because the pinned SDK's
+    # generated type lost format_kind and params. the pinned SDK generates the per-kind union, so
     # the narrowing has nothing left to narrow and the redeclaration is the parent's.
 
     # Internal fields for backward compatibility and convenience
@@ -2192,7 +2177,7 @@ _PLATFORM_TO_FORM_FACTORS: dict[str, list[str]] = {
 class _InternalTargetingDimensions(SalesAgentBaseModel):
     """The dimensions this seller adds to the pin's targeting overlay, declared ONCE.
 
-    A mixin rather than a base, because AdCP 3.2 splits the overlay into TWO pinned
+    A mixin rather than a base, because splits the overlay into TWO pinned
     schemas and this seller needs a local subclass of each: ``core/targeting.json``
     (``TargetingOverlay``, what a package READBACK carries) and
     ``core/targeting_input.json`` (``TargetingOverlayInput``, what a request sends).
@@ -2304,7 +2289,7 @@ class TargetingInput(TargetingOverlayInput, _InternalTargetingDimensions):
     """``core/targeting_input.json`` plus this seller's internal dimensions.
 
     The REQUEST side. ``PackageRequest.targeting_overlay`` and
-    ``PackageUpdate.targeting_overlay`` are typed with the INPUT schema from AdCP 3.2 on,
+    ``PackageUpdate.targeting_overlay`` are typed with the INPUT schema from on,
     and its nested element types are its own, so :class:`Targeting` is not a substitute
     even though the runtime union still accepts one through a ``SkipJsonSchema`` arm.
     Declaring both is what keeps the request DTOs statically honest about what they take.
@@ -2316,7 +2301,7 @@ class TargetingInput(TargetingOverlayInput, _InternalTargetingDimensions):
 
 #: Either local targeting overlay, for the business rules that read the PINNED dimensions.
 #:
-#: AdCP 3.2 splits the overlay into a readback schema and an input schema, so this seller
+#: splits the overlay into a readback schema and an input schema, so this seller
 #: has two local subclasses (above). A rule that only reads fields both declare --
 #: ``property_list``, the geo include/exclude pairs -- takes either, and saying so is what
 #: keeps one implementation of the rule instead of one per side.
@@ -2326,7 +2311,7 @@ AnyTargeting = Targeting | TargetingInput
 def _adopt_sibling(value: Any, annotation: Any) -> Any:
     """Re-validate *value* into the model its target field declares.
 
-    AdCP 3.2 splits several shapes into an input schema and a readback schema, and the
+    splits several shapes into an input schema and a readback schema, and the
     two are SIBLINGS -- identical field sets, neither a subclass of the other. So a
     name-keyed echo hands the input arm to a field typed as the readback arm and pydantic
     refuses it. Adopt by reading attributes, never by dumping in the caller.
@@ -2474,7 +2459,7 @@ class Principal(SalesAgentBaseModel):
     platform_mappings: dict[str, Any]
     #: The counterparty's own AdCP agent URL, from onboarding, or None when none was
     #: recorded. It is the key-resolution input for RFC 9421 verification: security.mdx
-    #: @ v3.1.1 § "agent_url derivation" makes the publication coordinate the verifier
+    #: § "agent_url derivation" makes the publication coordinate the verifier
     #: already controls the ONLY legitimate source, so a signer cannot assert its own and
     #: choose which key set it is checked against. None means no key can be resolved for
     #: this counterparty, not that it is trusted.
@@ -2510,7 +2495,7 @@ class ProductPerformance(SalesAgentBaseModel):
 class FormatId(LibraryFormatId):
     """AdCP format identifier - extends library FormatId with convenience methods.
 
-    Note: the inherited ``agent_url`` is the WIRE STRING. adcp 9 (#1396, "keep the
+    Note: the inherited ``agent_url`` is the WIRE STRING. the pinned SDK (#1396, "keep the
     format-reference agent_url as the wire string") types it ``StrictStr`` behind an
     absolute-URL validator, so an ``AnyUrl`` is REFUSED rather than coerced, and the
     normalisation ``AnyUrl`` used to apply (a trailing slash on a bare origin) is no
@@ -2623,7 +2608,7 @@ class PackageRequest(LibraryPackageRequest):
 
     # DELETED, not moved: tenant_id, media_buy_id, platform_line_item_id, created_at,
     # updated_at, metadata and a deprecated pricing_model. media-buy/package-request.json
-    # (AdCP 3.1.1, the pinned version) declares none of the seven, and the persisted
+    # (the pinned version) declares none of the seven, and the persisted
     # MediaPackage row already owns each one -- media_buy_id and package_id are its primary
     # key, platform_line_item_id is written into its package_config, and the timestamps
     # belong to the parent media buy. Every read of those names on a package in src/ reaches
@@ -2664,7 +2649,7 @@ class PackageRequest(LibraryPackageRequest):
     # ``type: ignore[assignment]`` survives the correction and is not the same silence it was.
     # ``adcp.types.CreativeAsset`` is a RootModel UNION over the two codegen branches of a
     # oneOf; ``CreativeAssetRequest`` extends one branch. The ignore this carried is GONE:
-    # adcp 9 retired the numeric arm name and the branch IS ``CreativeAsset``, so the field's
+    # the pinned SDK retired the numeric arm name and the branch IS ``CreativeAsset``, so the field's
     # declared element type is a class the local subclass statically extends and mypy no
     # longer reports a mismatch. Same removal on SyncCreativesRequest.creatives.
     creatives: list["CreativeAssetRequest"] | None = Field(
@@ -2688,7 +2673,7 @@ class PackageRequest(LibraryPackageRequest):
         exclude=True,
     )
     # Override library TargetingOverlayInput -> our TargetingInput with internal fields.
-    # The INPUT twin: from AdCP 3.2 on, the request schema $refs core/targeting_input.json
+    # The INPUT twin: from on, the request schema $refs core/targeting_input.json
     # and the readback core/targeting.json, and their nested element types are distinct.
     targeting_overlay: TargetingInput | None = None
 
@@ -2716,7 +2701,7 @@ class Package(LibraryPackage):
 
     # DELETED, not moved, and for the same reason as on PackageRequest above: tenant_id,
     # media_buy_id, platform_line_item_id, created_at, updated_at, metadata and a
-    # deprecated pricing_model. core/package.json (AdCP 3.1.1, the pinned version) declares
+    # deprecated pricing_model. core/package.json (the pinned version) declares
     # 29 properties and requires only package_id; none of the seven is among them. On this
     # class they were deader than on the request: no site under src/ or scripts/ ever
     # CONSTRUCTED a Package with one of them, and no site read one back. The four surviving
@@ -2735,7 +2720,7 @@ class Package(LibraryPackage):
     #: The fields this response and ``PackageRequest`` both declare that the SELLER decides,
     #: so :meth:`echoing` leaves them to its caller. Everything else the two models share is
     #: the BUYER's and is echoed. That default is the pin's, stated field by field in
-    #: core/package.json (AdCP 3.1.1): "Echoed from the buyer's request"
+    #: core/package.json (AdCP): "Echoed from the buyer's request"
     #: (``agency_estimate_number``, ``catalogs``), "Sellers SHOULD echo this field whenever
     #: the request included it" (``format_ids``, ``format_kind``, ``format_option_refs``),
     #: "echoed unchanged in responses" (``context``), "echoed from the create_media_buy
@@ -2855,7 +2840,7 @@ class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
     # nullability and default as the parent.
     push_notification_config: PushNotificationConfig | None = None
 
-    # account and idempotency_key are REQUIRED by AdCP 3.1.1
+    # account and idempotency_key are REQUIRED by AdCP.1
     # (media-buy/create-media-buy-request.json /required = [account, brand, end_time,
     # idempotency_key, start_time]) and are inherited as required from the library type.
     # ``account`` was overridden to optional here on the grounds that "our impl resolves
@@ -2987,7 +2972,7 @@ class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
         """Extract date from start_time for display purposes."""
         # ``start_time`` is declared on this model as ``datetime | Literal["asap"] | None``,
         # so the value IS the union member. This read used to go through ``.root``, which
-        # was the shape of the SDK's ``StartTiming`` RootModel wrapper; adcp 9 has no such
+        # was the shape of the SDK's ``StartTiming`` RootModel wrapper; the pinned SDK has no such
         # wrapper (and no ``StartTiming`` name at all), so the unwrap is gone.
         if isinstance(self.start_time, datetime):
             return self.start_time.date()
@@ -3082,7 +3067,7 @@ class MediaPackage(SalesAgentBaseModel):
     budget: float | None = None  # Budget allocation in the currency specified by the pricing option
     creative_ids: list[str] | None = None  # Creative IDs to assign to this package
     # The create-time pause the buyer asked for, carried to the ad server.
-    # media-buy/package-request.json (AdCP 3.2.1): "Whether this package should be created
+    # media-buy/package-request.json (AdCP): "Whether this package should be created
     # in a paused state. Paused packages do not deliver impressions. Defaults to false."
     #
     # It has to travel on the CARRIER rather than be answered from the request, because
@@ -3294,7 +3279,7 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
 
     Inherits all AdCP fields from library (paused, start_time, end_time,
     packages, push_notification_config, context, reporting_webhook, ext).
-    In adcp 3.9 all fields are optional (consolidated from oneOf variants).
+    In the pinned SDK all fields are optional (consolidated from oneOf variants).
 
     Overrides:
     - start_time: accept Literal["asap"] (backward compat with A2A path)
@@ -3321,7 +3306,7 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
     # Narrowed to the local class; see CreateMediaBuyRequest.
     push_notification_config: PushNotificationConfig | None = None
 
-    # account and idempotency_key are REQUIRED by AdCP 3.1.1
+    # account and idempotency_key are REQUIRED by AdCP.1
     # (media-buy/update-media-buy-request.json /required = [idempotency_key, account,
     # media_buy_id]) and are inherited as required from the library type. They were
     # overridden to optional here, with the override itself noting it should go away "when
@@ -3332,7 +3317,7 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
     # not judgement, so the overrides are gone.
 
     # Override datetime fields to accept raw strings (A2A path sends ISO strings).
-    # No suppression: adcp 9's parent field accepts the same union, so this is a narrowing.
+    # No suppression: the pinned SDK's parent field accepts the same union, so this is a narrowing.
     start_time: datetime | Literal["asap"] | None = None
     end_time: datetime | None = None
     # Override packages to use our extended type with creative_ids
@@ -3343,7 +3328,7 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
     # Campaign-level budget (not in library spec — convenience field)
     # Bare float is accepted so transport wrappers can preserve existing DB currency
     # when the caller updates only the amount.
-    # `budget` is NOT declared here on purpose. AdCP 3.1.1
+    # `budget` is NOT declared here on purpose. AdCP.1
     # media-buy/update-media-buy-request.json lists 16 properties and budget is not among
     # them -- budget is PACKAGE-level (media-buy/package-update.json /properties/budget), and
     # adcp.types.UpdateMediaBuyRequest declares none either. The schema and the SDK are the
@@ -3626,7 +3611,7 @@ class Signal(LibrarySignal):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Override types that differ from library. No suppression: adcp 9 types the parent
+    # Override types that differ from library. No suppression: the pinned SDK types the parent
     # field so the local element subclass is a static subtype.
     deployments: list[SignalDeployment] = Field(..., min_length=1, description="Array of platform deployments")
 
@@ -3637,7 +3622,7 @@ class Signal(LibrarySignal):
     metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata", exclude=True)
 
     # Backward compatibility properties (deprecated)
-    # Note: signal_id is now a library field in adcp 3.6.0 (SignalId | None)
+    # Note: signal_id is now a library field in the pinned SDK (SignalId | None)
     # The old @property signal_id that mapped to signal_agent_segment_id is removed
     # to avoid conflict with the new library field.
 
@@ -3649,7 +3634,7 @@ class Signal(LibrarySignal):
         Provides .cpm, .currency etc. from the first pricing option.
         Returns None if pricing_options is empty.
 
-        No ``.root``: adcp 9 types ``Signal.pricing_options`` as a list of the
+        No ``.root``: the pinned SDK types ``Signal.pricing_options`` as a list of the
         ``VendorPricingOption`` ARMS rather than of a RootModel wrapping them, so the
         element already IS the inner model this property promises.
         """
@@ -3731,7 +3716,7 @@ class ActivateSignalResponse(SalesAgentBaseModel):
 
     NOT migrated to library base (evaluated in ):
     1. Historically "library uses RootModel[SuccessVariant | ErrorVariant] — cannot
-       add fields". That reason is STALE at adcp 6.6: ActivateSignalResponse is a
+       add fields". That reason is STALE at the pinned SDK: ActivateSignalResponse is a
        union TypeAlias, not a RootModel, so the SyncAccountsResponse approach
        (subclass the success variant directly — src/core/schemas/account.py:141)
        would work. It is no longer what keeps this model local.
@@ -3908,7 +3893,7 @@ class GetMediaBuysMediaBuy(AlwaysIncludeFieldsMixin, LibraryGetMediaBuysMediaBuy
 
     Grounded on the library type, which makes the pinned item contract enforceable
     at the construction site: ``confirmed_at`` and ``revision`` are REQUIRED on
-    media_buys[] in AdCP 3.1.1, and every caller must now supply them or fail to
+    media_buys[] in and every caller must now supply them or fail to
     typecheck. That is the point — they are populated from the persisted columns
     rather than defaulted (GH #1928).
 
@@ -4130,8 +4115,8 @@ class GetTaskStatusResponse(LibraryGetTaskStatusResponse, SalesAgentAdcpResponse
 class GetMediaBuysRequest(BuyerRequest, LibraryGetMediaBuysRequest):
     """Extends the library GetMediaBuysRequest.
 
-    Was hand-defined against SalesAgentBaseModel "because adcp 3.6.0 is not yet required" --
-    a comment that outlived its pin. The SDK (adcp 6.6.0, AdCP 3.1.1) ships this type, and
+    Was hand-defined against SalesAgentBaseModel "because the pinned SDK is not yet required" --
+    a comment that outlived its pin. The SDK (the pinned SDK, AdCP) ships this type, and
     re-declaring the field set NARROWED it: ext, include_history, include_snapshot,
     include_webhook_activity, pagination and webhook_activity_limit are all in
     get-media-buys-request.json and were absent here, so they could not be advertised or
@@ -4165,7 +4150,7 @@ class GetMediaBuysResponse(NestedModelSerializerMixin, LibraryGetMediaBuysRespon
     """Extends library GetMediaBuysResponse.
 
     Library provides: media_buys, errors, context, pagination, sandbox, ext, and the
-    protocol envelope — including ``status``, which AdCP 3.1.1
+    protocol envelope — including ``status``, which AdCP.1
     (core/protocol-envelope.json, required: ["status"]) marks REQUIRED on every task
     response envelope and which this model carried on no wire at all while it
     extended SalesAgentBaseModel (GH #1900).

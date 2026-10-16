@@ -487,7 +487,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     webhook_config = db_session.scalars(stmt_webhook).first()
 
                 if webhook_config and media_buy_data:
-                    # A rejection is NOT a completed media buy. adcp 6.6 defaults
+                    # A rejection is NOT a completed media buy. the pinned SDK defaults
                     # CreateMediaBuySuccess.status="completed"/confirmed_at, so embedding a
                     # Success here would assert the buy COMPLETED inside a status="rejected"
                     # webhook. Spec 3.1.1 create-media-buy-response.json models a non-success

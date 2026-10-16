@@ -408,7 +408,7 @@ class AdServerAdapter(ABC):
 
         A package is reported paused when the SELLER holds it or when the BUYER asked
         for it to be created that way. Both are real and neither overrides the other:
-        media-buy/package-request.json (AdCP 3.2.1) says ``paused`` asks for a package
+        media-buy/package-request.json (AdCP) says ``paused`` asks for a package
         "created in a paused state", and core/package.json says the response reports
         whether the package "is paused by the buyer" — so an adapter that holds every
         package pending approval cannot answer "active" to a buyer who asked for paused,

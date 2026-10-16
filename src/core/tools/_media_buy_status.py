@@ -93,7 +93,7 @@ TERMINAL_STATUSES: frozenset[str] = frozenset({"paused", "completed", "rejected"
 # of these states gets its LAST notification: ``notification_type = "final"``
 # and no ``next_expected_at`` (the spec pins next_expected_at as "only present
 # ... when notification_type is not 'final'" — get-media-buy-delivery-response.json
-# @ v3.1-04f59d2d5 — and promises "one final notification when the campaign
+# -04f59d2d5 — and promises "one final notification when the campaign
 # completes" — optimization-reporting.mdx §Publisher Commitment). Derived from
 # TERMINAL_STATUSES minus ``paused``: pausing is an explicit decision but the
 # buy may resume and report again, so a next scheduled report is still a
@@ -114,7 +114,7 @@ NO_MORE_DATA_STATUSES: frozenset[str] = TERMINAL_STATUSES - {"paused"}
 #     Date-refining it to "active" made a past-start buy with unapproved
 #     creatives read as serving.
 #   - "pending_approval" -> "pending_start" (INTERPRETATION, graded but not
-#     spec-mandated): AdCP 3.1 has no "awaiting seller approval" wire status. Of
+# spec-mandated): has no "awaiting seller approval" wire status. Of
 #     the two pre-serving states, pending_start ("ready to serve, waiting for its
 #     flight date") is the closest — a buy the seller has yet to accept is not
 #     "serving" and has no creatives gap to report (that is pending_creatives).

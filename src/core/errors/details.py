@@ -124,7 +124,7 @@ class ErrorProblem(BaseModel):
     which is the epic's invariant applied one level down.
 
     ``rejected_value`` and ``accepted_values`` are the pin's canonical
-    rejection-set keys (v3.1.1 ``core/error.json``, the ``details``
+    rejection-set keys (``core/error.json``, the ``details``
     description): "sellers SHOULD use the canonical key ``accepted_values``
     rather than seller-specific variants observed in the wild". Using them lets
     a buyer's error classifier read this without per-seller pattern matching.
@@ -142,14 +142,14 @@ class ErrorProblem(BaseModel):
 
 # ---------------------------------------------------------------------------
 # Pinned shapes. Each mirrors its file under the pinned schema bundle at
-# dist/schemas/3.1.1/error-details/, field for field, plus any extra the pin
+# dist/schemas/<pin>/error-details/, field for field, plus any extra the pin
 # permits and a call site actually needs. A field the pin marks required is
 # required here.
 # ---------------------------------------------------------------------------
 
 
 class VersionUnsupportedDetails(ErrorDetails):
-    """``VERSION_UNSUPPORTED`` — v3.1.1 ``error-details/version-unsupported.json``.
+    """``VERSION_UNSUPPORTED`` — ``error-details/version-unsupported.json``.
 
     ``supported_versions`` is the pin's only required field. ``build_version``
     is advisory only: the schema states buyers MUST NOT negotiate on it, so it
@@ -386,7 +386,7 @@ class OutboundDeliveryDetails(AdapterFailureDetails):
     detail type. The two fields below are the pair the egress seam adds --
     what a retry SCHEDULE knows that a single call does not.
 
-    The names are the pinned acceptance criterion, not a preference. AdCP 3.1.1
+    The names are the pinned acceptance criterion, not a preference. AdCP.1
     ``core/error.json`` types ``details`` as ``{"type": "object",
     "additionalProperties": true}`` -- "Additional task-specific error details"
     -- so the spec mandates no key set here and cannot decide the spelling.
@@ -432,7 +432,7 @@ class ValueRejectionDetails(ErrorDetails):
     """A value the buyer supplied was refused, and optionally what is accepted.
 
     ``rejected_value`` and ``accepted_values`` are the pin's canonical
-    rejection-set keys (v3.1.1 ``core/error.json``, the ``details`` description),
+    rejection-set keys (``core/error.json``, the ``details`` description),
     named there explicitly "rather than seller-specific variants observed in the
     wild (``available``, ``allowed`` ...)".
 
@@ -678,7 +678,7 @@ class PricingValidationDetails(ValidationDetails):
 
 
 class BillingNotSupportedDetails(ErrorDetails):
-    """``BILLING_NOT_SUPPORTED`` — v3.1.1 ``error-details/billing-not-supported.json``.
+    """``BILLING_NOT_SUPPORTED`` — ``error-details/billing-not-supported.json``.
 
     Both fields and both spellings are the pin's, including ``scope``'s closed
     enum, so a buyer switching on it gets what the schema promises.

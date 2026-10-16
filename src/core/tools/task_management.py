@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 #: Validator for ``core/async-response-data.json``, built ONCE.
 #:
-#: A ``TypeAdapter`` rather than ``AdcpAsyncResponseData.model_validate``: adcp 9 ships
+#: A ``TypeAdapter`` rather than ``AdcpAsyncResponseData.model_validate``: the pinned SDK ships
 #: that name as an ``Annotated[Union[...]]`` ALIAS over the concrete task results rather
 #: than as a RootModel wrapping them, so there is no class to call a classmethod on.
 #: ``TypeAdapter`` is pydantic's own way to validate against a non-model annotation, and
@@ -80,7 +80,7 @@ _SPEC_STATUS_TO_WORKFLOW_STATUS: dict[str, str | None] = {
 #:     `create_media_buy`, `sync_creatives`) for routing to per-task handlers";
 #:   * protocol/calling-an-agent.mdx:95-99 -- the normative tasks/get response carries
 #:     `task_type: "create_media_buy"` beside `protocol: "media-buy"`;
-#:   * dist/compliance/3.1.1/domains/media-buy/scenarios/get_products_async.yaml GRADES it
+#: * dist/compliance/<pin>/domains/media-buy/scenarios/get_products_async.yaml GRADES it
 #:     twice -- `tasks[0].task_type == "get_products"` ("Task type identifies get_products")
 #:     on list_products_task, and `task_type == "get_products"` + `protocol == "media-buy"`
 #:     on get_products_task_status_completed -- and FILTERS on `filters.task_type`, so an

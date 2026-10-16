@@ -7,8 +7,8 @@ and pre-V3 keywords such as ``rate=`` would be accepted instead of rejected.
 The members can carry an ``extra`` policy: each one is a plain BaseModel and
 subclasses cleanly.
 
-At adcp 6.6.0 the union also had a ``RootModel`` WRAPPER class, which this
-module's ``PricingOption`` subclassed. adcp 9 deletes that wrapper and ships
+At the pinned SDK the union also had a ``RootModel`` WRAPPER class, which this
+module's ``PricingOption`` subclassed. the pinned SDK deletes that wrapper and ships
 only the union — the fix for adcontextprotocol/adcp-client-python#1077.
 
 This module therefore defines:

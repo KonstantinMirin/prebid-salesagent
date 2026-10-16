@@ -195,7 +195,7 @@ def convert_pricing_option_to_adcp(
         # CPCV (Cost Per Completed View) - typically fixed rate
         if not rate:
             raise ValueError(f"CPCV pricing option {pricing_option_id} requires rate")
-        # AdCP 3.1.1 pricing-options/cpcv-option.json declares NO parameters
+        # pricing-options/cpcv-option.json declares NO parameters
         # property (completion is definitional for CPCV). Stored parameters
         # cannot be expressed on the wire — fail loud rather than silently
         # dropping seller-configured data (no-quiet-failures). They previously
@@ -203,7 +203,7 @@ def convert_pricing_option_to_adcp(
         if parameters:
             raise ValueError(
                 f"CPCV pricing option {pricing_option_id} has parameters {parameters!r}, "
-                f"but AdCP 3.1.1 cpcv-option.json defines no parameters property. "
+                f"but cpcv-option.json defines no parameters property. "
                 f"Remove them from the pricing option record."
             )
         return CpcvPricingOption(
@@ -246,7 +246,7 @@ def convert_pricing_option_to_adcp(
             "fixed_price": float(rate),
         }
         # Flat rate may have optional parameters (DOOH venue packages, SOV, etc.)
-        # adcp 3.10: Parameters requires type="dooh" discriminator
+        # the pinned SDK: Parameters requires type="dooh" discriminator
         if parameters:
             if isinstance(parameters, dict) and "type" not in parameters:
                 parameters = {**parameters, "type": "dooh"}
@@ -254,7 +254,7 @@ def convert_pricing_option_to_adcp(
         return FlatRatePricingOption(**result_fields)
 
     elif pricing_model == "cpa":
-        # CPA (Cost Per Acquisition) - AdCP v3.1 pricing model for affiliate/conversion pricing.
+        # CPA (Cost Per Acquisition) - pricing model for affiliate/conversion pricing.
         # event_type is required per cpa-option.json; no default — an unknown value is a mispricing.
         if not rate:
             raise ValueError(f"CPA pricing option {pricing_option_id} requires rate")
@@ -286,7 +286,7 @@ def convert_pricing_option_to_adcp(
         )
 
     elif pricing_model == "time":
-        # Time-Based pricing - AdCP v3.1 model where rate scales with campaign duration.
+        # Time-Based pricing - model where rate scales with campaign duration.
         # fixed_price is the cost per time_unit; parameters.time_unit is required.
         # Supports both fixed (fixed_price) and auction (floor_price) variants.
         if not parameters or not isinstance(parameters, dict) or "time_unit" not in parameters:
@@ -432,7 +432,7 @@ def convert_product_model_to_schema(
     # `announced_legacy_format_arm`, which carries the producer rules and the citations for
     # them. Nothing is decided here; this carries the answer.
     #
-    # Omitted rather than emitted empty, deliberately. The field is "Deprecated in AdCP 3.2;
+    # Omitted rather than emitted empty, deliberately. The field is "Deprecated in AdCP;
     # removed in AdCP 4.0" and is absent from the schema's root `required` list, so a
     # canonically-authored product satisfies the "Canonical-format product" branch without
     # it. An empty array would be worse than absence: the deprecated branch requires only
@@ -547,7 +547,7 @@ def convert_product_model_to_schema(
     if product_model.product_card_detailed:
         product_data["product_card_detailed"] = product_model.product_card_detailed
     if product_model.placements:
-        # adcp 6.6 (spec 3.1.1) makes Placement.kind and Placement.mode required. Placements
+        # the pinned SDK (spec 3.1.1) makes Placement.kind and Placement.mode required. Placements
         # stored before these fields existed carry seller-defined metadata (name/description)
         # inline, so they are seller_inline, not publisher_ref: default kind="seller_inline"
         # (spec requires publisher_domain for publisher_ref, which legacy rows lack, but name
@@ -564,7 +564,7 @@ def convert_product_model_to_schema(
     # Default is_custom to False if not set
     product_data["is_custom"] = product_model.is_custom if product_model.is_custom else False
 
-    # AdCP 3.6.0 fields — direct attribute access on typed Mapped[] columns
+    # fields — direct attribute access on typed Mapped[] columns
     if product_model.property_targeting_allowed is not None:
         product_data["property_targeting_allowed"] = product_model.property_targeting_allowed
     if product_model.signal_targeting_allowed is not None:

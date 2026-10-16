@@ -21,10 +21,10 @@ from adcp.types import MediaBuyDeliveryStatus as LibraryMediaBuyDeliveryStatus
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
 from adcp.types.domains.core.geo_delivery_metrics import (
     GeoDeliveryMetrics as LibraryByGeoItem,
-)  # adcp 6.6: inline ByGeoItem promoted to named $ref type GeoDeliveryMetrics (spec 3.1.1 geo-delivery-metrics.json)
+)  # the pinned SDK: inline ByGeoItem promoted to named $ref type GeoDeliveryMetrics (spec 3.1.1 geo-delivery-metrics.json)
 from adcp.types.domains.core.placement_delivery_metrics import (
     PlacementDeliveryMetrics as LibraryByPlacementItem,
-)  # adcp 9: inline ByPlacementItem promoted to named $ref type PlacementDeliveryMetrics, same move ByGeoItem made above
+)  # the pinned SDK: inline ByPlacementItem promoted to named $ref type PlacementDeliveryMetrics, same move ByGeoItem made above
 from adcp.types.domains.media_buy.get_media_buy_delivery_response import (
     ByDeviceTypeItem as LibraryByDeviceTypeItem,
 )  # TODO: no stable alias in adcp.types

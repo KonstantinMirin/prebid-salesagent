@@ -48,7 +48,7 @@ enforcement. It is not one now, on both halves:
   this verifier never sees;
 * the escalation the namespace was worth protecting —
   ``tasks/pushNotificationConfig/set`` registering a webhook and its credentials outside
-  any skill invocation (security.mdx @ v3.1.1 :1462-1465) — is a channel this agent
+  any skill invocation (security.mdx :1462-1465) — is a channel this agent
   DECLINES wholesale: the card advertises ``push_notifications=False``, all four
   ``tasks/pushNotificationConfig/*`` handlers refuse, and the ``message/send`` envelope
   field is refused too (``src.a2a_server.adcp_a2a_server._refuse_envelope_push_config``).
@@ -56,10 +56,10 @@ enforcement. It is not one now, on both halves:
   body, where the escalation IS enforced (:mod:`src.core.signing.webhook_credentials`,
   read off the validated request).
 
-Spec grounding: AdCP 3.1.1 via ``adcp==6.6.0``;
-``v3.1.1:docs/building/by-layer/L1/security.mdx`` (there is no ``dist/docs/3.1.1/`` at that
+Spec grounding: via ``adcp==6.6.0``;
+``<pin>:docs/building/by-layer/L1/security.mdx`` (there is no ``dist/docs/<pin>/`` at that
 tag — ``dist/docs/`` stops at 3.1.0) and
-``v3.1.1:dist/compliance/3.1.1/universal/signed-requests.yaml`` (12 positive / 28 negative
+``<pin>:dist/compliance/<pin>/universal/signed-requests.yaml`` (12 positive / 28 negative
 vectors, graded on 2xx / 401 + the ``WWW-Authenticate`` code byte-for-byte).
 """
 
@@ -253,7 +253,7 @@ def _refuse_unsigned_if_required(
     *,
     authenticated: bool,
 ) -> None:
-    """The composition rule, security.mdx @ v3.1.1 :1268-1271.
+    """The composition rule, security.mdx :1268-1271.
 
     The SDK cannot decide this — its ``_precheck_presence`` raises
     ``request_signature_required`` on the absent branch UNCONDITIONALLY, which is the strict
@@ -367,7 +367,7 @@ def _verify_signed(
 def _handle_rejection(exc: SignatureVerificationError, operation: str, bucket: PostureBucket) -> VerifiedSigner | None:
     """The ONE owner of rejection policy: the spec's two phases, as one branch.
 
-    AdCP 3.1.1 ``security.mdx`` puts header well-formedness in a PRE-CHECK above the operation
+    ``security.mdx`` puts header well-formedness in a PRE-CHECK above the operation
     bucket (:1226) and signature validity in a checklist inside it. The SDK collapses presence
     and parse into a single call, so the phase boundary cannot be drawn by ordering two calls.
     It is drawn on WHICH EXCEPTION bypasses the narrowed ``none`` bucket's pass-through —
@@ -415,7 +415,7 @@ def _refuse(exc: SignatureVerificationError, operation: str, *, recorded: bool =
     ``AdCPSalesAgentError.__new__`` had an exception in it. Nothing names a code now.
 
     The SDK's exception goes to ``internal_detail``: it carries the checklist step and a
-    diagnostic sentence, which are server-log facts. AdCP 3.1.1 ``transport-errors.mdx``
+    diagnostic sentence, which are server-log facts. ``transport-errors.mdx``
     § Security Considerations forbids them reaching the buyer, and on #1721 there is nowhere
     for them to leak to — ``AdCPSalesAgentError`` has no ``message`` parameter at all.
     """
@@ -466,7 +466,7 @@ def build_registry_resolution(entry: CounterpartyRegistryEntry) -> AgentResoluti
 def _jwks_is_well_known(resolution: AgentResolution) -> bool:
     """Is the resolved JWKS at the ONE place this seller accepts keys from?
 
-    ``<agent origin>/.well-known/jwks.json``, and nowhere else. security.mdx @ v3.1.1
+    ``<agent origin>/.well-known/jwks.json``, and nowhere else. security.mdx
     step 6 makes that the DEFAULT — "defaulting to ``/.well-known/jwks.json`` at the
     origin of ``A`` when absent" — and permits ``agents[].jwks_uri`` to name somewhere
     else instead. This seller declines the second half, so key discovery is a pure
@@ -725,7 +725,7 @@ def _run_verifier(
             # ``VerifyOptions`` DEFAULTS this to "3.1", and the default is the one keyword
             # whose omission is silently wrong rather than loud: it leaves the SDK's
             # ``allow_legacy_base64url`` fallback on, so step 1 accepts a Base64URL
-            # ``sf-binary`` that AdCP 3.2 requires it to reject as
+            # ``sf-binary`` that requires it to reject as
             # ``request_signature_header_malformed`` — and accepts it with a signature that
             # is cryptographically VALID for the base, so nothing downstream notices.
             # Read from the same function the outbound signer reads.

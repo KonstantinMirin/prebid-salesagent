@@ -73,7 +73,7 @@ class CodeEntry:
     to whichever exception class happened to raise it: the pinned schema states the
     transport-level failure marker per code — ``HTTP 5xx`` for CONFIGURATION_ERROR and
     GOVERNANCE_UNAVAILABLE, ``HTTP 4xx`` for GOVERNANCE_DENIED and CREDENTIAL_IN_ARGS
-    (``enums/error-code.json``, ``enumDescriptions``, AdCP 3.1.1) — so a class that emitted a
+    (``enums/error-code.json``, ``enumDescriptions``, AdCP) — so a class that emitted a
     code with a status from a different band would contradict the pin. The band is the
     spec's; the exact number inside it is this seller's.
     """

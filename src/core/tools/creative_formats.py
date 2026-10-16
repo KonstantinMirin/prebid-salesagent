@@ -209,7 +209,7 @@ def _list_creative_formats_impl(
                     try:
                         format_id = FormatId(
                             id=f"broadstreet_{template_id}",
-                            # The WIRE STRING, not an AnyUrl: adcp 9 (#1396, "keep the
+                            # The WIRE STRING, not an AnyUrl: the pinned SDK (#1396, "keep the
                             # format-reference agent_url as the wire string") types
                             # FormatReferenceStructuredObject.agent_url as ``str``, so an
                             # AnyUrl is refused and its normalisation (a trailing slash on a
@@ -368,7 +368,7 @@ def _list_creative_formats_impl(
     # Filter by asset_types - formats must support at least one of the requested types
     if req.asset_types:
         # Normalize requested asset types to string values for comparison.
-        # adcp 3.6.0: req.asset_types contains AssetContentType enums; use .value to get string.
+        # the pinned SDK: req.asset_types contains AssetContentType enums; use .value to get string.
         # Format assets now use plain string literals, so must compare using .value not str(enum).
         requested_types = {enum_value(at) for at in req.asset_types}
         formats = [f for f in formats if get_format_asset_types(f) & requested_types]
@@ -430,7 +430,7 @@ def _list_creative_formats_impl(
             ]
 
     # Sort formats by name for consistent ordering
-    # (type field removed in adcp 3.12)
+    # (type field removed in the pinned SDK)
     formats.sort(key=lambda f: f.name or "")
 
     # A no-op today: the helper returns each format unchanged, because the pinned Format

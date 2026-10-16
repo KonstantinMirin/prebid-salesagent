@@ -23,7 +23,7 @@ from typing import Any, NamedTuple
 
 from adcp.types.domains.core.media_buy_features import MediaBuyFeatures
 from adcp.types.domains.core.postal_area_support import (
-    PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
+    PostalAreaSupport,  # the pinned SDK: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
 )
 from adcp.types.domains.enums.channels import MediaChannel
 from adcp.types.domains.enums.pricing_model import PricingModel
@@ -480,7 +480,7 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
 
     # Get adapter CLASS to determine channels and capabilities. Tenant-only,
     # principal-free: capabilities describe the SELLER (tenant), not the
-    # caller — INV-4 (AdCP v3.1.1). Resolved via get_adcp_capabilities.mdx
+    # caller — INV-4 (AdCP). Resolved via get_adcp_capabilities.mdx
     # L23 + get_adapter_class_for_tenant (adapter_helpers.py), which bypasses
     # Adapter.__init__ entirely — Kevel/TritonDigital would crash __init__
     # for a synthetic/tenant-only Principal (salesagent-dn2s).

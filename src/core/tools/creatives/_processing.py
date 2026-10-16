@@ -1022,8 +1022,8 @@ def _create_new_creative(
     )
 
     # Update creative_id if it was generated (i6k: model attribute assignment).
-    # The attr-defined ignore is GONE: adcp 5.7 made CreativeAsset a RootModel whose
-    # __getattr__ proxied to .root, which is what hid the attribute from mypy. adcp 9's
+    # The attr-defined ignore is GONE: the pinned SDK made CreativeAsset a RootModel whose
+    # __getattr__ proxied to .root, which is what hid the attribute from mypy. the pinned SDK's
     # CreativeAsset is a plain model again and declares creative_id itself.
     if not creative.creative_id:
         creative.creative_id = db_creative.creative_id

@@ -153,7 +153,7 @@ def sync_creatives(
     # ONE write path for both branches: dry_run rolls this transaction back on clean
     # exit instead of committing it (BaseUoW), so preview and live run identical
     # resolve/validate/write code and a preview's reads see its own flushed rows
-    # (sync-creatives-request.json#/properties/dry_run @ v3.1.1).
+    # (sync-creatives-request.json#/properties/dry_run).
     #
     # The stack, rather than a plain `with`, is what keeps the assignment stage a
     # SINGLE call site below: live closes this transaction before that call (as

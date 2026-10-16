@@ -81,9 +81,9 @@ def declared_gam_slots(declarations: Iterable[Any]) -> list[dict[str, Any]]:
     """The distinct GAM slots *declarations* state, each read by ATTRIBUTE.
 
     The CANONICAL arm, read as a first-class input. ``format_kind`` is the identity every
-    layer of this seller shares, and ``core/product-format-declaration.json`` (AdCP 3.2.3)
+    layer of this seller shares, and ``core/product-format-declaration.json`` (AdCP)
     makes ``params`` the per-kind canonical schema -- so a slot size is stated there, in the
-    arm the pin calls "the AdCP 3.2 authoring path", and not only on the deprecated one.
+    arm the pin calls "the authoring path", and not only on the deprecated one.
 
     TWO CALLERS, TWO DIFFERENT PINNED CLASSES, and that is why this takes ``Iterable[Any]``
     and reads ``.format_kind`` / ``.params`` rather than validating. The product seeder

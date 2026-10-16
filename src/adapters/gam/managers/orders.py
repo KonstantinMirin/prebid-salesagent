@@ -193,7 +193,7 @@ class GAMOrdersManager:
         except Exception as fault:
             # The ad server refused. Classify the SOAP fault into the code the
             # buyer should act on -- a quota is not a permission problem is not
-            # a missing ad unit. AdCP 3.1.1 transport-errors.mdx Rule 1:
+            # a missing ad unit. The spec's transport-errors.mdx Rule 1:
             # "Translate upstream errors into AdCP error codes. Do not pass
             # through raw upstream errors."
             #
@@ -614,7 +614,7 @@ class GAMOrdersManager:
                         raise
 
                     # Check if format type is supported by product
-                    # adcp 3.12: Format.type removed. Infer from format_id string.
+                    # the pinned SDK: Format.type removed. Infer from format_id string.
                     fid_str = (
                         format_obj.format_id.id if hasattr(format_obj.format_id, "id") else str(format_obj.format_id)
                     )
@@ -688,7 +688,7 @@ class GAMOrdersManager:
                             requirements = format_obj.requirements or {}
                             width = requirements.get("width")
                             height = requirements.get("height")
-                            # Infer creative size type from format_id name since Format.type was removed in adcp 3.12
+                            # Infer creative size type from format_id name since Format.type was removed in the pinned SDK
                             creative_size_type = "NATIVE" if "native" in format_id_str.lower() else "PIXEL"
 
                         # Check FormatId parameters (AdCP 2.5 parameterized formats)

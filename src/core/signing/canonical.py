@@ -5,7 +5,7 @@ the layer's canonicalization surface. It delegates every canonical form to the P
 SDK (:mod:`adcp.signing.canonical`) and adds exactly one thing on top: the COMPARER-side
 rejection of raw non-ASCII hosts.
 
-The delegation used to point at ``src/vendor/adcp_canonical`` — adcp 7.0.2's
+The delegation used to point at ``src/vendor/adcp_canonical`` — the pinned SDK's
 implementation copied verbatim — because the then-pinned ``adcp==6.6.0`` failed 14 of
 the 37 published canonicalization vectors and was terminal on its line. That copy is
 deleted. The pin is now ``9.0.0b1``, measured against the same vectors at **37/37 with
@@ -35,7 +35,7 @@ PR fixes it; when it reaches the pin, that completion goes too.
 
 What the comparer gate adds, and where each rule is grounded
 ------------------------------------------------------------
-``adcontextprotocol/adcp@v3.1.1:docs/reference/url-canonicalization.mdx``
+``adcontextprotocol/adcp@<pin>:docs/reference/url-canonicalization.mdx``
 is the authoritative algorithm — security.mdx §"@target-uri canonicalization" defers
 to it explicitly. The SDK's canonicalizer enforces the step-3 malformed-authority
 rejections and step 2's IPv6 rules itself. One rule differs BY DESIGN between the

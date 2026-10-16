@@ -19,7 +19,7 @@ from adcp.types import (
     SyncCreativeResult as LibrarySyncCreativeResult,
 )
 
-# The BRANCH, named at its generated path. adcp 9 retired the numeric arm name: the branch
+# The BRANCH, named at its generated path. the pinned SDK retired the numeric arm name: the branch
 # IS ``CreativeAsset`` in the generated module now, and neither it nor the public
 # ``adcp.types.CreativeAsset`` is a RootModel, so the static/runtime disagreement this
 # import was written around is gone. The import stays on the GENERATED path for one
@@ -190,7 +190,7 @@ class CreativeAssetRequest(LibraryCreativeAsset):
     # LibraryFormatId, not the local FormatId subclass: the ONLY axis this redeclaration
     # changes is nullability. Narrowing to the subclass would repeat the defect above one
     # level down -- the SDK's own FormatId would stop validating into its own field.
-    # No suppression: on adcp 9 the parent declares this field with the same class, so
+    # No suppression: on the pinned SDK the parent declares this field with the same class, so
     # adding nullability is a change mypy accepts outright.
     format_id: LibraryFormatId | None = None
 
@@ -303,7 +303,7 @@ _NON_TRACKING_EVENTS: frozenset[str] = frozenset(
 class Creative(LibraryCreative):
     """Individual creative asset - extends listing Creative with internal workflow fields.
 
-    adcp 3.6.0 listing Creative fields (public):
+    the pinned SDK listing Creative fields (public):
     - Required: creative_id, format_id, name, status, created_date, updated_date
     - Optional: assets, assignments, catalogs, tags, performance, account, sub_assets
 
@@ -492,7 +492,7 @@ class SyncCreativesRequest(BuyerRequest, LibrarySyncCreativesRequest):
     # Narrowed to the local class; see CreateMediaBuyRequest in _base.py.
     push_notification_config: PushNotificationConfig | None = None
 
-    # account and idempotency_key are REQUIRED by AdCP 3.1.1
+    # account and idempotency_key are REQUIRED by AdCP.1
     # (creative/sync-creatives-request.json /required = [idempotency_key, account,
     # creatives]) and are inherited as required. The removed override claimed
     # idempotency_key is "generated at the transport boundary when not supplied" -- which the
@@ -509,7 +509,7 @@ class SyncCreativesRequest(BuyerRequest, LibrarySyncCreativesRequest):
     def _delete_missing_needs_the_whole_library(self):
         """Refuse delete_missing together with creative_ids, as the pin says to.
 
-        creative/sync-creatives-request.json @ AdCP 3.1.1, ``delete_missing``: "Invalid
+        creative/sync-creatives-request.json @ ``delete_missing``: "Invalid
         when creative_ids is provided -- delete_missing applies to the entire library
         scope, not a filtered subset." A request that says both is malformed as a whole,
         which is INVALID_REQUEST; nothing about it is a per-creative outcome.
@@ -535,7 +535,7 @@ class SyncSummary(SalesAgentBaseModel):
 class SyncCreativeResult(LibrarySyncCreativeResult):
     """Extends library SyncCreativeResult with internal-only fields.
 
-    adcp 6.6 (spec 3.1.1) re-added assigned_to, assignment_errors, platform_id, status,
+    the pinned SDK (spec 3.1.1) re-added assigned_to, assignment_errors, platform_id, status,
     changes and warnings to the library parent, so all six are now INHERITED (they were
     locally redeclared under SDK 5.7 which had dropped them). See PR #1567.
 
@@ -546,11 +546,11 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # action is inherited from the adcp 6.6 parent as the StrEnum CreativeAction. Every value
+    # action is inherited from the the pinned SDK parent as the StrEnum CreativeAction. Every value
     # production emits (created/updated/unchanged/failed/deleted — as strings or enum members) is
     # a valid CreativeAction, and StrEnum coerces the strings, so no override or normalizer is needed.
 
-    # adcp 6.6 (spec 3.1.1) re-added assigned_to/assignment_errors/platform_id/status/changes/
+    # the pinned SDK (spec 3.1.1) re-added assigned_to/assignment_errors/platform_id/status/changes/
     # warnings to the library parent (PR #1567, shrinking the schema-inheritance
     # allowlist). Our former local `status` held internal review-routing state, not the spec's
     # advisory CreativeStatus, so it is renamed to `internal_status` (excluded from the wire)
@@ -623,7 +623,7 @@ class AssignmentResult(SalesAgentBaseModel):
 class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSuccess, SalesAgentAdcpResponse):
     """Extends library SyncCreativesResponse success variant.
 
-    adcp 3.9: SyncCreativesResponse is now a union TypeAlias (not RootModel).
+    the pinned SDK: SyncCreativesResponse is now a union TypeAlias (not RootModel).
     Since the error variant is never constructed (ToolError handles failures),
     we subclass the success variant directly.
 
@@ -631,7 +631,7 @@ class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSucc
     be. ``creative/sync-creatives-response.json`` composes the envelope into the whole
     response with ``allOf``, so every branch carries its eleven fields -- but the SDK's generated
     ``SyncCreativesResponse1`` (this class's parent) inherits ``AdcpVersionEnvelope`` alone.
-    At adcp 6.6 that is true of 19 of the 24 ``*SuccessResponse`` aliases: the five that DO
+    At the pinned SDK that is true of 19 of the 24 ``*SuccessResponse`` aliases: the five that DO
     inherit are the ones whose response schema has no ``oneOf``, so the alias resolves to the
     root class and picks the base up from the root ``allOf``. Filed upstream as
     adcontextprotocol/adcp-client-python#1136.
@@ -641,7 +641,7 @@ class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSucc
     go out with no marker at all. Delete this base the day the SDK's success branches compose the
     envelope; ``ProtocolEnvelope`` is exported and correct, only the branches fail to inherit it.
 
-    adcp 6.6 restored the fields SDK 5.7 had collapsed off the success envelope:
+    the pinned SDK restored the fields SDK 5.7 had collapsed off the success envelope:
     dry_run, context (ContextObject|None) and ext (ExtensionObject|None) are all
     INHERITED from the parent again (identical definitions; production may assign
     raw dicts to context/ext, which Pydantic coerces on validation). Only
@@ -691,7 +691,7 @@ class ListCreativeFormatsRequest(BuyerRequest, LibraryListCreativeFormatsRequest
 
         3.2.1 list-creative-formats-request.json puts ``uniqueItems: true`` on
         ``disclosure_positions`` AND ``disclosure_persistence``, in both role variants
-        (``media-buy/`` and ``creative/``). The generated model does not express it: adcp 9's
+        (``media-buy/`` and ``creative/``). The generated model does not express it: the pinned SDK's
         ``types._ergonomic._patch_unique_enum_list`` attaches a ``WrapValidator`` whose
         ``coerce_to_unique_enum_list`` SILENTLY DEDUPES (``list(dict.fromkeys(...))``), so
         ``["prominent", "prominent"]`` arrived as ``["prominent"]`` and a buyer's schema
@@ -754,7 +754,7 @@ class ListCreativesRequest(BuyerRequest, LibraryListCreativesRequest):
     3.1.1's list-creatives-request.json carries filters, sort, pagination, fields,
     account, context, ext and the ``include_*`` projection flags. The list this
     docstring used to enumerate named ``include_performance`` and
-    ``include_sub_assets`` among them, which stopped being true at adcp 3.10 when
+    ``include_sub_assets`` among them, which stopped being true at the pinned SDK when
     both were removed from the spec — a reader checking "is this field spec'd?"
     against the docstring got the wrong answer for two years' worth of SDK bumps.
     Enumerate nothing: the parent is the list.

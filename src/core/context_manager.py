@@ -817,7 +817,7 @@ class ContextManager(DatabaseManager):
             # the loop variable was never read. Every operation registers a config, so the
             # rows accumulate and the duplication grows with them: measured on the
             # storyboard tenant (run innet_200926_0647), one create emitted the same
-            # payload to the same URL 3 times within 17ms, and AdCP 3.1.1
+            # payload to the same URL 3 times within 17ms, and AdCP.1
             # `compliance/universal/webhook-emission.yaml`'s
             # `expect_no_duplicate_webhook_on_replay` caps a logical event at one delivery.
             #

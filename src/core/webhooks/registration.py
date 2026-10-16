@@ -21,8 +21,8 @@ validated against :class:`~adcp.types.PushNotificationConfig` ``Authentication``
 honours -- so what "deliverable" means is stated once, by a type derived from the
 spec, instead of by a hand-rolled union each caller had to destructure.
 
-Spec grounding: pinned AdCP 3.1.1,
-``dist/schemas/3.1.1/core/push-notification-config.json`` -- ``url`` is
+Spec grounding: pinned AdCP,
+``dist/schemas/<pin>/core/push-notification-config.json`` -- ``url`` is
 required at top level; ``authentication`` is optional but, when present,
 requires ``schemes`` and ``credentials``; ``AuthenticationScheme`` is
 ``["Bearer", "HMAC-SHA256"]``. The schema is SILENT on refusing a
@@ -109,11 +109,11 @@ class ValidatedWebhookRegistration:
     subset of it, and that is not a stylistic preference. The first version of
     this type was a hand-rolled dataclass carrying ``url`` plus two flattened
     auth primitives -- 2 of the 4 fields the pinned schema defines
-    (``dist/schemas/3.1.1/core/push-notification-config.json``: ``url``,
+    (``dist/schemas/<pin>/core/push-notification-config.json``: ``url``,
     ``operation_id``, ``token``, ``authentication``). It therefore silently DROPPED
     ``operation_id`` and ``token``, both of which carry echo obligations the seller
     MUST honour -- ``operation_id`` is graded by the conformance universal
-    ``dist/compliance/3.1.1/universal/webhook-emission.yaml`` requirement 1, and
+    ``dist/compliance/<pin>/universal/webhook-emission.yaml`` requirement 1, and
     the schema requires ``token`` echoed "verbatim in every webhook payload".
     A value that claims to receipt a document must not be a lossy projection of it;
     that is the same defect this package exists to remove, one level up.
@@ -353,7 +353,7 @@ class ValidatedWebhookRegistration:
         and ``authentication``. An earlier version rebuilt the dict from three
         flattened fields and silently dropped the other two — including
         ``operation_id``, whose echo is graded by
-        ``dist/compliance/3.1.1/universal/webhook-emission.yaml`` req. 1 and which
+        ``dist/compliance/<pin>/universal/webhook-emission.yaml`` req. 1 and which
         that requirement forbids recovering from the URL.
 
         Dumping the model also makes the byte-identity claim STRUCTURAL rather
@@ -534,7 +534,7 @@ def reporting_stream_id_missing(document: Mapping[str, Any]) -> bool:
     """Is this stored ``reporting_webhook`` registration unable to carry a correlation id?
 
     THE REPORTING-PATH CONDITION, and it is deliberately NOT the registration-path
-    one. AdCP 3.2.1 ``L3/webhooks.mdx`` :652-673 scopes the fail-closed ``MUST NOT``
+    one. ``L3/webhooks.mdx`` :652-673 scopes the fail-closed ``MUST NOT``
     to 3.3 and makes 3.2 opt-in guidance; this seller has adopted the interim
     agreement, so :666 is the rule it follows: "A registration without a
     buyer-supplied ID cannot enable this interim delivery path. Flag the missing
@@ -625,7 +625,7 @@ def accept_push_notification_config(
 
     THE CORRELATION-ID REFUSAL lives here, and this is the one funnel it belongs in.
     ``operation_id`` is optional on ``core/push-notification-config.json`` and
-    REQUIRED on ``core/mcp-webhook-payload.json``, and AdCP 3.2.1 ``L3/webhooks.mdx``
+    REQUIRED on ``core/mcp-webhook-payload.json``, and ``L3/webhooks.mdx``
     :143 forbids the one bridge between them ("Sellers MUST NOT derive
     ``operation_id`` by parsing ``push_notification_config.url``"). So a registration
     without it names a webhook whose conformant body can never be built, and :141

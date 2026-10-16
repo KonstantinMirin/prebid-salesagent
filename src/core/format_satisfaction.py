@@ -9,7 +9,7 @@ legacy assertion while the update and assignment gates REFUSED one. The two comm
 ``media_buy_create.py`` that recorded the skip as deliberate said it was pending this
 module.
 
-THE AUTHORITY is ``docs/creative/formats.mdx`` § Matching and satisfaction (AdCP 3.2.3,
+THE AUTHORITY is ``docs/creative/formats.mdx`` § Matching and satisfaction (AdCP,
 the pinned version -- ``adcp.get_adcp_spec_version()``), which states the relation as five
 rules:
 

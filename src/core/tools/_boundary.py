@@ -178,7 +178,7 @@ def failure_response(
     ``echo`` and the ``identity`` are the boundary's alone -- only ``serve`` holds a validated
     request and a resolved caller -- so only ``_failed`` passes them.
 
-    The ORIGINAL exception goes to the recorder: the body carries no exception text (AdCP 3.1.1
+    The ORIGINAL exception goes to the recorder: the body carries no exception text (AdCP.1
     transport-errors.mdx, Security Considerations), so the server-side record is the sole
     answer to what broke. ``adcp_error_for`` types it -- an untyped ValueError is a
     VALIDATION_ERROR, a PermissionError a PERMISSION_DENIED, anything else an INTERNAL_ERROR --
@@ -289,7 +289,7 @@ async def invoke_tool(
     The same is true of ``exchange``, the captured HTTP message an RFC 9421 signature covers.
     Nothing here reads it either. What this function DOES add is the two things only it knows
     and the capture cannot: the registry key this request dispatched on, and whether the
-    VALIDATED request registers webhook credentials (security.mdx @ v3.1.1 :1462-1465). Both
+    VALIDATED request registers webhook credentials (security.mdx :1462-1465). Both
     go into one :class:`~src.core.signing.verifier.SignatureSubject` beside the headers, and
     the resolver -- the one reader of a credential, signature included -- decides.
     """
@@ -308,7 +308,7 @@ async def invoke_tool(
     # The INBOUND half of version negotiation, FIRST and before anything reads the database.
     # A version pin is a property of the request in exactly the sense the account and the
     # idempotency key are, so it belongs at the one chokepoint rather than inside a tool;
-    # AdCP 3.1.1 ``compliance/universal/error-compliance.yaml`` grades it on ``get_products``.
+    # ``compliance/universal/error-compliance.yaml`` grades it on ``get_products``.
     # A release this build does not speak ends the exchange, so a rejected pin must not
     # resolve a credential, a tenant or an account, must not hash the request, and must not be
     # answered from the replay cache. The pins are declared fields on the request (the SDK's
@@ -391,7 +391,7 @@ def _served[Served: SalesAgentAdcpResponse](echo: ContextObject | None, response
     ``adcp_version``, inherited from the SDK's ``AdcpVersionEnvelope`` -- and it is set HERE
     for the same reason the account and the idempotency key are read at the boundary: it is a
     property of the seller and the call, not of the work, so an implementation neither knows
-    it nor should have to. AdCP 3.1.1 ``compliance/universal/version-negotiation.yaml`` grades
+    it nor should have to. ``compliance/universal/version-negotiation.yaml`` grades
     it at the envelope root with ``envelope_field_present`` and ``envelope_field_pattern``
     (advisory at 3.1, MUST at 4.0). The INBOUND half of that negotiation is a precondition
     rather than an envelope field, and runs at the top of ``invoke_tool``.

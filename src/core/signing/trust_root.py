@@ -6,7 +6,7 @@ authorized-property records that back the claim, and return plain dicts. The
 route layer (``src/routes/well_known.py``) owns the reads; this module owns the
 SHAPE, which is what the schemas grade.
 
-Two trust roots, two surfaces (AdCP 3.1.1 ``security.mdx``:1105-1111):
+Two trust roots, two surfaces (``security.mdx``:1105-1111):
 
 * **brand.json -> ``agents[].jwks_uri`` -> JWKS** is authoritative for REQUEST
   signatures and operator-side webhook signatures. This is the chain a verifier

@@ -107,7 +107,7 @@ class PolicyCheckService:
         brand_info = None
         if brand_manifest:
             if isinstance(brand_manifest, Brand):
-                # Extract name and tagline from adcp 3.12 Brand model
+                # Extract name and tagline from the pinned SDK Brand model
                 # names is list[LocalizedName] where LocalizedName is RootModel[dict[str, str]]
                 brand_name = None
                 if brand_manifest.names:

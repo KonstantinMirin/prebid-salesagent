@@ -30,7 +30,7 @@ that was drifting. Message was the last field that still disagreed on which of
 the two wins, so it now answers the same way the other three do.
 
 The platform codes in :class:`AppErrorCode` are this seller's own. The spec's
-vocabulary is open by design -- ``core/error.json`` (AdCP 3.1.1): ``error.code``
+vocabulary is open by design -- ``core/error.json`` (AdCP): ``error.code``
 is a wire-typed string rather than a closed enum, the published codes are
 documentary, senders MAY emit codes outside that set, and receivers MUST decode
 unknown ones by reading ``error.recovery``. So a code outside the 92 is legal,
@@ -426,7 +426,7 @@ def _build_code_table() -> dict[ErrorCodeT, CodeEntry]:
     ``adcp.signing.errors.REQUEST_TO_WEBHOOK_CODE``, not authored here.
 
     What the signature family lacks is METADATA. ``enums/error-code.json`` carries
-    ``enumMetadata`` for the codes it publishes, and at AdCP 3.1.1 it publishes none of
+    ``enumMetadata`` for the codes it publishes, and at it publishes none of
     the 28 (adcontextprotocol/adcp#7642), so their recovery/suggestion/message are
     transcribed in :mod:`src.core.errors.signature_codes` from the spec's own prose.
     That is a different SOURCE OF METADATA, not a different source of codes — so it is

@@ -103,7 +103,7 @@ class NotificationConfig(LibraryNotificationConfig):
     sellers MUST reject those entries as PER-ACCOUNT validation failures with INVALID_REQUEST
     or VALIDATION_ERROR and error.field pointing at the invalid ``event_types`` entry RATHER
     THAN SILENTLY DROPPING THEM"
-    (``#/properties/event_types``, AdCP 3.2.1). ``account/sync-accounts-request.json`` states
+    (``#/properties/event_types``, AdCP). ``account/sync-accounts-request.json`` states
     the same MUST independently at the field a buyer actually sends
     (``#/properties/accounts/items/properties/notification_configs``), and
     ``account/sync-accounts-response.json`` declares the channel it goes down:

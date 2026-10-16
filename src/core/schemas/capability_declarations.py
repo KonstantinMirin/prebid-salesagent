@@ -25,7 +25,7 @@ from collections.abc import Collection, Iterable
 from enum import Enum
 from typing import Any, NamedTuple
 
-# adcp 9 renamed two of these. ``ExperimentalFeature`` became the named $ref type
+# the pinned SDK renamed two of these. ``ExperimentalFeature`` became the named $ref type
 # ``ExperimentalFeatureId`` and moved to ``domains.core``; the capabilities response's
 # two-value ``ReportingDeliveryMethod`` enum (``webhook`` / ``offline``) became
 # ``CapabilityReportingDeliveryMethod``, because the public ``adcp.types`` name now belongs
@@ -216,7 +216,7 @@ _DERIVED_BLOCKS: dict[str, str] = {
 
 # The protocols a tenant may CLAIM. Derivation rule, applied uniformly: a protocol
 # is backed iff every tool in its conformance bundle
-# (`dist/compliance/3.1.1/protocols/<p>/index.yaml#required_tools`) is implemented
+# (`dist/compliance/<pin>/protocols/<p>/index.yaml#required_tools`) is implemented
 # in src/. Verified at v3.1.1:
 #   media_buy   -> [get_products, create_media_buy]  : both implemented.
 #   measurement -> NO protocol bundle exists (only brand, creative, governance,
@@ -697,7 +697,7 @@ class CapabilityDeclarations(BaseModel):
         ``get-adcp-capabilities-response.json`` carries this as an if/then rather than in the
         property's own ``enum``: IF ``request_signing.supported === true`` and the document
         speaks 3.2 or later, THEN ``covers_content_digest`` is required with
-        ``{"const": "required"}``. security.mdx: "AdCP 3.2 verifiers that advertise
+        ``{"const": "required"}``. security.mdx: "verifiers that advertise
         request-signing support MUST advertise ``covers_content_digest: "required"``", and
         ``either`` / ``forbidden`` are 3.0/3.1 compatibility values that "MUST NOT be
         advertised as a 3.2 signing posture". This seller serves 3.2, so the condition fires
@@ -724,7 +724,7 @@ class CapabilityDeclarations(BaseModel):
             return
         self._reject(
             "request_signing.covers_content_digest",
-            "A verifier that advertises request signing under AdCP 3.2 must advertise "
+            "A verifier that advertises request signing under must advertise "
             "covers_content_digest 'required': every accepted signature on a request with a "
             "body covers content-digest. 'either' and 'forbidden' are 3.0/3.1 compatibility "
             "postures that must not be advertised as a 3.2 signing posture; a deployment that "

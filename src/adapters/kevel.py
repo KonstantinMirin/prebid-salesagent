@@ -527,7 +527,7 @@ class Kevel(AdServerAdapter):
             self.log(f"Error updating Kevel flight: {e}")
             # The same obligation the AdCPAdapterError(internal_detail=e) branch
             # carried is met here, not dropped: ``requests``' text carried the ad
-            # server's URL/response body, which AdCP 3.1.1 transport-errors.mdx
+            # server's URL/response body, which transport-errors.mdx
             # § Security Considerations keeps off the buyer wire. The mapper's
             # messages are fixed first-party sentences naming a role, never an
             # address or a vendor body, and the detail stays in the log line above.

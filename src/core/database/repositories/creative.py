@@ -171,7 +171,7 @@ class CreativeRepository(SessionEffectsMixin):
 
         Returns a CreativeListResult with the matching creatives and total count.
 
-        ``statuses`` is a LIST because that is what the filter is: AdCP 3.1.1
+        ``statuses`` is a LIST because that is what the filter is: AdCP.1
         core/creative-filters.json declares ``statuses`` (an array, minItems 1) and no
         singular sibling. It used to be a single ``status`` string, which silently
         answered a two-status request with a one-status query.
@@ -200,7 +200,7 @@ class CreativeRepository(SessionEffectsMixin):
                 Creative.creative_id == CreativeAssignment.creative_id,
             ).where(CreativeAssignment.media_buy_id.in_(media_buy_ids))
 
-        # AdCP 3.1.1 core/creative-filters.json, on the filter object itself: "By default,
+        # core/creative-filters.json, on the filter object itself: "By default,
         # archived creatives are excluded from results. To include archived creatives,
         # explicitly filter by status='archived' or include 'archived' in the statuses
         # array." So an explicit list is honoured verbatim (naming `archived` is how a

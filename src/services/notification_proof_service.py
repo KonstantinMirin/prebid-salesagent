@@ -31,7 +31,7 @@ I/O in the request path:
 #1291 C2. The challenge carries an RFC 9421 signature made with this tenant's
 ``adcp_use: "request-signing"`` key under the WEBHOOK profile tag
 (``adcp/webhook-signing/v1``), over the exact bytes POSTed — or it is not sent.
-``sync_accounts.mdx`` @ v3.1.1 :207 requires exactly that, "even when the candidate
+``sync_accounts.mdx`` :207 requires exactly that, "even when the candidate
 config selects legacy delivery auth", and requires the receiver to verify the
 signature and to reject the challenge unless ``seller_agent_url``, ``delivery_auth``
 and ``event_types`` match the pending registration. So the body is the schema's
@@ -40,7 +40,7 @@ single-use value (:223-235) — not merely answering 2xx, which any endpoint tha
 accepts POSTs does, including one an attacker pointed at us.
 
 Domain separation between requests and webhooks is carried by the signature ``tag``,
-not by the key purpose (security.mdx @ v3.1.1 :1426), which is why a
+not by the key purpose (security.mdx :1426), which is why a
 ``request-signing`` key under the webhook tag is the conformant pairing and why no
 second key purpose exists for this. :1438 deprecates ``adcp_use:
 "webhook-signing"``; a webhook verifier that is handed the wrong purpose rejects with
@@ -148,7 +148,7 @@ class NotificationProofService:
             logger.info(
                 "Notification proof for account %s refused: this challenge cannot be RFC 9421-signed, "
                 "and an unsigned challenge is one no conformant receiver can attribute to us "
-                "(sync_accounts.mdx @ v3.1.1 :207)",
+                "(sync_accounts.mdx :207)",
                 account_id,
             )
             return False
@@ -189,7 +189,7 @@ class NotificationProofService:
         #
         # The refusal is deliberately OPAQUE. ``resolve_for_dial`` logs its own cause at
         # WARNING and raises WITHOUT one, because echoing a fetch error back to the party
-        # that supplied the URL is what AdCP 3.1.1 ``security.mdx`` point 6 forbids — so
+        # that supplied the URL is what ``security.mdx`` point 6 forbids — so
         # nothing is interpolated below. The outcome for the caller is unchanged: an
         # explicit, logged refusal that returns False.
         #
@@ -215,7 +215,7 @@ class NotificationProofService:
             logger.info(
                 "Notification proof for account %s refused: the egress seam refused this destination "
                 "before any connection was attempted (the cause is logged by the seam, not echoed "
-                "here — AdCP 3.1.1 security.mdx point 6)",
+                "here — security.mdx point 6)",
                 account_id,
             )
             return False
@@ -287,7 +287,7 @@ def _build_challenge(
     LOWERCASES the host: a tenant whose ``virtual_host`` carries any uppercase would emit
     ``https://seller.example.com/mcp/`` while brand.json publishes
     ``https://Seller.Example.com/mcp/``. A receiver matches this value BYTE-FOR-BYTE against
-    our published ``agents[].url`` (``security.mdx`` @ v3.1.1 :1104 step 5, "no
+    our published ``agents[].url`` (``security.mdx`` :1104 step 5, "no
     canonicalization at this step"), so the lowercased form fails resolution at a strict
     receiver — silently, because both strings look right to a human. The model still
     VALIDATES the value; only the emitted bytes carry the published spelling.

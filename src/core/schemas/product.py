@@ -101,8 +101,8 @@ class Product(LibraryProduct):
     # derived is_fixed property. Same wire shape, same discriminator and same constraints
     # as the SDK field it overrides.
     #
-    # The ELEMENTS, not a ``PricingOption`` RootModel wrapper. At adcp 6.6.0 the SDK's own
-    # field held such a wrapper and the local one subclassed it; adcp 9 deletes the wrapper
+    # The ELEMENTS, not a ``PricingOption`` RootModel wrapper. At the pinned SDK the SDK's own
+    # field held such a wrapper and the local one subclassed it; the pinned SDK deletes the wrapper
     # (the fix for adcp-client-python#1077) and types the field as the arms, so holding a
     # wrapper here would be a RESHAPE of the parent rather than a narrowing of it -- the
     # thing the schema-inheritance guard exists to catch. A local wrapper outlived the SDK's
@@ -203,7 +203,7 @@ class ProductFilters(LibraryFilters):
 
 
 class GetProductsRequest(BuyerRequest, LibraryGetProductsRequest):
-    """Extends library GetProductsWholesaleRequest (adcp 3.9: GetProductsRequest is a union alias).
+    """Extends library GetProductsWholesaleRequest (the pinned SDK: GetProductsRequest is a union alias).
 
     Base class: GetProductsWholesaleRequest (brief optional, buying_mode='wholesale').
     We widen buying_mode to str|None so callers aren't forced into a single mode.

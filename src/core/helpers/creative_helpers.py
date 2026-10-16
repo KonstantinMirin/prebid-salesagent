@@ -348,7 +348,7 @@ SIZED_ASSET_TYPES = frozenset({"image", "video"})
 # THE LAST RESORT, and no longer the only one: a creative identified by its canonical kind
 # reads its asset ids off the declaration's slots (priority 2 below), which is what the
 # pin actually says they are. This list is the v1-era stand-in for that and MAY ONLY
-# SHRINK. Measured against the declaration-derived ids at adcp 6.6.0: the slots name
+# SHRINK. Measured against the declaration-derived ids at the pinned SDK: the slots name
 # ``icon``, ``main_image`` and ``video`` among them, so those three are redundant for any
 # creative carrying a kind -- but ``Creative.format_kind`` is nullable ("a legacy reference
 # only has a kind once something projects it"), and for a creative with no kind this list
@@ -491,7 +491,7 @@ def _asset_group_vocabulary() -> dict[str, str]:
     ... are recognized as v1-era variants ... v1 aliases continue to work for backwards
     compatibility".
 
-    THE WHOLE REGISTRY, not just the click-destination entry. Measured at adcp 6.6.0: 49
+    THE WHOLE REGISTRY, not just the click-destination entry. Measured at the pinned SDK: 49
     entries, three of them url-typed -- ``landing_page_url``, ``privacy_policy_url`` and
     ``subtitle_file``. The latter two are a role this seller does not act on, which is a
     different fact from a role it was never told: an asset keyed ``privacy_policy_url`` is
@@ -545,7 +545,7 @@ def declared_slots(format_spec: Any | None) -> list[tuple[str, str, Any]]:
 
     and the alias is the lie: ``adcp.types.ImageFormatAsset`` IS
     ``adcp.types.domains.core.format.Assets``, the IMAGE arm of a discriminated union whose
-    other arms are not subclasses of it (measured at adcp 6.6.0: 45 arm classes, ``video``,
+    other arms are not subclasses of it (measured at the pinned SDK: 45 arm classes, ``video``,
     ``audio``, ``url``, ``pixel_tracker`` and the rest all ``issubclass -> False``). So the
     guard admitted image slots only, and then every test the loop performed on
     ``asset_type`` was testing a value the guard had already pinned to ``"image"``:

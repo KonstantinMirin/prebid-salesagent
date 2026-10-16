@@ -222,7 +222,7 @@ class DeliveryWebhookScheduler:
         # would silently re-open a transaction just to format a log line.
         media_buy_id = media_buy.media_buy_id
         try:
-            # SUPPRESS THE STREAM, which is this route's sanctioned shape. AdCP 3.2.1
+            # SUPPRESS THE STREAM, which is this route's sanctioned shape. AdCP.1
             # L3/webhooks.mdx :666 — "A registration without a buyer-supplied ID cannot
             # enable this interim delivery path. Flag the missing value for the buyer
             # and suppress scheduled sends; do not fabricate an ID or extract one from
@@ -247,7 +247,7 @@ class DeliveryWebhookScheduler:
             if reporting_stream_id_missing(reporting_webhook):
                 logger.error(
                     "Suppressing scheduled delivery report for media buy %s: its %s is absent, "
-                    "so there is no correlation id to echo and AdCP 3.2.1 L3/webhooks.mdx :666 "
+                    "so there is no correlation id to echo and L3/webhooks.mdx :666 "
                     "forbids fabricating one or reading it off the URL. The buyer must re-register "
                     "with an id before reports resume (tenant=%s, principal=%s)",
                     media_buy_id,
@@ -386,7 +386,7 @@ class DeliveryWebhookScheduler:
                 # and build_webhook_envelope then refused the delivery: the seller
                 # MUST echo it into mcp-webhook-payload.operation_id, where it is
                 # REQUIRED, and webhooks.mdx :143 forbids recovering it from the URL.
-                # `reporting_webhook.operation_id` is the AdCP 3.2 interim
+                # `reporting_webhook.operation_id` is the interim
                 # correlation agreement (webhooks.mdx :656-673), carried as an
                 # additive field under core/reporting-webhook.json's
                 # `additionalProperties: true`; from 3.3 the field is standardized.

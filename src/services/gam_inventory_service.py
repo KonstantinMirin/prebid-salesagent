@@ -749,7 +749,7 @@ class GAMInventoryService:
             logger.error(f"   Insert count: {len(to_insert)}, Update count: {len(to_update)}")
             logger.error("   This usually indicates: lost connection, lock contention, or large transaction")
             self.db.rollback()
-            # A DB commit timeout is SERVICE_UNAVAILABLE, per AdCP 3.1.1
+            # A DB commit timeout is SERVICE_UNAVAILABLE, per AdCP.1
             # transport-errors.mdx Rule 1, which names this exact translation.
             raise AdCPServiceUnavailableError(internal_detail=e) from e
         except (OperationalError, DBAPIError) as e:

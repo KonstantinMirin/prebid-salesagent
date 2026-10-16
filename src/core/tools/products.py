@@ -62,7 +62,7 @@ def get_recommended_cpm(product: Product) -> float | None:
     """
     for option in product.pricing_options:
         # The element IS the member: Product.pricing_options holds the arms, not the
-        # RootModel wrapper adcp 9 deleted.
+        # RootModel wrapper the pinned SDK deleted.
         inner = option
         price_guidance = getattr(inner, "price_guidance", None)
         if inner.pricing_model.upper() == "CPM" and price_guidance:
@@ -93,7 +93,7 @@ def extract_product_property_ids(
 
     property_ids: set[str] = set()
     for selector in publisher_properties:
-        # No ``.root``: adcp 9 ships PublisherPropertySelector as the union of its three
+        # No ``.root``: the pinned SDK ships PublisherPropertySelector as the union of its three
         # arms rather than a RootModel over them, so the selector IS the arm.
         if selector.selection_type == "all":
             # Product covers ALL properties for this domain
@@ -101,7 +101,7 @@ def extract_product_property_ids(
         elif selector.selection_type == "by_id":
             for pid in selector.property_ids:
                 # ``PropertyId`` is a ``ScalarStr`` -- a plain ``str`` subclass -- from
-                # adcp 9 on, and it keeps ``.root`` as a compatibility accessor returning
+                # the pinned SDK on, and it keeps ``.root`` as a compatibility accessor returning
                 # the same string. Read it as the string it is.
                 property_ids.add(str(pid))
         # by_tag: we don't resolve tags to IDs here; tags are excluded from matching
@@ -208,7 +208,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     # resolver, so there is no empty-catalog answer for one.
     tenant = identity.tenant
 
-    # Extract offering text from brand (adcp 3.6.0: brand replaces brand_manifest).
+    # Extract offering text from brand (the pinned SDK: brand replaces brand_manifest).
     # req.brand is BrandReference | None (Pydantic model with .domain attribute).
     offering = None
     if req.brand:
@@ -267,7 +267,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                 policy_result = await policy_service.check_brief_compliance(
                     brief=brief_text,
                     promoted_offering=offering,  # Use extracted offering from brand
-                    brand_manifest=None,  # adcp 3.6.0: brand_manifest replaced by brand; policy service still accepts None
+                    brand_manifest=None,  # the pinned SDK: brand_manifest replaced by brand; policy service still accepts None
                     tenant_policies=tenant_policies if tenant_policies else None,
                 )
 
@@ -289,7 +289,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                 )
 
             except Exception as e:
-                # structural-guard: fail-open is conformant at AdCP 3.1.1.
+                # structural-guard: fail-open is conformant at AdCP.
                 # `errors` is required on get-products-response.json only in its
                 # `if status == "failed"` branch; this path completes and returns
                 # products, so no emission condition applies. There is also no
@@ -458,7 +458,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         from src.services.dynamic_products import generate_variants_for_brief
 
         # A signals agent records its deployments against a ``destination.agent_url``, which
-        # AdCP 3.1.1 declares "format": "uri" (core/destination.json), and
+        # declares "format": "uri" (core/destination.json), and
         # ``extract_activation_key`` picks ours by comparing that string to this one. So it
         # is the URL the agent card publishes — the one accessor, so the two cannot name
         # different agents — never the bare host, which carries no scheme and may carry a
@@ -484,11 +484,11 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
 
             logger.info(f"[GET_PRODUCTS] Added {len(dynamic_variants)} dynamic product variants")
     except (ImportError, RuntimeError, OSError) as e:
-        # structural-guard: fail-open is conformant at AdCP 3.1.1.
+        # structural-guard: fail-open is conformant at AdCP.
         # get-products-response.json requires `errors` ONLY in its `if status ==
         # "failed"` branch; on a completed response the field carries no emission
         # condition. The nearest grading obligation is
-        # dist/compliance/3.1.1/universal/stale-response-advisory.yaml (required_tools:
+        # dist/compliance/<pin>/universal/stale-response-advisory.yaml (required_tools:
         # [get_products]), which puts STALE_RESPONSE in errors[] on a populated success
         # — but it requires details.served_from_cache + cache_age_seconds and scopes
         # itself to serving CACHE past its freshness target, which this path does not
@@ -519,7 +519,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                 min_exposures=getattr(req.filters, "min_exposures", None) if req.filters else None,
             )
     except (ImportError, RuntimeError, OSError) as e:
-        # structural-guard: fail-open is conformant at AdCP 3.1.1 —
+        # structural-guard: fail-open is conformant at —
         # same reasoning as the dynamic-variants handler above (errors[] is required
         # only on status=="failed"; stale-response-advisory.yaml does not reach a path
         # that serves no cache). If surfaced later, the correct field is `incomplete[]`
@@ -551,7 +551,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                 if not has_matching_pricing:
                     continue
 
-            # Filter by format_ids (format_types removed in adcp 3.12)
+            # Filter by format_ids (format_types removed in the pinned SDK)
             if req.filters.format_ids:
                 # The federation identity is the (agent_url, id) PAIR, canonicalized.
                 # core/format-id.json makes that a MUST of anyone comparing two format-id
@@ -656,7 +656,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                     pass
                 else:
                     # Extract country codes from filter. ``Country`` is NOT a RootModel --
-                    # at adcp 9 it is ``ScalarStr``, a ``str`` subclass, so the value IS the
+                    # at the pinned SDK it is ``ScalarStr``, a ``str`` subclass, so the value IS the
                     # string and ``.upper()`` can be called on it directly. ``.root`` still
                     # answers behind a deprecation shim ("Country.root is deprecated; the
                     # value IS a str"), which is what the read below is still using; the
@@ -792,7 +792,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
             # structural-guard: no spec surface covers ranking.
             # This degrades ORDER only — and the set returned is a SUPERSET, because
             # the <0.1 relevance filter stops running too, so the buyer loses nothing
-            # they were entitled to. AdCP 3.1.1 defines no ordering guarantee for
+            # they were entitled to. The spec defines no ordering guarantee for
             # get_products and no `incomplete[]` scope for ranking.
             logger.warning(f"Failed to apply AI product ranking: {e}. Returning unranked products.")
 
@@ -834,7 +834,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     # Note: We use eligible_products (Product objects), not response_data (dicts)
     # because Product objects have typed pricing_options (CpmFixedRatePricingOption, etc.)
     # while dicts lose this type information during serialization
-    # adcp 2.16.0+ accepts subclass lists at runtime via BeforeValidator coercion,
+    # the pinned SDK+ accepts subclass lists at runtime via BeforeValidator coercion,
     # but mypy still needs cast() due to list invariance in static typing
     resp = GetProductsResponse(
         products=cast(list[LibraryProduct], eligible_products),

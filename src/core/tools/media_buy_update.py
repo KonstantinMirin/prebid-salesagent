@@ -388,7 +388,7 @@ def _validate_creatives_for_assignment(
     Shared by both the ``creative_ids`` and ``creative_assignments`` update
     paths so the existence / status / format-compatibility rules live in one
     place (DRY). Checks run in order and raise on the first failing category,
-    each with the code adcp 3.1.1's ``enums/error-code.json`` defines for it --
+    each with the code the pinned SDK's ``enums/error-code.json`` defines for it --
     three different conditions, so three different codes:
 
     1. Existence — every ``creative_id`` exists for this principal within the
@@ -510,7 +510,7 @@ def _validate_creatives_for_assignment(
 
     if incompatible and first_refusal is not None:
         # A format outside the product's declared set is a BUSINESS-RULE violation, which
-        # adcp 3.1.1's enums/error-code.json codes as VALIDATION_ERROR ("violates business
+        # the pinned SDK's enums/error-code.json codes as VALIDATION_ERROR ("violates business
         # rules beyond schema validation"). It is not CREATIVE_REJECTED: that enum entry
         # reads "Creative failed content policy review ... revise the creative per the
         # seller's advertising_policies", and CREATIVE_VALUE_NOT_ALLOWED's own text calls
@@ -741,7 +741,7 @@ def _update_media_buy_impl(
             adapter = get_adapter(identity)
             today = date.today()
 
-            # AdCP 3.0.0 spec (core/product.json `property_targeting_allowed`): reject property_list targeting
+            # spec (core/product.json `property_targeting_allowed`): reject property_list targeting
             # on products with property_targeting_allowed=False. Runs before the dry_run
             # early return so dry_run requests are also rejected (parity with create).
             # Raise shape is shared with create via ``raise_if_property_targeting_violations``
@@ -903,7 +903,7 @@ def _update_media_buy_impl(
 
             # Handle campaign-level updates
             if req.paused is not None:
-                # adcp 2.12.0+: paused=True means pause, paused=False means resume
+                # the pinned SDK+: paused=True means pause, paused=False means resume
                 action = "pause_media_buy" if req.paused else "resume_media_buy"
                 result = adapter.update_media_buy(
                     media_buy_id=req.media_buy_id,
@@ -940,7 +940,7 @@ def _update_media_buy_impl(
                     media_buy_id=media_buy_id,
                     message=f"Media buy {media_buy_id} updated successfully.",
                     revision=_post_action_revision,
-                    media_buy_status=_post_action_mbs,  # AdCP 3.1: mirrors `status`
+                    media_buy_status=_post_action_mbs,  # AdCP: mirrors `status`
                     # This branch IS the applied one, so it carries the instant it took
                     # effect; _applied_instant states what the pinned field means and why
                     # the row's updated_at is not it.
@@ -967,7 +967,7 @@ def _update_media_buy_impl(
                 # No status assignment: UpdateMediaBuySuccess IS the completed branch of
                 # update-media-buy-response.json's oneOf, so its ``status`` is the const
                 # ``Literal["completed"]`` with that default. The line here set it to the
-                # same value through the TaskStatus enum, which adcp 9 types as the enum
+                # same value through the TaskStatus enum, which the pinned SDK types as the enum
                 # member rather than the bare string -- a no-op that did not type-check.
                 return success_response
 
@@ -979,7 +979,7 @@ def _update_media_buy_impl(
                 for pkg_index, pkg_update in enumerate(req.packages):
                     # Handle paused state
                     if pkg_update.paused is not None:
-                        # adcp 2.12.0+: paused=True means pause, paused=False means resume
+                        # the pinned SDK+: paused=True means pause, paused=False means resume
                         action = "pause_package" if pkg_update.paused else "resume_package"
                         # Failure is raised by the adapter, never returned.
                         adapter.update_media_buy(
@@ -1448,7 +1448,7 @@ def _update_media_buy_impl(
                             pkg_update.catalogs
                         )
 
-            # A campaign-level budget update is not expressible in AdCP 3.1.1: the request
+            # A campaign-level budget update is not expressible in AdCP: the request
             # schema declares no top-level budget, so the block that lived here -- validating
             # and persisting req.budget, then marking every package affected -- had no way to
             # be reached by a conformant buyer. Package budgets are handled above, per
@@ -1542,7 +1542,7 @@ def _update_media_buy_impl(
                 media_buy_id=req.media_buy_id or "",
                 message=f"Media buy {req.media_buy_id or ''} updated successfully.",
                 revision=_final_revision,
-                media_buy_status=_final_mbs,  # AdCP 3.1: mirrors `status`
+                media_buy_status=_final_mbs,  # AdCP: mirrors `status`
                 # The applied instant (see _applied_instant). This branch reaches writes
                 # that never touch the parent row — a creative_ids or
                 # creative_assignments entry on an active buy writes assignment rows

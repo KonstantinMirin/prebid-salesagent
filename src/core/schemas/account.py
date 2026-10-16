@@ -78,7 +78,7 @@ class ListAccountsRequest(BuyerRequest, LibraryListAccountsRequest):
 
     Library provides: account, status, pagination, sandbox, context, ext. Nothing is added:
     the field set is the pinned schema's, which is what lets the tool's advertised shape be
-    derived from this model without publishing anything AdCP 3.1.1 does not define.
+    derived from this model without publishing anything does not define.
 
     ``idempotency_key`` used to be declared here, commented as read-tool-idempotency
     tolerance. The citation was right and the conclusion was backwards, and the generated
@@ -234,7 +234,7 @@ class SyncAccountsResponse(
 ):
     """Extends library SyncAccountsResponse success variant.
 
-    adcp 3.10: SyncAccountsResponse is a union TypeAlias (not RootModel).
+    the pinned SDK: SyncAccountsResponse is a union TypeAlias (not RootModel).
     Since the error variant is never constructed (ToolError handles failures),
     we subclass the success variant directly.
 
@@ -246,7 +246,7 @@ class SyncAccountsResponse(
     are untyped and reach the wire only as pydantic extras.
 
     SDK 5.7 had collapsed the success envelope to just `status`, and this class
-    carried local copies of accounts/dry_run/context/ext as a result. adcp 6.6
+    carried local copies of accounts/dry_run/context/ext as a result. the pinned SDK
     re-added all four, typed, so only `accounts` is still declared here — and only
     to narrow its item type (Pattern #4). The rest are inherited.
     """
@@ -255,7 +255,7 @@ class SyncAccountsResponse(
 
     # Protocol-envelope `status` comes from ProtocolEnvelope (composed above).
     # account/sync-accounts-response.json composes the envelope branch via a top-level
-    # allOf, and this class is a TEMPORARY adopter: at adcp 6.6
+    # allOf, and this class is a TEMPORARY adopter: at the pinned SDK
     # SyncAccountsSuccessResponse has no ProtocolEnvelope in its MRO and no status
     # field, so the mixin is ADDITIVE here and deletes as a no-op the day the SDK
     # ships the field.
@@ -268,14 +268,14 @@ class SyncAccountsResponse(
     # (src/core/schemas/creative.py, GH #1710).
 
     # Pattern #4: narrowed to SyncResponseAccount for proper deserialization on
-    # transport roundtrip. `accounts` is REQUIRED (no default): AdCP 3.1
+    # transport roundtrip. `accounts` is REQUIRED (no default):
     # sync-accounts-response is oneOf(SyncAccountsSuccess requires `accounts` |
     # SyncAccountsError requires `errors`). This model is the success variant, so
     # omitting `accounts` entirely is invalid (it would be neither a valid success
     # nor error). May be an empty list for a zero-account sync, but must be present.
     #
     # dry_run / context / ext are NOT redeclared. They carried a stale "SDK 5.7
-    # removed these from the parent" note; adcp 6.6 re-added all three, typed, and
+    # removed these from the parent" note; the pinned SDK re-added all three, typed, and
     # the SyncCreativesResponse twin already inherits them. Two of the local copies
     # were also strictly worse: `context` widened to accept a raw dict although
     # SyncAccountsRequest.context is itself a ContextObject, and `ext` weakened the

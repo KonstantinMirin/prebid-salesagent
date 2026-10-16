@@ -49,10 +49,10 @@ from a2a.types import (
 from a2a.utils.errors import A2AError
 from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
 
-# The spec's nine-value task status, off the PUBLIC surface. Until adcp 9,
+# The spec's nine-value task status, off the PUBLIC surface. Until the pinned SDK,
 # ``adcp.types.TaskStatus`` resolved to a hand-written five-value enum and the real one was
 # reachable only through the private generated tree, which is why this import used to go
-# there. adcp 9 deletes the hand-written enum outright and ``GeneratedTaskStatus`` is the
+# there. the pinned SDK deletes the hand-written enum outright and ``GeneratedTaskStatus`` is the
 # public name for the generated one (identity-checked: it IS
 # ``adcp.types.domains.enums.task_status.TaskStatus``). The local ALIAS stays, because
 # ``TaskStatus`` above is a2a's protobuf message of the same name.
@@ -106,7 +106,7 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
     return s
 
 
-# Field names typed `integer` (not `number`) in the pinned AdCP v3.1.1 schema
+# Field names typed `integer` (not `number`) in the pinned schema
 # that this server can place in an A2A Part.data (via _dict_to_value above).
 #
 # google.protobuf.Value/Struct -- the well-known types backing Part.data --
@@ -521,7 +521,7 @@ class AdCPRequestHandler(RequestHandler):
         read ``params.message.parts`` and nothing else, so a registration sent here was
         silently DROPPED: the buyer received 200 for a webhook that was never registered.
         Worse, since the config never reached the validated request, neither the
-        security.mdx @ v3.1.1 :1464 log duty nor the :1465 signature escalation ran for a
+        security.mdx :1464 log duty nor the :1465 signature escalation ran for a
         payload carrying ``authentication`` — the two obligations the AdCP field triggers on
         every transport, including this one. Dropping and declining are indistinguishable
         from inside this agent and opposite from outside it.

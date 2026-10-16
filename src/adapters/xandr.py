@@ -83,7 +83,7 @@ class MediaBuyStatus:
 class PackageStatus:
     """Temporary stub for Xandr package status tracking (Xandr-specific, not AdCP).
 
-    NOTE: This is NOT the AdCP PackageStatus enum (which was removed in adcp 2.12.0).
+    NOTE: This is NOT the AdCP PackageStatus enum (which was removed in the pinned SDK).
     This is an internal class for tracking Xandr-specific package state information
     like delivery percentage and editability.
 
@@ -607,7 +607,7 @@ class XandrAdapter(AdServerAdapter):
         Maps from AdCP Targeting model's flat field structure to Xandr's profile API format.
 
         EITHER ARM. ``MediaPackage.targeting_overlay`` holds whichever of the two sibling
-        overlays its builder had -- AdCP 3.2 split the shape into an input schema and a
+        overlays its builder had -- split the shape into an input schema and a
         readback schema, and they are siblings with identical field sets and neither a
         subclass of the other -- so this reads only dimensions both declare. Narrowing with
         a cast at the call site is what hid the split from the type checker in the first

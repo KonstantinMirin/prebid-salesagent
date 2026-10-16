@@ -1,6 +1,6 @@
 """The pinned ``issues[]`` channel: one structured item per rejected field.
 
-AdCP 3.1.1 ``core/error.json`` declares a top-level ``issues`` array —
+``core/error.json`` declares a top-level ``issues`` array —
 "Structured list of validation failures. Primary use is ``VALIDATION_ERROR``,
 where multi-field rejections are common and ``field`` (singular) cannot carry
 the full pointer map." Items require ``pointer``, ``message`` and ``keyword``,
@@ -259,7 +259,7 @@ PYDANTIC_KEYWORD_MAP: dict[str, JsonSchemaKeyword | None] = {
     "uuid_version": "format",
     "json_invalid": "format",
     "string_unicode": "format",
-    # New in the pydantic-core the adcp 9 pin resolves (2.46.5, via pydantic 2.13.5):
+    # New in the pydantic-core the the pinned SDK pin resolves (2.46.5, via pydantic 2.13.5):
     # pydantic's ``StringConstraints(ascii_only=True)``, message "String should contain
     # only ASCII characters". Same family as ``string_unicode`` -- the string's character
     # repertoire is wrong, not its length or its regex -- and JSON Schema has no ``ascii``
