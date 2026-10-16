@@ -1099,17 +1099,31 @@ def then_adapter_trafficks_dimensions(ctx: dict, width: int, height: int) -> Non
     dispatched. A shared step would have to branch on which ran, which is the silent-env
     shape the BDD guards forbid.
 
-    THE ADAPTER BOUNDARY IS THE ONLY OBSERVABLE FOR THIS, and that bounds the transports.
-    The trafficked SIZE appears in no response field -- ``formats_to_provide`` and
-    ``format_ids_to_provide`` carry the package's creative CONTRACT, which is a different
-    fact from the dimensions the line item is created at. So this reads the mock, and the
-    scenarios using it are in-process only, exactly like the approval sibling.
+    IN-PROCESS ONLY, and NOT for the reason the approval sibling appears to share. That one
+    IS graded on e2e_rest and non-vacuously -- its row went PASSED, FAILED, PASSED across
+    three in-network runs -- so "the adapter is unobservable on a live transport" would be
+    false. The real difference is WHICH PROCESS RUNS THE BEHAVIOUR. ``when_publisher_approves``
+    calls ``run_approval`` directly in the TEST process on every transport (that helper has no
+    e2e branch at all), so on e2e_rest only the CREATE crosses the wire and the approval it
+    grades is in-process, populating this same mock for real.
+
+    This step grades the create itself, which on e2e_rest executes inside the container
+    against the Docker mock ad server. There is no in-process call to read, and no
+    server-written record of what the ad server was asked to traffic: ``package_config``
+    holds the package's creative CONTRACT (``formats_to_provide`` /
+    ``format_ids_to_provide``, which for a legacy-only product is the BUYER'S request arm),
+    and the create path's audit records carry budget and counts and no dimensions. Reading
+    either would grade the ask rather than the resolution. ``salesagent-6k1g0`` is the record
+    that would lift these scenarios to four transports.
     """
     from tests.bdd.steps._outcome_helpers import is_e2e
 
     assert not is_e2e(ctx), (
-        "this step reads the in-process adapter mock; the trafficked dimension has no wire "
-        "observable, so a scenario using it must not be routed to a live transport"
+        "this step reads the in-process adapter mock, and on a live transport the create runs "
+        "in the container where that mock is never populated -- unlike the approval sibling, "
+        "whose When runs in-process on every transport. A scenario using this step must not be "
+        "routed to a live transport until salesagent-6k1g0 gives the server a record of what "
+        "it asked the ad server to traffic."
     )
     adapter = ctx["env"].mock["adapter"].return_value
     calls = adapter.create_media_buy.call_args_list

@@ -695,8 +695,13 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # accepted, and the dimension rule is what decides. Legacy-only is spec-legal through
     # the 3.x window (core/product.json) and is the population this rule still serves.
     #
-    # IN-PROCESS ONLY, stated because the module's other scenarios run on four transports.
-    # The trafficked size has no wire observable — formats_to_provide and
-    # format_ids_to_provide carry the creative CONTRACT, which is a different fact from the
-    # dimensions the line item is created at — so the adapter boundary is the only place to
-    # read it, exactly as for the approval sibling above.
+    # IN-PROCESS ONLY, and NOT because the adapter is unobservable on a live transport —
+    # the approval sibling above IS graded on e2e_rest and detects regressions there. The
+    # difference is which PROCESS runs the behaviour: that scenario's When calls run_approval
+    # in the TEST process on every transport, so on e2e_rest only its create crosses the wire
+    # and the approval it grades populates the in-process mock for real. These two grade the
+    # CREATE, which on e2e_rest executes in the container, and the server writes no record of
+    # what it asked the ad server to traffic — package_config holds the creative CONTRACT (for
+    # a legacy-only product, the buyer's own request arm) and the audit records hold budget and
+    # counts. Reading either would grade the ask, not the resolution. salesagent-6k1g0 is the
+    # record that would lift these to four transports.
