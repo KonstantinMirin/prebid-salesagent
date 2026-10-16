@@ -430,15 +430,16 @@ def convert_product_model_to_schema(
     # place, `announced_legacy_format_arm`, which carries the producer rules and the
     # citations for them. Nothing is decided here; this carries the answer.
     #
-    # TWO DIFFERENT INPUTS, and the difference is the whole of salesagent-ym571. What the
-    # product SERVES resolves through `effective_format_ids`, so a linked inventory profile
-    # still supplies the arm for the legacy products that depend on it. What the divergence
-    # comparison JUDGES is `format_ids`, the product's OWN column, because divergence asks
-    # whether THIS product's seller authored a legacy arm that disagrees with THIS product's
-    # declarations. A shared profile's catalogue is not this product's authored arm, and
-    # substituting it made the seller invent the half it then reported on -- a
-    # canonically-authored product (own column NULL) was accused of divergence purely for
-    # being profile-linked, against a row the operator cannot fix from the product.
+    # THREE INPUTS ABOUT ONE ARM, and the distinctions are the whole of salesagent-ym571.
+    # `effective_format_ids` is what the product SERVES, so a linked inventory profile still
+    # supplies the arm for the legacy products that depend on it. `format_ids` is the
+    # product's OWN column, which says whether the served arm is the product's to answer
+    # for. `inventory_profile_id` names the row it came from when it is not.
+    #
+    # The defect that made this three values instead of one: the comparison was fed the
+    # resolved arm alone, so a canonically-authored product (own column NULL) was reported
+    # divergent against a shared profile's catalogue, and the advisory named the PRODUCT for
+    # a mismatch no operator can fix there.
     #
     # Omitted rather than emitted empty, deliberately. The field is "Deprecated in AdCP;
     # removed in AdCP 4.0" and is absent from the schema's root `required` list, so a
@@ -451,6 +452,11 @@ def convert_product_model_to_schema(
         authored_format_ids=product_model.format_ids,
         format_options=product_model.format_options,
         product_id=product_model.product_id,
+        # The profile's BUSINESS key, not its integer primary key: this reaches an advisory
+        # an operator reads, and `profile_id` is what the admin surface shows them.
+        # Read through the relationship rather than off `inventory_profile_id`, so the value
+        # and the arm it attributes come from the same row `effective_format_ids` resolved.
+        inventory_profile_id=(product_model.inventory_profile.profile_id if product_model.inventory_profile else None),
     )
     if legacy_arm.format_ids:
         product_data["format_ids"] = list(legacy_arm.format_ids)

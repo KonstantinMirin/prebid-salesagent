@@ -255,28 +255,46 @@ class FormatOptionDivergenceSummary(BaseModel):
 
 
 class FormatDeclarationDivergenceDetails(ErrorDetails):
-    """``FORMAT_DECLARATION_DIVERGENT``'s details, with the keys the pin names.
+    """``FORMAT_DECLARATION_DIVERGENT``'s details, with the keys the pin names plus the one
+    that says WHOSE legacy arm disagreed.
 
     ``enums/error-code.json`` says ``error.details`` SHOULD carry
-    ``{product_id, format_ids, format_options_summary, divergence_reason}``, so those are
-    the four fields and no others. ``format_ids`` is the legacy arm the product AUTHORED
-    — the arm the advisory says disagrees — rendered as identities for the same reason
-    the summary is.
+    ``{product_id, format_ids, format_options_summary, divergence_reason}``. ``format_ids``
+    is the legacy arm the buyer received — the arm the advisory says disagrees — rendered as
+    identities for the same reason the summary is.
 
-    ``divergence_reason`` is a ``Literal`` over the axes this seller can actually detect,
-    which is one: a v1 reference the canonical arm asserts that the authored legacy arm
-    does not name (``core/product-format-declaration.json``: ``Product.format_ids[]`` ⊇
-    the ``v1_format_ref`` entries). The pin's other axis — v2 ``params`` failing to narrow
-    the referenced v1 format's ``requirements`` — needs that format FETCHED from a
-    catalog, so it is not detectable on this path and is not a member here. Adding it is
-    then a type change mypy fails at the construction site, rather than a string nobody
-    notices is now ambiguous.
+    ``inventory_profile_id`` is the fifth, and it exists because the four above cannot say
+    something a recipient must know to act: this seller resolves a product's legacy arm
+    through a linked inventory profile when it has one, and that profile's ``format_ids``
+    is a NOT NULL column on a row OTHER PRODUCTS SHARE
+    (``InventoryProfile``, no canonical arm at all — salesagent-8qela.154). An advisory
+    naming only the product sends the operator to edit a field the product does not own,
+    and editing the profile to satisfy one product changes every product linked to it. So
+    when the disagreeing arm came from a profile this names it; when the product authored
+    its own arm it is ``None``. That is the whole of salesagent-ym571's second requirement:
+    an advisory the recipient cannot act on at the named object is a defect even when the
+    mismatch is real.
+
+    ``error.field`` still points at the PRODUCT, because the pin makes that a MUST and
+    because the product is where the buyer found the problem. Attribution of the CAUSE is a
+    details concern; location of the SYMPTOM is the field's.
+
+    ``divergence_reason`` is a ``Literal``, so each axis this seller can detect is a named
+    member and adding one is a type change mypy fails at the construction site rather than a
+    string nobody notices is now ambiguous. The two members differ by WHICH arm was judged,
+    not by what the comparison did. The pin's other axis — v2 ``params`` failing to narrow
+    the referenced v1 format's ``requirements`` — needs that format FETCHED from a catalog,
+    so it is not detectable on this path and is not a member.
     """
 
     product_id: str
     format_ids: list[str]
     format_options_summary: list[FormatOptionDivergenceSummary]
-    divergence_reason: Literal["v1_format_ref_absent_from_format_ids"]
+    divergence_reason: Literal[
+        "v1_format_ref_absent_from_format_ids",
+        "v1_format_ref_absent_from_inventory_profile_format_ids",
+    ]
+    inventory_profile_id: str | None = None
 
 
 class SelectorRouteSummary(BaseModel):

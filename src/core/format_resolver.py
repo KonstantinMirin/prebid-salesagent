@@ -446,6 +446,7 @@ def announced_legacy_format_arm(
     authored_format_ids: Iterable[Any] | None,
     format_options: Iterable[Mapping[str, Any]] | None,
     product_id: str,
+    inventory_profile_id: str | None = None,
 ) -> LegacyFormatArm:
     """The deprecated ``format_ids`` a product announces, and the divergence it carries.
 
@@ -517,45 +518,70 @@ def announced_legacy_format_arm(
     carries ``check: field_absent`` on ``products[0].format_ids``: "v2-only product does not
     invent v1 named-format fallbacks").
 
-    DIVERGENCE IS MEASURED AGAINST THE AUTHORED ARM, never the announced one. The
-    containment the pin states is ``Product.format_ids[]`` ⊇ the ``v1_format_ref`` entries
+    THE ARM THE BUYER SEES IS THE ONE JUDGED, because the pin's MUST is about presence:
+    "when both fields are present they MUST describe the same underlying formats". The
+    containment it states is ``Product.format_ids[]`` ⊇ the ``v1_format_ref`` entries
     (``core/product-format-declaration.json``; graded by the ``refs_resolve`` check on the
-    storyboard's ``get_seeded_canonical_product``). That distinction is load-bearing under
-    a seller that DOES project, where the announced arm holds the asserted refs by
-    construction and the advisory could never fire; keeping the measurement on the authored
-    arm means the rule reads the same whichever side of that choice the seller is on.
+    storyboard's ``get_seeded_canonical_product``).
+
+    WHOSE arm it is decides the remedy and the attribution, and that is the whole of
+    salesagent-ym571. A product that authored its own divergent arm omits it, per the
+    producer rule, and the advisory names the product. A product whose arm came from a
+    linked inventory profile authored nothing to omit: it SERVES the arm and the advisory
+    names the PROFILE, because dropping a shared row's catalogue from this product's
+    response removes inventory the buyer can use over a row the product does not own, and
+    because an advisory the recipient cannot act on at the named object is a defect even
+    when the mismatch is real. Under a seller that DOES project, judging the served arm
+    would be vacuous — the derivation puts the asserted refs there by construction — which
+    is why the decline is what makes this reading available.
 
     Args:
-        format_ids: the legacy arm the product authored, in the shape it is held in.
+        format_ids: the legacy arm the product SERVES, resolved through the caller's
+            ``effective_format_ids`` so a linked profile still supplies it.
+        authored_format_ids: the product's OWN legacy column, nothing substituted in.
+        inventory_profile_id: the business key of the profile the served arm came from,
+            when the product is linked to one. Read only when the served arm is the
+            profile's, which is the one case the advisory has to attribute elsewhere.
         format_options: the stored canonical declarations, as the JSON column holds them.
         product_id: the product the advisory would name.
     """
     served = tuple(format_ids or [])
     authored = tuple(authored_format_ids or [])
-    # NOTHING TO COMPARE AGAINST, so nothing to read. A product that authored no legacy arm
-    # cannot disagree with its own declarations, whatever a linked profile supplies on its
-    # behalf — so the canonically-authored case, which is the common one and every
-    # storyboard canonical fixture, returns without touching ``format_options`` at all. It
-    # still SERVES what it resolves to: dropping the profile's arm here would unserve the
-    # legacy products that depend on it, which is salesagent-8qeix and not this function's
-    # call to make.
-    if not authored:
-        return LegacyFormatArm(format_ids=served, divergence=None)
 
     declared = [(_declaration_kind(d), _asserted_legacy_identities(d)) for d in format_options or []]
     asserted = {identity for _, identities in declared for identity in identities}
-    if not asserted:
+    # NO LEGACY ARM AT ALL, or no asserted ref to disagree with it. The pin's MUST is about
+    # two fields being PRESENT ("when both fields are present they MUST describe the same
+    # underlying formats"), so one of them missing engages nothing. The canonically-authored
+    # case — every storyboard canonical fixture — lands here.
+    if not asserted or not served:
         return LegacyFormatArm(format_ids=served, divergence=None)
 
-    missing = asserted - product_format_identities(authored)
-    if not missing:
+    # WHICH ARM IS JUDGED, AND WHO IS TOLD. The arm the buyer sees is the one the MUST is
+    # about, so it is the one compared — but WHOSE it is decides both the attribution and
+    # whether omitting it is the right remedy.
+    #
+    # Own arm: the producer rule applies to the producer's own compatibility arm, so the
+    # product omits it ("a producer that cannot guarantee agreement MUST omit the legacy
+    # compatibility projection") and the advisory names only the product.
+    #
+    # Profile's arm: the product authored nothing to omit, and dropping a shared row's
+    # catalogue from this product's response is the wrong remedy for an authoring fault
+    # elsewhere — it removes inventory the buyer can use over a row the product does not
+    # own. So the arm is SERVED and the advisory names the PROFILE, which is where an
+    # operator can act (salesagent-ym571: an advisory the recipient cannot act on at the
+    # named object is a defect even when the mismatch is real).
+    arm_is_the_products_own = bool(authored)
+    judged = authored if arm_is_the_products_own else served
+
+    if not asserted - product_format_identities(judged):
         return LegacyFormatArm(format_ids=served, divergence=None)
 
     return LegacyFormatArm(
-        format_ids=(),
+        format_ids=() if arm_is_the_products_own else served,
         divergence=FormatDeclarationDivergenceDetails(
             product_id=product_id,
-            format_ids=sorted(format_display(identity) for identity in product_format_identities(authored)),
+            format_ids=sorted(format_display(identity) for identity in product_format_identities(judged)),
             format_options_summary=[
                 FormatOptionDivergenceSummary(
                     format_kind=kind,
@@ -563,7 +589,12 @@ def announced_legacy_format_arm(
                 )
                 for kind, identities in declared
             ],
-            divergence_reason="v1_format_ref_absent_from_format_ids",
+            divergence_reason=(
+                "v1_format_ref_absent_from_format_ids"
+                if arm_is_the_products_own
+                else "v1_format_ref_absent_from_inventory_profile_format_ids"
+            ),
+            inventory_profile_id=None if arm_is_the_products_own else inventory_profile_id,
         ),
     )
 

@@ -142,12 +142,12 @@ def given_canonical_only_product_with_ref(ctx: dict, format_kind: str, legacy_id
     )
 )
 def given_profile_linked_canonical_product(ctx: dict, profile_id: str, asserted_id: str) -> None:
-    """Store the shape that was falsely accused of divergence (salesagent-ym571).
+    """Store the shape the advisory used to MISATTRIBUTE (salesagent-ym571).
 
-    THE PRODUCT'S OWN ``format_ids`` IS NULL. The legacy arm the comparison used to judge it
-    against came from the LINKED PROFILE, a row other products also use, so the product was
-    accused of a disagreement it could not have authored and an operator could not fix from
-    it.
+    THE PRODUCT'S OWN ``format_ids`` IS NULL, and the arm it serves comes from the LINKED
+    PROFILE -- a row other products also use, whose ``format_ids`` is NOT NULL and which has
+    no canonical arm at all (salesagent-8qela.154). So the arm is real and the operator
+    authored it, just not on the product; the defect was reporting it as the product's own.
 
     The two ids differ by construction and both come from the scenario, so the fixture cannot
     drift into agreement and pass for the boring reason.
@@ -174,6 +174,7 @@ def given_profile_linked_canonical_product(ctx: dict, profile_id: str, asserted_
     )
     PricingOptionFactory(product=product)
     ctx["product"] = product
+    ctx["inventory_profile"] = profile
 
 
 @given("the seller stores a dual-authored product whose declaration is a custom format with no format_shape")
@@ -394,6 +395,39 @@ def then_divergence_advised(ctx: dict, field: str) -> None:
         f"the advisory's recovery is not the pinned enumMetadata's: {advisory.get('recovery')!r}"
     )
     ctx["format_divergence_advisory"] = advisory
+
+
+@then("the advisory attributes the legacy arm to an inventory profile rather than to the product")
+def then_divergence_attributed_to_profile(ctx: dict) -> None:
+    """The advisory says WHOSE arm disagreed, which is what makes it actionable.
+
+    Two halves, and the second is the one with teeth. ``inventory_profile_id`` must name the
+    profile the fixture linked -- the BUSINESS key the admin surface shows an operator, not
+    the integer primary key they never see -- and ``divergence_reason`` must be the
+    profile-sourced member, so a recipient routing on the reason alone reaches the right
+    object without parsing anything.
+
+    Asserted as EQUAL to the stored profile's id rather than merely present: a details block
+    that carried the product's id in that slot, or a hardcoded placeholder, would satisfy
+    presence while sending the operator to the same wrong object the defect did.
+
+    The product's own column is NULL in this fixture, so ``format_ids`` in the details is the
+    PROFILE's ref. That is deliberate and is why the reason member differs: the arm being
+    reported is real and on the wire, it is simply not the product's to answer for.
+    """
+    advisory = ctx["format_divergence_advisory"]
+    details = advisory.get("details")
+    assert isinstance(details, dict), f"the advisory carries no details object: {details!r}"
+
+    expected = ctx["inventory_profile"].profile_id
+    assert details.get("inventory_profile_id") == expected, (
+        "the advisory does not attribute the legacy arm to the profile it came from: "
+        f"expected {expected!r}, got {details.get('inventory_profile_id')!r}"
+    )
+    assert details.get("divergence_reason") == "v1_format_ref_absent_from_inventory_profile_format_ids", (
+        "the advisory classifies the divergence as the product's own, so a recipient routing "
+        f"on the reason goes to the wrong object: {details.get('divergence_reason')!r}"
+    )
 
 
 @then(parsers.parse('the advisory details name the authored "{authored_id}" and the asserted "{asserted_id}"'))

@@ -113,33 +113,38 @@ Feature: Canonical format options a seller stores are announced to buyers on the
     # divergence it had no basis for.
 
   @T-UC-GET-PRODUCTS-format-options-profile-linked @format_option_announcement @requires_db
-  Scenario: a canonically-authored product is not accused of divergence for being profile-linked
+  Scenario: a divergence whose legacy arm came from a shared profile is attributed to the profile
     Given the seller stores a canonically-authored product linked to an inventory profile whose format_ids names "display_300x250_image", asserting a v1_format_ref to "display_728x90_image"
     When the buyer requests products
     Then the announced format option carries v1_format_ref naming "display_728x90_image"
-    And the response carries no format-declaration advisory
-    # THE REGRESSION TEST for salesagent-ym571, a false-positive advisory in this stage's own
-    # landed deliverable. The product's OWN format_ids column is NULL -- it is canonically
-    # authored, the shape the pin tells new products to use -- so it has nothing to diverge
-    # FROM and must never be accused. It was accused anyway, because the conversion fed the
-    # comparison `effective_format_ids`, which substitutes the LINKED PROFILE's column
-    # (models.py:561-563), so the "nothing authored, nothing to compare" short-circuit never
-    # saw the product's real arm. The seller invented the legacy half and then reported on it.
+    And the announced product still carries its format_ids
+    And the response carries one FORMAT_DECLARATION_DIVERGENT advisory from the producer naming "products[0]"
+    And the advisory attributes the legacy arm to an inventory profile rather than to the product
+    # THE REGRESSION TEST for salesagent-ym571. The product's OWN format_ids column is NULL --
+    # it is canonically authored, the shape the pin tells new products to use -- and the arm
+    # it serves comes from a LINKED INVENTORY PROFILE, whose format_ids is a NOT NULL column
+    # on a row OTHER PRODUCTS SHARE and which has no canonical arm at all
+    # (salesagent-8qela.154). So the operator DID author that arm, just not on the product.
     #
-    # That property's own docstring argues at length that None and [] are DIFFERENT FACTS --
-    # "A canonically-authored product has no legacy arm at all, and that is a different fact
-    # from 'an empty legacy arm'" -- and the profile branch two lines below it destroys
-    # exactly that distinction for every profile-linked product. The docstring is the
-    # argument against the code beneath it.
+    # The defect was never that the advisory fired. The two arms the buyer receives really do
+    # disagree, and the pin's MUST is about presence -- "when both fields are present they
+    # MUST describe the same underlying formats". The defect was WHO IT ACCUSED: the advisory
+    # named the product and reported the profile's ref as the product's own authored arm,
+    # sending the operator to fix a field the product does not own, where editing the profile
+    # to satisfy this product changes every product linked to it.
     #
-    # Divergence is now judged on the product's OWN column and nothing substituted into it.
-    # What the product SERVES still resolves through the profile, so the legacy products that
-    # depend on a shared catalogue keep their arm.
+    # So the arm is still SERVED -- dropping a shared row's catalogue from this product's
+    # response would remove inventory the buyer can use over an authoring fault elsewhere --
+    # and the advisory names the PROFILE. An advisory the recipient cannot act on at the named
+    # object is a defect even when the mismatch is real.
     #
-    # The first outcome is what stops this passing vacuously: a seller that dropped the
-    # declaration would satisfy "no advisory" while serving the product undescribed. What it
-    # deliberately does NOT assert is the absence of a format_ids arm -- a profile-linked
-    # canonical product still serves the profile's, and that residual is salesagent-8qeix.
+    # `field` still points at products[0], because the pin makes that a MUST and because the
+    # product is where the BUYER found the problem. Attribution of the CAUSE is a details
+    # concern; location of the SYMPTOM is the field's.
+    #
+    # Falsifiable in three directions: judging the product's own NULL column fires nothing and
+    # fails the advisory outcome; judging the served arm without attribution fails the last
+    # outcome; and a seller that dropped the declaration or the arm fails the first two.
 
   @T-UC-GET-PRODUCTS-format-options-divergent @format_option_announcement @requires_db
   Scenario: a product whose two format arms disagree is served, and the producer says so
