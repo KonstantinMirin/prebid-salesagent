@@ -157,7 +157,6 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
                 height=250,
             ),
             name="Static Display",
-            type="display",
             # Even if requirements say something different, format_id wins
             requirements={"width": 728, "height": 90},
         )
@@ -171,7 +170,6 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
                 id="display_static",
             ),
             name="Static Display",
-            type="display",
             requirements={"width": 728, "height": 90},
         )
         assert fmt.get_primary_dimensions() == (728, 90)
@@ -184,7 +182,6 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
                 id="display_static",
             ),
             name="Static Display",
-            type="display",
         )
         assert fmt.get_primary_dimensions() is None
 
@@ -205,7 +202,6 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
                 height=250,
             ),
             name="Static Display",
-            type="display",
         )
         assert fmt.get_primary_dimensions() == (300, 250)
 
@@ -217,7 +213,6 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
                 id="video_hosted",
             ),
             name="Hosted Video",
-            type="video",
         )
         assert fmt.get_primary_dimensions() is None
 
@@ -229,7 +224,6 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
                 id="display_static",
             ),
             name="Static Display",
-            type="display",
             renders=[Renders(role="primary", dimensions=Dimensions(width=728, height=90))],
         )
         assert fmt.get_primary_dimensions() == (728, 90)
@@ -250,7 +244,6 @@ class TestFormatGetPrimaryDimensionsWithFormatId:
                 height=250,
             ),
             name="Static Display",
-            type="display",
             renders=[Renders(role="primary", dimensions=Dimensions(width=640, height=480))],
             requirements={"width": 728, "height": 90},
         )
