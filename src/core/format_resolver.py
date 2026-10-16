@@ -651,25 +651,93 @@ def snapshot_legacy_arm(snapshots: Iterable[LibraryPackageFormatSnapshot]) -> tu
     Duplicate-free and order-preserving on the canonical identity, because the array is a
     checklist: two snapshots asserting one reference ask for one creative, not two.
 
-    THE ONE READER OF ``v1_format_ref`` OFF A SNAPSHOT, again. This briefly had a sibling --
-    ``snapshot_adapter_format_ids`` -- that returned the same references with the selected
-    declaration's width, height and duration merged onto them, because ``MediaPackage`` could
-    carry only references and an adapter had to get the dimensions somehow. That projection
-    is DELETED along with the pairing helper the two shared: the carrier now holds
-    ``formats_to_provide``, so an adapter reads ``params`` off the snapshot it was actually
-    handed (``salesagent-ol033.8``, E1). Deleting it also retires the ceiling it had to
-    state, which was that a canonical-only declaration asserting no reference could not be
-    expressed in that carrier at all.
+    FOR THE WIRE, AND NOT FOR AN ADAPTER. The references are returned AS AUTHORED, which
+    means without dimensions -- measured: ``v1_format_ref: [{id: display_300x250, width:
+    None, height: None}]``. That is right for the wire field, whose job is to name formats,
+    and wrong for an adapter carrier, whose job is to be sufficient to place a line item.
+    :func:`snapshot_adapter_format_ids` is the carrier's projection for that reason.
+    """
+    return tuple(ref for _snapshot, ref in _asserted_refs(snapshots))
+
+
+def _asserted_refs(
+    snapshots: Iterable[LibraryPackageFormatSnapshot],
+) -> tuple[tuple[LibraryPackageFormatSnapshot, LibraryFormatId], ...]:
+    """Each seller-asserted ``v1_format_ref``, paired with the snapshot that asserts it.
+
+    The ref-reading rule lives HERE once -- read ``v1_format_ref`` and nothing else, and
+    deduplicate on the canonical ``(agent_url, id)`` identity -- because two consumers need
+    it and they project it differently: the WIRE wants the reference as authored
+    (:func:`snapshot_legacy_arm`), and an ADAPTER carrier wants it carrying the selected
+    declaration's dimensions (:func:`snapshot_adapter_format_ids`). Pairing rather than
+    returning bare refs is what lets the second one reach the right snapshot's ``params``
+    when a package records several.
     """
     seen: set[FormatKey] = set()
-    refs: list[LibraryFormatId] = []
+    pairs: list[tuple[LibraryPackageFormatSnapshot, LibraryFormatId]] = []
     for snapshot in snapshots:
         for ref in snapshot.v1_format_ref or []:
             identity = format_id_identity(ref)
             if identity not in seen:
                 seen.add(identity)
-                refs.append(ref)
-    return tuple(refs)
+                pairs.append((snapshot, ref))
+    return tuple(pairs)
+
+
+def snapshot_adapter_format_ids(
+    snapshots: Iterable[LibraryPackageFormatSnapshot],
+) -> tuple[LibraryFormatId, ...]:
+    """The snapshots as the deprecated references an ADAPTER carrier holds, with dimensions.
+
+    RESTORED AFTER BEING DELETED PREMATURELY, and the reason is worth keeping because the
+    mistake is easy to repeat. Stage 7 gave ``MediaPackage`` a ``formats_to_provide`` field
+    and taught the GAM order manager to read ``params`` off the snapshot, then removed this
+    projection on the reasoning that the canonical path now dominated it. It dominates it
+    FOR GAM. The carrier goes to EVERY adapter, and GAM is the only one that reads the
+    snapshot, so for the mock, Kevel, Triton and Broadstreet the legacy arm is still the only
+    channel a dimension has. Approving a parked buy then handed the ad server
+    ``[(None, None)]`` and the scenario that grades it went red on all four transports.
+
+    So the ceiling below is NARROWER than before stage 7 rather than retired, and that
+    correction matters: ``salesagent-ol033.8``'s commit claimed the ceiling went away with the
+    deletion, which was true only of the one adapter that gained the better channel.
+
+    The asserted refs themselves carry no width or height -- measured:
+    ``v1_format_ref: [{id: display_300x250, width: None, height: None}]`` -- so without this
+    merge an adapter would be handed a dimensionless format and would have to ask the live
+    product, which is the substitution the snapshot exists to prevent.
+
+    SELLER-ASSERTED ONLY, like its sibling: ``registries/v1-canonical-mapping.json`` makes
+    ``v1_format_ref`` the one legal v2 -> v1 source and forbids synthesizing an id from the
+    registry. A snapshot asserting no reference therefore projects to NOTHING here, and the
+    caller decides what to do with that -- this function does not invent a name for a
+    declaration the seller never paired with one.
+
+    CEILING, still real and now narrower: a canonical-only declaration with no
+    ``v1_format_ref`` cannot be expressed in this carrier at all. It no longer binds GAM,
+    which reads ``formats_to_provide``. The upgrade path for the rest is the same one -- each
+    adapter reads the snapshot -- and this projection can be deleted when the LAST of them
+    does, not when the first does.
+    """
+    return tuple(
+        ref.model_copy(
+            update={
+                name: value
+                for name, value in (
+                    ("width", _plain_param(snapshot, "width")),
+                    ("height", _plain_param(snapshot, "height")),
+                    ("duration_ms", _plain_param(snapshot, "duration_ms")),
+                )
+                if value is not None
+            }
+        )
+        for snapshot, ref in _asserted_refs(snapshots)
+    )
+
+
+def _plain_param(snapshot: LibraryPackageFormatSnapshot, name: str) -> Any:
+    """One canonical param off a snapshot, or None when the declaration does not state it."""
+    return getattr(snapshot.params, name, None)
 
 
 def format_accepted_by(requested: FormatRef, supported: FormatRef) -> bool:

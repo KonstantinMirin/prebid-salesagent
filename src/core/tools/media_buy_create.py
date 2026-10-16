@@ -1290,24 +1290,26 @@ def execute_approved_media_buy(
                     # the buyer had already bought -- and the wait is exactly when that
                     # happens (salesagent-zoo82).
                     #
-                    # THE SNAPSHOTS THEMSELVES NOW TRAVEL, which is stage 7's upgrade of the
-                    # projection this used to build (``salesagent-ol033.8``, E1). The carrier
-                    # gained ``formats_to_provide``, so the declaration's ``params`` reach the
-                    # adapter first-class and the deleted ``snapshot_adapter_format_ids`` --
-                    # which merged those dimensions onto the asserted references because the
-                    # carrier could only hold references -- has nothing left to do. Its stated
-                    # ceiling goes with it: a canonical-only declaration asserting no
-                    # ``v1_format_ref`` could not be NAMED in ``format_ids`` at all, and now
-                    # does not need to be.
+                    # THE SNAPSHOTS THEMSELVES ALSO TRAVEL, which is stage 7's addition
+                    # (``salesagent-ol033.8``, E1): the carrier gained ``formats_to_provide``,
+                    # so the declaration's ``params`` reach a snapshot-reading adapter
+                    # first-class. The GAM order manager is the one that reads it.
                     #
-                    # The legacy arm is still carried for the adapters that read only it, as
-                    # the references the seller ASSERTED and nothing more
-                    # (``registries/v1-canonical-mapping.json`` forbids synthesizing a v1 id
-                    # from the registry, so there is no other source).
-                    from src.core.format_resolver import snapshot_legacy_arm
+                    # BOTH ARMS, AND THE LEGACY ONE CARRIES DIMENSIONS. Stage 7 briefly
+                    # dropped the dimension merge here on the reasoning that the canonical arm
+                    # had superseded it. It had, FOR GAM. This carrier goes to every adapter
+                    # and GAM is the only one reading the snapshot, so for the mock, Kevel,
+                    # Triton and Broadstreet the legacy arm is still the only channel a
+                    # dimension has -- approving a parked buy handed the ad server
+                    # ``[(None, None)]``, and the scenario grading it
+                    # (``BR-UC-FORMAT-SATISFACTION``, "approving a parked buy executes the
+                    # recorded snapshot") went red on all four transports. The projection is
+                    # deletable when the LAST adapter reads the snapshot, not when the first
+                    # one does.
+                    from src.core.format_resolver import snapshot_adapter_format_ids
 
                     recorded = _PACKAGE_FORMAT_SNAPSHOTS.validate_python(package_config.get("formats_to_provide") or [])
-                    asserted = snapshot_legacy_arm(recorded)
+                    asserted = snapshot_adapter_format_ids(recorded)
 
                     # Convert formats to FormatId objects with comprehensive validation
                     format_ids_list: list[FormatId] = []
