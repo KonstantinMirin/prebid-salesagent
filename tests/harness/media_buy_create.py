@@ -56,10 +56,9 @@ def _live_ad_server_on_the_live_stack(self: MediaBuyCreateEnv, adapter_type: str
     self._write_adapter_config(adapter_type)
 
 
-#: Audit operations the Mock adapter writes, one row per call, as
-#: ``"<adapter_name>.<operation>"`` — so the lookups below are substring matches.
+#: Audit operation the Mock adapter writes, one row per creative push, as
+#: ``"<adapter_name>.<operation>"`` — so the lookup below is a substring match.
 _CREATIVE_PUSH_OPERATION = "add_creative_assets"
-_BUY_CREATE_OPERATION = "create_media_buy"
 
 
 def _adapter_operation_receipts(self: MediaBuyCreateEnv, operation: str) -> list[dict[str, Any]]:
@@ -71,7 +70,7 @@ def _adapter_operation_receipts(self: MediaBuyCreateEnv, operation: str) -> list
     scenario asserting something did NOT happen would pass vacuously.
 
     What the server leaves behind is a row. ``MockAdServer`` calls
-    ``audit_logger.log_operation(...)`` in production code for both operations named above,
+    ``audit_logger.log_operation(...)`` in production code for this operation,
     on its own session, committed before the create response returns — so the receipt exists
     by the time a Then runs, with no polling. (Same seam shape as
     ``_e2e_slack_notified_creatives``: the server's durable trace, not the test rig's mock.)
@@ -124,15 +123,6 @@ def _uploaded_assets_from_the_audit_trail(self: MediaBuyCreateEnv) -> list[dict[
     for details in _adapter_operation_receipts(self, _CREATIVE_PUSH_OPERATION):
         uploaded.extend(details.get("assets") or [])
     return uploaded
-
-
-def _buy_creates_from_the_audit_trail(self: MediaBuyCreateEnv) -> int:
-    """How many times the SERVER's ad server was asked to create a buy.
-
-    ``MockAdServer._create_media_buy_immediate`` audits every create, so the row count is
-    the call count. Read for the same reason as its sibling and through the same seam.
-    """
-    return len(_adapter_operation_receipts(self, _BUY_CREATE_OPERATION))
 
 
 def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> None:
@@ -527,25 +517,6 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             assets = call.args[1] if len(call.args) > 1 else call.kwargs.get("assets")
             uploaded.extend(assets or [])
         return uploaded
-
-    @realize_e2e(_buy_creates_from_the_audit_trail)
-    def ad_server_create_count(self) -> int:
-        """How many times the ad server was asked to create a media buy.
-
-        The observable for "system state is unchanged on failure": a refusal that happens
-        BEFORE the adapter call leaves nothing behind, and one that happens after answers the
-        buyer an error while a buy exists at the ad server. Both reach the wire as the same
-        code, so without this a scenario cannot tell them apart -- which a fire-probe
-        demonstrated rather than predicted: removing the pre-adapter refusal left all twelve
-        canonical-clickthrough nodeids green, because the asset builder refused afterwards
-        and the buyer saw the same VALIDATION_ERROR.
-
-        A count rather than the calls themselves, because the obligation is arity: the
-        in-process branch counts the mock's calls and the e2e branch counts the audit rows
-        the server's own ad server wrote, and those are comparable where call arguments
-        (a request model in one process, a JSON document in another) are not.
-        """
-        return len(self.mock["adapter"].return_value.create_media_buy.call_args_list)
 
     @realize_e2e(_live_ad_server_on_the_live_stack)
     def run_ad_server(self, adapter_type: str) -> None:

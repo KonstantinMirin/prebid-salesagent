@@ -549,15 +549,27 @@ def _validate_creatives_before_adapter_call(
                 f"Reference creative {creative.creative_id} missing dimensions (width={width}, height={height})"
             )
 
-        # core/assets/url-asset.json, on a url asset carrying neither a url_type nor a
-        # format-side role: "receivers MUST NOT silently pick a mechanism; they SHOULD
-        # reject the manifest." Refused HERE, before the adapter call, because the
-        # alternative is what this gate exists to prevent: the buy is created, the creative
-        # is pushed with the URL dropped, and the buyer is told the whole thing succeeded.
-        # No response field carries a click destination, so nothing else would ever say so.
+        # A url asset this seller cannot identify is NOT a refusal. core/assets/url-asset.json
+        # at the governing version ends "receivers MUST NOT silently pick a mechanism." and
+        # stops there; the "they SHOULD reject the manifest" clause that followed it at 3.1.1
+        # was REMOVED by 3.2.3. A version that drops a remedy is declining to require it, so
+        # refusing here would make this seller stricter than the spec on a buyer-facing path,
+        # and the costs are not symmetric: reject the manifest and the buyer loses the buy,
+        # return no clickthrough and they lose a clickthrough.
+        #
+        # LOGGED, NOT CARRIED, and that is a gap rather than a choice. The advisory lane
+        # (docs/design/error-architecture.md) rides a response's declared ``errors[]``, and
+        # create-media-buy-response.json declares that array on its Error and Submitted arms
+        # only -- CreateMediaBuySuccess has none, so the lane does not reach here. Its
+        # ``warnings[]`` array IS the right carrier by its own words ("non-blocking
+        # observations accompanying this successful creation ... Buyers SHOULD surface
+        # recognized codes operationally"), but enums/warning-code.json is closed at three
+        # members and none of them means "a url asset I could not identify" -- emitting one
+        # would misfile the fact under a code that means something else. So the sentence goes
+        # to the log until that code exists upstream; the wiring is filed.
         unidentified = unidentified_url_asset_reason(creative_data, format_spec, creative.creative_id)
         if unidentified:
-            validation_errors.append(unidentified)
+            logger.warning(log_safe(f"[ASSET] {unidentified}"))
 
     if bad_state:
         # The STATE per creative, not a joined sentence naming the ids: per-creative
@@ -946,14 +958,15 @@ def _build_adapter_asset_from_creative(
             f"(width={width}, height={height}, url={'set' if url else 'missing'}, format={identity.label})"
         )
 
-    # The same refusal the pre-adapter gate makes, for the callers that gate does not run
-    # ahead of: the approval replay and the retroactive push both reach this builder
-    # directly. One producer of the sentence, two refusal channels -- fixing it in the gate
-    # alone would leave those two paths shipping a creative whose URL this seller was never
-    # told the purpose of.
+    # The same observation the pre-adapter gate makes, for the callers that gate does not
+    # run ahead of: the approval replay and the retroactive push both reach this builder
+    # directly. One producer of the sentence, said at every site that resolves a creative's
+    # URLs -- so a creative whose destination this seller could not identify is never pushed
+    # without that being written down somewhere. Why it is a log and not a refusal, and not
+    # yet a wire field either, is at the pre-adapter gate's own call.
     unidentified = unidentified_url_asset_reason(creative_data, format_spec, creative.creative_id)
     if unidentified:
-        return None, unidentified
+        logger.warning(log_safe(f"[ASSET] {unidentified}"))
 
     asset: dict[str, Any] = {
         "creative_id": creative.creative_id,

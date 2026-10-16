@@ -2238,23 +2238,28 @@ def then_ad_server_receives_media_url(ctx: dict) -> None:
     assert asset.get("url"), f"the ad server received the creative with no media URL: {asset!r}"
 
 
-@then("the ad server was never asked to create the media buy")
-def then_ad_server_never_asked_to_create(ctx: dict) -> None:
-    """POST-F1 as an observable: the refusal happened BEFORE the adapter was called.
+@then("the ad server receives that creative with no clickthrough")
+def then_ad_server_receives_no_clickthrough(ctx: dict) -> None:
+    """The MUST NOT as an outcome: a url the manifest never identified is not guessed at.
 
-    Without this the refusal scenario cannot tell a pre-adapter gate from a refusal raised
-    after the buy exists -- both reach the buyer as the same VALIDATION_ERROR. That is not
-    an argument, it is a measurement: with the pre-adapter check removed, all twelve
-    canonical-clickthrough nodeids stayed GREEN, because the asset builder refused
-    afterwards and the wire looked identical. The difference the buyer pays for is an
-    orphaned buy at the ad server.
+    ``core/assets/url-asset.json``: "When neither ``url_type`` nor a format-side role is
+    available, receivers MUST NOT silently pick a mechanism." The creative ships a url asset
+    under an ``asset_group_id`` the vocabulary registry does not define, with no ``url_type``
+    -- so sending it to the ad server as the click destination would be that pick.
 
-    Read through the env's ``ad_server_create_count`` seam, which counts the adapter's
-    create calls in process and the receipts the server's own ad server wrote on the live
-    stack.
+    THE UPLOAD IS STILL ASSERTED, which is what stops this passing for the wrong reason: a
+    creative refused upstream also reaches the ad server with no clickthrough, and that would
+    make the absence true while grading nothing. Through the same
+    ``uploaded_adapter_assets`` seam as its positive sibling.
     """
-    created = ctx["env"].ad_server_create_count()
-    assert created == 0, (
-        f"the ad server was asked to create {created} media buy(s) before the request was "
-        f"refused, so the buyer holds an error while a buy exists at the ad server"
+    uploaded = ctx["env"].uploaded_adapter_assets()
+    assert uploaded, (
+        "the create never uploaded the creative, so the missing clickthrough is not evidence "
+        "of anything -- the asset gate or the closed set refused it first"
+    )
+    asset = uploaded[-1]
+    assert not asset.get("click_url"), (
+        f"the ad server was given click_url={asset['click_url']!r} for a url asset the "
+        f"manifest never identified as the click destination -- that is the mechanism guess "
+        f"core/assets/url-asset.json forbids"
     )

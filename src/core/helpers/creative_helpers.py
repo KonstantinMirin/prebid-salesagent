@@ -704,17 +704,28 @@ def url_asset_identification(
 def unidentified_url_asset_reason(
     creative_data: dict[str, Any], format_spec: Any | None, creative_id: str
 ) -> str | None:
-    """The pin's refusal for a url asset nothing identified, or ``None`` when all are.
+    """One sentence NAMING a url asset nothing identified, or ``None`` when all are.
 
-    ``core/assets/url-asset.json``: a receiver with neither a ``url_type`` nor a format-side
-    role "MUST NOT silently pick a mechanism; they SHOULD reject the manifest". Returning a
-    reason rather than raising, because the two call sites that must refuse already have a
-    refusal channel each -- the pre-adapter gate's reasons list and the asset builder's
-    error tuple -- and they reach the buyer as different shapes.
+    A NAMER, not a refusal, and the difference is the governing spec version.
+    ``core/assets/url-asset.json`` at 3.2.3 ends "...receivers MUST NOT silently pick a
+    mechanism." At 3.1.1 it continued "; they SHOULD reject the manifest", and that clause
+    was REMOVED. A version that drops a remedy is declining to require it, so the
+    prohibition on GUESSING stands -- :func:`url_asset_identification` honours it by
+    returning the asset as unidentified rather than inventing a mechanism -- while the
+    remedy is the seller's to choose. Refusing the buy would be stricter than the spec on a
+    buyer-facing path, and the costs are not symmetric: reject the manifest and the buyer
+    loses the buy, return no clickthrough and they lose a clickthrough.
 
-    The sentence NAMES the asset and what is missing. A buyer told only "invalid creative"
-    cannot act, and the whole point of refusing rather than returning no clickthrough is
-    that somebody is told something they can fix.
+    What the seller owes is that nobody loses a clickthrough SILENTLY, which is why this
+    returns a sentence rather than nothing. It names the asset, what signal is missing, and
+    for a historically-honoured id the fact that it is no longer acted on -- a reader told
+    only "no clickthrough" cannot act.
+
+    Its callers currently LOG it. That is a gap and it is filed: the advisory lane
+    (``docs/design/error-architecture.md``) rides a response's declared ``errors[]`` and
+    ``CreateMediaBuySuccess`` declares none, while its ``warnings[]`` array -- which IS the
+    right carrier by its own description -- takes a ``code`` from a closed three-member
+    enum, none of whose members means this.
     """
     _mechanisms, unidentified = url_asset_identification(creative_data, format_spec)
     if not unidentified:

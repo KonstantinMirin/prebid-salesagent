@@ -224,14 +224,28 @@ class TestTrackersResolveThroughTheSameRegistry:
         assert extract_impression_tracker_url(creative, None) is None
 
 
-class TestTheRefusalSaysWhatIsMissing:
-    def test_an_unidentified_url_asset_produces_a_refusal_naming_it(self) -> None:
-        """The pin's remedy clause: "they SHOULD reject the manifest".
+class TestTheSentenceSaysWhatIsMissing:
+    """The seller NAMES what it could not identify; it does not refuse the buy.
 
-        The reason has to name the asset and the remedy, because the entire argument for
-        refusing rather than returning no clickthrough is that SOMEBODY IS TOLD something
-        they can act on. A bare "invalid creative" would be the silence again, wearing an
-        error code.
+    ``core/assets/url-asset.json`` at the governing version ends "...receivers MUST NOT
+    silently pick a mechanism." At 3.1.1 it continued "; they SHOULD reject the manifest",
+    and that clause was REMOVED by 3.2.3 — a version declining to require the remedy. So
+    the prohibition on guessing is graded above (nothing resolves from an unidentified
+    asset) and the remedy here is a sentence, not a rejection.
+
+    What the seller still owes is that nobody loses a clickthrough SILENTLY. These grade the
+    sentence. That it does not yet reach the BUYER is a filed gap: the advisory lane needs a
+    declared ``errors[]``, ``CreateMediaBuySuccess`` has none, and the ``warnings[]`` array
+    that is the right carrier draws its ``code`` from a closed three-member enum with no
+    member meaning this.
+    """
+
+    def test_an_unidentified_url_asset_produces_a_sentence_naming_it(self) -> None:
+        """Four things in it, because a reader told only "no clickthrough" cannot act.
+
+        The asset id, the missing signal, the canonical name to use instead, and which
+        creative it was. A bare "something was dropped" would be the silence again, wearing
+        a log level.
         """
         reason = unidentified_url_asset_reason(_creative(UNNAMED), None, "creative_0001")
 
@@ -241,19 +255,19 @@ class TestTheRefusalSaysWhatIsMissing:
         assert "landing_page_url" in reason
         assert "creative_0001" in reason
 
-    def test_an_identified_manifest_produces_no_refusal(self) -> None:
+    def test_an_identified_manifest_produces_no_sentence(self) -> None:
         assert unidentified_url_asset_reason(_creative("landing_page_url"), None, "creative_0001") is None
 
     @pytest.mark.parametrize(
         "asset_id", ["click", "clickthrough", "destination_url", "landing_page", "pixel", "tracker_pixel"]
     )
-    def test_a_name_this_seller_once_honoured_is_refused_rather_than_dropped(self, asset_id: str) -> None:
+    def test_a_name_this_seller_once_honoured_is_named_rather_than_dropped(self, asset_id: str) -> None:
         """The six members of the two old guess lists that appear in no registry entry.
 
         Acting on them is the mechanism guess the pin forbids. Simply ceasing to act on
         them would mean a creative that resolves a clickthrough today stops doing so with
-        nobody told — the same silence, arrived at from the other side. So they refuse, and
-        the sentence says the name was honoured before and no longer is.
+        nobody told — the same silence, arrived at from the other side. So the sentence says
+        the name was honoured before and no longer is.
 
         Note these have NO ``asset_type`` here: that is the shape a pre-canonical stored
         creative has, and it is why they are named explicitly rather than covered by the
@@ -268,9 +282,9 @@ class TestTheRefusalSaysWhatIsMissing:
         assert "no longer acted on" in reason
 
     def test_such_a_name_still_resolves_when_the_manifest_declares_its_mechanism(self) -> None:
-        """Deprecated name plus ``url_type``: the first rung answers, nothing is refused.
+        """Deprecated name plus ``url_type``: the first rung answers and nothing is said.
 
-        The control that keeps the four from being a blanket ban. The pin's objection is to
+        The control that keeps the six from being a blanket ban. The pin's objection is to
         picking a mechanism nobody declared, not to the name.
         """
         creative = {"assets": {"landing_page": {"url": CLICK_URL, "url_type": "clickthrough"}}}

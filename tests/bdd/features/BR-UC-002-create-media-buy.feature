@@ -689,35 +689,41 @@ Feature: BR-UC-002 Create Media Buy
     # grades), and the upload assertion alone would pass on a seller that uploaded a creative
     # for a buy it then failed to create.
 
-  @T-UC-002-ext-canonical-clickthrough-unnamed @extension @creative @error @post-f1 @post-f2 @post-f3
-  Scenario: a url asset the manifest never identifies is refused rather than guessed at
+  @T-UC-002-ext-canonical-clickthrough-unnamed @extension @creative @post-f2
+  Scenario: a url asset the manifest never identifies is not guessed to be the clickthrough
     Given a valid create_media_buy request with a canonical creative signalling its clickthrough by "nothing the pin recognises"
     And the account exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy error spec
-    And the operation should fail
-    And the error code should be "VALIDATION_ERROR"
-    And the error should include "suggestion" field
-    And the ad server was never asked to create the media buy
+    Then the response should succeed
+    And the ad server receives that creative with no clickthrough
 
-    # core/assets/url-asset.json: "When neither `url_type` nor a format-side `role` is
-    # available, receivers MUST NOT silently pick a mechanism; they SHOULD reject the
-    # manifest." This creative carries a perfectly good URL under an asset_group_id the
-    # registry does not define, so the seller has been told a URL exists and has NOT been
-    # told what it is for.
+    # core/assets/url-asset.json at the GOVERNING version: "When neither `url_type` nor a
+    # format-side role is available, receivers MUST NOT silently pick a mechanism." This
+    # creative carries a perfectly good URL under an asset_group_id the registry does not
+    # define, so the seller has been told a URL exists and has NOT been told what it is for,
+    # and it must not ship as the click destination.
     #
     # THE CONTROL for the outline above, and the reason those two rows are not satisfied by a
-    # reader that returns the first url asset it finds. It is also the half of the fix that
-    # changes the ANSWER rather than finding one: the alternative -- returning no clickthrough
-    # and letting the buy proceed -- is compliant with the MUST NOT and reproduces the exact
-    # silence this bug is about, so the refusal is what makes the change tellable to a buyer.
-    # VALIDATION_ERROR because 3.1.1 enums/error-code.json codes it as "violates business
-    # rules beyond schema validation", which a manifest the seller cannot interpret is;
-    # CREATIVE_REJECTED is that enum's content-policy review failure, and no policy review
-    # runs on this path.
-    # POST-F2: Buyer knows what failed
-    # POST-F3: Buyer knows how to fix the issue -- the reason names the asset and says to
-    # declare url_type or key it by the canonical asset_group_id.
+    # reader that returns the first url asset it finds. Without this row the registry lookup
+    # is indistinguishable from a re-invented guess list.
+    #
+    # THE BUY STILL SUCCEEDS, deliberately. At 3.1.1 the sentence continued "; they SHOULD
+    # reject the manifest" and this scenario demanded VALIDATION_ERROR; that clause was
+    # REMOVED by 3.2.3, and a version dropping a remedy is declining to require it. Refusing
+    # would make this seller stricter than the spec on a buyer-facing path, and the costs are
+    # not symmetric -- reject the manifest and the buyer loses the buy, return no clickthrough
+    # and they lose a clickthrough. Measured, so the change is on spec grounds and not test
+    # grounds: the refusal reddened no graded storyboard step, because the seven
+    # dist/compliance/3.2.3 fixtures that ship a url asset with no `url_type` all key it
+    # `landing_page_url`, which the registry rung identifies.
+    #
+    # WHAT THE SELLER STILL OWES is that this is not SILENT, and that part is not graded here
+    # because it cannot be yet: the sentence naming the asset goes to the log, since
+    # CreateMediaBuySuccess declares no `errors[]` for the advisory lane and the `warnings[]`
+    # array that is the right carrier takes a code from a closed three-member enum with no
+    # member meaning this. The sentence itself is graded by
+    # tests/unit/test_url_asset_identification.py; the wire gap is filed.
+    # POST-F2: Buyer knows what the seller did with the manifest
 
   # --- A canonical audio buy is accepted, dimensions and all ---
 
