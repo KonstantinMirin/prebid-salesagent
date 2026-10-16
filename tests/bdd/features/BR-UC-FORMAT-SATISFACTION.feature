@@ -386,6 +386,64 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # legacy lane skips with a recorded error instead of refusing. Both rows are needed:
     # either one alone is satisfied by a gate that treats every mode the same.
 
+  @T-UC-FORMAT-SATISFACTION-sync-sized-conforming @format_satisfaction_sync @requires_db
+  Scenario: a creative sized as the deprecated arm requires is accepted
+    Given a packaged product selling only a deprecated format sized 300x250
+    And the buyer syncs a creative identified by format_id "display_image" sized 300x250
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+  @T-UC-FORMAT-SATISFACTION-sync-sized-mismatched @format_satisfaction_sync @requires_db
+  Scenario: a creative sized differently from the deprecated arm is refused
+    Given a packaged product selling only a deprecated format sized 300x250
+    And the buyer syncs a creative identified by format_id "display_image" sized 728x90
+    When the Buyer Agent assigns it to that package
+    Then the buyer is refused VALIDATION_ERROR naming the 300x250 it accepts
+
+    # THE PAIR IS ONE INSTRUMENT and neither row works alone: the accept row alone is
+    # satisfied by a seller that takes everything, which is the defect, and the refuse row
+    # alone is satisfied by a seller that takes nothing. They differ in exactly the
+    # creative's declared dimensions, so what they grade is the comparison and not the id.
+    #
+    # core/product-format-declaration.json states it under its own "Format matching vs
+    # satisfaction (normative)" heading: "when this declaration specifies fixed constraints
+    # such as width, height ... a buyer request or creative manifest MUST declare and
+    # satisfy those constraints", and it forbids the comparison that was being made --
+    # "do not exact-match raw (agent_url, id) pairs". The deprecated arm's accepted set was
+    # built from template keys, so a product restricting to 300x250 and one restricting to
+    # nothing were the same set and a 728x90 creative was accepted (salesagent-4764o).
+    #
+    # A TEMPLATE id carrying parameters, because a name-encoded one cannot express this:
+    # upgrade_legacy_format_id rewrites the parameters from the name, so
+    # display_300x250_image sized 728x90 becomes display_image at 300x250 and matches.
+
+  @T-UC-FORMAT-SATISFACTION-sync-density-mismatched @format_satisfaction_sync @requires_db
+  Scenario: a creative at the wrong asset density is refused
+    Given a packaged product selling only a deprecated format sized 300x250 at 2x density
+    And the buyer syncs a creative identified by format_id "display_image" sized 300x250 at 1x density
+    When the Buyer Agent assigns it to that package
+    Then the buyer is refused VALIDATION_ERROR naming the 300x250 it accepts
+
+  @T-UC-FORMAT-SATISFACTION-sync-density-silent @format_satisfaction_sync @requires_db
+  Scenario: a creative silent about asset density is refused by a product that fixes one
+    Given a packaged product selling only a deprecated format sized 300x250 at 2x density
+    And the buyer syncs a creative identified by format_id "display_image" sized 300x250
+    When the Buyer Agent assigns it to that package
+    Then the buyer is refused VALIDATION_ERROR naming the 300x250 it accepts
+
+    # THE FOURTH PARAMETER, and it needs BOTH rows because the two ways to fail it are
+    # different: a creative CONTRADICTING the density, and a creative SILENT about it. The
+    # pin requires the claim to "declare and satisfy" a fixed constraint, so silence fails
+    # it just as a wrong value does -- and core/format-id.json calls pixel_ratio "Required
+    # intrinsic-pixel density for a parameterized visual format".
+    #
+    # These two grade a check this seller makes BESIDE the SDK's, deliberately. adcp's
+    # format_is_supported compares a hand-written ("width", "height", "duration_ms") and
+    # never reads the fourth field, so a product requiring a 2x asset accepted a 1x one and
+    # also accepted one that said nothing. Measured on 9.0.0b3+sa.8qela.bf0228b68: all three
+    # of those answered supported=True. Without these rows the local supplement is correct
+    # and unfalsifiable -- removing it reddened nothing.
+
     # wrong_publisher_domain is the second half of formats.mdx's fourth rule. It carries
     # the SAME format_option_id the product publishes under a DIFFERENT publisher_domain,
     # which the pin makes a different option outright: the two arms of

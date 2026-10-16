@@ -33,6 +33,7 @@ from tests.bdd.steps._outcome_helpers import (
     stored_package_config,
     wire_absent,
     wire_entry,
+    wire_envelope_errors,
     wire_field,
 )
 from tests.factories import PricingOptionFactory, ProductFactory
@@ -512,6 +513,67 @@ def given_sync_legacy_product(ctx: dict) -> None:
     _seed_sync_chain(ctx, format_options=None, format_ids=list(_LEGACY_ARM))
 
 
+@given(parsers.parse("a packaged product selling only a deprecated format sized {width:d}x{height:d}"))
+def given_sync_legacy_sized_product(ctx: dict, width: int, height: int) -> None:
+    """A legacy-only product whose deprecated entry names a TEMPLATE id and SIZES it.
+
+    The fixture the acceptance rule needs, and the module had no shape that could express it:
+    ``_LEGACY_ARM`` leaves the arm's dimensions unset, so a product restricting to 300x250 and
+    a product restricting to nothing produce the same accepted set and no assertion can tell
+    a conforming creative from a mis-sized one (salesagent-4764o).
+
+    A TEMPLATE id carrying parameters, not a name-encoded one, and that is measured rather
+    than stylistic: ``upgrade_legacy_format_id`` rewrites a reference's parameters from its
+    NAME, so ``display_300x250_image`` sized 728x90 upgrades to ``display_image`` at 300x250
+    and compares equal to the product -- a name-encoded id cannot express a mis-sized claim at
+    all. ``core/format-id.json`` is explicit that the two spellings are different things: an
+    id "used alone, references a template format. When combined with dimension/duration
+    fields, creates a parameterized format ID for a specific variant."
+
+    LEGACY-ONLY because the lane is chosen by what the PRODUCT declares. With a canonical arm
+    present the claim would be graded by ``_canonical_lane``, which projects, and the row
+    would grade the projection instead of the deprecated arm's own comparison.
+    """
+    _seed_sync_chain(
+        ctx,
+        format_options=None,
+        format_ids=[{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_image", "width": width, "height": height}],
+    )
+
+
+@given(
+    parsers.parse(
+        "a packaged product selling only a deprecated format sized {width:d}x{height:d} at {pixel_ratio:d}x density"
+    )
+)
+def given_sync_legacy_density_product(ctx: dict, width: int, height: int, pixel_ratio: int) -> None:
+    """The same legacy-only product, additionally fixing the asset DENSITY it requires.
+
+    ``pixel_ratio`` is the fourth parameterizing field and the one the SDK's comparison does
+    not read, so this row is what makes ``_pixel_ratio_unsatisfied`` falsifiable. Without it
+    that clause is in exactly the position the dimensions were in before this change: correct
+    per the pin, and unfalsifiable by the suite -- removing it reddened nothing (measured).
+
+    The pin requires the match and requires the dimensions alongside it:
+    ``core/format-id.json`` calls the field "**Required** intrinsic-pixel density for a
+    parameterized visual format" and says it "Requires ``width`` and ``height``", so a
+    density is seeded WITH a size rather than instead of one.
+    """
+    _seed_sync_chain(
+        ctx,
+        format_options=None,
+        format_ids=[
+            {
+                "agent_url": DEFAULT_CREATIVE_AGENT_URL,
+                "id": "display_image",
+                "width": width,
+                "height": height,
+                "pixel_ratio": pixel_ratio,
+            }
+        ],
+    )
+
+
 def _seed_sync_chain(
     ctx: dict, *, format_options: list[dict[str, Any]] | None, format_ids: list[dict[str, str]]
 ) -> None:
@@ -594,6 +656,56 @@ def given_sync_legacy_creative(ctx: dict, format_id: str) -> None:
         CreativeAssetRequestFactory.payload(
             creative_id=_SYNC_CREATIVE_ID,
             format_id=resolvable_format_ref(format_id),
+        )
+    ]
+
+
+@given(parsers.parse('the buyer syncs a creative identified by format_id "{format_id}" sized {width:d}x{height:d}'))
+def given_sync_legacy_creative_sized(ctx: dict, format_id: str, width: int, height: int) -> None:
+    """The same claim, PARAMETERIZED -- the buyer naming one variant of a template.
+
+    The ONE difference from the unsized sibling is that the reference carries its own
+    width and height, which ``core/format-id.json`` says is what names a specific variant
+    rather than the template. That is the dimension every other fixture in this module holds
+    constant, and holding it constant is why the acceptance comparison could be wrong with
+    the whole module green: with no parameters on either side, "compare the template" and
+    "compare the variant" return the same answer for every row.
+
+    The parameters go through ``resolvable_format_ref`` with the rest of the reference, so the
+    pin's own field names are the only ones a scenario can spell.
+    """
+    from tests.factories.format import resolvable_format_ref
+    from tests.factories.request import CreativeAssetRequestFactory
+
+    ctx["creatives"] = [
+        CreativeAssetRequestFactory.payload(
+            creative_id=_SYNC_CREATIVE_ID,
+            format_id=resolvable_format_ref(format_id, width=width, height=height),
+        )
+    ]
+
+
+@given(
+    parsers.parse(
+        'the buyer syncs a creative identified by format_id "{format_id}" '
+        "sized {width:d}x{height:d} at {pixel_ratio:d}x density"
+    )
+)
+def given_sync_legacy_creative_density(ctx: dict, format_id: str, width: int, height: int, pixel_ratio: int) -> None:
+    """The claim naming a DENSITY as well as a size -- the fourth parameterizing field.
+
+    Its own step rather than an optional clause on the sized sibling, because a scenario
+    that says nothing about density means the claim CARRIES no density, and that silence is
+    one of the two cases the rule has to refuse against a product that fixes one. A step
+    defaulting the field would make that case unreachable.
+    """
+    from tests.factories.format import resolvable_format_ref
+    from tests.factories.request import CreativeAssetRequestFactory
+
+    ctx["creatives"] = [
+        CreativeAssetRequestFactory.payload(
+            creative_id=_SYNC_CREATIVE_ID,
+            format_id=resolvable_format_ref(format_id, width=width, height=height, pixel_ratio=pixel_ratio),
         )
     ]
 
@@ -780,6 +892,44 @@ def then_refused_unsupported_feature_bare(ctx: dict) -> None:
     pin a value production has no reason to carry.
     """
     ctx["result"].assert_wire_error("UNSUPPORTED_FEATURE")
+
+
+@then(parsers.parse("the buyer is refused VALIDATION_ERROR naming the {width:d}x{height:d} it accepts"))
+def then_refused_legacy_not_accepted(ctx: dict, width: int, height: int) -> None:
+    """The DEPRECATED lane's refusal, and the dimensions have to be in it.
+
+    A DIFFERENT CODE from the canonical sibling, and that is production's documented
+    decision rather than this scenario's preference: ``canonical_refusal`` asserts it is
+    never called for ``LEGACY_NOT_ACCEPTED``, because the legacy lane raises
+    ``AdCPValidationError`` at its own site -- "violates business rules beyond schema
+    validation". A row asserting UNSUPPORTED_FEATURE here would be asserting the canonical
+    lane's code against the deprecated lane's refusal, which is the mistake this Then was
+    written to replace. No ``field``: the site carries none, for the same reason the bare
+    UNSUPPORTED_FEATURE sibling asserts none.
+
+    THE DIMENSIONS ARE THE POINT, not the code. Before the fix the accepted set was built
+    from TEMPLATE keys, so it could only ever say ``<agent>/display_image`` -- the same
+    string for a product restricting to 300x250 and one restricting to nothing. Asserting
+    the code alone would pass against that, since a refusal would still arrive once anything
+    reddened. Asserting that the buyer is told WHICH size the product accepts is what
+    distinguishes a represented restriction from an unrepresentable one.
+
+    Graded as a substring of the accepted set rather than against a rendered literal: the
+    exact spelling is ``_reference_display``'s and pinning it would grade this seller's
+    formatting, where the obligation is that the dimensions reach the buyer at all.
+
+    The array comes from ``wire_envelope_errors``, not from indexing the envelope here. Its
+    own docstring names this mistake: "without this one, a step needing it wrote
+    ``envelope.get('errors')`` itself and the guard flagged it, correctly." It did -- check F
+    of ``test_architecture_bdd_wire_discipline`` caught the first version of this step.
+    """
+    ctx["result"].assert_wire_error("VALIDATION_ERROR")
+    accepted = str(wire_envelope_errors(ctx)[0].get("details", {}).get("accepted_values"))
+    for value in (width, height):
+        assert str(value) in accepted, (
+            f"the refusal does not tell the buyer the product accepts {width}x{height}; "
+            f"accepted_values={accepted!r}. A template-key accepted set cannot carry a size."
+        )
 
 
 @then("the buyer is refused CONFLICTING_SELECTORS naming the package")
