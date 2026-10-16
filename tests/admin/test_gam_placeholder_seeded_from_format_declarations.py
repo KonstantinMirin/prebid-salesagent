@@ -135,20 +135,21 @@ def test_a_canonical_only_product_is_seeded_with_the_size_it_declares(operator, 
     )
 
 
-def test_a_legacy_only_product_is_seeded_from_the_entry_it_stores(operator, gam_seller, factory_session):
-    """Defect 1 through the same handler: the entry's own width/height reach the seed.
-
-    The entry is what ``format-template-picker.js`` emits for a parameterized display
-    selection. ``_parse_format_entries`` stores it, and the derivation read a ``format_id``
-    key it never had -- so this product got 300x250 too.
-    """
-    tenant, tag_selection = gam_seller
-    entry = {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_image", "width": 970, "height": 250}
-    response = operator.post(
-        f"/tenant/{tenant.tenant_id}/products/add",
-        data=_create_form(tag_selection, formats=json.dumps([entry])),
-        follow_redirects=False,
-    )
-    assert response.status_code in (302, 303), response.data[:3000]
-
-    assert _stored_placeholders(factory_session, tenant.tenant_id) == [EXPECTED_970x250]
+# DELETED: test_a_legacy_only_product_is_seeded_from_the_entry_it_stores.
+#
+# It POSTed a legacy-only product to /products/add and expected a redirect. A4
+# (salesagent-ol033.6) removed legacy authoring from this surface, so that POST is now
+# REFUSED: core/product.json says "Do not author a new product from format_ids alone", and
+# a product created here must declare the canonical arm. The test asserted behaviour the
+# pin forbids, which this epic deletes rather than re-grounds.
+#
+# ITS OBLIGATION SURVIVES AND IS OWED BACK, as salesagent-knsx5. The claim that it could
+# not be re-homed was WRONG: resolving the callers of generate_default_config finds a third
+# one at src/core/tools/media_buy_create.py:3540, inside create_media_buy, which hands the
+# legacy arm over for an existing product with no implementation_config. A4 deliberately
+# PRESERVES format_ids on existing and ingested rows, so that path is live and untouched by
+# this change -- and it is a BUYER tool, so the obligation is gradable as a named scenario
+# on a2a/mcp/rest/e2e_rest rather than through a Flask POST no transport reaches. That is a
+# better instrument than the one deleted here.
+#
+# The sibling above still grades the admin plumbing, so this module does not go empty.
