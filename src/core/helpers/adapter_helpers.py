@@ -27,6 +27,7 @@ from src.adapters.google_ad_manager import GoogleAdManager
 from src.adapters.kevel import Kevel
 from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
 from src.adapters.triton_digital import TritonDigital
+from src.core.exceptions import AdCPConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -300,7 +301,7 @@ def resolve_manual_approval_signal(tenant: IdentityTenant) -> bool:
     return bool(row and getattr(row, column, None) is True)
 
 
-def _simulating_adapter_config(config_row: DBAdapterConfig | None) -> dict[str, object]:
+def _simulating_adapter_config(config_row: DBAdapterConfig) -> dict[str, object]:
     """The configuration the SIMULATING adapter runs under.
 
     Two callers want this, so it has one spelling: the ``mock`` branch of
@@ -310,16 +311,35 @@ def _simulating_adapter_config(config_row: DBAdapterConfig | None) -> dict[str, 
     forbids, and the two copies would be free to disagree about the approval
     default — which is the one decision in here.
 
-    ``manual_approval_required`` defaults to True (require approval) for
-    safety: a tenant that has not said otherwise gets the cautious answer.
+    THE ROW IS REQUIRED, and the two defaults that used to stand here are both gone.
+
+    ``mock_manual_approval_required`` IS NEVER UNSET ON A ROW: the column is ``NOT NULL`` with
+    ``server_default false`` (migration ``e38f2f6f395a`` adds it nullable, backfills ``false``,
+    then alters it) and ``models.py`` types it ``Mapped[bool]``. An ``is not None`` test on the
+    column stood here and was DEAD — worse than redundant, because it ADVERTISED a NULL state
+    the schema forbids, and two readers then reasoned at length about what that NULL would
+    mean. There is no such state to have a meaning (salesagent-6d07f).
+
+    AND A MISSING ROW IS NO LONGER GIVEN A DEFAULT EITHER. It used to answer ``True``, which
+    fabricated an approval posture for a tenant that no production path can produce: signup
+    (``admin/blueprints/public.py``), the tenant management API, ``scripts/setup/setup_tenant.py``
+    and ``scripts/setup/init_database.py`` all write the row, and the only
+    ``delete(AdapterConfig)`` drops the tenant in the same transaction. The one thing that
+    reached the default was a TEST fixture seeding a tenant without one, and it reached it
+    asymmetrically — a sandbox account was parked for approval where a non-sandbox account on
+    the same tenant completed, which surfaced as two ``e2e_rest``-only failures
+    (salesagent-8mynh). Inventing a value for impossible state is the defensive-default the
+    repo's no-quiet-failures rule refuses, so the parameter is now non-optional and an absent
+    row is a type error at the call site rather than a silent posture.
+
+    MEASURED BEFORE REMOVING IT, not assumed: with the fixture fixed, this branch raised on
+    zero of 11,979 collected integration and BDD items — the probe's message appears nowhere
+    in the run's JSON report, so nothing reached it and no raise was swallowed into an error
+    response.
     """
     return {
         "enabled": True,
-        "manual_approval_required": (
-            config_row.mock_manual_approval_required
-            if config_row is not None and config_row.mock_manual_approval_required is not None
-            else True
-        ),
+        "manual_approval_required": config_row.mock_manual_approval_required,
     }
 
 
@@ -383,6 +403,13 @@ def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdMan
             identity.account.account_id,
             selected_adapter,
         )
+        # LOUDLY, rather than inventing a posture. Every production path that creates a
+        # tenant writes its ``adapter_config`` row, so reaching this with none is a
+        # misconfigured tenant and not a case to accommodate — the ``True`` default that
+        # stood here fabricated an approval posture for impossible state and diverged from
+        # the non-sandbox branch's answer for the same absent row (salesagent-6d07f).
+        if config_row is None:
+            raise AdCPConfigurationError(internal_detail=ValueError(f"tenant {tenant_id} has no adapter_config row"))
         return MockAdServerAdapter(_simulating_adapter_config(config_row), principal, tenant_id=tenant_id)
 
     adapter_config: dict[str, object] = {"enabled": True}
