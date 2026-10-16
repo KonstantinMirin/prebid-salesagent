@@ -87,7 +87,7 @@ def sync_creatives(
 
     from pydantic import ValidationError
 
-    # AdCP 2.5: Filter creatives by creative_ids if provided -- scoped updates to specific
+    # Filter creatives by creative_ids if provided -- scoped updates to specific
     # creatives without affecting others.
     if req.creative_ids:
         creative_ids_set = set(req.creative_ids)

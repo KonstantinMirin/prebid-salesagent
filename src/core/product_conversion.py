@@ -336,7 +336,7 @@ def convert_pricing_option_to_adcp(
 
 
 def _normalize_legacy_placement(placement: dict) -> dict:
-    """Bring a stored (possibly pre-3.1.1) placement dict up to the spec 3.1.1 shape.
+    """Bring a stored placement dict up to the pinned shape.
 
     Defaults kind="seller_inline" / mode="targetable" for legacy rows (see the
     call-site comment for the spec grounding). seller_inline additionally
@@ -474,7 +474,7 @@ def convert_product_model_to_schema(
             f"inventory profile."
         )
 
-    # publisher_properties: Use effective_properties which returns AdCP 2.0.0 discriminated union format
+    # publisher_properties: Use effective_properties which returns discriminated union format
     effective_props = product_model.effective_properties
     if not effective_props:
         raise ValueError(
@@ -547,7 +547,7 @@ def convert_product_model_to_schema(
     if product_model.product_card_detailed:
         product_data["product_card_detailed"] = product_model.product_card_detailed
     if product_model.placements:
-        # the pinned SDK (spec 3.1.1) makes Placement.kind and Placement.mode required. Placements
+        # the pinned SDK makes Placement.kind and Placement.mode required. Placements
         # stored before these fields existed carry seller-defined metadata (name/description)
         # inline, so they are seller_inline, not publisher_ref: default kind="seller_inline"
         # (spec requires publisher_domain for publisher_ref, which legacy rows lack, but name

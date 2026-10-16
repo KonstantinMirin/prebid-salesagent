@@ -535,7 +535,7 @@ class SyncSummary(SalesAgentBaseModel):
 class SyncCreativeResult(LibrarySyncCreativeResult):
     """Extends library SyncCreativeResult with internal-only fields.
 
-    the pinned SDK (spec 3.1.1) re-added assigned_to, assignment_errors, platform_id, status,
+    the pinned SDK re-added assigned_to, assignment_errors, platform_id, status,
     changes and warnings to the library parent, so all six are now INHERITED (they were
     locally redeclared under SDK 5.7 which had dropped them). See PR #1567.
 
@@ -550,7 +550,7 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     # production emits (created/updated/unchanged/failed/deleted — as strings or enum members) is
     # a valid CreativeAction, and StrEnum coerces the strings, so no override or normalizer is needed.
 
-    # the pinned SDK (spec 3.1.1) re-added assigned_to/assignment_errors/platform_id/status/changes/
+    # the pinned SDK re-added assigned_to/assignment_errors/platform_id/status/changes/
     # warnings to the library parent (PR #1567, shrinking the schema-inheritance
     # allowlist). Our former local `status` held internal review-routing state, not the spec's
     # advisory CreativeStatus, so it is renamed to `internal_status` (excluded from the wire)

@@ -691,7 +691,7 @@ class GAMOrdersManager:
                             # Infer creative size type from format_id name since Format.type was removed in the pinned SDK
                             creative_size_type = "NATIVE" if "native" in format_id_str.lower() else "PIXEL"
 
-                        # Check FormatId parameters (AdCP 2.5 parameterized formats)
+                        # Check FormatId parameters (parameterized formats)
                         # The buyer can specify width/height directly in the FormatId object
                         if not (width and height):
                             # Handle both FormatId objects and dicts (from database JSONB)

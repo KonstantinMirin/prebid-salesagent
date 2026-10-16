@@ -220,7 +220,7 @@ class GetProductsRequest(BuyerRequest, LibraryGetProductsRequest):
     docs/development/building-tools.md.
 
     push_notification_config is inherited from the adcp library parent (added in the
-    6.6 SDK / spec 3.1.1); no local redeclaration.
+    an earlier SDK); no local redeclaration.
     """
 
     TAGS: ClassVar[tuple[str, ...]] = (

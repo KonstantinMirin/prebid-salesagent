@@ -237,7 +237,7 @@ def _update_existing_creative(
     registry: Any,
     principal_id: str,
 ) -> tuple[SyncCreativeResult, bool]:
-    """Update an existing creative with upsert semantics (AdCP 2.5).
+    """Update an existing creative with upsert semantics .
 
     Handles the full update path: field updates, approval mode logic,
     creative agent validation (generative and static), preview extraction,
@@ -315,7 +315,7 @@ def _update_existing_creative(
             needs_approval = True
 
     # Store creative properties in data field
-    # AdCP 2.5: Full upsert semantics (replace all data, not merge)
+    # Full upsert semantics (replace all data, not merge)
     url = _extract_url_from_assets(creative)
     data = _build_creative_data(creative, url)
 
@@ -677,7 +677,7 @@ def _create_new_creative(
     registry: Any,
     principal_id: str,
 ) -> tuple[SyncCreativeResult, bool]:
-    """Create a new creative and persist it to the database (AdCP 2.5).
+    """Create a new creative and persist it to the database .
 
     Handles the full create path: URL extraction, data dict construction,
     creative agent validation (generative build or static preview),

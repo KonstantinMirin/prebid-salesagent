@@ -1311,14 +1311,14 @@ def execute_approved_media_buy(
                         logger.error(f"[APPROVAL] {error_msg}")
                         return ApprovalResult.failed(error_msg)
 
-                    # Get budget from package_config (AdCP 2.5.0: budget is always float | None)
+                    # Get budget from package_config (budget is always float | None)
                     budget_data = package_config.get("budget")
                     if isinstance(budget_data, dict):
                         # Legacy dict format (Budget object) - extract total
                         total_budget = float(budget_data.get("total", 0.0))
                         budget = total_budget  # MediaPackage expects float
                     elif isinstance(budget_data, (int, float)):
-                        # AdCP 2.5.0 format - flat number
+                        # format - flat number
                         total_budget = float(budget_data)
                         budget = total_budget  # MediaPackage expects float
                     else:
@@ -1610,7 +1610,7 @@ def execute_approved_media_buy(
 
                 # Group packages by creative (REVERSED - key by creative_id, value is list of package assignments)
                 # This ensures each creative is uploaded ONCE with ALL its package assignments
-                # Each assignment includes weight for proper rotation in adapters (AdCP 2.5)
+                # Each assignment includes weight for proper rotation in adapters
                 packages_by_creative: dict[str, list[PackageAssignmentDict]] = {}
                 for assignment in assignments:
                     if assignment.creative_id not in packages_by_creative:
@@ -3502,7 +3502,7 @@ async def _create_media_buy_impl(
                             # UoW auto-commits on clean exit
                             logger.info(f"✅ Created creative assignments for package {pkg_id}")
 
-            # Submitted task envelope (spec 3.1.1): media_buy_status/packages land on
+            # Submitted task envelope: media_buy_status/packages land on
             # the task's completion artifact, not this response — main's media_buy_status
             # addition to the old Success envelope is subsumed by the Submitted variant.
             return _submitted_approval_result(step, req, adapter)
@@ -3625,7 +3625,7 @@ async def _create_media_buy_impl(
             except Exception as e:
                 logger.warning(f"⚠️ Failed to send configuration approval Slack notification: {e}")
 
-            # Submitted task envelope (spec 3.1.1) — see note on the manual-approval
+            # Submitted task envelope — see note on the manual-approval
             # branch above; main's media_buy_status addition is likewise subsumed.
             return _submitted_approval_result(step, req, adapter)
 
@@ -4490,7 +4490,7 @@ async def _create_media_buy_impl(
             revision=persisted_revision,
             # preferred status; mirrors deprecated `status`. Lifecycle on
             # the wire, from the same single source that drives valid_actions
-            # (spec 3.1.1 create-media-buy-response.json;
+            # (create-media-buy-response.json;
             # pending_creatives_to_start.yaml step create_buy_no_creatives
             # grades media_buy_status == "pending_creatives" alongside
             # envelope status == "completed"). Partial GH #1326.

@@ -1155,7 +1155,7 @@ def _update_media_buy_impl(
                             "current": pkg_update.creative_ids,
                         }
 
-                    # Handle creatives (inline upload) - AdCP 2.5
+                    # Handle creatives (inline upload)
                     if pkg_update.creatives:
                         # Validate package_id is provided
                         if not pkg_update.package_id:

@@ -243,7 +243,7 @@ def process_and_upload_package_creatives(
                 # Borrowing the outer key here is what used to make this call look like a
                 # second buyer request wearing the same identifier.
                 idempotency_key=f"internal-creative-upload-{uuid.uuid4().hex}",
-                # AdCP 2.5: Full upsert semantics (no patch parameter)
+                # Full upsert semantics (no patch parameter)
                 assignments=None,  # Assign separately after creation
                 dry_run=False,
                 validation_mode=ValidationMode.strict,

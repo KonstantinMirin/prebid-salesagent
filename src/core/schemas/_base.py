@@ -1412,7 +1412,7 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
     # reason to retain a sender's unknown keys and no reason to refuse them either.
     model_config = ConfigDict(extra="ignore")
 
-    # the pinned SDK (spec 3.1.1) made these required on the success envelope. ``status`` is
+    # the pinned SDK made these required on the success envelope. ``status`` is
     # REQUIRED and typed ``Literal["completed"]`` by the SDK parent, because this is the
     # success branch and the branch's schema makes the value a const. A local
     # ``CompletedTaskStatusMixin`` used to declare that field and supply its default; it is
@@ -1585,7 +1585,7 @@ class AffectedPackage(LibraryPackage):
     """Affected package in UpdateMediaBuySuccess response.
 
     Extends adcp library Package with internal tracking fields.
-    Note: In AdCP 2.12.0+, affected_packages uses the full Package type.
+    Note: affected_packages uses the full Package type.
 
     Library Package required fields:
     - package_id: Publisher's package identifier
@@ -1624,7 +1624,7 @@ class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySucces
     # ``workflow_step_id`` into an extra that serialized to the buyer.
     model_config = ConfigDict(extra="ignore")
 
-    # the pinned SDK (spec 3.1.1) made status/revision required on the update success envelope.
+    # the pinned SDK made status/revision required on the update success envelope.
     # status is REQUIRED and typed Literal["completed"] by the SDK parent, because this is the
     # success branch and the branch's schema makes the value a const. A local
     # CompletedTaskStatusMixin used to declare the field and supply its default; it is
@@ -2022,14 +2022,14 @@ class Format(LibraryFormat):
         """Extract primary dimensions from renders array or format_id parameters.
 
         Checks in order:
-        1. Parameterized format_id (AdCP 2.5) - width/height on FormatId
+        1. Parameterized format_id  - width/height on FormatId
         2. Renders array - first render's dimensions
         3. Requirements field (legacy, internal)
 
         Returns:
             Tuple of (width, height) in pixels, or None if not available.
         """
-        # Try format_id parameters first (AdCP 2.5 parameterized formats)
+        # Try format_id parameters first (parameterized formats)
         # Access width/height directly — works with both library FormatId and our subclass
         if self.format_id.width is not None and self.format_id.height is not None:
             return (self.format_id.width, self.format_id.height)
@@ -2502,7 +2502,7 @@ class FormatId(LibraryFormatId):
     longer applied on this field. Pass the string through; comparing two references
     still goes through :func:`canonical_agent_url`, which the spec makes a MUST.
 
-    AdCP 2.5+ supports parameterized format IDs with width/height/duration_ms fields.
+    The spec supports parameterized format IDs with width/height/duration_ms fields.
     """
 
     def __str__(self) -> str:
@@ -2532,7 +2532,7 @@ class FormatId(LibraryFormatId):
         return format_id_identity(self)
 
     def get_dimensions(self) -> tuple[int, int] | None:
-        """Get dimensions from parameterized FormatId (AdCP 2.5).
+        """Get dimensions from parameterized FormatId .
 
         Returns:
             Tuple of (width, height) in pixels, or None if not specified.
@@ -2542,7 +2542,7 @@ class FormatId(LibraryFormatId):
         return None
 
     def get_duration_ms(self) -> float | None:
-        """Get duration from parameterized FormatId (AdCP 2.5).
+        """Get duration from parameterized FormatId .
 
         Returns:
             Duration in milliseconds, or None if not specified.
@@ -2660,7 +2660,7 @@ class PackageRequest(LibraryPackageRequest):
     )
     # The one field this DTO declares beyond the pin, and it survives on a reader census
     # rather than on "backward compatibility". media-buy/package-request.json declared
-    # creative_ids up to AdCP 2.5 and dropped it at 3.0 in favour of `creatives` (full
+    # creative_ids up to and dropped it at 3.0 in favour of `creatives` (full
     # objects), but the create flow still routes ids, not objects, through it: the inline
     # creative upload writes the merged ids back onto the package
     # (src/core/helpers/creative_helpers.py, model_copy), and _get_creative_ids

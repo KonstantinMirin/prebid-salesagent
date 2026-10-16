@@ -1075,7 +1075,7 @@ def add_product(tenant_id):
                 if countries is not None:
                     product_kwargs["countries"] = countries
 
-                # Handle channels field (AdCP 2.5 - advertising channels)
+                # Handle channels field (advertising channels)
                 channels = request.form.getlist("channels")
                 if channels:
                     product_kwargs["channels"] = channels
@@ -1183,7 +1183,7 @@ def add_product(tenant_id):
                             )
                             return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
-                    # Build AdCP 2.13.0 discriminated union format
+                    # Build discriminated union format
                     publisher_properties = []
                     for domain, tags in tags_by_domain.items():
                         publisher_properties.append(
@@ -1227,7 +1227,7 @@ def add_product(tenant_id):
                     for prop in properties:
                         properties_by_domain[prop.publisher_domain].append(prop.property_id)
 
-                    # Build AdCP 2.13.0 discriminated union format
+                    # Build discriminated union format
                     publisher_properties = []
                     for domain, prop_ids in properties_by_domain.items():
                         publisher_properties.append(
@@ -1603,7 +1603,7 @@ def edit_product(tenant_id, product_id):
 
                     attributes.flag_modified(product, "countries")
 
-                # Handle channels field (AdCP 2.5 - advertising channels)
+                # Handle channels field (advertising channels)
                 from sqlalchemy.orm import attributes
 
                 channels = request.form.getlist("channels")
@@ -2075,7 +2075,7 @@ def edit_product(tenant_id, product_id):
                 "product_card_detailed": product.product_card_detailed,
                 "placements": product.placements,
                 "reporting_capabilities": product.reporting_capabilities,
-                # AdCP 2.5 fields
+                # Advertising channels
                 "channels": product.channels or [],
                 # Principal access control
                 "allowed_principal_ids": product.allowed_principal_ids or [],

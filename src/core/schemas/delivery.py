@@ -21,7 +21,7 @@ from adcp.types import MediaBuyDeliveryStatus as LibraryMediaBuyDeliveryStatus
 from adcp.types import ReportingPeriod as LibraryReportingPeriod
 from adcp.types.domains.core.geo_delivery_metrics import (
     GeoDeliveryMetrics as LibraryByGeoItem,
-)  # the pinned SDK: inline ByGeoItem promoted to named $ref type GeoDeliveryMetrics (spec 3.1.1 geo-delivery-metrics.json)
+)  # the pinned SDK: inline ByGeoItem promoted to named $ref type GeoDeliveryMetrics (geo-delivery-metrics.json)
 from adcp.types.domains.core.placement_delivery_metrics import (
     PlacementDeliveryMetrics as LibraryByPlacementItem,
 )  # the pinned SDK: inline ByPlacementItem promoted to named $ref type PlacementDeliveryMetrics, same move ByGeoItem made above
@@ -99,7 +99,7 @@ class GetMediaBuyDeliveryRequest(BuyerRequest, LibraryGetMediaBuyDeliveryRequest
 
     # account, reporting_dimensions, attribution_window, time_granularity,
     # include_window_breakdown, include_package_daily_breakdown: all now provided
-    # by adcp SDK 5.7 (spec 3.1.0-beta.3). No local redeclarations needed.
+    # by an earlier SDK. No local redeclarations needed.
 
 
 # ---------------------------------------------------------------------------

@@ -454,9 +454,9 @@ class Product(Base, JSONValidatorMixin):
     # XOR constraint: exactly one of (properties, property_ids, property_tags) must be set
     # Type hint: list of Property dicts for validation (legacy, full objects)
     properties: Mapped[list[dict] | None] = mapped_column(JSONType, nullable=True)
-    # Type hint: list of property ID strings (AdCP 2.0.0 by_id variant)
+    # Type hint: list of property ID strings (by_id variant)
     property_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
-    # Type hint: list of tag strings (AdCP 2.0.0 by_tag variant)
+    # Type hint: list of tag strings (by_tag variant)
     property_tags: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     # Note: PR #79 fields (estimated_exposures, floor_cpm, recommended_cpm) are NOT stored in database
     # They are calculated dynamically from product_performance_metrics table
@@ -566,7 +566,7 @@ class Product(Base, JSONValidatorMixin):
     def effective_properties(self) -> list[dict] | None:
         """Get publisher properties from inventory profile (if set) or product itself.
 
-        Returns properties in AdCP 2.0.0 discriminated union format:
+        Returns properties in discriminated union format:
         - all variant: {publisher_domain, selection_type='all'} (default)
         - by_id variant: {publisher_domain, property_ids, selection_type='by_id'}
         - by_tag variant: {publisher_domain, property_tags, selection_type='by_tag'}
@@ -588,7 +588,7 @@ class Product(Base, JSONValidatorMixin):
             return ensure_selection_type(self.properties)
 
         if self.property_ids:
-            # AdCP 2.0.0 by_id variant
+            # by_id variant
             return [
                 {
                     "publisher_domain": self.publisher_domain,
@@ -597,7 +597,7 @@ class Product(Base, JSONValidatorMixin):
                 }
             ]
         if self.property_tags:
-            # AdCP 2.0.0 by_tag variant
+            # by_tag variant
             return [
                 {
                     "publisher_domain": self.publisher_domain,
