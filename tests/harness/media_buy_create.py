@@ -264,7 +264,17 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             self._seeded_all_inventory_tag = True
 
         if format_ids is None:
-            format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}]
+            # An id the PINNED CAPTURE actually serves. A creative referenced from a package
+            # must satisfy two conditions at once -- its claimed id resolves against the
+            # capture, AND its claimed identity equals this arm, which ``_legacy_lane``
+            # compares whole -- and with the arm pinned to the synthetic ``display_300x250``
+            # those were unsatisfiable together: the only id equal to the arm was the one the
+            # agent does not serve. Measured against
+            # tests/fixtures/creative_formats/reference_formats.json (71 formats):
+            # ``display_300x250`` is ABSENT, ``display_300x250_image`` is PRESENT. This is
+            # also already ProductFactory's own default, for the reason written at
+            # tests/factories/product.py.
+            format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]
 
         product = ProductFactory(
             tenant=tenant,
@@ -426,32 +436,28 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
 
         # Setup checklist: pass by default
 
-        # Format spec: mock _get_format_spec_sync to avoid asyncio.run() inside
-        # running event loop. Returns a valid format keyed by format_id. Tests
-        # for format mismatch (ext-p) override via mock["format_spec"].side_effect.
-        from tests.helpers.adcp_factories import create_test_format
-
-        self._format_specs: dict[str, Any] = {
-            "display_300x250": create_test_format(
-                format_id="display_300x250",
-                name="Display 300x250",
-                type="display",
-            ),
-        }
-
+        # Format spec: mock _get_format_spec_sync to avoid asyncio.run() inside a running
+        # event loop. Resolution itself is NOT faked -- it reads the same pinned capture the
+        # live server reads under ADCP_TESTING, so in-process and e2e agree about which
+        # format ids exist. Tests for format mismatch (ext-p) override via
+        # mock["format_spec"].side_effect.
+        #
+        # THERE IS NO PER-ID STUB DICT, and that is the point. A one-entry dict consulted
+        # BEFORE the capture used to sit here, keyed ``display_300x250`` -- a synthetic id
+        # the agent does not serve, made resolvable in process and only in process. It was
+        # the single counterexample to the two sentences this comment used to end with
+        # ("in-process and e2e format resolution agree by construction. Synthetic ids stay
+        # unresolvable (None), matching the server"), and it is why three transports
+        # answered one way and e2e_rest the other. Re-adding a stub re-creates that
+        # blindness; a scenario needing a format the capture lacks wants its own finding
+        # filed, not a stand-in.
         def _format_spec_side_effect(agent_url: str, format_id: str, *, provenance: Any = None) -> Any:
-            spec = self._format_specs.get(format_id)
-            if spec is not None:
-                return spec
-            # Fall back to the 54-format reference catalog — the SAME fixture the
-            # live server resolves under ADCP_TESTING (format_cache), so
-            # in-process and e2e format resolution agree by construction.
-            # Synthetic ids stay unresolvable (None), matching the server.
             from src.core.format_cache import load_reference_formats
 
             for fmt in load_reference_formats():
                 if fmt.format_id.id == format_id:
                     return fmt
+            # Unresolvable, exactly as the live server answers for an id it does not serve.
             return None
 
         self.mock["format_spec"].side_effect = _format_spec_side_effect
