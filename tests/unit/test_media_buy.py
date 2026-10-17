@@ -360,7 +360,7 @@ class TestCreateMediaBuyResponseShapes:
     # it would pass against a model that never had the field at all. The live rule it
     # stood for (a response serializes to the pinned shape by inheritance, internal
     # fields declared Field(exclude=True) at their declaration) is graded in
-    # test_adcp_contract.py and test_architecture_schema_inheritance.py.
+    # test_adcp_contract.py.
 
     def test_body_carries_status_beside_the_domain_fields(self):
         """The buyer receives ONE flat document: envelope fields at the root, not nested.

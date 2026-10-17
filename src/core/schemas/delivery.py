@@ -178,9 +178,9 @@ class PackageDelivery(LibraryByPackageItem):
     library's 67 fields and adding none, with those three widened to ``| None = None``.
     The SDK base serializes with a blanket ``exclude_none=True``, so an unset one was
     dropped and every delivery response was schema-invalid; the compliance Then step
-    graded it on 470 UC-004 scenarios at once. A subclass could not have widened them:
-    ``test_architecture_schema_inheritance`` grades a redeclaration against its library
-    parent, and required -> optional needs an allowlist row naming the weakened axis.
+    graded it on 470 UC-004 scenarios at once. A subclass must not widen them:
+    required -> optional on a pinned field is a retype, and the pin is what makes these
+    required.
     """
 
     by_placement: list[PlacementBreakdown] | None = Field(  # type: ignore[assignment]  # covariant narrowing; see _NARROWED_LIST_NOTE

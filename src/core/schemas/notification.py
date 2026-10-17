@@ -37,8 +37,7 @@ required.
 :class:`NotificationConfig` carries one further divergence, on ``event_types``, for a
 related reason: the pinned field states an enum AND, in the same sentence, states that a
 value outside it is reported PER ENTRY rather than refused wholesale. A model that refuses
-the document cannot do the second. See that class's docstring; the axis is rowed in
-``tests/unit/test_architecture_schema_inheritance.py``.
+the document cannot do the second. See that class's docstring for the weakened axis.
 """
 
 from adcp.types import NotificationConfig as LibraryNotificationConfig
@@ -131,9 +130,8 @@ class NotificationConfig(LibraryNotificationConfig):
     declared; the question is its value domain. Pattern #7 states its own remedy for a value
     this seller must accept ("declare it on the DTO -- that is the only mechanism"), and its
     rationale is that an unimplemented rule be LOUD: this rule is implemented, and only the
-    value could not reach it. Rowed in ``KNOWN_OVERRIDES``
-    (``tests/unit/test_architecture_schema_inheritance.py``) naming the weakened axis, per
-    critical pattern #1.
+    value could not reach it. The weakened axis is named here rather than in a
+    guard allowlist, per critical pattern #1.
     """
 
     # The sanctioned redeclaration: narrowed to a local subclass, same nullability, same

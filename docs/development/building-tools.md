@@ -131,12 +131,40 @@ excluded field no transport could set and no caller read. `Field(exclude=True)` 
 domain or response model such as `Product`, where a field must exist on the model and not on
 the wire.
 
-**There is deliberately no test comparing a DTO's field set to the pinned schema.** Such a
-suite exists when the model and the schema are two artifacts that can disagree. Here the DTO
-*is* the pinned model plus the mixin, so what it declares is inherited, and the comparison
-asserts only that Python inheritance works. `tests/unit/test_architecture_schema_inheritance.py` grades
-REDECLARATIONS against the library parent instead, which is the only place a local class can
-weaken a pinned type.
+**A FIELD YOU ADD MUST HAVE A DECLARED SURFACE.** Extending a pinned model by inheritance is
+the point of adopting it, and nothing here forbids it. What is forbidden is adding a field
+without deciding which surface it lives on, because the three surfaces behave differently and
+two of them are buyer-visible:
+
+- **A field on a request DTO is ADVERTISED.** `_register_tool` derives the announced parameter
+  shape from the DTO, so the field becomes a parameter buyers may send and other sellers do
+  not implement. `ListAccountsRequest.idempotency_key` was added so one BDD step could
+  construct the model; it reached the advertised contract and then grew a predicate in the
+  transport boundary whose only job was to detect and ignore it. Deleting the field deleted
+  the predicate.
+- **A field on a response model is ON THE WIRE** unless declared `Field(exclude=True)`. Nine
+  such fields were emitted to buyers under pinned-looking names until `9094a72d2`.
+- **`Field(exclude=True)` does not mean "internal", it means gone.** It strips the field from
+  the wire, from persistence AND from the idempotency hash alike. So a field marked that way
+  to keep it off the wire cannot persist either — measured 2026-10-17, 16 fields are in that
+  state, among them `Product.implementation_config` and `Format.platform_config`.
+
+A seller-owned field with a persistence surface therefore has no spelling on a wire model
+today, which is what salesagent-3zmsd exists to give it: an ORM model built by
+`from_domain`/`to_domain` mappers, so the domain model is not coupled to the data model.
+
+This paragraph previously said the opposite — that no comparison of a DTO's fields against the
+pin was needed, because the DTO "*is* the pinned model plus the mixin, so what it declares is
+inherited". That reasoning is what let additions accumulate unexamined: measured 2026-10-17,
+51 added-field declaration sites across 99 adoption sites. Most had no live reason — three
+justifications the regenerated SDK has since absorbed, and `TaskSummary`'s six are a field set
+`GetTaskStatusResponse` lost a release earlier. The capability is fine; those 51 were not
+using it deliberately.
+
+`tests/unit/test_architecture_dto_adds_no_field.py` grades registry request DTOs — surface (1)
+above — by unioning `model_fields` across every `adcp`-defined ancestor, with a shrink-only
+allowlist. Its population is the registry, so it never saw a model that is not a tool's
+request type.
 
 Divergence from the spec has two directions, and Python can state only one of them. You
 declare an added field on the subclass, typed and greppable in the file you are already

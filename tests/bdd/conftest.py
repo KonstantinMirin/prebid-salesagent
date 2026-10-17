@@ -955,7 +955,7 @@ _XFAIL_TAGS: dict[str, str] = {
     # ``NotificationType - EventType`` and names ``notification_configs[i].event_types[j]``
     # — so admitted minus refused IS the account-surface enum, member for member, and a
     # value outside the vocabulary entirely still earns a request-level INVALID_REQUEST.
-    # The weakened axis is rowed in tests/unit/test_architecture_schema_inheritance.py.
+    # The weakened axis is named in the model's own docstring.
     #
     # tests/storyboard/known_failures.txt:124,137 still carry
     # ``notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification``

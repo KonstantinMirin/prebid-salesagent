@@ -94,8 +94,7 @@ from src.core.schemas.notification import PushNotificationConfig
 #: breakage lived only in tests, which is why it survived.
 #:
 #: An alias rather than a subclass because Python forbids extending an enum that has
-#: members — the same constraint ``library_base_violation`` had to be taught in
-#: ``tests/unit/test_architecture_schema_inheritance.py``. CLAUDE.md Pattern #1: use the
+#: members. CLAUDE.md Pattern #1: use the
 #: library type, never duplicate it.
 DigitalSourceType = LibraryDigitalSourceType
 

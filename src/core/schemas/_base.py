@@ -341,9 +341,10 @@ class Error(_LibraryError):
         would have worked at runtime (the before-validator injects the field anyway) and
         was only needed to stop mypy demanding the argument -- but redeclaring an
         inherited field to make it optional is exactly what
-        ``test_architecture_schema_inheritance`` forbids, and it is right to: "widening a
-        type, making a required field optional, or substituting an unrelated model are
-        all retypes that this guard must keep flagging." A narrower constructor removes
+        critical pattern #1 forbids: widening a type, making a required field optional, or
+        substituting an unrelated model are all retypes of the pinned declaration. (The guard
+        that used to flag them was deleted 2026-10-17; the rule stands, graded by behaviour.)
+        A narrower constructor removes
         the parameter without touching the inherited declaration.
         """
         payload: dict[str, Any] = {"code": code}
