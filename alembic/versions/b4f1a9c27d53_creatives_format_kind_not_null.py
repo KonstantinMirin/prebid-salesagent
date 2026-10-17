@@ -10,6 +10,14 @@ The write gate that refuses such a creative landed with this change. This makes 
 state unrepresentable rather than merely guarded, which is the user's ruling: "it can't be
 null now that we always project it. Migration, data layer fix, NOT NULL, validation rules."
 
+THE SPEC REFUSES THE STATE OUTRIGHT, so the constraint rests on the pin rather than on this
+seller's preference. ``manifest.json`` and ``enums/error-code.json``: "An unresolved option
+reference or an unprojectable legacy ID is rejected with UNSUPPORTED_FEATURE."
+``core/product-format-declaration.json`` closes the other direction too -- the protocol "does
+NOT mint synthetic v1 format_ids for unmappable declarations" -- so nothing is invented
+either way. A column that can hold NULL is a column that can hold a state the pin says must
+have been refused at the door.
+
 EXISTING ROWS ARE MIGRATED BY PROJECTION, NOT DELETED. Also the user's ruling: "Don't delete
 -- migrate using the projection. Those that can't be migrated would be migration errors and
 the seller would take care of them on the data level, no problem." So ``upgrade`` projects
@@ -27,6 +35,23 @@ the declaration. So a row this migration cannot project may still be perfectly r
 sync time, and the remedy for such a row is to RE-SYNC the creative (which reaches step 1)
 or to set its ``format_kind`` by hand -- not to delete it. The abort names the ids so the
 operator can do either and re-run.
+
+WHAT AN ABORT ACTUALLY MEANS, because the obvious reading is wrong. It is NOT "some
+creatives legitimately have no kind" -- the pin's own refusal clause above says no such
+creative should exist. It is that SEVEN formats in the published reference catalog carry no
+``canonical`` annotation, so their v1 ids project through neither route, and that is an
+upstream omission filed as adcontextprotocol/adcp#8277 (the card family:
+``product_card_standard``, ``product_card_detailed``, ``proposal_card_*``,
+``native_product_card``, ``format_card_*``). 64 of the 71 ARE annotated, and the 45 registry
+mappings cover none of the seven. So an abort is a loud failure pointing at someone else's
+missing annotation, not a design decision here -- and when #8277 lands, a re-sync picks the
+fix up for free.
+
+NO CATALOG SNAPSHOT IS BAKED INTO THIS REVISION, deliberately. Freezing a creative-agent
+capture here would freeze those seven missing annotations with it, so the migration would
+keep aborting on them after upstream fixed them -- a stale copy of someone else's bug,
+embedded in an immutable revision. Abort-and-re-sync needs no snapshot and loses nothing,
+because the operator re-syncs through the live path that holds the catalog.
 
 THE NUMBER OF AFFECTED ROWS IS UNKNOWN AND IS NOT KNOWABLE FROM A WORKTREE. ``creatives``
 does not exist in the shared test Postgres -- ``to_regclass('creatives')`` returns false --
