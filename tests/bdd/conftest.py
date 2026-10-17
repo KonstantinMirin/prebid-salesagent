@@ -4336,7 +4336,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # row-keyed below.
             "T-UC-026-ext-c",
             "T-UC-026-ext-d",
-            "T-UC-026-ext-e",
             "T-UC-026-ext-f",
             # Graduated: T-UC-026-ext-g-product, T-UC-026-ext-g-format,
             # T-UC-026-ext-g-pricing (innet_091026_1343, all four transports xpass).
@@ -4399,7 +4398,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Graduated: T-UC-026-inv-195-3 (rczc: bid_price ceiling semantics pass all 4 transports)
             # Graduated: T-UC-026-inv-195-4 (rczc: bid_price exact semantics pass all 4 transports)
             # Graduated: T-UC-026-inv-196-3 (all 4 transports pass)
-            "T-UC-026-inv-197-3",
             # Graduated: T-UC-026-inv-197-4 (innet_091026_1343, all four transports
             # xpass). 3.2.1 media-buy/package-request.json keeps minItems: 1 on
             # format_ids, so an empty array is a schema-constraint violation, which
@@ -4498,13 +4496,34 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # is not failing here -- it is being asked a different question than the
             # scenario means to ask. Graduating this needs a way to persist a settled
             # package, after which the scenario grades the refusal for real.
+            "T-UC-026-inv-197-3",
+            "T-UC-026-ext-e",
             "T-UC-026-ext-j",
         }
+        # THE SHARED REASON BELOW MISDESCRIBES AT LEAST TWO OF ITS MEMBERS, measured
+        # 2026-10-17 by removing each tag and reading the failure rather than trusting the
+        # group. Neither is AffectedPackage, keyword ops, or a missing error code:
+        #
+        #   T-UC-026-ext-e      "Expected error code 'INVALID_REQUEST', got 'VALIDATION_ERROR'".
+        #     Production DOES refuse a format_id the product does not carry. The scenario is
+        #     over-specified on the CODE, and the pin backs production -- see the two
+        #     T-UC-026-*-format-ids rows in _UC026_PARTITION_SELECTIVE for the citation.
+        #     Needs upstream reconciliation of the demanded code, not a production change.
+        #   T-UC-026-inv-197-3  "format_ids not echoed in response — production should echo
+        #     format_ids". A REAL production gap, and a different one: the defaulted arm is
+        #     applied but not echoed. Unrelated to the code-mapping class above.
+        #
+        # Left in the group rather than re-homed because moving a tag between structures
+        # changes its strictness and ordering; the correction owed here is the CAUSE, and a
+        # shared reason that names the wrong one is what sent this sweep looking in the
+        # wrong place. strict=False also means an xpass here is SILENT, so a member that
+        # starts passing is graduated by nobody.
         if marker_names & _UC026_XFAIL_TAGS:
             item.add_marker(
                 pytest.mark.xfail(
                     reason="UC-026 spec-production gap — AffectedPackage lacks full state / "
-                    "keyword ops not implemented / error codes missing",
+                    "keyword ops not implemented / error codes missing (NOT the cause for "
+                    "ext-e or inv-197-3 — see the comment above)",
                     strict=False,
                 )
             )
@@ -4607,14 +4626,34 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             (
                 "T-UC-026-boundary-format-ids",
                 {"format_id from different product", "one unsupported format_id among valid ones"},
-                "a format_id the product does not carry is accepted instead of refused with "
-                "INVALID_REQUEST — the valid-format rows of this outline pass",
+                "scenario is OVER-SPECIFIED on the error CODE, and production is right: it "
+                "DOES refuse, naming field packages[0].format_ids with details "
+                "{product_id, rejected_value, accepted_values}. It answers VALIDATION_ERROR "
+                "and the scenario demands INVALID_REQUEST. The pin backs production: "
+                "core/product-format-declaration.json makes the REJECTION the MUST and the "
+                "code permissive ('typically with UNSUPPORTED_FEATURE or a seller-specific "
+                "code'), and enums/error-code.json reserves INVALID_REQUEST for 'malformed, "
+                "missing required fields, or violates schema constraints' while "
+                "VALIDATION_ERROR is 'violates business rules beyond schema validation' -- "
+                "which a well-formed reference outside a product's accepted set is. Needs "
+                "UPSTREAM RECONCILIATION of the demanded code, not graduation and not a "
+                "production change (salesagent-xpass sweep, 2026-10-17)",
             ),
             (
                 "T-UC-026-partition-format-ids",
                 {"unsupported_format"},
-                "a format_id the product does not carry is accepted instead of refused with "
-                "INVALID_REQUEST — the valid-format rows of this outline pass",
+                "scenario is OVER-SPECIFIED on the error CODE, and production is right: it "
+                "DOES refuse, naming field packages[0].format_ids with details "
+                "{product_id, rejected_value, accepted_values}. It answers VALIDATION_ERROR "
+                "and the scenario demands INVALID_REQUEST. The pin backs production: "
+                "core/product-format-declaration.json makes the REJECTION the MUST and the "
+                "code permissive ('typically with UNSUPPORTED_FEATURE or a seller-specific "
+                "code'), and enums/error-code.json reserves INVALID_REQUEST for 'malformed, "
+                "missing required fields, or violates schema constraints' while "
+                "VALIDATION_ERROR is 'violates business rules beyond schema validation' -- "
+                "which a well-formed reference outside a product's accepted set is. Needs "
+                "UPSTREAM RECONCILIATION of the demanded code, not graduation and not a "
+                "production change (salesagent-xpass sweep, 2026-10-17)",
             ),
             # Keyword / negative-keyword conflict and empty-value validation. Every
             # failing row is REST-only, which matches the REST update-dispatch note
