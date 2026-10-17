@@ -29,6 +29,7 @@ from src.core.errors.details import (
     EntityRefDetails,
     FormatDeclarationDivergenceDetails,
     FormatOptionDivergenceSummary,
+    PlatformExtensionCollisionDetails,
 )
 from src.core.exceptions import AdCPFormatNotFoundError, AdCPSalesAgentError
 from src.core.schemas import (
@@ -362,6 +363,169 @@ def product_format_kinds(format_options: Iterable[Any] | None) -> set[str]:
     is a ``StrEnum``; normalizing both sides means that stays true if it ever is not.
     """
     return {str(declaration.format_kind) for declaration in format_options or []}
+
+
+def platform_extension_collisions(
+    extensions: Iterable[Any] | None,
+    definitions: Mapping[str, Any] | None,
+) -> list[PlatformExtensionCollisionDetails]:
+    """Per-field overlaps between a declaration's ``platform_extensions``, and who wins each.
+
+    ``formats/canonical/_base.json``'s ``platform_extensions`` (3.2.3) states the rule: when
+    two or more entries "extend the same target ... with overlapping field names, **array
+    order is authoritative -- later entries override earlier ones on a per-field basis**
+    (last-in-array-wins)".
+
+    THE PRECEDENCE IS COMPUTED, NOT APPLIED. Nothing here merges the extensions, and that is
+    the pin's instruction rather than a shortcut: the same paragraph ends "the deterministic
+    precedence is for last-resort consistency across SDK implementations, **not a sanctioned
+    merging strategy**". A seller that merged colliding extensions would be implementing the
+    thing the pin declines to sanction. What a producer owes is to SAY the overlap happened --
+    "``error.details: { collision_kind, target, overlapping_fields, winning_extension_uri }``"
+    -- and the buyer resolves it with the stated order.
+
+    *definitions* is a parameter and not a lookup because the collision is NOT DECIDABLE FROM
+    THE DECLARATION. ``core/platform-extension-ref.json`` requires ``uri`` + ``digest`` and
+    declares nothing else, while the target (``extends``) and the field names
+    (``fields.properties``) are properties of the definition -- carried in
+    ``get-products-response.json``'s bundled ``extensions`` map, keyed ``<uri>@<digest>``. A
+    reference whose definition is absent is therefore left alone rather than guessed at: the
+    advisory's every key would be invented. That is the state this seller is in for EVERY
+    reference today, because nothing populates that map (salesagent-hff54's deferred half).
+
+    An identical ``uri@digest`` twice contributes nothing, and the digest is the proof: equal
+    digests mean the same document, so last-in-array-wins selects a value identical to the one
+    it displaced. A buyer can observe no divergence, and an advisory reporting one would be
+    reporting a conflict that does not exist. The SAME uri at two DIFFERENT digests does
+    collide -- one extension, two versions.
+
+    Returns one record per (target, winner) rather than per target: precedence is per-field, so
+    partially-overlapping extensions can each win different fields of the same target, and the
+    pin's own shape pairs plural ``overlapping_fields`` with a singular
+    ``winning_extension_uri``.
+    """
+    # Keyed by uri@digest, so the same document referenced twice resolves to one entry and
+    # drops out of the overlap by construction.
+    resolved: dict[str, tuple[str, frozenset[str]]] = {}
+    order: list[str] = []
+    for reference in extensions or ():
+        uri, digest = _reference_member(reference, "uri"), _reference_member(reference, "digest")
+        if uri is None or digest is None:
+            continue
+        key = f"{uri}@{digest}"
+        definition = (definitions or {}).get(key)
+        target, fields = _definition_target_and_fields(definition)
+        if target is None:
+            continue
+        if key not in resolved:
+            resolved[key] = (target, fields)
+            order.append(key)
+
+    winners: dict[tuple[str, str], str] = {}
+    for key in order:
+        target, fields = resolved[key]
+        for field in fields:
+            winners[(target, field)] = key
+
+    # A field is only overlapping if two or more DISTINCT documents declare it.
+    overlapping: dict[tuple[str, str], str] = {
+        (target, field): winner
+        for (target, field), winner in winners.items()
+        if sum(1 for key in order if resolved[key][0] == target and field in resolved[key][1]) > 1
+    }
+
+    grouped: dict[tuple[str, str], list[str]] = {}
+    for (target, field), winner in overlapping.items():
+        grouped.setdefault((target, winner), []).append(field)
+
+    return [
+        PlatformExtensionCollisionDetails(
+            target=target,
+            overlapping_fields=sorted(fields),
+            winning_extension_uri=resolved_uri_of(winner),
+        )
+        for (target, winner), fields in sorted(grouped.items(), key=lambda item: (item[0][0], item[0][1]))
+    ]
+
+
+def bundled_extension_definitions() -> Mapping[str, Any]:
+    """The platform-extension definitions this seller holds, keyed ``<uri>@<digest>``.
+
+    THE ONE SEAM, and it is empty. ``get-products-response.json``'s ``extensions`` map is the
+    pin's named resolution source -- "lets buyers resolve ``platform_extensions`` references on
+    product format declarations without a separate fetch" -- and this seller stores no extension
+    definitions, so it has nothing to put there. The map is a MAY ("subsequent get_products
+    responses MAY omit definitions the buyer already has cached"), so serving none is conforming;
+    what it costs is that :func:`platform_extension_collisions` can decide nothing, since the
+    target and field names it compares are the definition's.
+
+    Filling this is the deferred half of ``salesagent-hff54`` and it is a design choice, not a
+    gap to patch here: either a definition store carrying the pin's full fetch contract (the SSRF
+    allowlist, response-size cap and ``$ref`` sandbox documented on
+    ``product-format-declaration.json#format_schema``), or resolution per request through
+    ``src/core/security/outbound_http.py``. The SDK's own
+    ``CanonicalReferenceResolver.resolve_platform_extension`` does the single-reference half
+    correctly but fetches with its own ``httpx`` client and its own address checks, which is the
+    one thing critical pattern #9 reserves to this repo's gateway.
+
+    A function rather than a constant so the seam has a name, one caller, and a docstring saying
+    what feeding it turns on.
+    """
+    return {}
+
+
+def declaration_platform_extensions(declaration: Any) -> list[Any]:
+    """One declaration's ``platform_extensions`` references.
+
+    They live on ``params`` rather than on the declaration itself -- the field is declared by
+    ``formats/canonical/_base.json``, which types each arm's ``params`` -- so 15 of the 16 arms
+    carry it and ``custom`` does not. Read through ``getattr`` for the same reason
+    :func:`_declaration_kind` does: a declaration arrives as a validated arm from the wire and
+    as a stored document from the database.
+    """
+    params = declaration.get("params") if isinstance(declaration, Mapping) else getattr(declaration, "params", None)
+    if params is None:
+        return []
+    extensions = (
+        params.get("platform_extensions")
+        if isinstance(params, Mapping)
+        else getattr(params, "platform_extensions", None)
+    )
+    return list(extensions or ())
+
+
+def resolved_uri_of(key: str) -> str:
+    """The ``uri`` half of a ``<uri>@<digest>`` extensions-map key.
+
+    Split from the RIGHT: the digest is ``@``-prefixed and a URI may itself contain ``@``
+    (userinfo), so ``partition`` would cut the wrong one.
+    """
+    return key.rpartition("@")[0]
+
+
+def _reference_member(reference: Any, name: str) -> str | None:
+    """One member of a platform-extension reference, as an object or as a document."""
+    value = reference.get(name) if isinstance(reference, Mapping) else getattr(reference, name, None)
+    return str(value) if value is not None else None
+
+
+def _definition_target_and_fields(definition: Any) -> tuple[str | None, frozenset[str]]:
+    """An extension definition's ``extends`` target and the field names it contributes.
+
+    ``get-products-response.json``'s ``extensions`` values require both ``extends`` and
+    ``fields``, the latter being "a JSON Schema fragment declaring the additional fields this
+    extension contributes" -- so the names are the fragment's ``properties`` keys. A
+    definition missing either is treated as no definition at all, for the same reason an
+    absent one is: a target this seller cannot read is a target it cannot say was shared.
+    """
+    if definition is None:
+        return None, frozenset()
+    extends = definition.get("extends") if isinstance(definition, Mapping) else getattr(definition, "extends", None)
+    fields = definition.get("fields") if isinstance(definition, Mapping) else getattr(definition, "fields", None)
+    properties = fields.get("properties") if isinstance(fields, Mapping) else None
+    if not extends or not isinstance(properties, Mapping):
+        return None, frozenset()
+    return str(extends), frozenset(str(name) for name in properties)
 
 
 def product_format_option_identities(format_options: Iterable[Any] | None) -> set[FormatOptionIdentity]:

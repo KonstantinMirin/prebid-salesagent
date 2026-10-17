@@ -27,6 +27,9 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.format_resolver import (
+    bundled_extension_definitions,
+    declaration_platform_extensions,
+    platform_extension_collisions,
     product_format_identities,
     product_format_kinds,
     product_format_option_identities,
@@ -828,6 +831,33 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         if product.product_id in divergences
     ]
 
+    # The pin's OTHER FORMAT_DECLARATION_DIVERGENT details shape, on the SAME lane, the same
+    # pointer rule and the same `source`. `formats/canonical/_base.json` asks for the same code
+    # when "a producer-self-emitted overlap on a single declaration" happens, with
+    # `details: { collision_kind, target, overlapping_fields, winning_extension_uri }` --
+    # PlatformExtensionCollisionDetails is exactly those four.
+    #
+    # QUIET TODAY, AND NOT DEAD: the overlap is undecidable from a declaration, because
+    # `core/platform-extension-ref.json` carries `uri` + `digest` only while the target and
+    # field names are the DEFINITION's. The definitions arrive in the response's bundled
+    # `extensions` map, which nothing populates yet -- so every reference resolves to no
+    # definition and is left alone rather than guessed at. `bundled_extension_definitions` is
+    # the one seam the deferred half of salesagent-hff54 fills; feeding it is what makes this
+    # emit, and nothing else about this call site changes then.
+    collision_advisories = [
+        Error.of(  # structural-guard: advisory per-product divergence in GetProductsResponse.errors[]
+            ErrorCode.FORMAT_DECLARATION_DIVERGENT,
+            field=f"products[{index}]",
+            details=collision,
+            source=LibraryErrorSource.producer,
+        )
+        for index, product in enumerate(eligible_products)
+        for declaration in product.format_options or ()
+        for collision in platform_extension_collisions(
+            declaration_platform_extensions(declaration), bundled_extension_definitions()
+        )
+    ]
+
     # Our Product extends LibraryProduct - cast for type safety since list is invariant
     # When serialized, Pydantic automatically uses library Product fields
     # Internal-only fields (implementation_config) excluded by model_dump()
@@ -838,7 +868,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     # but mypy still needs cast() due to list invariance in static typing
     resp = GetProductsResponse(
         products=cast(list[LibraryProduct], eligible_products),
-        errors=format_advisories or None,
+        errors=(format_advisories + collision_advisories) or None,
         message=_products_message(len(eligible_products), anonymous=principal_id is None),
     )
 

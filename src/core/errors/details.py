@@ -254,6 +254,40 @@ class FormatOptionDivergenceSummary(BaseModel):
     v1_format_ref: list[str]
 
 
+class PlatformExtensionCollisionDetails(ErrorDetails):
+    """``FORMAT_DECLARATION_DIVERGENT``'s OTHER details shape: a per-field extension overlap.
+
+    One code, two details shapes, and the pin asks for both. ``formats/canonical/_base.json``'s
+    ``platform_extensions`` says a dual-emission overlap takes
+    :class:`FormatDeclarationDivergenceDetails`, and that "a producer-self-emitted overlap on a
+    single declaration SHOULD use the same code with ``error.details: { collision_kind:
+    "platform_extension_field", target, overlapping_fields, winning_extension_uri }``" -- these
+    four keys, which is the whole of this class.
+
+    ``collision_kind`` is a one-member ``Literal`` rather than a free string because it is the
+    DISCRIMINATOR between the two shapes: a recipient reads it to know which set of keys it has.
+    A second member is added when the pin names a second kind, and mypy then fails every
+    construction site that has not chosen.
+
+    ``target`` is the canonical concept both extensions extend (``tracking``,
+    ``cta_vocabulary``, ``destinations``, ``placement``) and it is NOT derivable from a
+    reference: ``core/platform-extension-ref.json`` requires ``uri`` + ``digest`` and nothing
+    else, while ``extends`` is a property of the definition. The same is true of the field
+    names. So this advisory is only constructible for extensions whose definitions the seller
+    holds, which is what makes :func:`~src.core.format_resolver.platform_extension_collisions`
+    take them as an argument instead of looking them up.
+
+    ``winning_extension_uri`` is singular while ``overlapping_fields`` is plural, and that is
+    the pin's shape rather than a simplification: precedence is per-FIELD, so one target can
+    produce several of these records, each naming the fields one extension won.
+    """
+
+    collision_kind: Literal["platform_extension_field"] = "platform_extension_field"
+    target: str
+    overlapping_fields: list[str]
+    winning_extension_uri: str
+
+
 class FormatDeclarationDivergenceDetails(ErrorDetails):
     """``FORMAT_DECLARATION_DIVERGENT``'s details, with the keys the pin names plus the one
     that says WHOSE legacy arm disagreed.
