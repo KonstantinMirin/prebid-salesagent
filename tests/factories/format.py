@@ -319,6 +319,13 @@ def resolvable_format_ref(format_id: str, **parameters: int) -> dict[str, Any]:
         video_640x480         NOT in capture  | kind video_hosted, no dimensions
         display_300x250       NOT in capture  | kind image, upgrades to display_image 300x250
 
+    "RAISES" above means from the id ALONE, which is the only question this door asks. A
+    captured id is still PROJECTABLE through the format's own ``canonical`` declaration --
+    measured, 64 of the 71 declare one, ``video_1280x720`` among them -- so a caller who has
+    the catalog resolves it at step 1. What the caller needs is to actually HAVE the catalog:
+    the sync path does (``find_format(all_formats, ...)``), ``CreativeFactory`` does through
+    ``served_format_spec``, and a bare ``canonical_kind_for(id)`` does not.
+
     So the ids the primitives know are largely the hand-invented legacy ones the agent does
     NOT serve, and vice versa. A caller needing DIMENSIONS wants the ``display_NNNxNNN_image``
     family, the only one ``upgrade_legacy_format_id`` sizes; a caller needing only a resolvable
@@ -355,9 +362,25 @@ def resolvable_format_ref(format_id: str, **parameters: int) -> dict[str, Any]:
     return {"agent_url": AGENT_URL, "id": format_id, **parameters}
 
 
-def _category_of(fmt: Format) -> str | None:
-    """The catalog category a reference format is served under, as a plain string."""
-    value = getattr(fmt, "type", None)
+def _canonical_kind_of(fmt: Format) -> str | None:
+    """The canonical format kind a reference format declares, as a plain string.
+
+    THIS USED TO READ ``fmt.type``, AND ``type`` IS NOT A FIELD. It is a key the capture
+    carries on every one of its 71 entries, and the pinned ``LibraryFormat``'s
+    ``extra="allow"`` STORED it, so a plain attribute read found it. The local subclass now
+    sets ``extra="ignore"`` -- correctly, because deleting a declared field from an
+    ``extra="allow"`` parent promotes it to an extra that reaches the wire -- and the key is
+    dropped on validation. Measured at that point: ``_category_of`` answered ``None`` for
+    all 71 formats, so ``pick_reference_format`` matched nothing and the UC-005
+    multi-category Given raised (salesagent-6018h).
+
+    ``canonical.kind`` is the pinned replacement and not merely an available one:
+    ``core/format-id.json`` makes it required when a format declares a projection, the
+    capture declares one on 64 of the 71, and it is the same vocabulary everything inside
+    this seller keys on. Reading a field the pin declares is what stops the next ``extra``
+    tightening from silently emptying this selector again.
+    """
+    value = getattr(getattr(fmt, "canonical", None), "kind", None)
     return None if value is None else str(getattr(value, "value", value))
 
 
@@ -368,13 +391,20 @@ def _uses_asset_type(fmt: Format, asset_type: str) -> bool:
     )
 
 
-def pick_reference_format(category: str, *, without_asset_type: str | None = None) -> Format:
-    """The first reference format served under *category*, in catalog order.
+def pick_reference_format(canonical_kind: str, *, without_asset_type: str | None = None) -> Format:
+    """The first reference format declaring *canonical_kind*, in catalog order.
 
-    A scenario that says "a display format" wants a REAL one -- served by the in-process
+    A scenario that says "an image format" wants a REAL one -- served by the in-process
     fixture and the live e2e stack alike -- not a minted ``fmt_N`` that the live stack can
     never realize and that carries no assets to grade. Catalog order makes the choice
     deterministic across runs and transports.
+
+    THE SELECTOR IS A CANONICAL KIND and not the capture's ``type`` string, for the reason
+    :func:`_canonical_kind_of` records. Measured on the pinned capture, excluding the
+    ``pixel_tracker`` carriers: ``image`` 14, ``video_hosted`` 3, ``video_vast`` 2, and
+    ``html5`` / ``audio_hosted`` 0 -- every html5 and audio format the agent serves carries
+    a pixel_tracker asset the pin's assets union does not admit, so those two kinds are
+    unreachable through this helper today.
 
     ``without_asset_type`` skips formats carrying that asset type; it exists for
     ``pixel_tracker``, which the pinned 3.1.1 ``core/format.json`` assets union does not
@@ -383,7 +413,8 @@ def pick_reference_format(category: str, *, without_asset_type: str | None = Non
     """
     return pick_reference_formats(
         lambda f: (
-            _category_of(f) == category and (without_asset_type is None or not _uses_asset_type(f, without_asset_type))
+            _canonical_kind_of(f) == canonical_kind
+            and (without_asset_type is None or not _uses_asset_type(f, without_asset_type))
         )
     )[0]
 

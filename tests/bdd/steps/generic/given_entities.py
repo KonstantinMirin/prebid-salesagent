@@ -95,11 +95,19 @@ def given_registry_multi_categories(ctx: dict) -> None:
     (E2EUnsupportedSetup, the scenario graded nothing), and a minted format carries no
     assets, so POST-S2 graded nothing in-process either. The three are chosen without
     ``pixel_tracker`` assets, which the pinned Format.assets union does not admit
-    (adcp#7338); the catalog has no such audio format, so native stands in for it.
+    (adcp#7338).
+
+    THE CATEGORY IS NOW A CANONICAL KIND. These were ``display`` / ``video`` / ``native``,
+    read off the capture's non-pin ``type`` key, which the model stopped storing when
+    ``Format`` took ``extra="ignore"`` -- so all three matched nothing and this Given
+    raised (salesagent-6018h). The replacement names the pinned vocabulary, and the three
+    are the only kinds with a pin-admissible member: measured on the capture, ``image`` 14,
+    ``video_hosted`` 3, ``video_vast`` 2, every ``html5`` and ``audio_hosted`` format being
+    a pixel_tracker carrier. Three genuinely different kinds is what the sentence needs.
     """
     ctx["registry_formats"] = [
-        pick_reference_format(category, without_asset_type="pixel_tracker")
-        for category in ("display", "video", "native")
+        pick_reference_format(canonical_kind, without_asset_type="pixel_tracker")
+        for canonical_kind in ("image", "video_hosted", "video_vast")
     ]
     _sync_registry(ctx)
 
