@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 
 from adcp import Error as _LibraryError
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import BrandReference as LibraryBrandReference
 from adcp.types import (
     # ``CanonicalFormatKind`` was imported here for the deleted ProductFormatDeclaration
     # subclass (see the note where that class used to be) and has no reader left.
@@ -223,7 +222,6 @@ from adcp.types.domains.core.collection_list_ref import (
 )
 from annotated_types import MaxLen, MinLen
 from pydantic import (
-    AwareDatetime,
     BaseModel,
     ConfigDict,
     Discriminator,
@@ -1504,49 +1502,26 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
     # omits the field. Listing ``ProtocolEnvelope`` AFTER the parent is deliberate: the
     # parent's narrower ``Literal`` wins, so ``status="failed"`` on a success branch stays a
     # type error rather than becoming an eight-member enum.
-    # ``confirmed_at`` and ``revision`` are NOT invariant: they are columns the repository
-    # owns, so they carry NO default here and every construction site states where its
-    # value came from. A default made this model a second producer of persisted state —
-    # and an invisible one, because the write-seam guard scans assignments and a
-    # ``default_factory`` is not an assignment.
+    # ``confirmed_at`` is INHERITED. It was redeclared here as ``AwareDatetime | None``
+    # with no default -- which is, field for field, what the regenerated SDK parent
+    # already declares: same annotation, required, no default, no metadata. The only thing
+    # the local line still carried was the ABSENCE of the parent's description, so the
+    # redeclaration's one remaining effect was to drop documentation from the published
+    # schema. The properties the construction sites rely on come from the pin:
     #
-    # What the default asserted: ``confirmed_at=datetime.now(UTC)`` on EVERY success,
-    # including a ``pending_creatives`` buy whose column is NULL precisely because the
-    # seller has not committed. The docstring of ``CreateMediaBuySubmitted`` below
-    # already rejects that reasoning in so many words ("would falsely assert the seller
-    # confirmed a buy that is not yet committed"); the Success branch was doing it.
-    #
-    # Both keep the parent's REQUIRED types and lose only their local defaults, so
-    # omitting either is a construction error instead of a fabricated value.
-    #
-    # WIDENED to ``| None``, and the whole stack already agreed except this line:
-    #
-    #   pin  create-media-buy-response.json @ 3.1.1 branch0 (CreateMediaBuySuccess)
+    #   pin  create-media-buy-response.json branch0 (CreateMediaBuySuccess)
     #        type ["string", "null"], and IN ``required`` -> present, may be null
     #   ORM  MediaBuy.confirmed_at  Mapped[datetime | None], nullable=True
     #   DB   media_buys.confirmed_at  is_nullable = YES
     #
-    # So this annotation was the only layer narrower than the contract, and the
-    # narrowing was never mandated. ``required`` + nullable is exactly "the key must
-    # be present, its value may be null" -- no default, and AlwaysIncludeFieldsMixin
-    # emits the explicit null rather than dropping the key.
-    #
-    # It previously said "deliberately NOT widened", on the premise that "this seller
-    # never [sends null]: ... a create that is NOT committed (manual approval pending)
-    # returns the ``CreateMediaBuySubmitted`` branch instead." That premise was false for
-    # one path, and review found it: a ``pending_creatives`` create returns the
-    # SUCCESS branch, not Submitted. While PENDING_CREATIVES sat in
-    # ``_SELLER_COMMITTED_STATUSES`` the buy got stamped and the non-null type held --
-    # but the stamp itself was the defect, a write-once buyer-visible commitment minted
-    # at the moment of a HOLD, before the ad server was contacted. Removing that
-    # membership is the fix; this widening is what makes the correct state expressible.
-    #
-    # The suppression records an SDK/SPEC DIVERGENCE, not our convenience: we extend the
-    # SDK's class, and that class does not account for the null case its own pinned
-    # schema permits. The suppression this carried is GONE: the pinned SDK types the parent field
-    # so the redeclaration is a plain narrowing mypy accepts, and the type-ignore ratchet
-    # shrinks by one rather than carrying an approved exception.
-    confirmed_at: AwareDatetime | None
+    # It is a column the repository owns, so it carries NO default and every construction
+    # site states where its value came from -- a default here made this model a second
+    # producer of persisted state, and an invisible one, because the write-seam guard
+    # scans assignments and a ``default_factory`` is not an assignment. That default
+    # asserted ``confirmed_at=datetime.now(UTC)`` on EVERY success, including a
+    # ``pending_creatives`` buy whose column is NULL precisely because the seller has not
+    # committed. The parent carries no default either, so omitting it is still a
+    # construction error rather than a fabricated value.
 
     # Names the branch this model IS, so the retained-field set is DERIVED from the pin
     # rather than listed here. branch0 is CreateMediaBuySuccess; the bare ref is
@@ -2967,12 +2942,12 @@ class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
         "adcp",
     )
 
-    # The spec's type, matching the library parent. REQUIRED, as the library declares it (create-media-buy-request.json /required lists
-    # brand). Narrowing the TYPE back to the parent's must not touch the requiredness --
-    # redeclaring it optional would relax a spec constraint, which is the weakening the
-    # inheritance guard exists to catch and which broke
-    # test_brand_field_is_required_on_create_media_buy_request.
-    brand: LibraryBrandReference = Field(..., description="Brand reference")
+    # ``brand`` is INHERITED. The redeclaration restated the parent's own type
+    # (``BrandReference``) and its own requiredness (create-media-buy-request.json
+    # /required lists brand), so the only axis it changed was the description: it replaced
+    # the pin's text with "Brand reference" in the published schema. Requiredness comes
+    # from the pin, which is what
+    # test_brand_field_is_required_on_create_media_buy_request grades.
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
@@ -4277,7 +4252,14 @@ class GetTaskStatusResponse(LibraryGetTaskStatusResponse, SalesAgentAdcpResponse
       channel and would have been the home for one of these that a buyer needed; none does.
     """
 
-    context_id: str | None = Field(default=None, description="Workflow context this task belongs to")
+    # ``context_id`` is INHERITED, from ``core/protocol-envelope.json`` via the pinned
+    # parent: same ``str | None``, same ``default=None``. The redeclaration's one remaining
+    # effect was to replace the pin's description -- the transport-managed conversation
+    # identifier -- with "Workflow context this task belongs to", so the published schema
+    # documented a seller-internal subject under a protocol field name. What the seller
+    # WRITES there (``task.context_id``, task_management.py:363) is unchanged by
+    # inheriting; whether that value is the right one for this pinned field is a separate
+    # question, filed as salesagent-2epqt.
 
 
 class GetMediaBuysRequest(BuyerRequest, LibraryGetMediaBuysRequest):

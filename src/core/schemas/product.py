@@ -6,7 +6,6 @@ All classes are re-exported from src.core.schemas for backward compatibility.
 
 from typing import Annotated, Any, ClassVar
 
-from adcp.types import BrandReference as LibraryBrandReference
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
 
@@ -230,14 +229,13 @@ class GetProductsRequest(BuyerRequest, LibraryGetProductsRequest):
         "adcp",
     )
 
-    # The spec's type, matching the library parent. This field used to be declared WIDER
-    # (``| dict | str``) so the announced shape would admit the brand shorthand -- a bare
-    # onto the tool's ``__annotations__`` and FastMCP validates against it. Narrowing it
-    # without a replacement is what broke the shorthand twice (18 mcp scenarios, then 16).
-    #
-    # The shorthand is no longer accepted anywhere: the compat layer that coerced it was
-    # deleted whole. This DTO announces the spec's shape and nothing else.
-    brand: LibraryBrandReference | None = Field(default=None, description="Brand reference")
+    # ``brand`` is INHERITED. It used to be declared WIDER (``| dict | str``) so the
+    # announced shape would admit the brand shorthand -- that shorthand is no longer
+    # accepted anywhere, the compat layer that coerced it was deleted whole, and the
+    # redeclaration was narrowed back to the parent's own ``BrandReference | None`` with
+    # the parent's own ``default=None``. What was left differed from the pin on one axis,
+    # the description, so the only thing it still did was publish "Brand reference" in
+    # place of the pin's text. This DTO announces the spec's shape and nothing else.
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 

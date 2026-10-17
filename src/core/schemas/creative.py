@@ -184,15 +184,16 @@ class CreativeAssetRequest(LibraryCreativeAsset):
     # round-trip through a dict to get past it.
     model_config = ConfigDict(extra=get_pydantic_extra_mode(), from_attributes=True)
 
-    # WEAKENED, deliberately: required -> optional. The parent is one branch of the oneOf,
-    # where format_id is the identifier. The other branch identifies by format_kind and omits
-    # format_id, so requiring it here announces half the schema.
-    # LibraryFormatId, not the local FormatId subclass: the ONLY axis this redeclaration
-    # changes is nullability. Narrowing to the subclass would repeat the defect above one
-    # level down -- the SDK's own FormatId would stop validating into its own field.
-    # No suppression: on the pinned SDK the parent declares this field with the same class, so
-    # adding nullability is a change mypy accepts outright.
-    format_id: LibraryFormatId | None = None
+    # ``format_id`` is INHERITED. This redeclaration existed to WEAKEN the parent from
+    # required to optional, back when the generated parent was one branch of the oneOf and
+    # required the field. The regenerated pin already declares it
+    # ``FormatReferenceStructuredObject | None`` with ``default=None`` on the single
+    # flattened ``CreativeAsset``, so the weakening has nothing left to weaken -- measured
+    # field for field, the only axes the local line still changed were the parent's
+    # description and its ``deprecated=True`` marker, both of which it dropped. Inheriting
+    # restores them: ``format_id`` is DEPRECATED in 3.2, the published schema now says so,
+    # and reading the attribute emits the SDK's DeprecationWarning, which is the correct
+    # signal while format_kind is the canonical identifier.
 
     @model_validator(mode="before")
     @classmethod
@@ -314,7 +315,9 @@ class Creative(LibraryCreative):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # === Overrides of listing Creative fields ===
-    name: str = Field(description="Creative name")
+    # ``name`` is INHERITED: the pinned listing Creative declares the same required
+    # ``str``. The redeclaration's only remaining effect was to publish "Creative name"
+    # instead of the pin's "Human-readable creative name".
     status: CreativeStatus = Field(
         default=CreativeStatus.pending_review,
         description="Workflow approval status",
