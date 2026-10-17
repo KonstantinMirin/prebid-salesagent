@@ -44,6 +44,7 @@ from tests.bdd.steps._outcome_helpers import is_e2e, payload_or_none, require_pa
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import CreativeFactory
+from tests.factories.core import set_adapter_type
 from tests.factories.creative_asset import (
     assert_assets,
     asset_spec,
@@ -4311,14 +4312,36 @@ def then_valid_not_affected_by_invalid(ctx: dict) -> None:
 
 @given("a creative with a non-HTTP adapter format_id")
 def given_creative_with_adapter_format(ctx: dict) -> None:
-    """Set up a creative whose format_id has a non-HTTP agent_url (adapter format)."""
+    """A creative naming a format THIS SELLER'S ADAPTER ACTUALLY SERVES.
+
+    The reference is ``broadstreet_static`` at ``broadstreet://<tenant_id>`` because that
+    is a pair ``BroadstreetAdapter.creative_formats`` answers, and the tenant's
+    ``AdapterConfig`` is pointed at Broadstreet so it does -- the ONE fact
+    ``adapter_served_creative_formats`` reads. A non-HTTP ``agent_url`` is only half of
+    what INV-2 is about: the other half is that the seller can still resolve the format,
+    and the only route for a pseudo-URL is the adapter's own ``canonical`` declaration
+    (``core/canonical-projection-ref.json`` step 1).
+
+    IT USED TO NAME ``adapter_display_300x250`` AT ``adapter://local-gam``, which nothing
+    serves. No adapter in ``ADAPTER_REGISTRY`` declares that id -- GAM overrides
+    ``creative_formats`` not at all -- so the scenario asserted that a creative in a
+    format this seller does not have is processed successfully, and passed only while
+    nothing checked the format could be resolved. The write gate (salesagent-jzhea) made
+    the hole visible: the id has no canonical projection, so ``creative_identity_of``
+    refused it and the creative came back ``failed``. Renaming it to a format the adapter
+    DOES declare is what makes this scenario grade the production route rather than an
+    invented one (salesagent-zthsk) -- and it grades it on all four transports, because
+    the declaration lives in the adapter, not in the harness.
+    """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    format_id = "adapter_display_300x250"
+    tenant_id = ctx["tenant"].tenant_id
+    set_adapter_type(env, tenant_id, "broadstreet")
+    format_id = "broadstreet_static"
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-adapter-fmt-001",
         name="Adapter Format Creative",
-        format_id={"id": format_id, "agent_url": "adapter://local-gam"},
+        format_id={"id": format_id, "agent_url": f"broadstreet://{tenant_id}"},
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -4326,12 +4349,30 @@ def given_creative_with_adapter_format(ctx: dict) -> None:
 
 @then("the creative should be processed without external agent validation")
 def then_processed_without_external_validation(ctx: dict) -> None:
-    """Assert the creative was processed without external agent validation.
+    """The creative is processed, AND no request was made to a creative agent for it.
 
-    The load-bearing assertion is that the external validation agent mock was
-    NOT invoked (call_count == 0). The creative should still be processed
-    successfully (action created/updated). If the harness does not wire an
-    external validation mock, xfail only that specific check.
+    Two assertions, and the second is the one the sentence is about. Processed alone
+    would pass for a creative the seller merely stored; no-dial alone would pass for a
+    creative the seller REFUSED, because a refusal dials nothing either.
+
+    THE OBSERVABLE IS ``preview_creative``, which is the external validation for a static
+    creative -- ``_processing.py`` calls it "for validation (update)" / "for validation",
+    reaching the agent named by ``format_obj.agent_url``. It is one of the two recorders
+    ``HarnessCreativeAgentRegistry`` adds, so the count is readable with no instrument of
+    this step's own.
+
+    IT USED TO READ ``get_format.await_count``, and that was unreadable here. Land
+    replaced the registry stand-in with production's own ``ReferenceFormatsRegistry``
+    (salesagent-6xtxb), so ``get_format`` is a bound METHOD with no counter unless a
+    Given has replaced it -- which the sibling "the creative agent is reachable" Given
+    does and this scenario, correctly, does not. Measured on box run innet_171026_2343:
+    ``AttributeError: 'function' object has no attribute 'await_count'`` on all nine
+    in-process rows, reached only because the action assertion above had STARTED passing.
+
+    ``preview_creative`` is also the call that was being made wrongly: with the format
+    resolvable, the agent-backed branch dialled ``broadstreet://<tenant_id>`` and the
+    egress seam refused it (salesagent-zufx8). So this assertion now grades the fix
+    rather than an attribute that happened to exist.
     """
     assert "error" not in ctx, (
         f"Expected adapter format to skip external validation, but production raised: {ctx.get('error')}"
@@ -4344,17 +4385,17 @@ def then_processed_without_external_validation(ctx: dict) -> None:
     assert action_str in ("created", "updated", "unchanged"), (
         f"Expected creative processed successfully (created/updated/unchanged), got action='{action_str}'"
     )
-    # The external validation IS the creative-agent registry lookup: _validation.py
-    # resolves a dialled agent_url through fetch_format_spec -> registry.get_format,
-    # and skips that call for an adapter (non-HTTP) agent_url. CreativeSyncEnv patches
-    # that registry, so "no external validation" is measurable as "get_format was never
-    # awaited". This used to look for validate_creative / external_validation /
-    # creative_agent_validate -- names no env has ever wired -- and refused on the
-    # missing mock, which parked every scenario carrying the sentence.
-    get_format = ctx["env"].mock["registry"].return_value.get_format
-    assert get_format.await_count == 0, (
-        f"an adapter (non-HTTP) format must not be looked up with the creative agent, "
-        f"but registry.get_format was awaited {get_format.await_count} time(s)"
+    if is_e2e(ctx):
+        # The server holds the recorder, not this process. The action assertion above is
+        # what grades e2e_rest, and it is not weak there: a dialled pseudo-URL is exactly
+        # what made that row fail (salesagent-zufx8), so a regression reappears as
+        # action='failed' on the wire.
+        return
+    preview = ctx["env"].mock["registry"].return_value.preview_creative
+    assert preview.await_count == 0, (
+        f"an adapter (non-HTTP) format is served by the adapter in process and must not be "
+        f"validated with a creative agent, but registry.preview_creative was awaited "
+        f"{preview.await_count} time(s) for {getattr(preview, 'await_args', None)}"
     )
 
 

@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from src.core.database.models import AdapterConfig as DBAdapterConfig
     from src.core.database.models import Tenant as DBTenant
     from src.core.resolved_identity import ResolvedIdentity
+    from src.core.schemas import Format
     from src.core.tenant_context import TenantContext
     from src.core.utils.mcp_client import SignMcpAttempt
 
@@ -255,6 +256,48 @@ def get_adapter_class_for_tenant(tenant: TenantLike) -> type[AdServerAdapter]:
     from src.adapters import get_adapter_class
 
     return get_adapter_class(resolve_adapter_context(tenant).adapter_type)
+
+
+def adapter_served_creative_formats(tenant_id: str) -> list[Format]:
+    """The creative formats this tenant's ad-server adapter serves itself.
+
+    THE ONE READ of an adapter's own catalogue, and the second half of what the seller
+    serves: ``CreativeAgentRegistry`` answers for the agents it DIALS, this answers for
+    the adapter that serves formats in process. Both consumers of a catalogue add both
+    halves -- ``_list_creative_formats_impl`` (discovery) and ``sync_creatives``
+    (resolution) -- so a format the seller advertises is a format a creative may name.
+    Building them in the discovery tool alone is what left the sync path refusing every
+    adapter-format creative (salesagent-zthsk).
+
+    ``AdServerAdapter.creative_formats`` is a classmethod precisely so this needs no
+    Principal and no configured connection: a format catalogue is a property of the
+    adapter and the seller, and the discovery paths resolve the adapter CLASS for a
+    tenant.
+
+    NOT PUT ON THE REGISTRY, though that would be one insertion point instead of two.
+    Measured: ``CreativeFormatsEnv`` replaces ``list_all_formats_with_errors`` with an
+    ``AsyncMock`` (``tests/harness/creative_formats.py``), so a production step added
+    inside that method does not run for ~20 integration modules and several BDD step
+    modules -- the three ``test_creative_formats_validation_a.py`` Broadstreet rows go red
+    while grading nothing. Putting it on the registry would ALSO have widened
+    ``search_formats`` and the admin product form, which this change does not measure.
+
+    ``AdapterConfig.adapter_type`` alone, NOT ``resolve_tenant_adapter_type``. The
+    ``tenant.ad_server`` fallback that function adds needs the tenant ROW, which the
+    registry does not carry (it is keyed by tenant_id), and consulting it would change
+    which formats an existing tenant is served -- a behaviour this change does not
+    measure. No row means no adapter declared, which for this question means no
+    adapter-served formats. An ``adapter_type`` outside ``ADAPTER_REGISTRY`` is an
+    operator misconfiguration and ``get_adapter_class`` refuses it here as everywhere.
+    """
+    from src.adapters import get_adapter_class
+    from src.core.database.repositories.adapter_config import read_adapter_config
+
+    config_row = read_adapter_config(tenant_id)
+    adapter_type = config_row.adapter_type if config_row else None
+    if not adapter_type:
+        return []
+    return get_adapter_class(adapter_type).creative_formats(tenant_id)
 
 
 #: Resolved adapter type -> the AdapterConfig column backing its manual-approval

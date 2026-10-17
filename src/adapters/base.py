@@ -32,6 +32,7 @@ from src.core.schemas import (
     AssetStatus,
     CheckMediaBuyStatusResponse,
     CreateMediaBuyRequest,
+    Format,
     MediaPackage,
     Principal,
     PushNotificationConfig,
@@ -718,25 +719,41 @@ class AdServerAdapter(ABC):
         # Default implementation returns empty inventory
         return {"placements": [], "ad_units": [], "targeting_options": {}, "creative_specs": [], "properties": {}}
 
-    def get_creative_formats(self) -> list[dict[str, Any]]:
-        """Return creative formats provided by this adapter.
+    @classmethod
+    def creative_formats(cls, tenant_id: str) -> list[Format]:
+        """The creative formats this adapter serves itself, as a creative agent.
 
-        Override in adapters that act as both sales and creative agents.
-        Returns format definitions that will be included in list_creative_formats.
+        Override in adapters that act as both sales and creative agents. Whatever this
+        answers is the tenant's catalogue for those formats on EVERY path --
+        ``list_creative_formats`` advertises it and ``sync_creatives`` resolves against
+        it, both reading it through ``adapter_served_creative_formats``, so the two cannot
+        disagree about a format one of them serves. These formats are NOT in
+        ``CreativeAgentRegistry``: that answers for the agents it DIALS, and the point of
+        an adapter-served format is that there is nothing to dial.
 
-        Each format dict should match AdCP Format schema:
-        {
-            "format_id": {"id": "cube_3d", "agent_url": "..."},
-            "name": "3D Cube Gallery",
-            "type": "display",
-            "assets": [
-                {"item_type": "individual", "asset_id": "front_image", "asset_type": "image", "required": True},
-                ...
-            ],
-            "description": "6-sided rotating cube with images",
-        }
+        EVERY FORMAT MUST CARRY ``canonical``, and that is the whole reason this returns
+        models rather than the dicts it used to. An adapter-served format's ``agent_url``
+        is a pseudo-URL (``broadstreet://<tenant_id>``) with no host to dial, and its id
+        is outside ``registries/v1-canonical-mapping.json``, so step 1 of the projection
+        order in ``core/format-id.json`` -- the format's own
+        ``CanonicalProjectionReference``, whose ``kind`` is required once declared -- is
+        the ONLY route by which a creative naming it can be given a ``format_kind``. A
+        format served without one cannot be synced at all: ``creative_identity_of``
+        refuses the reference and the creative comes back ``failed``. The declaring party
+        for a format nothing can fetch is the adapter, locally, with no network call.
+
+        A format whose canonical kind the adapter cannot name must not be served. Guessing
+        one fabricates the identity every comparison downstream keys on.
+
+        A CLASSMETHOD because the catalogue is a property of the adapter and the tenant,
+        not of a configured connection: the discovery paths resolve the adapter CLASS for
+        a tenant (``get_adapter_class_for_tenant``) and have no Principal to construct one
+        with.
+
+        Args:
+            tenant_id: the seller whose catalogue this is; it names the ``agent_url``.
 
         Returns:
-            List of format dictionaries (empty by default)
+            The adapter's formats, each with ``canonical.kind`` set (empty by default).
         """
         return []

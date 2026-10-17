@@ -805,6 +805,13 @@ class CreativeAgentRegistry:
 
         When all agents succeed, errors is empty.
         When some agents fail, returns partial results + errors for failed agents.
+
+        AGENTS ONLY. The tenant's own ad-server adapter may serve formats too, and those
+        are NOT here: an agent is something this registry DIALS, and the whole point of an
+        adapter-served format is that its ``agent_url`` is a pseudo-URL with no host. A
+        caller that needs the seller's whole catalogue adds
+        ``adapter_served_creative_formats(tenant_id)``, which is what both consumers of
+        this method do (``_list_creative_formats_impl``, ``sync_creatives``).
         """
         if (reference := self._operator_formats_override()) is not None:
             return FormatFetchResult(formats=reference, errors=[])

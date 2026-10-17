@@ -25,7 +25,7 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPServiceUnavailableError,
 )
-from src.core.format_resolver import creative_identity_of, find_format, is_agent_backed, is_generative
+from src.core.format_resolver import creative_identity_of, find_format, is_dialled_agent_format, is_generative
 from src.core.helpers import _validate_creative_assets
 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import CreativeFormatIdentity, CreativeStatusEnum, SyncCreativeResult
@@ -348,7 +348,10 @@ def _update_existing_creative(
             # every generative creative to a static one (salesagent-kyc89).
             format_obj = find_format(all_formats, creative_format)
 
-            if format_obj and is_agent_backed(format_obj):
+            # is_dialled_agent_format, not is_agent_backed: an adapter-served format
+            # declares a pseudo-URL with no host, so entering this branch for one sends
+            # preview_creative at a url the egress seam then refuses (salesagent-zufx8).
+            if format_obj and is_dialled_agent_format(format_obj):
                 if is_generative(format_obj):
                     # Generative creative update - rebuild using AI
                     logger.info(
@@ -729,7 +732,9 @@ def _create_new_creative(
             # every generative creative to a static one (salesagent-kyc89).
             format_obj = find_format(all_formats, creative_format)
 
-            if format_obj and is_agent_backed(format_obj):
+            # is_dialled_agent_format, not is_agent_backed — see the note at the update
+            # site above (salesagent-zufx8).
+            if format_obj and is_dialled_agent_format(format_obj):
                 if is_generative(format_obj):
                     # Generative creative - call build_creative
                     logger.info(

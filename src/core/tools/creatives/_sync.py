@@ -145,10 +145,24 @@ def sync_creatives(
 
     # Fetch creative formats ONCE before processing loop (outside any transaction)
     # This avoids async HTTP calls inside database savepoints which cause transaction errors
+    #
+    # THE SELLER'S WHOLE CATALOGUE, which is the dialled agents PLUS the formats its own
+    # ad-server adapter serves. The registry half is agents only -- an adapter-served
+    # format's ``agent_url`` is a pseudo-URL with no host to dial -- so a catalogue built
+    # from the registry alone made ``find_format`` answer None for every
+    # ``broadstreet_*`` reference, which left ``creative_identity_of`` with no
+    # ``canonical`` declaration to project from and refused the creative
+    # UNSUPPORTED_FEATURE. ``list_creative_formats`` composes its catalogue from the same
+    # two parts through the same reader, so a format this seller ADVERTISES is a format a
+    # creative may NAME (salesagent-zthsk).
     from src.core.creative_agent_registry import get_creative_agent_registry
+    from src.core.helpers.adapter_helpers import adapter_served_creative_formats
 
     registry = get_creative_agent_registry()
-    all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant.tenant_id))
+    all_formats = [
+        *run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant.tenant_id)),
+        *adapter_served_creative_formats(tenant.tenant_id),
+    ]
 
     # ONE write path for both branches: dry_run rolls this transaction back on clean
     # exit instead of committing it (BaseUoW), so preview and live run identical

@@ -1203,6 +1203,31 @@ def is_dialled_agent_url(agent_url: str) -> bool:
     return agent_url.startswith(("http://", "https://"))
 
 
+def is_dialled_agent_format(fmt: Format) -> bool:
+    """Whether a creative in this format is served by an agent we will DIAL.
+
+    THE COMPOSITION :func:`is_agent_backed`'s docstring prescribes, in one place rather
+    than as the same two-clause condition written at each call site. An adapter-served
+    format is agent-backed -- it declares an ``agent_url`` -- and is never dialled,
+    because that url is a pseudo-URL (``broadstreet://<tenant_id>``) with no host: the
+    adapter serves the format in process.
+
+    GATING ON ``is_agent_backed`` ALONE SENT THE SELLER AT ITS OWN PSEUDO-URL.
+    ``sync_creatives``' agent-backed branch fetches a preview (or a generative build)
+    from ``format_obj.agent_url``, so a resolved ``broadstreet_*`` format reached
+    ``preview_creative("broadstreet://...")``, the egress seam refused the scheme, and
+    the creative came back ``failed`` -- measured on box run innet_171026_2343, on
+    e2e_rest only, because the in-process harness answers ``preview_creative`` with an
+    ``AsyncMock`` and never dials (salesagent-zufx8). The branch was unreachable for such
+    a format until an adapter declaration made one resolvable (salesagent-zthsk), which
+    is why the hole outlived the docstring that named it.
+
+    A format that fails this is still a format the seller SERVES. It is processed with no
+    external validation and no preview fetched, which is what BR-RULE-035 INV-2 states.
+    """
+    return is_agent_backed(fmt) and is_dialled_agent_url(fmt.agent_url or "")
+
+
 def fetch_format_spec(agent_url: str, format_id: str, *, provenance: UrlProvenance | None = None) -> Format | None:
     """Fetch one format spec from the creative-agent registry (sync bridge).
 

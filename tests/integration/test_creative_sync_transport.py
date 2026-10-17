@@ -23,6 +23,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
+from tests.factories.core import set_adapter_type
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope
 from tests.helpers.creative_test_helpers import (
@@ -744,9 +745,18 @@ class TestFormatValidationAdapter:
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_adapter_format_skips_registry(self, integration_db, transport):
-        """Non-HTTP agent_url (adapter://) bypasses registry.get_format check."""
+        """A format the ADAPTER serves is resolved in process and never dialled.
+
+        The reference is one ``BroadstreetAdapter.creative_formats`` answers, and the
+        tenant's ``AdapterConfig`` says Broadstreet, so ``adapter_served_creative_formats``
+        puts it in the catalogue ``sync_creatives`` resolves against. It used to name
+        ``billboard`` at ``broadstreet://default`` -- neither a Broadstreet template id nor
+        this tenant's pseudo-URL -- so the only thing it could grade was the skipped dial,
+        and the creative itself was unresolvable (salesagent-zthsk).
+        """
         with CreativeSyncEnv() as env:
-            env.setup_default_data()
+            tenant, _principal = env.setup_default_data()
+            set_adapter_type(env, tenant.tenant_id, "broadstreet")
 
             result = env.call_via(
                 transport,
@@ -754,7 +764,10 @@ class TestFormatValidationAdapter:
                     {
                         "creative_id": "c_adapter_fmt",
                         "name": "Adapter Format Creative",
-                        "format_id": {"id": "billboard", "agent_url": "broadstreet://default"},
+                        "format_id": {
+                            "id": "broadstreet_static",
+                            "agent_url": f"broadstreet://{tenant.tenant_id}",
+                        },
                         "assets": build_assets(image_spec("banner")),
                     }
                 ],
@@ -765,9 +778,18 @@ class TestFormatValidationAdapter:
             assert len(result.payload.creatives) == 1
             assert result.payload.creatives[0].action == "created"
 
-            # registry.get_format should NOT be called for adapter formats
+            # No creative agent was asked about it. ``preview_creative`` is the external
+            # validation for a static creative and one of the two recorders
+            # ``HarnessCreativeAgentRegistry`` adds; ``get_format``, which this read
+            # before, is production's bound method on that registry and carries no
+            # counter (salesagent-6xtxb replaced the stand-in). It is also the call the
+            # agent-backed branch was making at a pseudo-URL (salesagent-zufx8), so the
+            # count grades that fix.
             registry = env.mock["registry"].return_value
-            assert not registry.get_format.called, "get_format should not be called for adapter-provided formats"
+            assert registry.preview_creative.await_count == 0, (
+                "an adapter-provided format is served in process; no creative agent should be asked "
+                f"about it, but preview_creative was awaited {registry.preview_creative.await_count} time(s)"
+            )
 
 
 @pytest.mark.requires_db
