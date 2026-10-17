@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from uuid import uuid4
@@ -156,6 +157,7 @@ def make_format_spec(
     agent_url: str = "https://creative.adcontextprotocol.org",
     name: str = "Medium Rectangle",
     output_format_ids: list[str] | None = None,
+    canonical_kind: str | None = "image",
 ) -> Mock:
     """A registry listing entry shaped the way production's actually is.
 
@@ -171,12 +173,28 @@ def make_format_spec(
       decide whether a format is generative, and a bare Mock attribute is truthy, so
       every static format silently became a generative one the moment the lookup
       started working. Empty by default; pass a list to build a generative spec.
+
+    And a THIRD of the same shape, found the same way -- by production starting to read
+    an attribute the mock was invisibly answering. ``canonical_kind_for`` reads
+    ``spec.canonical`` and then its ``.kind``, and BOTH reads succeed on a bare ``Mock``,
+    so this did not raise: it returned ``str(Mock)``. Measured,
+    ``"<Mock name='mock.canonical.kind' id='4737355696'>"`` -- a fabricated kind that
+    satisfies the ``str`` annotation, belongs to no vocabulary, and reaches every
+    downstream closed-set check as though the agent had declared it.
+
+    ``canonical`` is therefore explicit, and a ``SimpleNamespace`` rather than a ``Mock``
+    so that reading any OTHER attribute of it raises instead of auto-speccing a fourth
+    instance of this. ``canonical_kind`` defaults to the kind the real reference catalog
+    carries for the default ``format_id``; pass ``None`` to model a format with no
+    canonical projection, which is what sends ``canonical_kind_for`` down the registry
+    glob route the way an unprojectable format does in production.
     """
     spec = Mock()
     spec.format_id = create_test_format_id(format_id, agent_url=agent_url)
     spec.agent_url = agent_url
     spec.name = name
     spec.output_format_ids = output_format_ids or []
+    spec.canonical = SimpleNamespace(kind=canonical_kind) if canonical_kind is not None else None
     return spec
 
 
