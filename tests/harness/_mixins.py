@@ -874,7 +874,9 @@ class DeliveryPollMixin:
             total_spend = float(sum(p.get("spend", 0.0) for p in packages))
             totals = DeliveryTotals(impressions=total_impressions, spend=total_spend)
         else:
-            simulated_geo, simulated_device_type = simulate_breakdowns(float(impressions), float(spend))
+            simulated_geo, simulated_device_type, simulated_placement = simulate_breakdowns(
+                float(impressions), float(spend)
+            )
             by_package = [
                 AdapterPackageDelivery(
                     package_id=package_id,
@@ -882,7 +884,13 @@ class DeliveryPollMixin:
                     spend=spend,
                     by_geo=simulated_geo,
                     by_device_type=simulated_device_type,
-                    by_placement=by_placement,
+                    # ``is not None`` rather than ``or``: a scenario passing ``[]`` is
+                    # saying the adapter reported zero placements, which must not be
+                    # overwritten by the simulated split. Only an unsupplied value falls
+                    # back. The fallback keeps the rows a scenario that never named any
+                    # placements used to receive from the delivery tool's own synthesis,
+                    # which production no longer does.
+                    by_placement=by_placement if by_placement is not None else simulated_placement,
                 )
             ]
             totals = DeliveryTotals(impressions=float(impressions), spend=spend)

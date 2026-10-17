@@ -827,9 +827,22 @@ def _build_placement_breakdown(
     (``get-media-buy-delivery-response.json`` §by_placement_truncated;
     ``get_media_buy_delivery.mdx`` §Truncation.)
 
-    - Uses the adapter's per-placement metrics when present, else synthesizes
-      a representative multi-placement split of the package totals so the
-      requested sort ordering is observable.
+    - Uses the adapter's per-placement metrics, and INVENTS NOTHING when the adapter
+      reports none. Three placements with the ids ``plc_a``/``plc_b``/``plc_c`` and a
+      ``clicks`` value from a hardcoded 1% CTR used to be synthesized here, so that a
+      ``sort_by=clicks`` request had a substantive ordering to grade. That ran in
+      production: a buyer asking a GAM tenant for a placement breakdown received three
+      placement identifiers that exist in no ad server and a click count nothing had
+      measured. The rows the sort tests need now come from the mock adapter, which
+      supplies them through ``simulate_breakdowns`` the way it already supplies
+      ``by_geo`` and ``by_device_type`` -- test input belongs in a fixture, not in a
+      production branch every tenant shares.
+    - Omits rather than returning an empty array, matching
+      ``_build_device_type_breakdown``: ``([], False)`` asserts a complete zero-row
+      breakdown for a package that delivered impressions. The pin permits the omission --
+      "unsupported dimensions are silently omitted from the response" -- and will stop
+      permitting it only if ``supports_placement_breakdown`` is ever declared true, which
+      no adapter can honour today.
     - Delegates sort + limit to ``_apply_breakdown_limit`` (spec §Truncation:
       rows sorted by ``sort_by`` descending, then truncated by ``limit``).
       When the seller does not report the requested metric on the breakdown
@@ -839,28 +852,10 @@ def _build_placement_breakdown(
     if placement_dim is None:
         return None, None
 
-    if raw_placements:
-        placements: list[PlacementBreakdown] = [PlacementBreakdown(**p) for p in raw_placements]
-    else:
-        # No per-placement data from the adapter — synthesize a deterministic
-        # representative split so the breakdown (and its ordering) is
-        # meaningful. Weights are distinct so descending sorts are verifiable.
-        # ``clicks`` is always populated (a representative 1% CTR of the
-        # placement's impression share) so a ``sort_by=clicks`` request is a
-        # substantive ordering, not a vacuous all-null sort.
-        imp = float(package_impressions or 0.0)
-        spd = float(package_spend or 0.0)
-        weights = ((0.5, "plc_a"), (0.3, "plc_b"), (0.2, "plc_c"))
-        placements = [
-            PlacementBreakdown(
-                placement_id=pid,
-                impressions=imp * w,
-                spend=spd * w,
-                clicks=round(imp * w * 0.01, 4),
-            )
-            for w, pid in weights
-        ]
+    if not raw_placements:
+        return None, None
 
+    placements: list[PlacementBreakdown] = [PlacementBreakdown(**p) for p in raw_placements]
     return _apply_breakdown_limit(placements, placement_dim)
 
 

@@ -54,14 +54,23 @@ from src.core.security.webhook_egress import deliver_webhook
 from src.core.validation_helpers import package_field_path
 
 
-def simulate_breakdowns(impressions: float, spend: float) -> tuple[list[dict], list[dict]]:
-    """Return deterministic geo + device_type splits for mock delivery data.
+def simulate_breakdowns(impressions: float, spend: float) -> tuple[list[dict], list[dict], list[dict]]:
+    """Return deterministic geo + device_type + placement splits for mock delivery data.
 
     Weights are distinct and descending so sort/truncation behaviour is
     verifiable in tests.  Real adapters replace this with actual platform data.
 
+    THE PLACEMENT SPLIT LIVES HERE RATHER THAN IN THE DELIVERY TOOL. It used to be
+    synthesized inside ``_build_placement_breakdown`` whenever an adapter reported no
+    per-placement rows, which gave the sort tests their multi-row input at the cost of
+    returning three invented placement ids to every real tenant's buyers. Supplying it
+    from the mock adapter puts the test input in a fixture and leaves the production path
+    reporting only what an ad server actually said. ``clicks`` is populated for the same
+    reason it was before -- so ``sort_by=clicks`` is a substantive ordering rather than a
+    vacuous all-null sort -- but now only for a tenant that chose the mock adapter.
+
     Returns:
-        (geo, device_type) — lists of raw dicts ready for AdapterPackageDelivery.
+        (geo, device_type, placement) — raw dicts ready for AdapterPackageDelivery.
     """
     device_type = [
         {"device_type": "mobile", "impressions": impressions * 0.50, "spend": spend * 0.50},
@@ -79,7 +88,16 @@ def simulate_breakdowns(impressions: float, spend: float) -> tuple[list[dict], l
         }
         for geo_code, weight in zip(_geo_codes, _geo_weights, strict=False)
     ]
-    return geo, device_type
+    placement = [
+        {
+            "placement_id": placement_id,
+            "impressions": impressions * weight,
+            "spend": spend * weight,
+            "clicks": round(impressions * weight * 0.01, 4),
+        }
+        for weight, placement_id in ((0.5, "plc_a"), (0.3, "plc_b"), (0.2, "plc_c"))
+    ]
+    return geo, device_type, placement
 
 
 class MockConnectionConfig(BaseConnectionConfig):
@@ -1329,7 +1347,7 @@ class MockAdServer(AdServerAdapter):
                         package_spend = spend / len(packages) if packages else spend
                         package_impressions = int(impressions / len(packages) if packages else impressions)
 
-                    simulated_geo, simulated_device_type = simulate_breakdowns(
+                    simulated_geo, simulated_device_type, simulated_placement = simulate_breakdowns(
                         float(package_impressions), float(package_spend)
                     )
 
@@ -1340,6 +1358,7 @@ class MockAdServer(AdServerAdapter):
                             spend=package_spend,
                             by_geo=simulated_geo,
                             by_device_type=simulated_device_type,
+                            by_placement=simulated_placement,
                         )
                     )
 
