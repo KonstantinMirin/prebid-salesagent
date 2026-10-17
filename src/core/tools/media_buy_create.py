@@ -463,7 +463,7 @@ def _resolved_format_verdicts(
                 (
                     product.product_id,
                     cid,
-                    satisfies(claim, product.format_options, legacy_catalog=product.format_ids),
+                    satisfies(claim.as_selector(), product.format_options, legacy_catalog=product.format_ids),
                 )
             )
     return verdicts
@@ -4237,7 +4237,7 @@ async def _create_media_buy_impl(
                                     if creative:
                                         stored_identity = CreativeFormatIdentity.from_row(creative)
                                         verdict = satisfies(
-                                            stored_identity,
+                                            stored_identity.as_selector(),
                                             product_format_check.format_options,
                                             legacy_catalog=product_format_check.format_ids,
                                         )

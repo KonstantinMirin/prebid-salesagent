@@ -243,22 +243,25 @@ def creative_identity_of(creative: LibraryCreativeAsset, *, spec: Format | None)
             what makes the agent's own explicit projection (step 1) reachable; without it
             only the registry glob (step 3) is consulted.
     """
-    kind: str | None = None
     format_id = creative.format_id
-    if format_id is not None:
-        try:
-            kind = canonical_kind_for(format_id, spec=spec)
-        except ValueError as exc:
-            # ``from exc``: the boundary attaches the traceback when an error has a __cause__,
-            # so the unresolvable id's own ValueError is on the record without any raise site
-            # authoring a sentence about it.
-            raise AdCPCapabilityNotSupportedError(
-                details=CapabilityRefusalDetails(
-                    format_id=str(getattr(format_id, "id", format_id)),
-                    creative_id=creative.creative_id,
-                    capability="format_kind projection",
-                )
-            ) from exc
+    if format_id is None:
+        # The canonical arm already carries the kind; there is nothing to project and no
+        # optional local to carry a ``None`` through. ``creative_format_identity`` re-reads
+        # the arm and refuses an out-of-vocabulary value on construction.
+        return creative_format_identity(creative, kind=str(creative.format_kind))
+    try:
+        kind = canonical_kind_for(format_id, spec=spec)
+    except ValueError as exc:
+        # ``from exc``: the boundary attaches the traceback when an error has a __cause__, so
+        # the unresolvable id's own ValueError is on the record without any raise site
+        # authoring a sentence about it.
+        raise AdCPCapabilityNotSupportedError(
+            details=CapabilityRefusalDetails(
+                format_id=str(getattr(format_id, "id", format_id)),
+                creative_id=creative.creative_id,
+                capability="format_kind projection",
+            )
+        ) from exc
     return creative_format_identity(creative, kind=kind)
 
 

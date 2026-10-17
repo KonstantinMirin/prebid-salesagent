@@ -8,7 +8,7 @@ import copy
 import re
 import warnings
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -644,6 +644,65 @@ _FORMAT_ID_PARAMETERS: frozenset[str] = frozenset(LibraryFormatId.model_fields) 
 
 
 @pydantic_dataclass(frozen=True, slots=True)
+class FormatSelector:
+    """What a PACKAGE names when it addresses a format, which may name no kind at all.
+
+    THE OTHER POPULATION, split out of :class:`CreativeFormatIdentity` under the user's
+    ruling that a creative's kind is "always NOT NULL ... if it cannot be derived, something
+    is wrong with the premise". That ruling is true of a CREATIVE and not of a SELECTOR, and
+    one type served both: ``media-buy/package-request.json`` gives a package three
+    independent ways to name a format, and two of them legitimately carry no kind --
+
+    * an ``format_option_refs`` entry names a declaration outright, so the route has an
+      ``option`` and no kind until the declaration is resolved;
+    * a ``format_ids`` entry whose legacy reference projects to nothing is the
+      ``LEGACY_UNPROJECTABLE`` refusal, which is a GRADED product-side outcome rather than a
+      creative being stored -- ``satisfies`` answers it, and answering it requires being able
+      to hold the unprojected state long enough to report it.
+
+    So the optional ``kind`` lives here, where it is a real state, and is gone from the
+    creative identity, where it was the hole this epic was about. A creative identity is
+    always a valid selector and converts with :meth:`CreativeFormatIdentity.as_selector`;
+    the reverse does not hold, which is the asymmetry the two types now state.
+    """
+
+    kind: CanonicalFormatKindStr | None = None
+    option: FormatOptionIdentity | None = None
+    legacy: FormatKey | None = None
+    legacy_parameters: tuple[tuple[str, Any], ...] = ()
+    assertion: LibraryFormatId | None = field(default=None, compare=False)
+
+    @classmethod
+    def of_legacy(cls, format_id: LibraryFormatId, *, kind: str | None = None) -> "FormatSelector":
+        """A selector naming a legacy reference, with the kind it projects to IF it does.
+
+        ``kind=None`` is the unprojectable selector, which is a state this type exists to
+        hold: ``satisfies`` turns it into ``FormatRefusal.LEGACY_UNPROJECTABLE`` and reports
+        it to the buyer. The creative-side constructor of the same name REQUIRES a kind,
+        because a creative in that state is refused at the door instead.
+        """
+        return cls(
+            kind=kind,
+            legacy=format_id_identity(format_id),
+            legacy_parameters=_legacy_parameters_of(format_id),
+            assertion=format_id,
+        )
+
+
+def _legacy_parameters_of(format_id: LibraryFormatId) -> tuple[tuple[str, Any], ...]:
+    """A reference's declared parameters, sorted, as the comparison form.
+
+    ``getattr`` with NO default, deliberately: the names are read off the model's own field
+    set, so every one resolves, and a default would guard against a name the derivation
+    cannot produce. Shared by both identity types so the comparison form cannot diverge
+    between what a package names and what a creative carries.
+    """
+    return tuple(
+        sorted((name, value) for name in _FORMAT_ID_PARAMETERS if (value := getattr(format_id, name)) is not None)
+    )
+
+
+@pydantic_dataclass(frozen=True, slots=True)
 class CreativeFormatIdentity:
     """A creative's format identity: the canonical kind, plus the legacy assertion it retains.
 
@@ -655,9 +714,12 @@ class CreativeFormatIdentity:
 
     The members have different jobs and are not interchangeable:
 
-    * ``kind`` is THE identity -- what logic keys on and what is compared. ``None`` when the
-      creative carries a legacy reference that nothing projects: the sixth normative step is
-      to fail closed, and a kind guessed from an unmatched id would be a fabricated identity.
+    * ``kind`` is THE identity -- what logic keys on and what is compared, and it is NEVER
+      absent. The user's ruling: "it is always possible to derive the kind. If it is not
+      possible, something is wrong with the premise, not with the rule." A reference that
+      projects to nothing is refused at the creation edge (``creative_identity_of``), so a
+      creative in that state never becomes a value here. What a PACKAGE names, which may
+      genuinely name no kind, is :class:`FormatSelector`.
     * ``option`` narrows the kind to one of the enclosing product's concrete options.
     * ``legacy`` and ``legacy_parameters`` are the assertion's COMPARISON form, canonical per
       ``core/format-id.json``'s MUST. A parameter is part of which format a reference names --
@@ -669,33 +731,46 @@ class CreativeFormatIdentity:
       reported a format change on every such respelling.
     """
 
-    kind: CanonicalFormatKindStr | None = None
+    kind: CanonicalFormatKindStr
     option: FormatOptionIdentity | None = None
     legacy: FormatKey | None = None
     legacy_parameters: tuple[tuple[str, Any], ...] = ()
     assertion: LibraryFormatId | None = field(default=None, compare=False)
 
+    def as_selector(self) -> FormatSelector:
+        """This identity as the thing a package could have named.
+
+        ONE direction, because only one holds: every creative identity is a valid selector,
+        and a selector may name no kind. ``satisfies`` grades selectors, so a caller with a
+        stored creative converts here rather than the two types being interchangeable.
+        """
+        return FormatSelector(
+            kind=self.kind,
+            option=self.option,
+            legacy=self.legacy,
+            legacy_parameters=self.legacy_parameters,
+            assertion=self.assertion,
+        )
+
     @classmethod
-    def of_legacy(cls, format_id: LibraryFormatId, *, kind: str | None = None) -> "CreativeFormatIdentity":
-        """The identity of a retained legacy assertion, with the kind it projects to if any.
+    def of_legacy(cls, format_id: LibraryFormatId, *, kind: str) -> "CreativeFormatIdentity":
+        """The identity of a retained legacy assertion and the kind it projects to.
+
+        ``kind`` IS REQUIRED, and that is the ruling applied: a creative whose reference
+        projects to nothing is refused at the creation edge, so there is no caller here with
+        nothing to pass. It used to default to ``None`` and ``from_row`` then set the value
+        afterwards through ``replace`` -- two-step construction of a mandatory member, which
+        is how a kindless identity could exist at all between the two steps.
 
         THE ONE place the three derived members are built from the one reference, so the
-        comparison form and the verbatim form cannot drift apart. The parameters come off
-        ``model_fields`` rather than a list of names.
-
-        ``getattr`` with NO default, deliberately: the names are read off this very model's
-        field set, so every one of them resolves, and a default would be guarding against a
-        name the derivation cannot produce. The dynamic read is irreducible -- the name is in
-        a variable -- but its fallback is not.
+        comparison form and the verbatim form cannot drift apart -- and the derivation is
+        shared with :class:`FormatSelector` through :func:`_legacy_parameters_of`, so what a
+        package names and what a creative carries cannot compare differently.
         """
         return cls(
             kind=kind,
             legacy=format_id_identity(format_id),
-            legacy_parameters=tuple(
-                sorted(
-                    (name, value) for name in _FORMAT_ID_PARAMETERS if (value := getattr(format_id, name)) is not None
-                )
-            ),
+            legacy_parameters=_legacy_parameters_of(format_id),
             assertion=format_id,
         )
 
@@ -721,12 +796,19 @@ class CreativeFormatIdentity:
         the arm is decided by the pin and a malformed document fails HERE.
         """
         legacy_document = row.legacy_format_id
-        identity = cls.of_legacy(FormatId.model_validate(legacy_document)) if legacy_document is not None else cls()
         option_document = row.format_option_ref
-        return replace(
-            identity,
+        # ONE construction, not a build-then-``replace``. ``format_kind`` is NOT NULL, so the
+        # row always carries the mandatory member and there is no intermediate value with it
+        # missing -- which is what the two-step form created and what let a kindless identity
+        # exist at all.
+        return cls(
             kind=row.format_kind,
             option=(FormatOptionIdentity.of_document(option_document) if option_document is not None else None),
+            legacy=(format_id_identity(FormatId.model_validate(legacy_document)) if legacy_document else None),
+            legacy_parameters=(
+                _legacy_parameters_of(FormatId.model_validate(legacy_document)) if legacy_document else ()
+            ),
+            assertion=(FormatId.model_validate(legacy_document) if legacy_document else None),
         )
 
     @property
@@ -797,7 +879,7 @@ class CreativeFormatIdentity:
 def creative_format_identity(
     creative: LibraryCreativeAsset,
     *,
-    kind: str | None = None,
+    kind: str,
 ) -> CreativeFormatIdentity:
     """Which format this creative names, read off whichever arm it carries.
 
@@ -850,9 +932,10 @@ def creative_format_identity(
     if (format_id is None) == (declared_kind is None):
         raise ValueError("a creative carries exactly one of format_id and format_kind")
     if format_id is not None:
-        # The legacy arm. Its projected kind, when the caller resolved one, is refused by
-        # CreativeFormatIdentity itself if it lands outside the vocabulary -- a projection
-        # this seller cannot key on is not an identity, and the type says so.
+        # The legacy arm. Its projected kind is refused by CreativeFormatIdentity itself if
+        # it lands outside the vocabulary -- a projection this seller cannot key on is not an
+        # identity, and the type says so. ``kind`` is REQUIRED now: the caller holding the
+        # projection either resolved one or raised before reaching here.
         return CreativeFormatIdentity.of_legacy(format_id, kind=kind)
     kind_value = str(declared_kind)
     # The reference arrives already validated into one arm of core/format-option-ref.json's
