@@ -804,21 +804,23 @@ class TestAgentInventedKeysNeverReachTheBuyer:
     response under the pinned ``Format`` name, where no buyer could validate it.
 
     Measured counterfactual, not a hypothesis: ``LegacyFormat.model_validate`` of the payload
-    below dumps five keys and the local class dumps two, which is what the second test here
-    pins.
+    below retains the undeclared keys and the local class dumps two, which is what the second
+    test here pins.
 
     This is also what makes DELETING an internal field mean what it says.
-    ``iab_specification`` and ``accepts_3p_tags`` were removed from ``Format`` as unused;
-    under the parent's "allow" an agent still sending either would have had it PROMOTED from
-    a field that could never reach the wire (``exclude=True``) to an extra that always does.
+    ``iab_specification``, ``accepts_3p_tags`` and ``category`` were removed from ``Format``
+    as unused; under the parent's "allow" an agent still sending one would have had it
+    PROMOTED from a field that could never reach the wire (``exclude=True``) to an extra that
+    always does.
     """
 
     _AGENT_PAYLOAD = {
         "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
         "name": "Agent-supplied format",
-        # The two deleted internal fields, plus an invented one.
+        # The three deleted internal fields, plus an invented one.
         "iab_specification": "IAB-SOMETHING",
         "accepts_3p_tags": True,
+        "category": "standard",
         "agent_invented_key": "should never be echoed",
     }
 
@@ -842,6 +844,6 @@ class TestAgentInventedKeysNeverReachTheBuyer:
             "extra='ignore' may have become redundant -- re-read it before deleting"
         )
 
-    def test_the_two_deleted_internal_fields_are_not_declared(self):
-        for name in ("iab_specification", "accepts_3p_tags"):
+    def test_the_deleted_internal_fields_are_not_declared(self):
+        for name in ("iab_specification", "accepts_3p_tags", "category"):
             assert name not in Format.model_fields

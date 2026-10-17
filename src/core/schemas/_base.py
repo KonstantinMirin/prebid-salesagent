@@ -2079,9 +2079,6 @@ class Format(LibraryFormat):
         exclude=True,
         description="Internal: Platform-specific configuration (e.g., gam, kevel) for creative mapping",
     )
-    category: Literal["standard", "custom", "generative"] | None = Field(
-        None, exclude=True, description="Internal: Format category (not in AdCP spec)"
-    )
     is_standard: bool | None = Field(
         None, exclude=True, description="Internal: Whether this follows IAB specifications (not in AdCP spec)"
     )
@@ -2090,12 +2087,15 @@ class Format(LibraryFormat):
         exclude=True,
         description="Internal: Legacy technical specifications (not in AdCP spec, use renders instead)",
     )
-    # ``iab_specification`` and ``accepts_3p_tags`` are DELETED. Both were write-only: the one
-    # site that named either (``src/core/tools/creative_formats.py``) passed ``None`` for both,
-    # and no site anywhere under ``src/``, ``scripts/`` or ``tests/`` read either back. The
-    # pinned ``core/format.json`` declares 20 properties and neither name appears on any node
-    # in the bundle, so there was no spec reading to preserve and no value to route to a
-    # carrier -- CLAUDE.md pattern #4's "delete if genuinely unused" arm.
+    # ``iab_specification``, ``accepts_3p_tags`` and ``category`` are DELETED. All three were
+    # write-only: the one site that named any of them (``src/core/tools/creative_formats.py``)
+    # passed ``None``, and no site anywhere under ``src/``, ``scripts/`` or ``tests/`` read one
+    # back. The pinned ``core/format.json`` declares 20 properties and no node in the bundle
+    # declares any of the three -- 3836 pinned nodes walked by ``__annotations__``, zero hits
+    # for ``category`` on ``core.format`` or anywhere else -- so there was no spec reading to
+    # preserve and no value to route to a carrier: CLAUDE.md pattern #4's "delete if genuinely
+    # unused" arm. ``category`` was additionally redundant with ``is_standard``, which the
+    # format readers actually use ("standard" vs "custom" is what that boolean says).
 
     @property
     def agent_url(self) -> str | None:
@@ -4059,9 +4059,18 @@ class GetMediaBuysMediaBuy(AlwaysIncludeFieldsMixin, LibraryGetMediaBuysMediaBuy
     # carries a correlation obligation (POST-S6, "each media buy should include
     # buyer_campaign_ref for correlation") and a dedicated degradation scenario whose own
     # comment says it exists because nothing else would catch this field's removal.
-    # Declared + applied + graded is either a gap in the pin, which goes UPSTREAM, or two
-    # wrong scenarios, which get fixed or deleted -- and deciding which needs the
-    # conformance storyboard read, not this bead. Filed as salesagent-9zugt.
+    # MEASURED FURTHER, and the answer is that this one goes to a CARRIER: ``exclude`` is
+    # None here, so unlike every other non-pin field in that census family the value is
+    # NOT stripped -- it dumps to the buyer and it is published in this item's
+    # model_json_schema() under a name no pinned node declares. The scenario's e2e_rest arm
+    # is not in ``tests/bdd/e2e_rest_known_failures.txt``, so the correlation
+    # post-condition reads the field after a real HTTP round trip, which only a wire
+    # emission can satisfy; the sibling degradation scenario says "wire field" outright.
+    # So the fix is the one 9094a72d2 established -- the value moves to a repository-owned
+    # carrier and POST-S6 is re-grounded on a PINNED field (``ext`` is the pin's channel
+    # for a seller extension, and being declared is the whole difference). Left in place
+    # until that is scheduled, deliberately: deleting it first would drop a buyer-visible
+    # graded field. Filed as salesagent-9zugt with the full measurement.
     buyer_campaign_ref: str | None = Field(default=None, description="Buyer campaign reference")
     packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")
 

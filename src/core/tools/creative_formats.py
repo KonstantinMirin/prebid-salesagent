@@ -240,7 +240,6 @@ def _list_creative_formats_impl(
                             assets=assets_list if assets_list else None,
                             is_standard=False,
                             platform_config=None,
-                            category=None,
                             requirements=None,
                         )
                         formats.append(fmt)
