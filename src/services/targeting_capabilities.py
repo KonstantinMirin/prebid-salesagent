@@ -1,15 +1,28 @@
-"""
-Targeting capabilities configuration.
+"""Targeting validation helpers: property_list support, geo overlap, overlay violations.
 
-Defines which targeting dimensions are available for overlay vs managed-only access.
-This is critical for AEE (Ad Effectiveness Engine) integration.
+WHAT THIS MODULE NO LONGER CONTAINS, because none of it ran. Three top-level objects
+are deleted and the reach of each was measured, not assumed:
 
-AdCP TargetingOverlay defines: geo_countries, geo_regions, geo_metros,
-geo_postal_areas, frequency_cap, property_list, axe_include_segment,
-axe_exclude_segment.  Everything else here is a seller extension — standard
-ad-server dimensions (device, OS, browser, media type, audience) that AdCP
-does not yet define but that adapters actively support.  These are candidates
-for upstream inclusion in AdCP.
+* ``TARGETING_CAPABILITIES``, a 29-row table of ``TargetingCapability`` rows, read by
+  exactly one function -- ``get_overlay_dimensions`` in this module;
+* ``get_overlay_dimensions``, called from nowhere. The identically-named function at
+  ``src/services/targeting_dimensions.py:344`` is a DIFFERENT function with a different
+  signature, which is what made this one look reachable;
+* ``FIELD_TO_DIMENSION``, a 29-entry map from ``Targeting`` field name to capability
+  dimension, referenced nowhere in ``src/``, ``tests/`` or ``scripts/``.
+
+The ``TargetingCapability`` schema class goes with them: the deleted table was its only
+constructor anywhere.
+
+Deleting the map matters beyond the dead lines, and that is why it is recorded here. Its
+comment read "Both inclusion and exclusion variants map to the same capability dimension",
+and the old module docstring said the seller's extension dimensions are ones "that adapters
+actively support". Together those were the only statements in the repo about whether the
+eighteen seller targeting dimensions are honoured -- and they are false for half of them:
+no adapter and no tool reads ANY ``*_none_of`` field, or either ``connection_type_*``
+field. A dead map asserting a capability that nothing checks is worse than no map, because
+it answers the question the next reader would otherwise measure. salesagent-lh23b carries
+the per-dimension table and the apply-exactly-or-reject decision it needs.
 """
 
 from typing import TYPE_CHECKING, Any
@@ -18,122 +31,11 @@ from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
 from src.core.exceptions import AdCPValidationError
-from src.core.schemas import AnyTargeting, Error, TargetingCapability
+from src.core.schemas import AnyTargeting, Error
 from src.core.validation_helpers import PACKAGES_FIELD
 
 if TYPE_CHECKING:
     from src.core.database.models import Product
-
-# Define targeting capabilities for the platform
-TARGETING_CAPABILITIES: dict[str, TargetingCapability] = {
-    # ── AdCP-defined dimensions ──────────────────────────────────────────
-    # These map directly to fields on adcp.types.TargetingOverlay.
-    "geo_country": TargetingCapability(
-        dimension="geo_country", access="overlay", description="Country-level targeting using ISO 3166-1 alpha-2 codes"
-    ),
-    "geo_region": TargetingCapability(dimension="geo_region", access="overlay", description="State/province targeting"),
-    "geo_metro": TargetingCapability(dimension="geo_metro", access="overlay", description="Metro/DMA targeting"),
-    "geo_zip": TargetingCapability(dimension="geo_zip", access="overlay", description="Postal code targeting"),
-    "frequency_cap": TargetingCapability(
-        dimension="frequency_cap", access="overlay", description="Impression frequency limits"
-    ),
-    "device_platform": TargetingCapability(
-        dimension="device_platform",
-        access="overlay",
-        description="OS-level platform targeting (Sec-CH-UA-Platform values)",
-        allowed_values=[
-            "ios",
-            "android",
-            "windows",
-            "macos",
-            "linux",
-            "chromeos",
-            "tvos",
-            "tizen",
-            "webos",
-            "fire_os",
-            "roku_os",
-        ],
-    ),
-    # ── Seller extensions ────────────────────────────────────────────────
-    # Standard ad-server dimensions not yet in AdCP TargetingOverlay.
-    # Adapters (GAM, Kevel, Triton, Xandr) actively consume these.
-    # Candidates for upstream AdCP inclusion.
-    "device_type": TargetingCapability(
-        dimension="device_type",
-        access="overlay",
-        description="Device type targeting",
-        allowed_values=["mobile", "desktop", "tablet", "ctv", "dooh", "audio"],
-    ),
-    "device_make": TargetingCapability(
-        dimension="device_make", access="overlay", description="Device manufacturer targeting"
-    ),
-    "os": TargetingCapability(dimension="os", access="overlay", description="Operating system targeting"),
-    "browser": TargetingCapability(dimension="browser", access="overlay", description="Browser targeting"),
-    "content_category": TargetingCapability(
-        dimension="content_category", access="overlay", description="IAB content category targeting"
-    ),
-    "content_language": TargetingCapability(
-        dimension="content_language", access="overlay", description="Content language targeting"
-    ),
-    "content_rating": TargetingCapability(
-        dimension="content_rating", access="overlay", description="Content rating targeting"
-    ),
-    "media_type": TargetingCapability(
-        dimension="media_type",
-        access="overlay",
-        description="Media type targeting",
-        allowed_values=["video", "display", "native", "audio", "dooh"],
-    ),
-    "audience_segment": TargetingCapability(
-        dimension="audience_segment", access="overlay", description="Third-party audience segments"
-    ),
-    "custom": TargetingCapability(dimension="custom", access="both", description="Platform-specific custom targeting"),
-}
-
-
-def get_overlay_dimensions() -> list[str]:
-    """Get list of dimensions available for overlay targeting."""
-    return [name for name, cap in TARGETING_CAPABILITIES.items() if cap.access in ["overlay", "both"]]
-
-
-# Explicit mapping from Targeting field names to capability dimension names.
-# Both inclusion and exclusion variants map to the same capability dimension.
-#
-# AdCP TargetingOverlay defines only the geo fields, frequency_cap, axe
-# segments, and property_list.  The device/OS/browser/media/audience fields
-# are seller extensions carried forward from the original seller engine —
-# standard ad-server dimensions that adapters actively support but AdCP has
-# not yet adopted.  See module docstring for details.
-FIELD_TO_DIMENSION: dict[str, str] = {
-    # ── AdCP-defined fields (from adcp.types.TargetingOverlay) ───────────
-    "geo_countries": "geo_country",
-    "geo_regions": "geo_region",
-    "geo_metros": "geo_metro",
-    "geo_postal_areas": "geo_zip",
-    "frequency_cap": "frequency_cap",
-    # ── Geo exclusion extensions (PR #1006, not yet in AdCP) ─────────────
-    "geo_countries_exclude": "geo_country",
-    "geo_regions_exclude": "geo_region",
-    "geo_metros_exclude": "geo_metro",
-    "geo_postal_areas_exclude": "geo_zip",
-    # ── AdCP device_platform (OS-level, converted to device_type internally) ──
-    "device_platform": "device_platform",
-    # ── Seller extensions (not in AdCP, consumed by adapters) ────────────
-    "device_type_any_of": "device_type",
-    "device_type_none_of": "device_type",
-    "os_any_of": "os",
-    "os_none_of": "os",
-    "browser_any_of": "browser",
-    "browser_none_of": "browser",
-    "content_cat_any_of": "content_category",
-    "content_cat_none_of": "content_category",
-    "media_type_any_of": "media_type",
-    "media_type_none_of": "media_type",
-    "audiences_any_of": "audience_segment",
-    "audiences_none_of": "audience_segment",
-    "custom": "custom",
-}
 
 
 def supports_property_list_filtering(adapter: object | type | None) -> bool:

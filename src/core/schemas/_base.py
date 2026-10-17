@@ -2273,16 +2273,11 @@ class FrequencyCap(LibraryFrequencyCap):
     model_config = ConfigDict(extra="ignore", from_attributes=True)
 
 
-class TargetingCapability(SalesAgentBaseModel):
-    """Defines targeting dimension capabilities and restrictions."""
-
-    dimension: str  # e.g., "geo_country"
-    # No "managed_only" and no "removed": the pinned targeting overlay declares no managed-only
-    # dimension, and the rows that carried either value described fields nothing declares
-    # (salesagent-3cs7o.22; the city-level refusal went with salesagent-3cs7o.15).
-    access: Literal["overlay", "both"] = "overlay"
-    description: str | None = None
-    allowed_values: list[str] | None = None  # For restricted value sets
+# ``TargetingCapability`` is DELETED. Its only constructor anywhere was the
+# ``TARGETING_CAPABILITIES`` table in src/services/targeting_capabilities.py, whose single
+# reader was a function with no callers; all three went together. See that module's
+# docstring for the measurement, and salesagent-lh23b for why the table's claim about
+# which dimensions adapters support mattered.
 
 
 # Mapping from device_platform (OS-level, AdCP TargetingOverlay) to the form factors
