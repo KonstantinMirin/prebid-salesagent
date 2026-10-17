@@ -23,6 +23,7 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPValidationError,
 )
+from src.core.utils.frequency_cap import suppress_cooldown_minutes
 
 logger = logging.getLogger(__name__)
 
@@ -1055,30 +1056,38 @@ class GAMOrdersManager:
                 and package.targeting_overlay.frequency_cap
             ):
                 freq_cap = package.targeting_overlay.frequency_cap
-                # Convert AdCP FrequencyCap (suppress_minutes) to GAM format
-                # AdCP: suppress_minutes (e.g., 60 = 1 hour)
+                # Convert the cap's COOLDOWN to GAM's shape.
+                # AdCP: suppress (a duration) or the deprecated suppress_minutes
                 # GAM: maxImpressions=1, numTimeUnits=X, timeUnit="MINUTE"/"HOUR"/"DAY"
-
-                # Determine best GAM time unit (int() cast needed because
-                # suppress_minutes is float after library type inheritance, GAM API expects int)
-                if freq_cap.suppress_minutes < 60:
-                    time_unit = "MINUTE"
-                    num_time_units = int(freq_cap.suppress_minutes)
-                elif freq_cap.suppress_minutes < 1440:  # Less than 24 hours
-                    time_unit = "HOUR"
-                    num_time_units = int(freq_cap.suppress_minutes // 60)
+                #
+                # Read through the shared helper rather than off ``suppress_minutes``: the pin
+                # deprecates that field in favour of ``suppress``, and types it nullable, so a
+                # cap sent the preferred way was ignored here and a max_impressions-only cap
+                # (valid per the schema's anyOf) raised TypeError comparing None to an int.
+                cooldown_minutes = suppress_cooldown_minutes(freq_cap)
+                if cooldown_minutes is None:
+                    log("Buyer frequency cap carries no cooldown to translate; omitting GAM frequencyCap")
                 else:
-                    time_unit = "DAY"
-                    num_time_units = int(freq_cap.suppress_minutes // 1440)
+                    # Determine best GAM time unit (int() cast because the cooldown is a
+                    # float and the GAM API expects an int)
+                    if cooldown_minutes < 60:
+                        time_unit = "MINUTE"
+                        num_time_units = int(cooldown_minutes)
+                    elif cooldown_minutes < 1440:  # Less than 24 hours
+                        time_unit = "HOUR"
+                        num_time_units = int(cooldown_minutes // 60)
+                    else:
+                        time_unit = "DAY"
+                        num_time_units = int(cooldown_minutes // 1440)
 
-                frequency_caps.append(
-                    {
-                        "maxImpressions": 1,  # Suppress after 1 impression
-                        "numTimeUnits": num_time_units,
-                        "timeUnit": time_unit,
-                    }
-                )
-                log(f"Added buyer frequency cap: 1 impression per {num_time_units} {time_unit.lower()}(s)")
+                    frequency_caps.append(
+                        {
+                            "maxImpressions": 1,  # Suppress after 1 impression
+                            "numTimeUnits": num_time_units,
+                            "timeUnit": time_unit,
+                        }
+                    )
+                    log(f"Added buyer frequency cap: 1 impression per {num_time_units} {time_unit.lower()}(s)")
 
             if frequency_caps:
                 line_item["frequencyCaps"] = frequency_caps

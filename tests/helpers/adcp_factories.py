@@ -191,7 +191,9 @@ def create_test_format(
             Defaults to a single image asset for display, video asset for video.
             Use 'required: True/False' to indicate if the asset is mandatory.
         assets_required: DEPRECATED - use 'assets' instead. Kept for backward compatibility.
-        **kwargs: Additional optional fields (requirements, iab_specification, etc.)
+        **kwargs: Additional optional fields (requirements, platform_config, etc.).
+            ``Format`` is ``extra="ignore"``, so a name it does not declare is DROPPED
+            rather than stored -- ``iab_specification`` used to be listed here and is gone.
 
     Returns:
         AdCP-compliant Format object (adcp 2.6.0+)

@@ -2059,6 +2059,21 @@ class Format(LibraryFormat):
     We only add internal fields here marked with exclude=True.
     """
 
+    # The generated parent sets ``extra="allow"``, which STORES an unknown key and then
+    # SERIALIZES it -- and this class is built from a COUNTERPARTY's payload
+    # (``creative_agent_registry._fetch_formats_raw_mcp`` validates a creative agent's reply
+    # into it) and then serialized to buyers by ``list_creative_formats``. Under "allow", any
+    # key an agent invented travelled through this seller onto a buyer's wire under the
+    # pinned ``Format`` name, where no buyer could validate it.
+    #
+    # "ignore" is also what makes DELETING an internal field here mean what it says. Two were
+    # just deleted (see below); with the parent's "allow" in force, an agent that still sends
+    # one would have had it promoted from a field that could never reach the wire
+    # (``exclude=True``) to an extra that always does. :class:`Package` records the same trap
+    # for the same reason -- a response has no forward-compatibility claim on a sender's
+    # unknown keys, so there is nothing to retain and no reason to refuse either.
+    model_config = ConfigDict(extra="ignore")
+
     # ``canonical_parameters`` is INHERITED. It was redeclared here only to narrow it to
     # the local ProductFormatDeclaration subclass, which existed only because the pinned SDK's
     # generated type lost format_kind and params. the pinned SDK generates the per-kind union, so
@@ -2082,12 +2097,12 @@ class Format(LibraryFormat):
         exclude=True,
         description="Internal: Legacy technical specifications (not in AdCP spec, use renders instead)",
     )
-    iab_specification: str | None = Field(
-        None, exclude=True, description="Internal: Name of IAB specification (not in AdCP spec)"
-    )
-    accepts_3p_tags: bool | None = Field(
-        None, exclude=True, description="Internal: Whether format accepts third-party tags (not in AdCP spec)"
-    )
+    # ``iab_specification`` and ``accepts_3p_tags`` are DELETED. Both were write-only: the one
+    # site that named either (``src/core/tools/creative_formats.py``) passed ``None`` for both,
+    # and no site anywhere under ``src/``, ``scripts/`` or ``tests/`` read either back. The
+    # pinned ``core/format.json`` declares 20 properties and neither name appears on any node
+    # in the bundle, so there was no spec reading to preserve and no value to route to a
+    # carrier -- CLAUDE.md pattern #4's "delete if genuinely unused" arm.
 
     @property
     def agent_url(self) -> str | None:
@@ -2216,14 +2231,53 @@ def convert_format_ids_to_formats(format_ids: list[str], tenant_id: str | None =
     return formats
 
 
+# ``FrequencyCap`` IS the pinned type. The local subclass is deleted, and with it its one
+# field, ``scope: Literal["media_buy", "package"] = "media_buy"``.
+#
+# THE LEVEL IS POSITIONAL IN THE PIN, not a property. ``core/frequency-cap.json`` declares
+# five properties -- suppress, suppress_minutes, max_impressions, per, window -- and no
+# ``scope``; what decides the level is WHERE the cap hangs, stated in the pin's own
+# ``max_impressions`` text: "campaign applies across the owning field's full flight: the
+# package flight FOR A TARGETING OVERLAY, or the MediaBuy flight FOR A ROOT CAP". The pin
+# carries both places as different fields of different types: ``TargetingOverlay[Input]
+# .frequency_cap`` is this schema, and ``CreateMediaBuyRequest.frequency_cap`` is
+# ``core/media-buy-frequency-cap.json`` (this schema plus a required ``max_impressions`` and
+# no suppress). So a cap reachable through an overlay is package-scoped by construction and
+# there is nothing for a field to say.
+#
+# ``enums/frequency-cap-scope.json`` does exist in the pin, and reading it is what settles
+# the field rather than the absence alone: its SOLE member is "package", and it is
+# referenced by no schema in the bundle except the registry index. So the vocabulary this
+# field claimed to express (a) never admitted "media_buy" and (b) is bound to no wire field.
+# The local declaration therefore defaulted every cap to a value the pin's own enum does not
+# contain -- which is what made ``_check_unsupported_features`` in src/adapters/kevel.py
+# refuse EVERY frequency cap a buyer sent as "media buy level not supported", and left that
+# adapter's package-level branch reachable only by a buyer who sent a non-spec field.
+#
+# NOT AN ALIAS, and the reason is the one :class:`Package` records: the generated parent sets
+# ``extra="allow"``, which STORES an unknown key and then serializes it. Aliasing this name
+# to the parent would have turned ``scope`` from a field that could never reach the wire
+# (declared, constrained to two values) into an extra that ALWAYS does, carrying any value a
+# caller passed -- the opposite of deleting it, and invisible, because nothing refuses the
+# construction. Every targeting overlay persisted before this change holds
+# ``"scope": "media_buy"`` (it had a default), so the readback would have put it straight
+# back on the wire for every stored buy.
+#
+# So the subclass survives with no field, for its ``model_config`` alone. That config IS the
+# content: "ignore" drops an undeclared key rather than retaining it, which is what a
+# response wants (a stored document's stale key is not forward compatibility), and
+# ``from_attributes`` lets a parent-class instance -- what ``adcp.types.FrequencyCap`` builds,
+# and what adapters and the discovery readers hand over -- fill a slot typed with this
+# subclass, by reading the five declared fields off it. Without that, pydantic refuses a
+# parent instance in a subclass slot by identity.
 class FrequencyCap(LibraryFrequencyCap):
-    """Frequency capping extending AdCP library type with scope.
+    """The pinned ``core/frequency-cap.json``, declaring no field of its own.
 
-    Inherits suppress_minutes: float from library.
-    Adds scope field for media buy vs package level capping.
+    See the note above for why this is a subclass rather than an alias, and why its one
+    ``model_config`` is the reason it exists.
     """
 
-    scope: Literal["media_buy", "package"] = Field("media_buy", description="Apply at media buy or package level")
+    model_config = ConfigDict(extra="ignore", from_attributes=True)
 
 
 class TargetingCapability(SalesAgentBaseModel):
@@ -2364,7 +2418,11 @@ class Targeting(TargetingOverlay, _InternalTargetingDimensions):
     order, last one wins) -- the same ordering rule the pricing members follow.
     """
 
-    # Override frequency_cap to use our extended FrequencyCap with scope
+    # Narrowed to the local :class:`FrequencyCap`, which declares no field -- only
+    # ``extra="ignore"``. The narrowing is what APPLIES that config: the generated parent
+    # types this slot with its own ``extra="allow"`` class, so without this line a stale
+    # ``scope`` key in a stored overlay (every one persisted before it was deleted has one)
+    # would be retained on read and emitted on the readback wire.
     frequency_cap: FrequencyCap | None = None
 
 
@@ -2378,7 +2436,7 @@ class TargetingInput(TargetingOverlayInput, _InternalTargetingDimensions):
     Declaring both is what keeps the request DTOs statically honest about what they take.
     """
 
-    # Override frequency_cap to use our extended FrequencyCap with scope
+    # Narrowed for the same reason :class:`Targeting` records: the config, not a field.
     frequency_cap: FrequencyCap | None = None
 
 
@@ -3687,9 +3745,23 @@ class Signal(LibrarySignal):
     data_provider, coverage_percentage, deployments, pricing_options — all
     inherited from AdCP spec.
 
-    Local overrides:
-    - deployments: local SignalDeployment (has scope, decisioning_platform_segment_id)
-    - Internal fields with Field(exclude=True): tenant_id, created_at, updated_at, metadata
+    Local override: deployments, narrowed to the local SignalDeployment.
+
+    FOUR INTERNAL FIELDS ARE GONE -- ``tenant_id``, ``created_at``, ``updated_at`` and
+    ``metadata`` -- and they were dead in the strongest available sense: NOTHING under
+    ``src/`` or ``scripts/`` constructs this class at all. ``get_signals`` is a tool this
+    seller CALLS rather than serves, and the one module that dials it
+    (``src/core/signals_agent_registry.py``) parses the reply with the library
+    ``GetSignalsResponse``, not this subclass; the local type survives only in
+    ``schema_validation.create_schema_registry`` and a schema hook. With no writer the four
+    could never be anything but ``None``, so no persistence and no read depended on them.
+
+    CLAUDE.md pattern #4 is the rule they broke even so: a field off the wire but needing to
+    persist "belongs on a repository-owned carrier", and ``exclude=True`` strips a value from
+    PERSISTENCE and the idempotency hash as well as the wire -- so a tenant id parked here
+    would have been silently dropped by the very marker that was meant to protect it. The pin
+    confirms the shape independently: ``core/signal-listing.json`` declares none of the four,
+    and none of ``tenant_id``'s 0 occurrences in the bundle is on any node.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -3697,12 +3769,6 @@ class Signal(LibrarySignal):
     # Override types that differ from library. No suppression: the pinned SDK types the parent
     # field so the local element subclass is a static subtype.
     deployments: list[SignalDeployment] = Field(..., min_length=1, description="Array of platform deployments")
-
-    # Internal fields (not in AdCP spec, excluded from serialization)
-    tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
-    created_at: datetime | None = Field(None, description="Internal: Creation timestamp", exclude=True)
-    updated_at: datetime | None = Field(None, description="Internal: Last update timestamp", exclude=True)
-    metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata", exclude=True)
 
     # Backward compatibility properties (deprecated)
     # Note: signal_id is now a library field in the pinned SDK (SignalId | None)
@@ -3767,10 +3833,16 @@ class GetSignalsResponse(NestedModelSerializerMixin, LibraryGetSignalsResponse):
 
 # --- Signal Activation ---
 class ActivateSignalRequest(LibraryActivateSignalRequest):
-    """Extends library ActivateSignalRequest with local extension fields.
+    """The pinned ``signals/activate-signal-request.json``, declaring nothing of its own.
 
-    Library provides: signal_agent_segment_id, deployments, context, ext.
-    Local extensions: campaign_id, media_buy_id (unused in impl, kept for API compat).
+    ``campaign_id`` and ``media_buy_id`` are DELETED. The pinned node declares neither --
+    measured on the node itself, not by grepping the bundle, which is why ``media_buy_id``
+    existing on 46 other pin nodes was never evidence for this one. Their own docstring said
+    "unused in impl, kept for API compat", and the census agreed: no ``_impl``, no row in
+    ``src.core.tools.registry.TOOLS``, and the single remaining reference to this class
+    anywhere is ``scripts/hooks/validate_mcp_schemas.py``. So nothing read them -- but
+    declaring a field is what ADMITS it (critical pattern #7: the DTO is the accepted shape),
+    so the two were a live door onto a request shape no buyer could validate.
 
     NOTE: ActivateSignalResponse is NOT migrated — library uses RootModel
     discriminated union (success|error) which is fundamentally incompatible
@@ -3778,10 +3850,6 @@ class ActivateSignalRequest(LibraryActivateSignalRequest):
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-    # Extension fields (not in library spec)
-    campaign_id: str | None = Field(None, description="Optional campaign ID to activate signal for")
-    media_buy_id: str | None = Field(None, description="Optional media buy ID to activate signal for")
 
     @property
     def signal_id(self) -> str:
@@ -4182,17 +4250,34 @@ class GetTaskStatusResponse(LibraryGetTaskStatusResponse, SalesAgentAdcpResponse
     task_type's place carrying ``step_type``. Same root cause and same fix as
     :class:`ListTasksResponse` -- see that docstring; the two share their derivation.
 
-    The extras mirror :class:`TaskSummary`'s, plus the two only a single-task read returns.
+    FIVE NON-SPEC FIELDS ARE GONE, and every one of them had a pinned home or no reader.
+    ``protocol/get-task-status-response.json`` declares 14 properties and none of
+    ``tool_name``, ``owner``, ``associated_objects``, ``error_message`` or ``request_data``
+    is among them -- measured per-model against the pinned node, not by grepping the bundle
+    for the name. A buyer could not validate any of the five, which is what makes them a
+    defect rather than a convenience:
+
+    * ``error_message`` -> the pin's own ``message``, "Human-readable summary of the task
+      result ... suitable for display to end users or for AI agent comprehension". A free-text
+      failure summary is exactly that field's subject, and routing it there needs no invented
+      error code (which an ``error``/``adcp_error`` object would have, and CLAUDE.md pattern
+      #10 forbids minting one to wrap a stored string).
+    * ``request_data`` -> the pin's ``history``, which :func:`_task_history` already fills with
+      ``{timestamp, type, data}`` for the request and the response alike. The top-level field
+      was a SECOND copy of the same material, and an UNGATED one: ``include_history`` defaults
+      false "for lightweight status-only polls", so the field shipped the opening request on
+      every poll past the flag that exists to withhold it -- the same defect the ``result``
+      comment in ``_get_task_status_impl`` records for ``response_data``.
+    * ``tool_name``, ``owner``, ``associated_objects`` -> deleted. Seller internals with no
+      consumer: nothing under ``src/`` or ``scripts/`` reads one off a response, the admin UI
+      reads the workflow ROW, and the one scenario that asserted ``associated_objects``
+      (``@T-UC-027-ext-a-objects``) lives in ``BR-UC-027-manage-async-tasks.feature``, which
+      is in ``UNBOUND_ALLOWLIST`` (``test_architecture_feature_file_bound.py``) and is
+      executed by no BDD module -- so it graded nothing. ``ext`` is the pin's extension
+      channel and would have been the home for one of these that a buyer needed; none does.
     """
 
     context_id: str | None = Field(default=None, description="Workflow context this task belongs to")
-    tool_name: str | None = Field(default=None, description="Non-spec: the seller-side tool the step invokes")
-    owner: str | None = Field(default=None, description="Non-spec: principal | publisher | system")
-    associated_objects: list[dict[str, Any]] = Field(
-        default_factory=list, description="Non-spec: objects this task acts on"
-    )
-    error_message: str | None = Field(default=None, description="Non-spec: failure detail when the task failed")
-    request_data: dict[str, Any] | None = Field(default=None, description="Non-spec: the request that opened the task")
 
 
 class GetMediaBuysRequest(BuyerRequest, LibraryGetMediaBuysRequest):

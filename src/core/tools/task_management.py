@@ -327,8 +327,6 @@ async def _get_task_status_impl(
     callable this tool could not be dispatched over A2A or routed over REST -- one
     missing boundary showing up as two absent transports.
     """
-    task_id = req.task_id
-
     tenant = identity.tenant
     # F-03: an authenticated principal is required; the ResolvedIdentity carries one by type
     principal_id = identity.principal.principal_id
@@ -340,11 +338,13 @@ async def _get_task_status_impl(
         # to here: "Sellers MUST return REFERENCE_NOT_FOUND for a task_id that exists only
         # under a different account or principal" (get-task-status-status-request.json @ 3.1.1).
         # The lookup was tenant-scoped only, so any authenticated principal could read
-        # another's task by id -- request_data and response_data included. The raised error
-        # is identical to the absent case, so it does not reveal that the task exists.
+        # another's task by id -- the opening request and response_data included. The raised
+        # error is identical to the absent case, so it does not reveal that the task exists.
         task = uow.workflows.get_by_step_id_or_raise(req.task_id, principal_id=principal_id)
 
-        mappings = uow.workflows.get_mappings_for_step(task_id)
+        # No mapping read. The object mappings fed a non-spec ``associated_objects`` field
+        # this response no longer declares (see the class docstring), so fetching them was
+        # a query whose only consumer was a field a buyer could not validate.
 
         task_type = _spec_task_type(task)
         created_at, updated_at, completed_at = _task_timestamps(task)
@@ -361,21 +361,14 @@ async def _get_task_status_impl(
             updated_at=updated_at,
             completed_at=completed_at,
             context_id=task.context_id,
-            tool_name=task.tool_name,
-            owner=task.owner,
-            request_data=task.request_data,
-            error_message=task.error_message,
-            associated_objects=[
-                {
-                    "type": m.object_type,
-                    "id": m.object_id,
-                    "action": m.action,
-                    "created_at": (
-                        m.created_at.isoformat() if hasattr(m.created_at, "isoformat") else str(m.created_at)
-                    ),
-                }
-                for m in mappings
-            ],
+            # The stored failure text under the PIN's name for it: ``message`` is
+            # "Human-readable summary of the task result ... suitable for display to end
+            # users or for AI agent comprehension" (protocol/get-task-status-response.json).
+            # It replaces a non-spec ``error_message`` the buyer could not validate, and it
+            # is not an ``error``/``adcp_error`` object because those carry a CODE and this
+            # seller stores only the sentence -- minting a code to wrap it is what CLAUDE.md
+            # pattern #10 refuses.
+            message=task.error_message,
         )
 
         # The terminal payload is CONDITIONAL. get-task-status-status-request.json defaults

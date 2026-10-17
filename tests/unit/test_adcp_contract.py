@@ -1105,10 +1105,13 @@ class TestAdCPContract:
             pricing_options=[
                 {"pricing_option_id": "cpm_usd", "cpm": 2.50, "currency": "USD", "model": "cpm"},
             ],
-            tenant_id="test_tenant",
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
-            metadata={"category": "automotive", "confidence": 0.92},
+            # No tenant_id / created_at / updated_at / metadata. ``Signal`` declared those
+            # four with exclude=True and they are DELETED: core/signal-listing.json declares
+            # none of them (tenant_id appears on no node in the pinned bundle at all), and
+            # nothing under src/ or scripts/ constructs this class, so there was no value to
+            # route to a carrier. The refusal and absence are graded in
+            # tests/unit/test_signals_response_serialization.py; the assertion below keeps
+            # the wire-shape half here, where the rest of this contract lives.
         )
 
         # Test AdCP-compliant model_dump (external response)
@@ -1129,10 +1132,16 @@ class TestAdCPContract:
             assert field in adcp_response, f"Required AdCP field '{field}' missing from response"
             assert adcp_response[field] is not None, f"Required AdCP field '{field}' is None"
 
-        # Verify internal fields are excluded from AdCP response
+        # Verify the four deleted internal fields are on neither the model nor the wire.
+        # They used to be DECLARED with exclude=True, so this check could only ever grade the
+        # exclude marker; now it grades the stronger fact that nothing can put them there.
         internal_fields = ["tenant_id", "created_at", "updated_at", "metadata"]
         for field in internal_fields:
             assert field not in adcp_response, f"Internal field '{field}' exposed in AdCP response"
+            assert field not in Signal.model_fields, (
+                f"Internal field '{field}' was re-declared on Signal — the pin declares it on no "
+                f"node, and exclude=True would strip it from persistence too (pattern #4)"
+            )
 
         # Verify AdCP-specific requirements
         assert adcp_response["signal_type"] in ["marketplace", "custom", "owned"], "signal_type must be valid enum"
@@ -1159,12 +1168,17 @@ class TestAdCPContract:
         assert signal.signal_agent_segment_id == "signal_auto_intenders_q1_2025", "Primary ID should work"
         assert signal.signal_type == "marketplace", "signal_type field should work"
 
-        # The internal half of the split: every Field(exclude=True) field is CARRIED on the
-        # model, and the attribute is what existing means. There is no second dump shape to
-        # read them out of (CLAUDE.md pattern 4 — one serializer seat).
-        for field in internal_fields:
-            assert getattr(signal, field) is not None, f"Internal field '{field}' not carried on the model"
+        # The internal half of the split, on the one class that still HAS one.
+        # ``SignalDeployment.scope`` is Field(exclude=True): carried on the model, absent from
+        # the wire, and the attribute is what existing means — there is no second dump shape
+        # to read it out of (CLAUDE.md pattern 4, one serializer seat).
+        #
+        # ``Signal``'s own four internal fields are not asserted here any more because they
+        # no longer exist: the loop this replaces read them off the model, and the deletion
+        # makes ``getattr`` an AttributeError rather than a None. Their absence is asserted
+        # positively above (``field not in Signal.model_fields``).
         assert signal.deployments[0].scope == "account-specific", "deployment scope not carried on the model"
+        assert "scope" not in adcp_response["deployments"][0], "deployment scope reached the wire"
 
         # Verify field count expectations (flexible to allow AdCP spec evolution)
         assert len(adcp_response) >= 8, f"AdCP response should have at least 8 core fields, got {len(adcp_response)}"

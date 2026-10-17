@@ -110,10 +110,12 @@ def _validate_creative_input(
     if approved is not None:
         schema_data["approved"] = approved
 
-    # Pass through AI provenance metadata (EU AI Act Article 50), as the model it is.
-    provenance = getattr(creative, "provenance", None)
-    if provenance is not None:
-        schema_data["provenance"] = provenance
+    # No provenance copy. The listing model this builds declares no ``provenance`` field --
+    # the pin declares it on the REQUEST item (core/creative-asset.json) and not on
+    # list-creatives-response.json's ``creatives[]`` -- and the only consumer,
+    # :func:`check_provenance_policy`, now reads the request item it came from. The persisted
+    # document is written from that same request item (``_assets.py``), so nothing that
+    # stores or enforces provenance went through here.
 
     # Validate by creating a Creative schema object
     # This will fail if required fields are missing or invalid (like empty name)
@@ -206,7 +208,7 @@ def _validate_creative_input(
     return validated_creative
 
 
-def _assets_carry_provenance(creative: Creative) -> bool:
+def _assets_carry_provenance(creative: CreativeAsset) -> bool:
     """Whether any individual asset declares its own provenance object."""
     for value in (creative.assets or {}).values():
         for asset in value if isinstance(value, list) else [value]:
@@ -220,8 +222,10 @@ def _assets_carry_provenance(creative: Creative) -> bool:
 
 
 def check_provenance_policy(
-    creative: Creative,
+    creative: CreativeAsset,
     creative_policy: CreativePolicy | dict | None,
+    *,
+    creative_id: str,
 ) -> None:
     """Refuse a creative that does not meet the product's provenance policy.
 
@@ -240,6 +244,20 @@ def check_provenance_policy(
     The resolved provenance inspected for the *_MISSING checks is the creative-level
     object; a creative carrying provenance only on individual assets satisfies
     ``provenance_required`` and is not inspected field by field here.
+
+    INSPECTS THE REQUEST ITEM, which is where the pin puts the field.
+    ``core/creative-asset.json`` -- the sync request's ``creatives[]`` -- declares
+    ``provenance``; the listing model (``creatives[]`` of list-creatives-response.json, 28
+    properties) does not. This used to take the listing model, so ``_validate_creative_input``
+    had to COPY the value from the request item onto a local ``Creative`` subclass that
+    declared a non-spec ``provenance`` field purely to carry it two lines -- and the field
+    then appeared in the advertised list_creatives shape, where a buyer could not validate
+    it. Reading the request item directly deletes the copy, the field and the hand-over.
+
+    ``creative_id`` is passed rather than read off *creative*: the pin makes it OPTIONAL on a
+    sync item (the seller assigns one when the buyer omits it), so the refusal would
+    otherwise name no creative in exactly the case where a buyer most needs to know which of
+    up to 100 items to fix.
     """
     if creative_policy is None:
         return
@@ -250,7 +268,7 @@ def check_provenance_policy(
     if not _get_field(creative_policy, "provenance_required"):
         return
 
-    details = EntityRefDetails(creative_id=creative.creative_id)
+    details = EntityRefDetails(creative_id=creative_id)
     provenance = creative.provenance
     if provenance is None:
         if _assets_carry_provenance(creative):

@@ -2996,31 +2996,49 @@ Feature: BR-UC-002 Create Media Buy
     And the response should succeed
     And the response status should be "completed"
     # v3.1: core/price.json — amount >= 0, currency ^[A-Z]{3}$, optional period (night|month|year|one_time)
-    # --- v3.1 wave A: frequency_cap.scope vocabulary ---
+    # --- v3.1 wave A: frequency_cap scope is POSITIONAL, not a property ---
+    # CORRECTED against the pin, which binds the scope vocabulary to no wire field:
+    #   * core/frequency-cap.json declares five properties -- suppress, suppress_minutes,
+    #     max_impressions, per, window -- and no "scope".
+    #   * Its own max_impressions description states the mechanism: "campaign applies across
+    #     the owning field's full flight: the package flight FOR A TARGETING OVERLAY, or the
+    #     MediaBuy flight FOR A ROOT CAP". So the level is decided by WHERE the cap hangs.
+    #   * The two places are different fields of different types: TargetingOverlay[Input]
+    #     .frequency_cap is core/frequency-cap.json, and CreateMediaBuyRequest.frequency_cap
+    #     is core/media-buy-frequency-cap.json (that schema plus a required max_impressions
+    #     and no suppress).
+    #   * enums/frequency-cap-scope.json DOES exist, its sole member is "package", and it is
+    #     referenced by no schema in the bundle except the registry index.
+    # The two scenarios this replaces asserted a "frequency_cap.scope" property on the
+    # overlay cap. One of them ("accepts the registered value") asked this seller to accept a
+    # field the pin declares nowhere -- CLAUDE.md pattern #7's documented case: the DTO is the
+    # accepted shape, and a field we should NOT accept means the scenario is wrong. The other
+    # demanded an enum refusal naming a field, which cannot be produced for a key that is not
+    # part of the accepted shape at all.
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-frequency-cap-scope-package @v31 @frequency-cap-scope @targeting @post-s1
-  Scenario: v3.1 frequency_cap.scope accepts the registered "package" value
+  Scenario: v3.1 an overlay frequency_cap is package-scoped with no scope field
     Given a valid create_media_buy request
-    And the targeting frequency_cap.scope is "package"
+    And the package targeting_overlay carries a frequency_cap with no scope field
     And the account "acc-001" exists and is active
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy success spec
     And the response should succeed
-    # v3.1: enums/frequency-cap-scope.json — sole registered value is "package"
+    # v3.1: core/frequency-cap.json — the level follows the owning field, not a property
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-frequency-cap-scope-unregistered @v31 @frequency-cap-scope @targeting @validation @post-f2
-  Scenario: v3.1 frequency_cap.scope rejects unregistered values
+  Scenario: v3.1 a frequency_cap scope property is not part of the accepted shape
     Given a create_media_buy request
-    And the targeting frequency_cap.scope is "campaign"
+    And the package targeting_overlay carries a frequency_cap with a scope property
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the response should indicate a validation error
-    And the error should reference the frequency_cap.scope enum
-    # v3.1: cross-package and cross-buy scoping NOT supported in this protocol release
+    # v3.1: an undeclared key inside frequency_cap is refused in dev and dropped in production
+    # (critical pattern #7); cross-package and cross-buy scoping are not in this release
 
   @T-UC-002-boundary-sandbox-response @boundary @sandbox @br-rule-209
   Scenario Outline: v3.1 sandbox response-semantics boundary validation - <boundary_point>

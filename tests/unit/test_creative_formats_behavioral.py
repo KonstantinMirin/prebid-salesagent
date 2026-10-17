@@ -791,3 +791,57 @@ class TestReferralCapabilitiesAreCommitments:
             assert cap_values == {"validation", "assembly", "preview"}, (
                 f"Advertised capabilities must be exactly the backed set, got {cap_values}"
             )
+
+
+class TestAgentInventedKeysNeverReachTheBuyer:
+    """A creative agent's undeclared keys must not travel through this seller onto the wire.
+
+    ``Format`` is built from a COUNTERPARTY's payload
+    (``creative_agent_registry._fetch_formats_raw_mcp`` validates a creative agent's reply
+    into it) and then serialized to buyers by ``list_creative_formats``. The GENERATED parent
+    sets ``extra="allow"``, which stores an unknown key and then emits it -- so without the
+    local class's ``extra="ignore"`` every key an agent invented appeared in this seller's
+    response under the pinned ``Format`` name, where no buyer could validate it.
+
+    Measured counterfactual, not a hypothesis: ``LegacyFormat.model_validate`` of the payload
+    below dumps five keys and the local class dumps two, which is what the second test here
+    pins.
+
+    This is also what makes DELETING an internal field mean what it says.
+    ``iab_specification`` and ``accepts_3p_tags`` were removed from ``Format`` as unused;
+    under the parent's "allow" an agent still sending either would have had it PROMOTED from
+    a field that could never reach the wire (``exclude=True``) to an extra that always does.
+    """
+
+    _AGENT_PAYLOAD = {
+        "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
+        "name": "Agent-supplied format",
+        # The two deleted internal fields, plus an invented one.
+        "iab_specification": "IAB-SOMETHING",
+        "accepts_3p_tags": True,
+        "agent_invented_key": "should never be echoed",
+    }
+
+    def test_undeclared_keys_are_dropped_at_construction(self):
+        fmt = Format.model_validate(self._AGENT_PAYLOAD)
+
+        assert sorted(fmt.model_dump(exclude_none=True)) == ["format_id", "name"]
+
+    def test_the_generated_parent_would_have_echoed_them(self):
+        """The positive control: proves the assertion above is the local config's doing.
+
+        Without it, a parent that happened to be strict would make the test above pass for a
+        reason that has nothing to do with the ``model_config`` it exists to grade.
+        """
+        from adcp.types.legacy import LegacyFormat
+
+        echoed = LegacyFormat.model_validate(self._AGENT_PAYLOAD).model_dump(exclude_none=True)
+
+        assert "agent_invented_key" in echoed, (
+            "the generated parent no longer retains unknown keys, so this seller's "
+            "extra='ignore' may have become redundant -- re-read it before deleting"
+        )
+
+    def test_the_two_deleted_internal_fields_are_not_declared(self):
+        for name in ("iab_specification", "accepts_3p_tags"):
+            assert name not in Format.model_fields
