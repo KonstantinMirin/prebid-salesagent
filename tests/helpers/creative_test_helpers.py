@@ -27,6 +27,26 @@ if TYPE_CHECKING:
     from src.core.schemas.creative import SyncCreativesRequest
 
 
+#: THE reference every default creative payload names, and the only one that resolves on
+#: all four transports. Both halves are forced:
+#:
+#: * the agent_url must be the one the capture was taken from, because
+#:   ``format_resolver.find_format`` matches on the PAIR ``(canonical agent_url, id)`` and
+#:   every captured format carries ``https://creative.adcontextprotocol.org``. It is also
+#:   the only value ``_is_operator_agent`` admits, so ``_validation.py``'s ``get_format``
+#:   reaches the capture instead of the egress seam.
+#: * the id must be one the capture carries. ``display_300x250`` is NOT one of the 71
+#:   (the captured 300x250 formats are ``_image``, ``_image_2x``, ``_image_1x_2x``,
+#:   ``_html`` and ``_generative``), and the previous default named it at
+#:   ``https://creative.test.example.com`` -- a format no agent serves at an agent no
+#:   capture carries, which is how in-process transports and e2e_rest came to grade two
+#:   different sellers.
+#:
+#: ``make_creative_dict`` below already used this pair; ``creative_payload`` is the half
+#: that had not followed, so the two are named once here.
+DEFAULT_FORMAT_REFERENCE = {"id": "display_300x250_image", "agent_url": "https://creative.adcontextprotocol.org"}
+
+
 def make_creative_dict(creative_id: str = "c1", name: str = "Test Banner") -> dict:
     """Build a valid creative REQUEST dict (core/creative-asset.json @ AdCP 3.1.1).
 
@@ -40,12 +60,10 @@ def make_creative_dict(creative_id: str = "c1", name: str = "Test Banner") -> di
     return {
         "creative_id": creative_id,
         "name": name,
-        "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+        "format_id": dict(DEFAULT_FORMAT_REFERENCE),
         "assets": build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
     }
 
-
-_DEFAULT_AGENT_URL = "https://creative.test.example.com"
 
 #: Stands in for an account a test is not about. ``_sync_creatives_impl`` never reads
 #: ``req.account`` -- the transport wrapper resolves the reference into ``identity`` before
@@ -89,7 +107,7 @@ def creative_payload(**overrides: object) -> dict:
     payload: dict = dict(overrides)
     payload.setdefault("creative_id", "c1")
     payload.setdefault("name", "Test")
-    payload.setdefault("format_id", {"id": "display_300x250", "agent_url": _DEFAULT_AGENT_URL})
+    payload.setdefault("format_id", dict(DEFAULT_FORMAT_REFERENCE))
     payload.setdefault("assets", build_assets(image_spec("banner")))
     return payload
 

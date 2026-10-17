@@ -68,15 +68,20 @@ if TYPE_CHECKING:
 # E2E format helpers — real creative agent data for Docker transport
 # ═══════════════════════════════════════════════════════════════════════
 
-# Docker's creative agent URL (internal to Docker network, used by the app
-# container) — https via the shared tls-proxy front; the seam requires https
-# unconditionally now (#1757), so this stopped being reachable at all once
-# ADCP_OUTBOUND_ALLOW_INSECURE was deleted, and this literal was the one thing
-# in this file that was never caught by that disease scan (it hardcodes a URL,
-# not the flag itself).
-_E2E_AGENT_URL = "https://creative-agent.adcp.test:8443/api/creative-agent"
-# Real format that exists in Docker's creative agent catalog
-_E2E_FORMAT_ID = "display_300x250_image"
+#: The format every transport names. A CAPTURED id -- one of the 71 in
+#: tests/fixtures/creative_formats/reference_formats.json, which both the in-process
+#: registry and the e2e server answer from. Paired with ``env.DEFAULT_AGENT_URL``, which
+#: is the agent the capture was taken from; the pair is what ``find_format`` matches on,
+#: so naming either half differently resolves to nothing. Replaces the
+#: in-process/e2e_rest switch on ``_E2E_FORMAT_ID`` -- see ``_format_payload``.
+_CATALOG_FORMAT_ID = "display_300x250_image"
+#: The GENERATIVE format every transport names, same rule and same capture. The reference
+#: agent's seven generative formats all end in ``_generative`` and carry a real
+#: ``output_format_ids``, which is what ``format_resolver.is_generative`` reads. Replaces
+#: the invented ``gen_banner`` / ``display_gen``, which no catalogue carried: measured,
+#: ``canonical_kind_for`` refuses both outright ("no canonical projection for legacy
+#: format_id"), so the scenarios naming them were refused before reaching their subject.
+_CATALOG_GENERATIVE_FORMAT_ID = "display_300x250_generative"
 # A creative agent that does not answer, on the wire: the TLS front's own name (so the
 # egress gate resolves it and lets the dial through) at a port nothing listens on. A
 # made-up host fails DNS inside the gate instead, which is a VALIDATION_ERROR on the
@@ -85,27 +90,44 @@ _E2E_UNREACHABLE_AGENT_URL = "https://creative-agent.adcp.test:8444/api/creative
 
 
 def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
-    """Return (format_id, agent_url, assets) appropriate for current transport.
+    """Return (format_id, agent_url, assets) — the SAME format on every transport.
 
-    For in-process transports: uses mock format/agent that the patched registry accepts.
-    For e2e_rest: uses real format from Docker's creative agent catalog.
+    THIS USED TO SWITCH, and the switch was the parity break. Its own docstring said so:
+    "For in-process transports: uses mock format/agent that the patched registry accepts.
+    For e2e_rest: uses real format from Docker's creative agent catalog." So one scenario
+    sent ``display_300x250`` @ ``https://creative.test.example.com`` in process and
+    ``display_300x250_image`` @ the Docker agent on the wire, and the four transports
+    graded two different sellers against two different catalogues.
+
+    Neither side resolved, measured at ADCP_TESTING=true against the committed capture
+    (``find_format``, the pair match ``_sync.py`` performs):
+
+        (creative.test.example.com,              display_300x250)        found=False
+        (creative-agent.adcp.test:8443/...,      display_300x250_image)  found=False
+        (creative.adcontextprotocol.org,         display_300x250_image)  found=True
+
+    One reference now, the capture's own. Both transports' registries are
+    ``ReferenceFormatsRegistry`` serving that capture -- in process because the harness
+    installs it, on the wire because docker-compose.e2e.yml sets ``ADCP_TESTING`` -- so
+    the one reference is the one both can resolve, and ``identity_spec`` is non-None on
+    both, which is what makes step 1 of the projection order graded rather than skipped.
+
+    ``ctx`` stays in the signature: callers pass it and the e2e/in-process distinction
+    may matter again for a different fact. It is deliberately NOT consulted for the
+    format.
+
+    SDK 5.7 / AdCP 3.1: creative assets are a discriminated union keyed by role. Built
+    via the canonical AssetSpec mechanism (image_spec/build_assets) so the shape lives in
+    exactly one place — see GH #1391. The click url rode only the e2e branch before and
+    now rides both, which is the same "one scenario, one payload" rule.
     """
-    if is_e2e(ctx):
-        return (
-            _E2E_FORMAT_ID,
-            _E2E_AGENT_URL,
-            build_assets(
-                image_spec("banner_image", url="https://example.com/banner.png"),
-                url_spec("click_url", url="https://example.com/landing"),
-            ),
-        )
-    # SDK 5.7 / AdCP 3.1: creative assets are a discriminated union keyed by role.
-    # Build via the canonical AssetSpec mechanism (image_spec/build_assets) so the
-    # shape lives in exactly one place — see GH #1391.
     return (
-        "display_300x250",
+        _CATALOG_FORMAT_ID,
         env.DEFAULT_AGENT_URL,
-        build_assets(image_spec("image")),
+        build_assets(
+            image_spec("banner_image", url="https://example.com/banner.png"),
+            url_spec("click_url", url="https://example.com/landing"),
+        ),
     )
 
 
@@ -133,11 +155,12 @@ def _product_format_entry(ctx: dict, env: object) -> dict[str, str]:
     """Return a single ``{"agent_url": ..., "id": ...}`` for ProductFactory.format_ids.
 
     Must match the creative format_id returned by ``_format_payload`` so that
-    format compatibility checks pass on all transports including e2e_rest.
+    format compatibility checks pass on all transports including e2e_rest -- so it is
+    DERIVED from it rather than re-stated. It used to carry its own copy of the same
+    transport switch, which is two places one pairing had to agree in.
     """
-    if is_e2e(ctx):
-        return {"agent_url": _E2E_AGENT_URL, "id": _E2E_FORMAT_ID}
-    return {"agent_url": env.DEFAULT_AGENT_URL, "id": "display_300x250"}
+    format_id, agent_url, _assets = _format_payload(ctx, env)
+    return {"agent_url": agent_url, "id": format_id}
 
 
 def _scenario_format_entry(ctx: dict, env: object) -> dict[str, str]:
@@ -179,12 +202,14 @@ def _scenario_format_id(ctx: dict, env: object) -> str:
 
     ``ctx["creative_format_id"]`` is this module's carrier for "the format under test" -- 30
     steps write it and several read it back. The reads used to default to the literal
-    ``"display_300x250"``, which is the quiet half of the same defect: a scenario that never
-    wrote the key got the IN-PROCESS format on every transport, including e2e_rest where the
-    creative it is compared against had switched to ``display_300x250_image``.
+    ``"display_300x250"``, which was the quiet half of the transport switch
+    :func:`_format_payload` used to carry: a scenario that never wrote the key got the
+    IN-PROCESS format on every transport, including e2e_rest where the creative it is
+    compared against had switched to ``display_300x250_image``.
 
-    Defaulting through :func:`_format_payload` keeps the fallback on the same switch as the
-    value it stands in for. A literal default is the same bug one level down.
+    Defaulting through :func:`_format_payload` keeps the fallback on the same value it
+    stands in for. There is no switch left for it to disagree with, and a literal default
+    would still be the same bug one level down if one ever came back.
     """
     recorded = ctx.get("creative_format_id")
     if recorded:
@@ -2514,10 +2539,10 @@ def given_creative_already_exists(ctx: dict, stored_name: str | None = None) -> 
         agent_url=fmt_id["agent_url"],
         format=fmt_id["id"],
         # When the payload names a format THIS ENV serves, the row is seeded with that
-        # declaration. The factory otherwise resolves against the shared reference
-        # capture, which carries none of the env's own ids (``gen_banner``,
-        # ``static_300x250``), so the projection would be refused and the UPDATE branch
-        # this Given exists to reach would never be entered.
+        # declaration. Since salesagent-6xtxb the env serves the shared reference capture
+        # itself, so the two agree by construction rather than by this branch -- it stays
+        # because a scenario may still narrow the catalogue (``set_served_catalogue``) and
+        # the factory's own lookup would then find more than the env serves.
         format_spec=(env.served_format_spec(fmt_id["id"]) if env.serves_format(fmt_id["id"]) else None),
     )
     env._commit_factory_data()
@@ -3401,7 +3426,7 @@ def given_generative_creative_served_by_agent(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
 
-    fmt = env.setup_generative_build(format_id="gen_banner")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID)
     creative_id = "creative-generative-001"
     ctx.setdefault("creatives", []).append(
         CreativeAssetRequestFactory.payload(
@@ -3461,7 +3486,7 @@ def given_creative_reaching_the_agent(ctx: dict, creative_state: str, format_kin
 
     generative = format_kind == "generative"
     fmt = env.configure_agent_served_creative(
-        generative=generative, format_id="gen_banner" if generative else "static_300x250"
+        generative=generative, format_id=_CATALOG_GENERATIVE_FORMAT_ID if generative else _CATALOG_FORMAT_ID
     )
 
     creative_id = f"creative-{creative_state}-{format_kind}-001"
@@ -4566,7 +4591,7 @@ def given_creative_with_generative_format(ctx: dict) -> None:
     """Set up a creative with a generative format (output_format_ids populated)."""
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-generative-001",
         name="Generative Creative",
@@ -4612,7 +4637,7 @@ def given_creative_with_known_http_format(ctx: dict) -> None:
     from src.core.format_resolver import is_dialled_agent_url
 
     env = ctx["env"]
-    fmt = env.configure_agent_served_creative(generative=False, format_id="display_300x250")
+    fmt = env.configure_agent_served_creative(generative=False, format_id=_CATALOG_FORMAT_ID)
     assert is_dialled_agent_url(fmt["agent_url"]), (
         f"this sentence promises an HTTP-based format, but the agent_url is {fmt['agent_url']!r}, "
         "which production classifies as an adapter format and exempts from external validation"
@@ -4880,7 +4905,7 @@ def given_creative_no_output_format_ids(ctx: dict) -> None:
     was therefore passing on a request that had no format to classify, which is a
     weaker fact than the one it claims and is true of an unknown format too.
     """
-    ctx["env"].configure_agent_served_creative(generative=False, format_id="display_300x250")
+    ctx["env"].configure_agent_served_creative(generative=False, format_id=_CATALOG_FORMAT_ID)
     given_creative_with_format(ctx)
 
 
@@ -4904,7 +4929,7 @@ def given_creative_output_format_ids_present(ctx: dict) -> None:
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-generative-part-001",
         name="Generative Partition Creative",
@@ -4928,7 +4953,7 @@ def given_creative_output_format_ids_present_create(ctx: dict) -> None:
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-generative-create-001",
         name="My Summer Campaign Banner",
@@ -5028,7 +5053,7 @@ def given_creative_generative_with_prompt(ctx: dict) -> None:
     """Set up a generative creative with a message asset containing prompt text (boundary)."""
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     asset_prompt = "Design a responsive ad for holiday promotion"
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-prompt-001",
@@ -5050,7 +5075,7 @@ def given_new_creative_generative_no_prompt_with_name(ctx: dict) -> None:
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     # assets={}, not OMIT: an EMPTY assets object is what the scenario means by "no
     # prompt", and the pin accepts it — so this is a conformant payload whose
     # wrongness is downstream, not a malformation.
@@ -5076,7 +5101,7 @@ def given_creative_generative_no_gemini(ctx: dict) -> None:
     # Generative format, and the key NOT configured. Said once, as an argument, rather
     # than set and then unset: the two-step form left the env briefly in a state no
     # scenario describes, and the second step had to know the config mock's shape.
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key=None)
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key=None)
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-no-key-001",
         name="Generative No Key",
@@ -5173,7 +5198,7 @@ def given_creative_format_with_output_format_ids(ctx: dict) -> None:
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-inv1-001",
         name="Generative Detection Test",
@@ -5209,7 +5234,7 @@ def given_generative_creative_with_asset_role(ctx: dict, role: str, content: str
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-inv2-001",
         name="Generative Prompt From Assets",
@@ -5233,7 +5258,7 @@ def given_generative_creative_with_context_description(ctx: dict, description: s
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-inv3-001",
         name="Generative Context Description",
@@ -5256,7 +5281,7 @@ def given_generative_creative_named_no_prompt(ctx: dict, name: str) -> None:
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-inv4-001",
         name=name,
@@ -5281,7 +5306,7 @@ def given_generative_creative_exists_with_content(ctx: dict) -> None:
     ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
 
     creative_id = "creative-gen-inv5-001"
     existing_data = {
@@ -5303,12 +5328,12 @@ def given_generative_creative_exists_with_content(ctx: dict) -> None:
         creative_id=creative_id,
         name="Existing Generative Creative",
         agent_url=env.DEFAULT_AGENT_URL,
-        format="display_gen",
-        # The declaration THIS ENV serves, because ``display_gen`` is this env's own id
-        # and no shared catalog carries it. Without it the factory resolves against the
-        # reference capture, finds nothing, and the projection is refused -- so the
-        # precondition raised before the update path under test ever ran.
-        format_spec=env.served_format_spec("display_gen"),
+        format=_CATALOG_GENERATIVE_FORMAT_ID,
+        # The declaration the env serves, which since salesagent-6xtxb IS the shared
+        # reference capture's -- so this is the same Format the factory would resolve on
+        # its own. Passed anyway, because the seed and the sync agreeing is the
+        # precondition, and spelling it keeps the step readable if either side moves.
+        format_spec=env.served_format_spec(_CATALOG_GENERATIVE_FORMAT_ID),
         data=existing_data,
     )
     env._commit_factory_data()
@@ -5337,7 +5362,7 @@ def given_generative_creative_with_user_assets_and_prompt(ctx: dict) -> None:
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
+    fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
     user_image = image_spec("image", url="https://example.com/user-banner.png")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-inv6-001",

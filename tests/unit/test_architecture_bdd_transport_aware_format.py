@@ -1,35 +1,46 @@
-"""Guard: the format a BDD step seeds must switch with the transport, not be a literal.
+"""Guard: the format a BDD step seeds comes from ONE owner and is the SAME on every transport.
 
 THE DEFECT THIS REPRODUCES (salesagent-6mm5z). `uc006_sync_creatives.py` carries two
-transport-aware helpers, and their whole purpose is that a product's declared format and a
-creative's declared format agree on EVERY transport:
+helpers, and their whole purpose is that a product's declared format and a creative's
+declared format agree on EVERY transport:
 
-    _format_payload(ctx, env)        -> creative side: display_300x250 in-process,
-                                        display_300x250_image on e2e_rest
-    _product_format_entry(ctx, env)  -> product  side: the same two, same branch
-                                        ("MUST MATCH the creative format_id returned by
-                                         _format_payload so that format compatibility
-                                         checks pass on all transports including e2e_rest")
+    _format_payload(ctx, env)        -> the creative side
+    _product_format_entry(ctx, env)  -> the product side ("MUST MATCH the creative
+                                        format_id returned by _format_payload so that
+                                        format compatibility checks pass on all
+                                        transports including e2e_rest")
 
-The creative side switches. The product side is CALLED AT FOUR SITES while thirteen others
-hard-code ``display_300x250`` straight into ``ProductFactory(format_ids=...)``, and
-``_build_creative_scope_payload`` hard-codes it on the creative side too. In-process both
-halves say ``display_300x250``, so they agree BY COINCIDENCE. Under e2e_rest the creative
-becomes ``display_300x250_image`` while the product still claims ``display_300x250`` -- they
-disagree, and the seller answers CREATIVE_REJECTED (16 nodes) or cannot resolve the
-creative's format at all (6). Twenty-two failures, byte-identical across three consecutive
-runs, every one of them passing on all three in-process transports.
+The product side was CALLED AT FOUR SITES while thirteen others hard-coded
+``display_300x250`` straight into ``ProductFactory(format_ids=...)``, and
+``_build_creative_scope_payload`` hard-coded it on the creative side too. In-process both
+halves said ``display_300x250``, so they agreed BY COINCIDENCE; under e2e_rest the creative
+became ``display_300x250_image`` while the product still claimed ``display_300x250``, and
+the seller answered CREATIVE_REJECTED (16 nodes) or could not resolve the creative's format
+at all (6). Twenty-two failures, byte-identical across three consecutive runs, every one of
+them passing on all three in-process transports.
 
-WHY A GUARD IS THE RIGHT FAILING ARTIFACT HERE. There is no behavioural reproduction to
-write that is not already written: the 22 e2e_rest failures ARE the demonstration, and they
-fail today. What no behavioural test can express is the INVARIANT -- that a scenario
-expecting format compatibility must not name the format itself, because naming it is what
-makes the two halves independent. This is the "helper-bypass" class, where the bypass is
-the disease and the symptom is a transport away.
+THE SWITCH ITSELF IS NOW GONE (salesagent-6xtxb), AND THIS GUARD GRADES ITS ABSENCE.
+``_format_payload`` used to branch on ``is_e2e`` -- by its own docstring, "mock
+format/agent that the patched registry accepts" in process and "real format from Docker's
+creative agent catalog" on the wire. Neither reference resolved against the committed
+capture, measured: ``(creative.test.example.com, display_300x250)`` and
+``(creative-agent.adcp.test:8443/..., display_300x250_image)`` both answered
+``find_format`` -> None, while the capture's own
+``(creative.adcontextprotocol.org, display_300x250_image)`` resolves. Both transports'
+registries serve that capture, so one reference serves both -- and
+``test_the_helpers_this_guard_defers_to_do_not_switch_on_transport`` is what keeps a branch
+from coming back. It is the INVERSE of the assertion that stood here, deliberately: while a
+switch existed, delegating to a helper that had stopped switching was no better than a
+literal; now a helper that STARTS switching is the defect.
 
-WHAT IS DELIBERATELY NOT FLAGGED. Only the DEFAULT literal counts as a bypass, because that
-is precisely the value ``_product_format_entry`` returns in-process and swaps on e2e. Sites
-naming a DIFFERENT format are making a different claim and must keep their literal:
+WHY A GUARD IS THE RIGHT FAILING ARTIFACT HERE. What no behavioural test can express is the
+INVARIANT -- that a scenario expecting format compatibility must not name the format itself,
+because naming it is what makes the two halves independent. This is the "helper-bypass"
+class, where the bypass is the disease and the symptom is a transport away.
+
+WHAT IS DELIBERATELY NOT FLAGGED. Only the catalogue literal counts as a bypass, because
+that is precisely the value the owning helpers return. Sites naming a DIFFERENT format are
+making a different claim and must keep their literal:
 
     "video_30s_incompatible"   a scenario whose point is that the formats do NOT match
     "video_30s", "agent/video-30s", "agent/banner-300x250"
@@ -52,16 +63,19 @@ STEPS = REPO_ROOT / "tests" / "bdd" / "steps" / "domain"
 #: therefore keep the two halves in agreement. The second one imports the first's constants.
 STEP_FILES = (STEPS / "uc006_sync_creatives.py", STEPS / "uc006_storyboard_creative_sync.py")
 
-#: The transport-switched pair. Hard-coding EITHER pins one half of a pairing that the other
-#: half switches; the e2e value is no safer as a literal than the in-process one.
+#: BOTH halves of the retired switch. ``display_300x250_image`` is the catalogue id the
+#: helpers now return on every transport; ``display_300x250`` is the id the capture does NOT
+#: carry and nothing may name again. Keeping both in one set is deliberate: a literal of
+#: either is a bypass, and the retired one is the more dangerous because it still looks
+#: plausible.
 SWITCHED_FORMAT_IDS = frozenset({"display_300x250", "display_300x250_image"})
 
-#: The only functions allowed to name them: the two that OWN the switch.
+#: The only functions allowed to name them: the two that OWN the format choice.
 SANCTIONED = frozenset({"_format_payload", "_product_format_entry"})
 
-#: Module-level constants that DEFINE the switched values. A definition is not a bypass --
-#: the value has to be written down once, and this is where.
-CONSTANT_NAMES = frozenset({"_E2E_FORMAT_ID", "_E2E_AGENT_URL", "_DEFAULT_FORMAT_ID"})
+#: Module-level constants that DEFINE the value. A definition is not a bypass -- the value
+#: has to be written down once, and this is where.
+CONSTANT_NAMES = frozenset({"_CATALOG_FORMAT_ID", "_CATALOG_GENERATIVE_FORMAT_ID", "_DEFAULT_FORMAT_ID"})
 
 #: Methods whose scenarios CANNOT reach e2e_rest, so a literal in their arguments has no
 #: switching counterpart to disagree with. Keyed on the CALLED METHOD, not on the calling
@@ -178,12 +192,20 @@ def test_no_step_hardcodes_the_transport_switched_format() -> None:
     )
 
 
-def test_the_helpers_this_guard_defers_to_still_switch() -> None:
-    """The guard is only worth anything while the helpers it names actually branch.
+def test_the_helpers_this_guard_defers_to_do_not_switch_on_transport() -> None:
+    """One scenario, one format reference, on all four transports.
 
-    Without this, deleting the ``is_e2e`` branch from either helper would leave every call
-    site 'compliant' and every scenario broken -- the guard would keep passing over the exact
-    defect it exists to prevent, because it only checks that callers DELEGATE.
+    THE INVERSE of the assertion that stood here, and the inversion is the fix rather than a
+    relaxation. While ``_format_payload`` returned a different format in process than on the
+    wire, a helper that had STOPPED switching was the defect (every call site would read
+    'compliant' while every e2e scenario was broken), so this asserted that it branched.
+    The switch is gone (salesagent-6xtxb): both transports' registries serve the same
+    committed capture, so the capture's own reference is the one both resolve, and a branch
+    reintroduced here would put the two sellers back out of agreement.
+
+    ``is_e2e`` elsewhere in the module is untouched and legitimate -- an unreachable AGENT
+    has to be a real host on the wire and cannot be in process. What is forbidden is
+    switching the FORMAT, which is why this is keyed to the two owning helpers.
     """
     owner = STEP_FILES[0]
     tree = ast.parse(owner.read_text(), filename=str(owner))
@@ -196,10 +218,11 @@ def test_the_helpers_this_guard_defers_to_still_switch() -> None:
             isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id == "is_e2e"
             for sub in ast.walk(func)
         )
-        assert branches, (
-            f"{helper} no longer branches on is_e2e(), so it returns one format on every "
-            f"transport. Delegating to it is then no better than a literal, and the sibling "
-            f"guard above would pass over a fully broken suite."
+        assert not branches, (
+            f"{helper} branches on is_e2e(), so a scenario names a different format in process "
+            f"than on the wire and the four transports grade two different sellers. Both "
+            f"registries answer from tests/fixtures/creative_formats/reference_formats.json; "
+            f"name a format THAT carries, once, for every transport."
         )
 
 

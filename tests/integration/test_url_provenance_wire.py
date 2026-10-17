@@ -231,7 +231,7 @@ class TestAnOperatorRefusalNamesNoEndpoint:
             env.setup_default_data()
 
             registry = env.mock["registry"].return_value
-            env.set_run_async_result([FormatFactory(format_id={"id": _FORMAT_ID, "agent_url": AGENT_URL})])
+            env.set_served_catalogue([FormatFactory(format_id={"id": _FORMAT_ID, "agent_url": AGENT_URL})])
             registry.preview_creative.side_effect = OutboundRequestBlocked()
 
             from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId

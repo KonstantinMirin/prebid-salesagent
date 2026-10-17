@@ -23,9 +23,19 @@ from tests.factories.creative_asset import (
     text_spec,
 )
 from tests.harness import CreativeSyncEnv
-from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
+from tests.helpers.creative_test_helpers import (
+    DEFAULT_FORMAT_REFERENCE,
+    assert_stored_creative_assets,
+    creative_payload,
+)
 
-DEFAULT_AGENT_URL = "https://creative.test.example.com"
+#: The committed capture's own reference -- the only ``(agent_url, id)`` pair that
+#: resolves through production's two routes (``find_format``'s pair match and
+#: ``_is_operator_agent``'s no-dial branch). It replaces a local
+#: ``"https://creative.test.example.com"`` / ``"display_300x250"`` pair, which named a
+#: format no agent serves at an agent no capture carries and only ever worked because
+#: the registry was a stand-in (salesagent-6xtxb).
+DEFAULT_AGENT_URL = DEFAULT_FORMAT_REFERENCE["agent_url"]
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -49,7 +59,7 @@ def _creative(**overrides) -> dict:
         **{
             "creative_id": "c_proc_1",
             "name": "Processing Test",
-            "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
+            "format_id": dict(DEFAULT_FORMAT_REFERENCE),
             **overrides,
         }
     )
@@ -462,10 +472,10 @@ class TestStaticPreviewUpdate:
         from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         mock_format = MagicMock()
-        mock_format.format_id = LibraryFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250")
+        mock_format.format_id = LibraryFormatId(agent_url=DEFAULT_AGENT_URL, id=DEFAULT_FORMAT_REFERENCE["id"])
         mock_format.agent_url = DEFAULT_AGENT_URL
         mock_format.output_format_ids = None  # Static (not generative)
-        env.set_run_async_result([mock_format])
+        env.set_served_catalogue([mock_format])
 
     def test_update_no_format_no_url_fails(self, integration_db):
         """Update creative: no matching format in registry AND no media_url → action=failed.
@@ -573,10 +583,10 @@ class TestStaticPreviewDimensionExtraction:
         from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         mock_format = MagicMock()
-        mock_format.format_id = LibraryFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250")
+        mock_format.format_id = LibraryFormatId(agent_url=DEFAULT_AGENT_URL, id=DEFAULT_FORMAT_REFERENCE["id"])
         mock_format.agent_url = DEFAULT_AGENT_URL
         mock_format.output_format_ids = None
-        env.set_run_async_result([mock_format])
+        env.set_served_catalogue([mock_format])
 
     def test_update_preview_dimensions_extracted(self, integration_db):
         """Update: preview agent returns dimensions → stored in DB."""
@@ -680,7 +690,7 @@ class TestFormatChangeOnUpdate:
                 creatives=[
                     _creative(
                         creative_id="c_fmt_change",
-                        format_id={"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
+                        format_id=dict(DEFAULT_FORMAT_REFERENCE),
                     )
                 ]
             )

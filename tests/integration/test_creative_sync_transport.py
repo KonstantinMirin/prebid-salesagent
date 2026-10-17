@@ -16,7 +16,7 @@ Covers: UC-006-ASYNC-LIFECYCLE-{01,02,03} (gap tests — not yet implemented)
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import select
@@ -25,7 +25,11 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope
-from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
+from tests.helpers.creative_test_helpers import (
+    DEFAULT_FORMAT_REFERENCE,
+    assert_stored_creative_assets,
+    creative_payload,
+)
 
 
 def _error_codes(errors: list | None) -> list[str]:
@@ -156,17 +160,20 @@ class TestSyncCreativeCreateTransport:
             assert db_creative is None, "Dry-run creative should NOT be in the database"
 
 
-DEFAULT_AGENT_URL = "https://example.com/agent"
-DEFAULT_FORMAT_ID = {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL}
-
-
 def _creative(creative_id: str = "c1", name: str = "Test", **overrides) -> dict:
-    """Build a minimal creative dict for transport tests."""
+    """Build a minimal creative dict for transport tests.
+
+    The format reference is ``creative_payload``'s own default, which is the committed
+    capture's identity. The ``DEFAULT_AGENT_URL = "https://example.com/agent"`` /
+    ``DEFAULT_FORMAT_ID = {"id": "display_300x250", ...}`` pair that stood here named a
+    format no agent serves at an agent no capture carries, so ``find_format`` resolved it
+    to nothing and ``get_format`` would have dialled ``https://example.com/agent/mcp``
+    once the registry stopped being mocked (salesagent-6xtxb).
+    """
     return creative_payload(
         **{
             "creative_id": creative_id,
             "name": name,
-            "format_id": DEFAULT_FORMAT_ID,
             **overrides,
         }
     )
@@ -1020,7 +1027,7 @@ class TestAssignmentResultFields:
             product = ProductFactory(
                 tenant=tenant,
                 product_id="prod_assign",
-                format_ids=[DEFAULT_FORMAT_ID],
+                format_ids=[DEFAULT_FORMAT_REFERENCE],
             )
             mb = MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id="mb_assign")
             MediaPackageFactory(
@@ -1151,25 +1158,34 @@ class TestStaticPreviewFailed:
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_no_preview_no_url_fails(self, integration_db, transport):
-        """Static format with empty preview_creative result and no url → failed."""
-        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
+        """Static format with empty preview_creative result and no url → failed.
 
+        RE-GROUNDED ON ITS OWN SUBJECT (salesagent-6xtxb). It used to hand-roll a
+        ``MagicMock()`` format whose ``canonical`` answered a fresh child mock, so
+        ``canonical_kind_for``'s first step read
+        ``"<MagicMock name='mock.canonical.kind' id=...>"`` and the pinned vocabulary
+        refused it. The creative came back ``action='failed'`` BEFORE the preview branch
+        was ever reached, so the test was green on an unresolvable format rather than on
+        the no-preview rejection it names -- and it would have asserted the same thing
+        with ``preview_creative`` returning a full set of previews.
+
+        Now the format is the capture's own ``display_300x250_image``: a real static
+        ``Format`` with ``canonical.kind = "image"``, which RESOLVES, so production
+        reaches the static branch, calls ``preview_creative``, gets nothing back, finds no
+        media_url on an empty asset map, and rejects for the stated reason.
+        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
-            # Set up a static format (no output_format_ids) in the all_formats list
-            mock_format = MagicMock()
-            mock_format.format_id = LibraryFormatId(
-                agent_url=DEFAULT_AGENT_URL,
-                id="display_300x250",
-            )
-            mock_format.agent_url = DEFAULT_AGENT_URL
-            mock_format.output_format_ids = None  # Static, not generative
-            env.set_run_async_result([mock_format])
+            # The capture's own static format: resolvable, so the preview branch is
+            # reached. The catalogue is not narrowed -- it is the whole capture, which is
+            # what the e2e server serves.
+            env.served_format("display_300x250_image", generative=False)
 
-            # preview_creative returns empty dict (no previews)
-            registry = env.mock["registry"].return_value
-            registry.preview_creative = AsyncMock(return_value={})
+            # The one thing this test configures: the agent answers the preview request
+            # with no previews. (A recorder because preview_creative has no capture --
+            # salesagent-1bc7l.)
+            env.mock["registry"].return_value.preview_creative = AsyncMock(return_value={})
 
             # Creative with format_id but no assets — tests the "no previews" path.
             # Uses dict because the test exercises the dict→CreativeAsset coercion
@@ -1181,7 +1197,7 @@ class TestStaticPreviewFailed:
                     {
                         "creative_id": "c_no_preview",
                         "name": "No Preview Creative",
-                        "format_id": DEFAULT_FORMAT_ID,
+                        "format_id": dict(DEFAULT_FORMAT_REFERENCE),
                         # `assets` is spec-REQUIRED (core/creative-asset.json
                         # required=[creative_id,name,assets]). Omitting it made this scenario
                         # depend on a transport accident: a2a hit an impl-side

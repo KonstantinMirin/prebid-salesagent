@@ -20,7 +20,12 @@ from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv
 from tests.helpers.creative_test_helpers import creative_payload
 
-DEFAULT_AGENT_URL = "https://creative.test.example.com"
+#: The agent the committed capture was taken FROM, which is the only agent_url whose
+#: ``(agent_url, id)`` pair ``find_format`` matches against the capture and the only one
+#: ``_is_operator_agent`` admits -- so the one that resolves without dialling. The
+#: previous value ``https://creative.test.example.com`` did neither; it worked only while
+#: the registry was a stand-in (salesagent-6xtxb).
+DEFAULT_AGENT_URL = CreativeSyncEnv.DEFAULT_AGENT_URL
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -87,20 +92,21 @@ class TestGenerativeCreatives:
     def test_static_format_calls_preview_creative(self, integration_db):
         """Test that static formats (without output_format_ids) call preview_creative.
 
-        The served format is a REAL ``Format`` through the env, not a hand-rolled
-        ``MagicMock``: the sync path hands the resolved spec to ``canonical_kind_for``,
-        whose first step reads ``spec.canonical.kind``, and a mock answers a child mock
+        The served format is the CAPTURE's own, read through the env: the sync path hands
+        the resolved spec to ``canonical_kind_for``, whose first step reads
+        ``spec.canonical.kind``, and a hand-rolled ``MagicMock`` answered a child mock
         there -- which ``CreativeFormatIdentity`` refuses as an out-of-vocabulary kind, so
-        the creative came back ``action='failed'``. ``CreativeSyncEnv.served_format``
-        states the kind instead of pretending to have one.
+        the creative came back ``action='failed'``. ``CreativeSyncEnv.served_format`` now
+        FILTERS the committed capture, so the kind is the reference agent's own and no
+        test states it.
         """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
-            # A static format -- no output_format_ids, so production takes the
-            # preview_creative branch rather than the generative build.
-            mock_format = env.served_format("display_300x250", canonical_kind="image", output_format_ids=[])
-            env.set_run_async_result([mock_format])
+            # A static format -- no output_format_ids in the capture, so production takes
+            # the preview_creative branch rather than the generative build. Asserted
+            # through ``generative=False`` rather than assumed.
+            served = env.served_format("display_300x250_image", generative=False)
 
             registry = env.mock["registry"].return_value
             registry.preview_creative = AsyncMock(
@@ -117,14 +123,12 @@ class TestGenerativeCreatives:
                     ]
                 }
             )
-            registry.get_format = AsyncMock(return_value=mock_format)
-
             result = env.call_impl(
                 creatives=[
                     _creative(
                         creative_id="static-creative-001",
                         name="Test Static Creative",
-                        format_id={"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
+                        format_id={"agent_url": env.DEFAULT_AGENT_URL, "id": served.format_id.id},
                         assets=build_assets(image_spec("image", url="https://example.com/banner.png")),
                     )
                 ]

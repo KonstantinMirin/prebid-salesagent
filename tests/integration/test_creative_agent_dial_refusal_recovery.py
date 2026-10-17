@@ -93,7 +93,7 @@ class TestOperatorDialRefusalIsTerminalNotTransient:
             env.setup_default_data()
 
             registry = env.mock["registry"].return_value
-            env.set_run_async_result([_registered_format()])
+            env.set_served_catalogue([_registered_format()])
             registry.preview_creative = AsyncMock(side_effect=OutboundRequestBlocked())
 
             result = env.call_via(
@@ -161,7 +161,7 @@ class TestOperatorDialRefusalIsTerminalNotTransient:
             )
 
             registry = env.mock["registry"].return_value
-            env.set_run_async_result([_registered_format()])
+            env.set_served_catalogue([_registered_format()])
             registry.preview_creative = AsyncMock(side_effect=OutboundRequestBlocked())
 
             from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId

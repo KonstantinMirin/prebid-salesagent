@@ -1,7 +1,10 @@
 """CreativeSyncEnv — integration test environment for _sync_creatives_impl.
 
-Patches: creative agent registry, run_async_in_sync_context, notifications, audit; pins the Gemini key in the environment.
-Real: get_db_session, CreativeRepository, all validation/processing (all hit real DB).
+Patches: the creative agent registry INSTANCE (with production's own
+``ReferenceFormatsRegistry``, so the catalogue is the committed capture the e2e server
+reads), notifications, audit; pins the Gemini key in the environment.
+Real: get_db_session, CreativeRepository, the format catalogue and every format
+resolution, all validation/processing (all hit real DB).
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
 
@@ -26,7 +29,7 @@ Generative creative usage::
     with CreativeSyncEnv() as env:
         env.setup_default_data()
         fmt = env.setup_generative_build(
-            format_id="gen_banner",
+            format_id="display_300x250_generative",   # an id the CAPTURE carries
             build_result={"status": "draft", "context_id": "ctx-1", "creative_output": {}},
         )
         result = env.call_via(transport, creatives=[{
@@ -39,8 +42,13 @@ Generative creative usage::
         }])
 
 Available mocks via env.mock:
-    "registry"            -- get_creative_agent_registry (lazy import in _sync.py)
-    "run_async"           -- run_async_in_sync_context (module-level import in _sync.py)
+    "registry"            -- get_creative_agent_registry (lazy import in _sync.py). Its
+                             ``.return_value`` is a REAL ``HarnessCreativeAgentRegistry``
+                             (a ``ReferenceFormatsRegistry``), not a stand-in: the
+                             catalogue and every format resolution are production's,
+                             answered from the committed capture. Only
+                             ``preview_creative`` / ``build_creative`` are recorders,
+                             because neither has a capture (salesagent-1bc7l)
     "send_notifications"  -- _send_creative_notifications (from _workflow); runs the REAL
                              function by default, so its webhook/approval-mode guard is graded
     "slack_notifier"      -- get_slack_notifier (src.services.slack_notifier), the Slack sender
@@ -59,14 +67,19 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from adcp.types import AccountReferenceById
 
-from src.core.creative_agent_registry import _get_reference_formats
-from src.core.schemas import Format, FormatId, SyncCreativesRequest, SyncCreativesResponse
+from src.core.creative_agent_registry import (
+    PUBLIC_DEFAULT_AGENT_URL,
+    ReferenceFormatsRegistry,
+    _get_reference_formats,
+)
+from src.core.schemas import Format, SyncCreativesRequest, SyncCreativesResponse
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
@@ -229,6 +242,67 @@ def _has_ai_review_outcome(row: Any) -> bool:
     return data.get("ai_review") is not None or data.get("ai_review_error") is not None
 
 
+class HarnessCreativeAgentRegistry(ReferenceFormatsRegistry):
+    """PRODUCTION's testing-mode registry, used as itself rather than stood in for.
+
+    ``ReferenceFormatsRegistry`` is what ``get_creative_agent_registry()`` selects
+    whenever ``reference_formats_only`` is set, which is every test deployment and the
+    e2e server (docker-compose.e2e.yml sets ``ADCP_TESTING``). Its
+    ``_operator_formats_override`` answers an OPERATOR reference from the committed
+    capture (``tests/fixtures/creative_formats/reference_formats.json``, 71 formats) and
+    never dials. So the in-process catalogue and the e2e server's catalogue are THE SAME
+    BYTES, which is the property a ``MagicMock`` registry destroyed: in-process
+    transports were served a stand-in while e2e_rest was served the capture, and the same
+    scenario graded two different sellers.
+
+    What this subclass adds is exactly two recorders, and no catalogue of its own:
+
+    ``preview_creative`` / ``build_creative`` are OUTBOUND AdCP operations with NO
+    capture. ``_get_reference_formats`` covers ``list_creative_formats`` only;
+    ``scripts/refresh-reference-formats.py`` captures the catalogue and nothing else, so
+    production has no no-dial answer for these two and the un-overridden inherited methods
+    reach ``call_operator_mcp_tool`` -- measured, this worktree, ADCP_TESTING=true:
+    ``preview_creative`` and ``build_creative`` both dial
+    ``https://creative.adcontextprotocol.org``. That is **salesagent-1bc7l**, which owns
+    the gap and the remedy. Until a capture exists these two are recorded here, which is
+    also what the ~40 call sites asserting ``registry.build_creative.call_args`` read.
+
+    Everything else is production: ``list_all_formats``, ``list_all_formats_with_errors``,
+    ``get_format``, ``get_formats_for_agent`` and ``search_formats`` all consult the one
+    override hook, so a format resolves here exactly when the reference agent serves it
+    and is ``None`` exactly when it does not. An UNCONFIGURED attribute raises
+    ``AttributeError`` instead of answering a truthy child mock -- which is the second
+    defect a ``MagicMock`` caused: ``canonical_kind_for``'s first step read
+    ``spec.canonical.kind`` off a mock and got the string
+    ``"<MagicMock name='mock.canonical.kind' id=...>"`` through production code.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        #: ``None`` means "the committed capture, unfiltered" -- what the e2e server
+        #: serves, so it is the default. A scenario that needs a narrower catalogue
+        #: SAYS so through :meth:`CreativeSyncEnv.set_served_catalogue`.
+        self._catalogue: list[Format] | None = None
+        # The two with no capture. Defaults are the previous stand-in's defaults
+        # verbatim, so this change moves the CATALOGUE and nothing else: an empty
+        # preview answer is the no-previews case _processing.py already guards for.
+        self.preview_creative = AsyncMock(return_value={})
+        self.build_creative = AsyncMock(return_value={})
+
+    def _operator_formats_override(self) -> list[Format] | None:
+        if self._catalogue is None:
+            return _get_reference_formats()
+        return list(self._catalogue)
+
+    def serve_only(self, formats: list[Format]) -> None:
+        """Narrow what every read answers from to exactly *formats*."""
+        self._catalogue = list(formats)
+
+    def serve_capture(self) -> None:
+        """Undo a narrowing: serve the committed capture, which is the default."""
+        self._catalogue = None
+
+
 def creative_fingerprint(creative: Any) -> tuple[str, str]:
     """The per-row state comparison every creative-effect oracle uses.
 
@@ -254,8 +328,20 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
     """
 
     EXTERNAL_PATCHES = {
+        # The registry OBJECT is production's own ReferenceFormatsRegistry (see
+        # HarnessCreativeAgentRegistry); what this patch replaces is only the
+        # process-wide memoized instance, so each env gets a fresh format cache and
+        # fresh recorders rather than sharing one across scenarios.
+        #
+        # ``run_async`` USED TO BE PATCHED HERE and was the second half of the parity
+        # break. It patched the sync bridge _sync.py calls the registry THROUGH, with
+        # ``side_effect = lambda coro: []`` -- so ``list_all_formats`` was discarded and
+        # the in-process catalogue was EMPTY no matter which registry was installed
+        # (``_sync.py:151`` read ``len=0``), while the e2e server fetched 71. With it
+        # gone the real bridge runs, which is what _processing.py already used. Its
+        # blast radius was exactly one call: ``run_async_in_sync_context`` has a single
+        # call site in _sync.py.
         "registry": "src.core.creative_agent_registry.get_creative_agent_registry",
-        "run_async": "src.core.tools.creatives._sync.run_async_in_sync_context",
         "send_notifications": "src.core.tools.creatives._sync._send_creative_notifications",
         # The Slack sender _send_creative_notifications reaches (a call-time import from
         # src.services.slack_notifier). Patching it lets the real notification function
@@ -279,7 +365,24 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
     #: ``patch:<key>`` cleanup label cannot drift from it: a rename that reached only one
     #: of them would turn "stop the executor patch" into a silent no-op.
     _AI_REVIEW_PATCH_NAME = "ai_review_executor"
-    DEFAULT_AGENT_URL = "https://creative.test.example.com"
+    #: The agent the capture was taken FROM, which is the only url a format reference can
+    #: name and resolve on all four transports. Two reasons, both measured in this
+    #: worktree at ADCP_TESTING=true:
+    #:
+    #: 1. ``_is_operator_agent`` is True for it, so ``_validation.py``'s
+    #:    ``get_format(..., provenance=CounterpartyUrl(...))`` reaches the capture
+    #:    override instead of the egress seam. With the previous value
+    #:    (``https://creative.test.example.com``) the same call DIALLED
+    #:    ``https://creative.test.example.com/mcp`` -- which is why the registry had to
+    #:    be mocked at all.
+    #: 2. ``find_format`` matches on the PAIR ``(canonical agent_url, id)``, and every
+    #:    captured format carries ``https://creative.adcontextprotocol.org``. A creative
+    #:    naming any other url resolves to None there, so ``identity_spec`` is None and
+    #:    step 1 of the projection order (the format's own ``canonical`` declaration) is
+    #:    never reached. ``tests/factories/creative.py`` already states this rule for
+    #:    seeded rows ("a fixture names THIS url and lets production decide the
+    #:    transport"); the harness was the half that had not followed.
+    DEFAULT_AGENT_URL = PUBLIC_DEFAULT_AGENT_URL
     REST_ENDPOINT = "/api/v1/creatives/sync"
 
     #: {creative_id: fingerprint-or-None} as seen by an INDEPENDENT connection at
@@ -306,20 +409,10 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         #: step that seeds a row in one can reach the declaration the sync path resolves
         #: against (``served_format_spec``). Reset per env, with the mocks.
         self._served_formats: dict[str, Format] = {}
-        # Registry: return a mock that supports list_all_formats() + get_format()
-        mock_registry = MagicMock()
-        mock_registry.list_all_formats.return_value = []
-        # get_format must return a coroutine (consumed by run_async_in_sync_context
-        # in _validation.py). Return a truthy value to pass format existence check.
-        mock_registry.get_format = AsyncMock(return_value={"id": "display_300x250", "name": "Display 300x250"})
-        # build_creative and preview_creative must be AsyncMock because
-        # _processing.py uses the REAL run_async_in_sync_context (not patched there).
-        mock_registry.build_creative = AsyncMock(return_value={})
-        mock_registry.preview_creative = AsyncMock(return_value={})
-        self.mock["registry"].return_value = mock_registry
-
-        # run_async: execute the coroutine synchronously (return empty list)
-        self.mock["run_async"].side_effect = lambda coro: []
+        # The registry is PRODUCTION's testing-mode registry, serving the committed
+        # capture through its own override hook -- the same bytes the e2e server reads.
+        # See HarnessCreativeAgentRegistry for what it adds (two recorders) and why.
+        self.mock["registry"].return_value = HarnessCreativeAgentRegistry()
 
         # Notifications: the REAL _send_creative_notifications runs behind this mock, so
         # the mock still records that the notification step was entered (INV-3 asserts
@@ -724,25 +817,26 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
             "read-back), which is its own build"
         )
     )
-    def configure_agent_served_creative(
-        self, *, generative: bool, format_id: str, canonical_kind: str = "image"
-    ) -> dict[str, str]:
+    def configure_agent_served_creative(self, *, generative: bool, format_id: str) -> dict[str, str]:
         """Configure a format the creative agent actually serves, generative or not.
 
         ONE seam for both cells of the dry_run out-of-transaction outline, so the
         e2e-unrealizability is declared once, at the env method, rather than
         re-derived in a step body.
+
+        ``generative`` is the scenario's DECLARATION and is checked against the capture
+        rather than imposed on it: ``served_format`` refuses when the two disagree. The
+        catalogue is not narrowed to this one format -- the capture carries all 71 and so
+        does the server, so narrowing it would be the divergence this method exists to
+        avoid.
         """
         if generative:
-            return self.setup_generative_build(format_id=format_id, canonical_kind=canonical_kind)
+            return self.setup_generative_build(format_id=format_id)
 
-        served = self.served_format(format_id, canonical_kind=canonical_kind, output_format_ids=[])
-        self.set_run_async_result([served])
-        registry = self.mock["registry"].return_value
-        registry.preview_creative = AsyncMock(
+        self.served_format(format_id, generative=False)
+        self.mock["registry"].return_value.preview_creative = AsyncMock(
             return_value={"previews": [{"url": "https://preview.example.com/p.html"}]}
         )
-        registry.get_format = AsyncMock(return_value=served)
         return {"agent_url": self.DEFAULT_AGENT_URL, "id": format_id}
 
     @realize_e2e(
@@ -762,49 +856,58 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         self.mock["registry"].return_value.preview_creative = AsyncMock(return_value={})
         return fmt
 
-    def served_format(
-        self,
-        format_id: str,
-        *,
-        canonical_kind: str = "image",
-        output_format_ids: list[str] | None = None,
-        agent_url: str | None = None,
-    ) -> Format:
-        """One format this env's creative agent serves, as a REAL ``Format``.
+    def served_format(self, format_id: str, *, generative: bool | None = None) -> Format:
+        """The CAPTURE's own declaration for *format_id*. A FILTER, never a fabrication.
 
-        A ``MagicMock`` STOOD HERE AND IT BROKE THE PROJECTION. The sync path resolves
-        ``identity_spec = find_format(all_formats, creative.format_id)`` and hands it to
-        ``canonical_kind_for``, whose FIRST normative step reads ``spec.canonical.kind``
-        -- and a MagicMock answers a fresh child mock for both. Measured: the kind came
-        back as the string ``"<MagicMock name='mock.canonical.kind' id=...>"`` and
-        ``CreativeFormatIdentity`` refused it ("Unknown canonical format kind"), so every
-        scenario configuring a served format recorded ``action='failed'``. A mock that
-        answers anything is indistinguishable from one that answers correctly right up to
-        the point something reads the value (CLAUDE.md: defensive code is a data-model
-        smell; the same applies to a stand-in with no shape).
+        THREE STAND-INS HAVE STOOD HERE AND EACH ONE FABRICATED SOMETHING THE SELLER
+        THEN READ. First a ``MagicMock``, whose ``spec.canonical.kind`` answered a fresh
+        child mock: ``canonical_kind_for``'s first normative step read it and got the
+        string ``"<MagicMock name='mock.canonical.kind' id=...>"``, which the pinned
+        vocabulary refused, so every scenario configuring a served format recorded
+        ``action='failed'``. Then a hand-built ``Format`` with the kind and the
+        output-format list as PARAMETERS, which fixed the shape and kept the invention:
+        a declaration no agent serves, at an agent url no capture carries, so
+        ``find_format`` matched nothing anyway.
 
-        So the declaration is REAL and the kind is a PARAMETER. ``core/format-id.json``
-        makes ``CanonicalProjectionReference.kind`` required when a format declares one,
-        which is exactly how a creative agent's own catalogue carries ids the v1 registry
-        never covered -- the 64-of-71 case in the pinned capture. Naming the kind here is
-        what makes step 1 of the projection order GRADED in process rather than merely
-        reachable.
+        Now it is a lookup. The capture IS the catalogue -- read through
+        ``_get_reference_formats``, the identical function
+        ``ReferenceFormatsRegistry._operator_formats_override`` serves and the e2e server
+        reads -- so a format is served here exactly when the reference agent serves it,
+        with the agent's own ``canonical.kind`` and the agent's own
+        ``output_format_ids``. There is nothing left for a harness to get wrong.
 
-        ``output_format_ids`` non-empty is what makes the format GENERATIVE
-        (``format_resolver.is_generative``); ``[]`` takes the preview branch. The ids are
-        taken as plain strings and built into REFERENCES here, because the pinned field is
-        ``list[FormatReferenceStructuredObject]`` -- the mock this replaced held bare
-        strings, a shape the pin refuses and nothing noticed.
+        ``generative`` is the scenario's declaration, CHECKED rather than imposed: the
+        capture decides (``format_resolver.is_generative``) and a disagreement is a
+        refusal, because a scenario that asked for a generative format and silently got a
+        static one grades the wrong branch. Pass ``None`` not to assert either way.
+
+        Raises ``KeyError`` for an id the capture does not carry, naming the near misses.
+        That refusal is PRODUCTION'S refusal brought forward: ``get_format`` answers
+        ``None`` for the same id and ``_validation.py`` raises
+        ``AdCPFormatNotFoundError``, which is exactly what e2e_rest already did while
+        in-process transports were handed a stand-in. An invented id is a scenario to
+        fix (salesagent-jrr9y owns that population), not a format to manufacture.
         """
-        from adcp.types.domains.core.canonical_projection_ref import CanonicalProjectionReference
+        capture = _get_reference_formats()
+        served = next((fmt for fmt in capture if fmt.format_id.id == format_id), None)
+        if served is None:
+            near = sorted(fmt.format_id.id for fmt in capture if format_id.split("_")[0] in fmt.format_id.id)
+            raise KeyError(
+                f"{format_id!r} is not in the pinned reference capture "
+                f"(tests/fixtures/creative_formats/reference_formats.json, {len(capture)} formats), so no "
+                f"creative agent serves it and production refuses it with REFERENCE_NOT_FOUND on every "
+                f"transport. Name a captured id instead; near misses: {near or 'none'}"
+            )
+        if generative is not None:
+            from src.core.format_resolver import is_generative
 
-        agent = agent_url or self.DEFAULT_AGENT_URL
-        served = Format(
-            format_id=FormatId(agent_url=agent, id=format_id),
-            name=f"Harness format {format_id}",
-            canonical=CanonicalProjectionReference(kind=canonical_kind),
-            output_format_ids=[FormatId(agent_url=agent, id=output) for output in output_format_ids or []],
-        )
+            actual = is_generative(served)
+            if actual is not generative:
+                raise KeyError(
+                    f"the capture's {format_id!r} is {'generative' if actual else 'static'}, but the "
+                    f"scenario declared {'generative' if generative else 'static'}. The capture decides; "
+                    f"pick an id that matches (generative ids end in '_generative')"
+                )
         self._served_formats[format_id] = served
         return served
 
@@ -821,15 +924,14 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
     def served_format_spec(self, format_id: str) -> Format:
         """The declaration this env already configured for *format_id*.
 
-        For a step that SEEDS an existing row in a format this env serves:
-        ``CreativeFactory`` resolves its spec against the shared reference capture, which
-        carries none of this env's own ids, so the row has to be seeded with the
-        declaration the env itself answers with -- otherwise the precondition is refused
-        and the scenario fails before its subject runs.
+        For a step that SEEDS an existing row in a format this env serves, so the seed and
+        the sync resolve the same declaration. Since :meth:`served_format` now reads the
+        shared capture, this answers the SAME ``Format`` ``CreativeFactory`` would find on
+        its own -- which is the point: the two agreeing is no longer something the harness
+        has to arrange.
 
-        Raises rather than answering None for an unconfigured id: a silent None would
-        put the seed back on the capture lookup and reproduce exactly the refusal this
-        exists to avoid.
+        Raises rather than answering None for an id no step configured: a silent None
+        would hide a Given that never ran.
         """
         if format_id not in self._served_formats:
             raise KeyError(
@@ -838,40 +940,37 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
             )
         return self._served_formats[format_id]
 
+    #: The capture's generative format a scenario gets when it does not name one. A
+    #: CAPTURED id, not an invented one: the seven generative formats the reference agent
+    #: serves all end in ``_generative`` and carry a real ``output_format_ids``, which is
+    #: what ``format_resolver.is_generative`` reads.
+    DEFAULT_GENERATIVE_FORMAT_ID = "display_300x250_generative"
+
     def setup_generative_build(
         self,
-        format_id: str = "display_gen",
-        agent_url: str | None = None,
+        format_id: str = DEFAULT_GENERATIVE_FORMAT_ID,
         build_result: dict[str, Any] | None = None,
         gemini_api_key: str | None = "test-gemini-key",
-        canonical_kind: str = "image",
     ) -> dict[str, str]:
         """Configure harness for generative creative testing.
 
         Sets up:
-        - A served format with output_format_ids (makes it generative)
-        - build_creative AsyncMock with the given return value
-        - gemini_api_key on the config mock
-        - run_async to return the generative format list
+        - the CAPTURE's declaration for *format_id*, refused unless it is generative there
+        - the ``build_creative`` recorder's return value
+        - the Gemini key
 
         Returns a format_id dict for use in creative payloads::
 
-            fmt = env.setup_generative_build(format_id="gen_banner")
+            fmt = env.setup_generative_build()
             creative = {"creative_id": "c1", "name": "Test", "format_id": fmt, ...}
 
-        The Format itself is reachable through :meth:`served_format_spec`, which a step
-        that also SEEDS an existing row in this format has to pass to ``CreativeFactory``
-        -- the factory resolves against the shared capture, which carries none of this
-        env's own ids.
+        Neither the catalogue nor ``get_format`` is configured here any more. Both are
+        answered by production from the capture, which already carries this format --
+        narrowing the catalogue to one entry is what made the in-process seller differ
+        from the server. ``agent_url`` is likewise gone: a captured format has exactly
+        one, and naming another produced a reference ``find_format`` matched nowhere.
         """
-        agent = agent_url or self.DEFAULT_AGENT_URL
-
-        mock_format = self.served_format(
-            format_id, canonical_kind=canonical_kind, output_format_ids=[format_id], agent_url=agent
-        )
-
-        # Configure run_async to return this format for list_all_formats
-        self.set_run_async_result([mock_format])
+        self.served_format(format_id, generative=True)
 
         # Configure build_creative return value. The generated assets are spelled the
         # way the pinned asset union spells them (core/assets/text-asset.json: asset_type
@@ -884,15 +983,11 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
                 "output_format": {"url": "https://generated.example.com/creative.html"},
             },
         }
-        registry = self.mock["registry"].return_value
-        registry.build_creative = AsyncMock(return_value=build_result or default_build)
-
-        # Also configure get_format to return this format for validation
-        registry.get_format = AsyncMock(return_value=mock_format)
+        self.mock["registry"].return_value.build_creative = AsyncMock(return_value=build_result or default_build)
 
         self.set_gemini_api_key(gemini_api_key)
 
-        return {"agent_url": agent, "id": format_id}
+        return {"agent_url": self.DEFAULT_AGENT_URL, "id": format_id}
 
     @realize_e2e(
         e2e_unsupported(
@@ -928,31 +1023,36 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         # write lives exactly as long as the env and is undone with it.
         self._apply_gemini_api_key(value)
 
-    def set_run_async_result(self, formats: list[Any]) -> None:
-        """Configure run_async_in_sync_context to return *formats*.
+    def set_served_catalogue(self, formats: list[Format]) -> None:
+        """NARROW the catalogue every registry read answers from, to exactly *formats*.
 
-        Unlike CreativeFormatsEnv.set_registry_formats (which patches
-        registry.list_all_formats directly), this patches the sync bridge
-        that wraps the async call in _sync.py.
+        A RESTRICTION, and the default is no restriction: the registry serves the whole
+        committed capture, which is what the e2e server serves. Call this only for a
+        scenario whose subject IS the catalogue's contents -- an empty one, or a tenant
+        whose own registered agent carries a format the reference agent does not.
+
+        Replaces ``set_run_async_result``, which configured the sync BRIDGE
+        (``run_async_in_sync_context``) to answer with a fixed list and so bypassed the
+        registry entirely -- the measured reason ``_sync.py:151`` read ``len=0`` no
+        matter which registry was installed. This writes the catalogue onto the registry,
+        so ``list_all_formats`` AND ``get_format`` both see it and cannot disagree; the
+        bridge is production's.
         """
-        self.mock["run_async"].side_effect = lambda coro: formats
+        self.mock["registry"].return_value.serve_only(formats)
 
     def serve_reference_catalog(self) -> None:
-        """The sync path's catalog is the pinned capture -- what the e2e server serves.
+        """Serve the pinned capture, unrestricted -- what the e2e server serves.
 
-        FOR A SCENARIO WHOSE CREATIVE CLAIMS A CATALOG ID. ``all_formats`` in
-        ``_sync.py`` defaults to ``[]`` on this env, so ``find_format`` answers None,
-        ``canonical_kind_for`` never sees a spec, and the projection falls back to the
-        registry glob -- which covers only 22 of the 71 formats the reference agent
-        serves. A scenario that names one of the other 49 is then refused for the ENV's
-        reason instead of reaching its own subject. ``LibraryUpsertCreativeSyncEnv``'s
-        docstring records the same measurement for the same cause.
-
-        The capture is read through ``_get_reference_formats``, the identical function
-        ``ReferenceFormatsRegistry._operator_formats_override`` serves, so a format
-        resolves here exactly when the real agent would resolve it.
+        THE DEFAULT, kept as an explicit spelling because scenarios call it to SAY that
+        the catalogue matters to them. It used to be an opt-in: ``all_formats`` in
+        ``_sync.py`` was ``[]`` on this env, so ``find_format`` answered None,
+        ``canonical_kind_for`` never saw a spec, and the projection fell back to the
+        registry glob -- which covers 22 of the 71 formats the reference agent serves, so
+        a scenario naming one of the other 49 was refused for the ENV's reason instead of
+        reaching its own subject. The registry now answers from the capture through
+        ``_operator_formats_override``, so this only undoes a prior restriction.
         """
-        self.set_run_async_result(list(_get_reference_formats()))
+        self.mock["registry"].return_value.serve_capture()
 
     #: AdCP 3.1.1 makes idempotency_key REQUIRED on sync-creatives-request. Supplied here so
     #: every scenario gets a spec-conformant request without each of ~200 call sites naming a
@@ -1204,9 +1304,11 @@ class RealRegistryCreativeSyncEnv(CreativeSyncEnv):
 
     Resolution is hermetic: under ``ADCP_TESTING`` the registry this env leaves unpatched is
     ``ReferenceFormatsRegistry``, whose ``_operator_formats_override`` answers an OPERATOR
-    reference from the checked-in capture before any fetch is attempted. So what this env
-    buys is the REAL CATALOG in place of the parent's one-format stub, which is how it
-    reproduces in process a sync refusal that otherwise only e2e_rest can see.
+    reference from the checked-in capture before any fetch is attempted. The parent now
+    serves that SAME capture (it installs ``ReferenceFormatsRegistry`` itself rather than a
+    stand-in), so what this env buys is no longer the catalogue -- it is the real
+    ``get_creative_agent_registry`` and therefore the real egress seam for a
+    COUNTERPARTY-supplied agent_url, which is what its scenarios grade.
 
     The process is not: that class overrides ONE method and inherits NINE public ones, so
     hermeticity is a property of what each one happens to call rather than of the class.
@@ -1218,8 +1320,8 @@ class RealRegistryCreativeSyncEnv(CreativeSyncEnv):
 
     TRAP inherited from the same pattern in ``RealResolverProductEnv``:
     ``self.mock["registry"]`` does not exist after ``__enter__``, so any helper
-    that programs the registry mock (``setup_generative_build``,
-    ``set_run_async_result``) will ``KeyError`` on this env.
+    that programs the registry (``setup_generative_build``, ``set_served_catalogue``)
+    will ``KeyError`` on this env.
     """
 
     EXTERNAL_PATCHES = {name: target for name, target in CreativeSyncEnv.EXTERNAL_PATCHES.items() if name != "registry"}
@@ -1228,14 +1330,18 @@ class RealRegistryCreativeSyncEnv(CreativeSyncEnv):
         """Configure everything except the registry, which is real here.
 
         Same shape as ``RealResolverProductEnv`` (tests/harness/product.py): a throwaway
-        stand-in absorbs the parent's registry wiring and is deleted afterwards, so the
+        sink absorbs the parent's registry wiring and is deleted afterwards, so the
         REST of the parent's wiring still runs. Forking the body instead — which is what
         this method used to do — silently dropped whatever the parent gained later, and it
         HAS gained: the ai_review_executor stand-in and the
         ``ai_review_commit_observations`` / ``*_at_notification`` attributes the effect
         oracles read. A fork would leave those unset and every oracle would AttributeError.
+
+        A ``SimpleNamespace`` and not a ``MagicMock``: nothing reads this object, so all it
+        needs is a settable ``return_value``, and a sink that answers every attribute is how
+        a stand-in stops being visibly inert.
         """
-        self.mock["registry"] = MagicMock()
+        self.mock["registry"] = cast("Any", SimpleNamespace(return_value=None))
         try:
             super()._configure_mocks()
         finally:
@@ -1243,94 +1349,31 @@ class RealRegistryCreativeSyncEnv(CreativeSyncEnv):
 
 
 class LibraryUpsertCreativeSyncEnv(RealRegistryCreativeSyncEnv):
-    """A real registry whose ``list_all_formats`` is actually EXECUTED.
+    """Historical name for ``RealRegistryCreativeSyncEnv``; both its mechanisms moved up.
 
-    ``RealRegistryCreativeSyncEnv`` alone is not enough, and the reason is a second stub a
-    layer below it. ``CreativeSyncEnv`` patches the sync bridge that ``_sync.py`` calls the
-    registry THROUGH::
+    It existed for two patches that are now gone from the whole family:
 
-        self.mock["run_async"].side_effect = lambda coro: []
+    1. ``CreativeSyncEnv`` used to blank the sync bridge ``_sync.py`` calls the registry
+       THROUGH (``self.mock["run_async"].side_effect = lambda coro: []``), so
+       ``list_all_formats`` was discarded and ``_sync.py:151`` read ``len=0`` no matter
+       which registry was installed. That patch is gone from the base.
+    2. It patched ``CreativeAgentRegistry.get_format`` to answer from
+       ``_get_reference_formats()``, on the stated ground that ``get_format`` "consults
+       ``_operator_formats_override``: False DIALS" for ANY id. THAT GROUND WAS WRONG, and
+       re-measured here at ADCP_TESTING=true, instrumenting ``asend``:
 
-    so the coroutine is discarded and the answer is ``[]`` no matter which registry is
-    installed. Measured on the way here: with the registry unpatched, ``_sync.py:151`` still
-    read ``registry=ReferenceFormatsRegistry len=0``. Swapping the registry buys nothing
-    while the call through it is blanked, and the mock's own comment -- "execute the
-    coroutine synchronously (return empty list)" -- describes a thing it does not do.
+           get_format(capture_url, id,        provenance=None)          dials=[]
+           get_format(capture_url, id,        provenance=Counterparty)  dials=[]
+           get_format(capture_url, unknown,   provenance=Counterparty)  dials=[]  -> None
+           get_format(harness_url, id,        provenance=Counterparty)  DIALLED
 
-    SO THIS ENV DROPS THAT PATCH, and its blast radius is exactly one call:
-    ``run_async_in_sync_context`` has a SINGLE call site in ``_sync.py`` (the
-    ``list_all_formats`` fetch), so the patch existed only to blank the fetch and dropping
-    it affects only the fetch. ``_processing.py`` already uses the real bridge, so this makes
-    the two halves of the tool agree rather than making one exotic.
+       ``get_format`` delegates to ``get_formats_for_agent``, which takes the egress-seam
+       branch only when the provenance is a counterparty AND ``_is_operator_agent`` is
+       False -- otherwise it consults the override. The nine dials that were measured were
+       all on the previous ``DEFAULT_AGENT_URL`` (``https://creative.test.example.com``),
+       which is not an operator agent. With the harness naming the capture's own agent the
+       dial does not arise, so the patch has nothing left to prevent.
 
-    ``get_format`` IS PATCHED HERE, and only ``get_format``, because the reference registry
-    is hermetic ONLY for the methods that consult its hook. Resolved against the MRO rather
-    than read off the class::
-
-        list_all_formats_with_errors   consults _operator_formats_override:  True   hermetic
-        get_format                     consults _operator_formats_override:  False  DIALS
-        build_creative                 consults _operator_formats_override:  False  DIALS
-
-    So ``get_format`` dials for ANY id, present or absent, and the write gate does not save
-    it: measured with the gate in place, the subject scenario still made 9 attempts on
-    ``https://creative.adcontextprotocol.org`` (3 per transport). That is why the gate
-    removing the dial would have been luck -- ``_validation.py`` reaches ``get_format`` well
-    upstream of any write. A dialing suite is not acceptable to hand over: it is precisely
-    how the ``rkuzz`` "flake" was misdiagnosed, where the one varying row varied only in the
-    run that reached the live agent.
-
-    THE PATCH ANSWERS FROM THE SAME CAPTURE, NOT FROM A MOCK. ``_get_reference_formats()`` is
-    the identical checked-in fixture ``_operator_formats_override`` serves, so a format is
-    found here exactly when the reference agent serves it and is ``None`` exactly when it does
-    not -- which keeps the refusal under test production's refusal rather than the harness's.
-    Deliberately NOT a fix to ``ReferenceFormatsRegistry.get_format`` itself: that class
-    dialing while claiming to serve the capture is **salesagent-1bc7l**, it has the same hole
-    in ``build_creative`` for a tool this seller does not serve, and the fix belongs there
-    with its own grading rather than absorbed into this bead.
-
-    Otherwise hermetic for the reason the parent gives: ``ReferenceFormatsRegistry`` answers
-    ``list_all_formats`` from its ``_operator_formats_override``, which short-circuits
-    ``list_all_formats_with_errors`` BEFORE ``_get_tenant_agents`` and before any fetch
-    (``creative_agent_registry.py:809``). No agent is enumerated, so no dial is attempted on
-    this path. The parent's warning about its NINE inherited methods still applies to every
-    other path and is not weakened here.
-
-    WHY A SUBCLASS AND NOT A FIX TO THE PARENT: the parent is routed by scenarios that grade
-    the egress seam through ``_processing.py``, where the real bridge is already in use and
-    the blanked fetch is harmless. Changing the parent would re-point those at a catalog of
-    71 formats to no purpose. salesagent-jzhea.
+    Kept as a name because ``tests/bdd/conftest.py`` routes scenarios at its dotted path;
+    collapsing the two names is a scenario-routing change, not a harness one.
     """
-
-    EXTERNAL_PATCHES = {
-        **{
-            name: target for name, target in RealRegistryCreativeSyncEnv.EXTERNAL_PATCHES.items() if name != "run_async"
-        },
-        "get_format": "src.core.creative_agent_registry.CreativeAgentRegistry.get_format",
-    }
-
-    def _configure_mocks(self) -> None:
-        """Absorb the parent's ``run_async`` wiring in a stand-in, then discard it.
-
-        The same shape, and for the same stated reason, as the parent's registry stand-in
-        directly above: the grandparent's ``_configure_mocks`` programs
-        ``self.mock["run_async"]`` inline, and this env does not create that mock -- so
-        without a stand-in ``__enter__`` dies with ``KeyError: 'run_async'`` before any
-        scenario runs. Forking the body to skip the one line would silently drop everything
-        the grandparent gains later, which is the failure mode its docstring records.
-        """
-        self.mock["run_async"] = MagicMock()
-        try:
-            super()._configure_mocks()
-        finally:
-            del self.mock["run_async"]
-
-        async def _format_from_capture(agent_url: str, format_id: str, **_kwargs: object) -> Format | None:
-            """The reference agent's answer for one id, read from the capture it serves.
-
-            Matched on ``format_id.id`` -- a reference ``Format`` carries a structured
-            ``FormatReferenceStructuredObject``, so comparing the object's repr finds nothing
-            and would make every id look unserved.
-            """
-            return next((fmt for fmt in _get_reference_formats() if fmt.format_id.id == format_id), None)
-
-        self.mock["get_format"].side_effect = _format_from_capture
