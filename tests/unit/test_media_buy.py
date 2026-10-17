@@ -1058,7 +1058,13 @@ class TestCreateMediaBuyCreativeValidation:
         # Generative creative: has output_format_ids on its format spec
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_gen"
-        stamp_format_identity(mock_creative, format_id="generative_video", agent_url="http://agent.test")
+        # The id is incidental to what this grades -- the generative-ness comes from
+        # ``output_format_ids`` on the SPEC below, not from the id. It must be an id the
+        # registry glob can project, because the write gate refuses a creative whose
+        # reference has no canonical kind and this helper has no catalog to resolve one
+        # with. Every real generative format in the pinned capture (7 of 71) declares
+        # ``canonical.kind`` and so projects in production, where the spec IS passed.
+        stamp_format_identity(mock_creative, format_id="display_300x250", agent_url="http://agent.test")
         mock_creative.data = {}  # No media_url -- but generative should skip validation
 
         mock_format_spec = MagicMock()

@@ -30,6 +30,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import (
     parked_media_buy,
+    payload_or_none,
     stored_package_config,
     wire_absent,
     wire_entry,
@@ -960,22 +961,35 @@ def then_refused_and_nothing_stored(ctx: dict) -> None:
     request itself therefore completes. Measured before the assertion was corrected:
     production answered ``status=completed``, "Synced 0 creatives, 1 failed",
     ``action=failed``, with ``UNSUPPORTED_FEATURE`` and ``recovery=correctable`` on the entry
-    -- the right behaviour failing a demand for the wrong shape. Read off ``wire_response``
-    because that is what the buyer received; the entry is located by ``creative_id`` rather
-    than by position so the obligation does not quietly become "and it was first".
+    -- the right behaviour failing a demand for the wrong shape. The entry is located by
+    ``creative_id`` rather than by position, so the obligation does not quietly become "and
+    it was first".
+
+    READ OFF THE TYPED PAYLOAD, not the wire dict. Indexing ``wire["creatives"][...]
+    ["errors"]`` is a step re-deriving where the spec puts a field, which
+    ``test_architecture_bdd_wire_discipline`` refuses by name -- and it refused this step
+    when it was written that way. ``assert_wire_error`` is not the remedy here either: that
+    asserts the ENVELOPE, and this is a batch tool whose request COMPLETES while one entry
+    fails. ``payload_or_none`` is the sanctioned reader that keeps the value's provenance,
+    and the typed model exposes ``action`` and ``errors`` as attributes, so no position is
+    restated. Same primitive the UC-006 per-creative steps use.
     """
     from src.core.database.repositories.uow import CreativeUoW
 
-    wire = ctx["result"].wire_response
-    assert wire is not None, "no success-path wire body was captured, so the batch never answered"
-    entries = {entry["creative_id"]: entry for entry in wire["creatives"]}
+    resp = payload_or_none(ctx)
+    assert resp is not None, (
+        f"the dispatch produced no payload, so the batch never answered about "
+        f"{_SYNC_CREATIVE_ID!r} ({ctx.get('error')!r})"
+    )
+    entries = {entry.creative_id: entry for entry in resp.creatives}
     assert _SYNC_CREATIVE_ID in entries, f"the batch answered about {sorted(entries)}, not {_SYNC_CREATIVE_ID!r}"
     entry = entries[_SYNC_CREATIVE_ID]
-    assert entry["action"] == "failed", (
-        f"the unprojectable creative was reported {entry['action']!r}; the gate is supposed to "
+    action = entry.action.value if hasattr(entry.action, "value") else str(entry.action)
+    assert action == "failed", (
+        f"the unprojectable creative was reported {action!r}; the gate is supposed to "
         f"refuse it, and any other action means it was admitted"
     )
-    codes = [error["code"] for error in entry.get("errors") or []]
+    codes = [error.code for error in entry.errors or []]
     assert codes == ["UNSUPPORTED_FEATURE"], (
         f"expected exactly UNSUPPORTED_FEATURE on the entry, got {codes!r}. The pinned enum "
         f"classifies it correctable, which is what leaves the buyer a lever to resend under a "
