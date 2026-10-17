@@ -78,7 +78,9 @@ class PriorCreativeState:
         )
 
 
-def comparison_changes(creative: CreativeAsset, prior: PriorCreativeState, format_value) -> list[str]:
+def comparison_changes(
+    creative: CreativeAsset, prior: PriorCreativeState, identity: CreativeFormatIdentity
+) -> list[str]:
     """The part of ``changes`` derived purely by comparison -- no mutation, no agent.
 
     Deliberately decoupled from the field assignments it used to be interleaved
@@ -88,9 +90,16 @@ def comparison_changes(creative: CreativeAsset, prior: PriorCreativeState, forma
     as changed even though the live branch assigns nothing (the assignment keeps its
     ``is not None`` guard at the call site).
 
-    ``format_value`` is unused: the incoming identity is read off the creative, which is
-    where ``format_id`` and ``format_kind`` both live. It stays in the signature because the
-    two callers pass the same validated value they pass to the mutation.
+    ``identity`` is the caller's ALREADY-PROJECTED incoming identity, and it is a parameter
+    rather than a second ``creative_identity_of`` call here for two reasons. It used to be
+    ``format_value``, documented as unused, while this function recomputed the identity from
+    the creative alone -- so the projection happened twice and the copies could disagree the
+    moment one of them gained an input. That is no longer hypothetical: the projection needs
+    the registry's ``Format`` to reach past the glob, this function has no catalog to find
+    one with, and a spec-less recomputation compared against a spec-projected stored identity
+    would report ``format`` as changed on every update of the 56 formats that need it. Taking
+    the value means the reported ``changes`` and the ``set_identity`` decision in
+    ``_update_existing_creative`` derive from one projection by construction.
     """
     changes: list[str] = []
     if creative.name != prior.name:
@@ -100,7 +109,7 @@ def comparison_changes(creative: CreativeAsset, prior: PriorCreativeState, forma
     # canonical members and deliberately excludes the verbatim assertion: the same agent
     # respelled (host case, a default port, a trailing slash ``AnyUrl`` used to append) is the
     # same agent, and comparing raw spellings reported a format change on every respelling.
-    if creative_identity_of(creative) != prior.identity:
+    if identity != prior.identity:
         changes.append("format")
     return changes
 
@@ -110,7 +119,7 @@ def build_update_sync_result(
     *,
     creative: CreativeAsset,
     prior: PriorCreativeState,
-    format_value,
+    identity: CreativeFormatIdentity,
     data: Mapping[str, Any],
     agent_derived_changes: Sequence[str] = (),
     internal_status: str | None = None,
@@ -131,9 +140,7 @@ def build_update_sync_result(
     changed_upsert_fields = [key for key in _UPSERT_FIELDS if data.get(key) != prior.upsert_fields.get(key)]
     # dict.fromkeys: each field once, first occurrence's position kept.
     changes = list(
-        dict.fromkeys(
-            [*comparison_changes(creative, prior, format_value), *agent_derived_changes, *changed_upsert_fields]
-        )
+        dict.fromkeys([*comparison_changes(creative, prior, identity), *agent_derived_changes, *changed_upsert_fields])
     )
 
     action: Literal["updated", "unchanged"] = "updated" if changes else "unchanged"
@@ -285,7 +292,19 @@ def _update_existing_creative(
     # -- which canonicalizes agent_url, the comparison ``core/format-id.json`` makes a MUST,
     # and ignores the verbatim spelling it retains. Four columns move together or not at all,
     # through the one repository mapping that ``create`` also uses.
-    incoming_identity = creative_identity_of(creative)
+    # The SPEC is passed, and that is the whole of why format_kind used to be NULL. The
+    # resolver's own docstring: passing it "is what makes the agent's own explicit projection
+    # (step 1) reachable; without it only the registry glob (step 3) is consulted". Measured
+    # against the pinned capture of 71 formats -- 15 project from the glob route alone, 64
+    # with the spec -- so the three bare calls on this path stored NULL for 56 of the formats
+    # the agent actually serves.
+    #
+    # ``find_format`` is pure (no HTTP, no DB) and ``all_formats`` is pre-fetched outside the
+    # transaction at function start, so resolving it here costs nothing and adds no call
+    # inside the savepoint. Hoisted above the identity because the later use at the
+    # agent-backed branch comes after it.
+    identity_spec = find_format(all_formats, creative.format_id) if creative.format_id else None
+    incoming_identity = creative_identity_of(creative, spec=identity_spec)
     if incoming_identity != prior.identity:
         creative_repo.set_identity(existing_creative, incoming_identity)
 
@@ -657,7 +676,7 @@ def _update_existing_creative(
             existing_creative.creative_id,
             creative=creative,
             prior=prior,
-            format_value=format_value,
+            identity=incoming_identity,
             data=data,
             agent_derived_changes=changes,
             internal_status=existing_creative.status,
@@ -1015,7 +1034,13 @@ def _create_new_creative(
         # kind. ONE value for all four columns: the three legacy strings this used to pass
         # could only ever persist the deprecated arm, and a parameter the hand-written
         # extraction did not name was dropped on the way in.
-        identity=creative_identity_of(creative),
+        #
+        # ``spec=`` is what makes the projection reach past the registry glob -- see the
+        # same call in ``_update_existing_creative`` for the measurement. Without it this
+        # stored format_kind=NULL for 56 of the 71 formats the agent serves.
+        identity=creative_identity_of(
+            creative, spec=find_format(all_formats, creative.format_id) if creative.format_id else None
+        ),
         principal_id=principal_id,
         status=creative_status,
         data=data,

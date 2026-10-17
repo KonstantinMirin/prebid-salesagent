@@ -6877,6 +6877,46 @@ ENV_ROUTES: list[EnvRoute] = [
         seed=_seed_default_tenant_and_principal,
     ),
     EnvRoute(
+        tag="creative-library-upsert",
+        # The LIBRARY UPSERT path, and the ONE route in this feature that leaves both the
+        # creative-agent registry AND the sync bridge it is called through unpatched.
+        # ``RealRegistryCreativeSyncEnv`` says why the registry has to be real -- "a refusal
+        # produced by a mock proves nothing about production" -- and
+        # ``LibraryUpsertCreativeSyncEnv`` says why that is not sufficient on its own: the
+        # parent still blanks the fetch, measured at ``registry=ReferenceFormatsRegistry
+        # len=0``.
+        #
+        # MEASURED, and it is why these two scenarios cannot share the sibling row above:
+        # ``CreativeSyncEnv._configure_mocks`` sets
+        # ``mock_registry.list_all_formats.return_value = []``, so ``all_formats`` arrives
+        # EMPTY at the write site (probed: ``all_formats=0``, ``registry=MagicMock``). With
+        # no catalog, ``find_format`` answers None, the spec never reaches
+        # ``canonical_kind_for``, and the projection falls back to the registry glob -- which
+        # raises for ``display_300x250_image`` and leaves ``format_kind`` NULL. The control
+        # scenario would then fail for the ENV's reason rather than production's, which is
+        # the vacuous-pass shape inverted (salesagent-jzhea).
+        #
+        # Hermetic BY CONSTRUCTION, not by luck: under ADCP_TESTING the unpatched registry
+        # is ``ReferenceFormatsRegistry``, which serves the checked-in capture and never
+        # dials -- measured at 71 formats, with ``display_300x250_image`` projecting to
+        # ``image`` once the spec is supplied.
+        #
+        # ITS OWN TAG, and the tag deliberately does NOT contain "format_satisfaction":
+        # these rows are PREDICATE-routed by substring, so a tag sharing a prefix with a
+        # sibling would be claimed by whichever row is reached first. Derived against the
+        # live table rather than assumed -- ``creative_library_upsert`` is claimed by no
+        # other row, checked with the two existing tags as controls so a table that claimed
+        # nothing could not read as agreement.
+        #
+        # Pinned in ``test_architecture_measurement_floors.py`` in this same change: an
+        # own-identity tag makes ``detect_uc`` return None, so deleting this row would send
+        # both scenarios to "No harness wired for None" -- an auto-xfail at fixture setup
+        # that grades nothing while reading green.
+        when=lambda m: "creative_library_upsert" in m,
+        env_builder=_env("tests.harness.creative_sync.LibraryUpsertCreativeSyncEnv"),
+        seed=_seed_default_tenant_and_principal,
+    ),
+    EnvRoute(
         tag="security-wire-error-safety",
         # BR-SECURITY-001 grades that an UNTYPED exception cannot leak internals to
         # the wire. It dispatches get_products, so it takes the UC-GET-PRODUCTS branch.
