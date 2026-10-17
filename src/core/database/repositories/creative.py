@@ -15,6 +15,7 @@ from typing import Any, NamedTuple
 from sqlalchemy import SQLColumnExpression, case, func, or_, select
 from sqlalchemy.orm import Session, attributes
 
+from src.core.database.mapping.creative import CREATIVE_MAPPER
 from src.core.database.models import (
     Creative,
     CreativeAssignment,
@@ -46,26 +47,13 @@ class CreativeListResult(NamedTuple):
     total_count: int
 
 
-def _identity_columns(identity: CreativeFormatIdentity) -> dict[str, Any]:
-    """THE ONE mapping from a format identity to the four columns that store it.
-
-    The identity is one object, so there is no arm to pick and nothing for a create and an
-    update to disagree about: the kind IS the identity, and the retained assertion lands in
-    both of the columns its two obligations need — ``legacy_format_id`` verbatim, because the
-    echo owes the buyer its own ``format_id`` back, and ``legacy_format_key`` canonical and
-    indexed, because ``core/format-id.json`` makes canonicalizing before a comparison a MUST.
-
-    A repository is a persistence edge, which is where a model legitimately becomes a
-    document; nothing upstream serializes.
-    """
-    return {
-        "format_kind": identity.kind,
-        "format_option_ref": identity.option.document if identity.option else None,
-        "legacy_format_id": (
-            identity.assertion.model_dump(exclude_none=True) if identity.assertion is not None else None
-        ),
-        "legacy_format_key": identity.legacy_key,
-    }
+#: THE ONE mapping from a format identity to the four columns that store it, under the name
+#: this module's callers already know it by. The implementation moved onto the creative
+#: mapper, which is the layer that owns the translation between a creative asset and its row
+#: and which cannot be defined while a column of that row is unaccounted for --
+#: :meth:`CreativeMapper.identity_columns` carries the reasoning. Nothing about the mapping
+#: changed; this is the same function reached through its new owner.
+_identity_columns = CREATIVE_MAPPER.identity_columns
 
 
 def _assignment_count_of(creative: type[Creative]) -> SQLColumnExpression[int]:
