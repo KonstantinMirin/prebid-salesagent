@@ -99,6 +99,35 @@ class TestTheSelectorIsTheOtherPopulation:
         )
 
 
+class TestTheArmExclusivityIsTheDTOsJob:
+    """The second of the three mechanisms, graded because it was measured and not asserted.
+
+    A kindless creative identity is kept out by three things: this arm exclusivity, the
+    creation gate (below), and the ``NOT NULL`` column
+    (``tests/integration/test_creatives_format_kind_not_null_migration.py``). When
+    ``_validation`` stopped borrowing ``CreativeFormatIdentity``'s construction validator,
+    the arm check was the half that stayed behind on the DTO -- I measured that it still
+    held and then shipped without an assertion, which is how a mechanism nobody grades
+    survives until it does not.
+    """
+
+    def test_both_arms_at_once_is_refused(self) -> None:
+        """``core/creative-asset.json`` is a oneOf on the identifier, not an anyOf.
+
+        It matters to the kind specifically: a creative carrying both arms has two possible
+        kinds -- the declared one and whatever the reference projects to -- and nothing
+        downstream would know which is the identity.
+        """
+        with pytest.raises(ValidationError):
+            _creative(format_kind="image", format_id={"agent_url": AGENT, "id": "display_300x250"})
+
+    def test_neither_arm_is_refused(self) -> None:
+        """No arm means no kind is derivable, which the creation edge could not raise about
+        in a way the buyer could act on -- so the DTO refuses it by field instead."""
+        with pytest.raises(ValidationError):
+            _creative()
+
+
 class TestTheCreationEdgeDerivesOrRaises:
     def test_the_canonical_arm_needs_no_projection(self) -> None:
         """A creative that carries its kind is read, not derived -- and no spec is consulted."""
