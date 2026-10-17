@@ -38,6 +38,13 @@ from src.core.schemas import GetSignalsResponse, Signal, SignalDeployment
 #: test read the same list. Re-adding one to ``Signal`` reddens both.
 DELETED_INTERNAL_FIELDS = ("tenant_id", "created_at", "updated_at", "metadata")
 
+#: The same shape one level down. ``SignalDeployment`` carried ``scope`` and
+#: ``decisioning_platform_segment_id`` as ``Field(exclude=True)``; ``core/deployment.json``
+#: declares neither, and no site under ``src/`` or ``scripts/`` constructed this model at
+#: all -- the only constructions and the only reads were in this file and two sibling
+#: tests, so the fields existed to be asserted. Deleted with salesagent-gweku.
+DELETED_DEPLOYMENT_FIELDS = ("scope", "decisioning_platform_segment_id")
+
 
 def _make_signal(signal_agent_segment_id: str = "signal_123", **overrides) -> Signal:
     """Build a valid Signal with adcp 3.9 pricing_options."""
@@ -55,8 +62,6 @@ def _make_signal(signal_agent_segment_id: str = "signal_123", **overrides) -> Si
                 account=None,
                 is_live=True,
                 type="platform",
-                scope="platform-wide",
-                decisioning_platform_segment_id="seg_123",
                 estimated_activation_duration_minutes=None,
             )
         ],
@@ -89,30 +94,44 @@ def test_signal_refuses_a_deleted_internal_field(field):
     )
 
 
-def test_nested_deployment_internal_fields_stay_off_the_wire_and_on_the_model():
-    """The nested half of pattern #4's split, on the one class on this response that has one.
+@pytest.mark.parametrize("field", DELETED_DEPLOYMENT_FIELDS)
+def test_deployment_does_not_declare_the_deleted_internal_fields(field):
+    assert field not in SignalDeployment.model_fields
 
-    ``SignalDeployment`` adds ``scope`` and ``decisioning_platform_segment_id`` to the pinned
-    ``Deployment``, both ``Field(exclude=True)``. So they are carried on the model (the
-    attribute is what existing means) and absent from the wire — INCLUDING through the
-    parent's nested re-dump, which is the path that could have put them back.
+
+@pytest.mark.parametrize("field", DELETED_DEPLOYMENT_FIELDS)
+def test_deployment_refuses_a_deleted_internal_field(field):
+    """Refused, not dropped, for the reason the ``Signal`` pair above gives.
+
+    ``SignalDeployment`` carries ``extra=get_pydantic_extra_mode()`` too, so re-adding one
+    of these at a construction site fails loudly in dev and CI instead of the value
+    becoming an extra. That matters more here than on ``Signal``: the deleted pair was
+    ``exclude=True``, so while the fields existed the attribute was their ONLY observable
+    and a value that never arrived looked exactly like one doing its job.
+    """
+    with pytest.raises(ValidationError) as exc:
+        SignalDeployment(platform="gam", is_live=True, type="platform", **{field: "whatever"})
+
+    assert any(e["type"] == "extra_forbidden" and e["loc"] == (field,) for e in exc.value.errors()), (
+        f"expected {field} to be refused as an undeclared field, got {exc.value.errors()}"
+    )
+
+
+def test_nested_deployment_dumps_the_pinned_members_through_the_parent():
+    """The nested re-dump still runs, and the deleted pair does not come back through it.
 
     This is deliberately NOT a test that the mixin preserves a local child's extra wire
-    fields: with ``Signal``'s four internal fields deleted and these two excluded, this
-    response has no local-subclass field left ON the wire, so there is nothing here for such
-    a test to grade. ``SyncCreativesResponse`` — the original bug this file cites — is where
-    that half is graded.
+    fields: with ``Signal``'s four internal fields deleted and ``SignalDeployment``'s two
+    deleted as well, this response has no local-subclass field left to grade either way.
+    ``SyncCreativesResponse`` — the original bug this file cites — is where that half is
+    graded. What is asserted here is that the nested child reaches the wire AT ALL, so the
+    absences above are a deletion and not an empty dump.
     """
-    signal = _make_signal()
-    result = GetSignalsResponse(signals=[signal]).model_dump()
-
-    assert signal.deployments[0].scope == "platform-wide"
-    assert signal.deployments[0].decisioning_platform_segment_id == "seg_123"
+    result = GetSignalsResponse(signals=[_make_signal()]).model_dump()
 
     deployment = result["signals"][0]["deployments"][0]
-    assert "scope" not in deployment
-    assert "decisioning_platform_segment_id" not in deployment
-    # The pinned members DO travel, so the absence above is a strip and not an empty dump.
+    for field in DELETED_DEPLOYMENT_FIELDS:
+        assert field not in deployment
     assert deployment["platform"] == "gam"
     assert deployment["is_live"] is True
 

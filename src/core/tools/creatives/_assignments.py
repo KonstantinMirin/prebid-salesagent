@@ -413,7 +413,6 @@ def _process_assignments(
                 action="unchanged",
                 status=None,
                 platform_id=None,
-                review_feedback=None,
                 assigned_to=assigned,
                 assignment_errors=errors or None,
             )

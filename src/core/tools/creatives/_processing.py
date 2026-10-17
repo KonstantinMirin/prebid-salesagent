@@ -150,7 +150,6 @@ def build_update_sync_result(
         action=action,
         internal_status=internal_status,
         changes=changes,
-        review_feedback=None,
     )
 
 
@@ -176,7 +175,6 @@ def _failed_sync_result(creative_id: str, source: AdCPSalesAgentError) -> SyncCr
         # place that renders a details CLASS to its wire dict, so a typed detail shape
         # reached Error(details=...) as a model and failed validation.
         errors=[AdCPErrorDetail.from_exception(source)],
-        review_feedback=None,
         assigned_to=None,
         assignment_errors=None,
     )
@@ -1080,7 +1078,6 @@ def _create_new_creative(
             creative_id=db_creative.creative_id,
             action="created",
             internal_status=db_creative.status,
-            review_feedback=None,
         ),
         needs_approval,
     )

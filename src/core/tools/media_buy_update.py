@@ -10,7 +10,7 @@ Handles media buy updates including:
 
 import logging
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
@@ -170,12 +170,18 @@ class _PackageChanges:
     produced a seventh copy of the same assembly — which is why the assembly moved to
     one place (``_affected_package``, called once per package after the loop) instead.
 
-    ``applied`` holds what the branches WROTE, for the fields the record cannot be
-    re-read for: the adapter commits its package writes in its OWN session, so a value
-    this update caused is carried here rather than looked up again.
+    ``paused`` and ``budget`` hold what the branches WROTE, for the two fields the record
+    cannot be re-read for: the adapter commits its package writes in its OWN session, so a
+    value this update caused is carried here rather than looked up again.
+
+    A third field, ``changes_applied``, is gone with the ``AffectedPackage`` field it was
+    copied into. Eight branches wrote per-change entries into it and nothing read it back,
+    so the entries described the update to no one. The six branches whose ONLY statement
+    was such a write now call ``_package_changes`` for its registration alone -- the call
+    is what puts the package in ``affected_packages``, and that was always the load-bearing
+    half.
     """
 
-    changes_applied: dict[str, Any] = field(default_factory=dict)
     paused: bool | None = None
     budget: float | None = None
 
@@ -260,10 +266,6 @@ def _affected_package(
         # Written by the catalogs branch below and by nothing else, so the stored document
         # is this tool's own shape — not a blob some past client's create left behind.
         catalogs=config.get("catalogs"),
-        # Internal, exclude=True on both: off the wire, off persistence, off the
-        # idempotency hash.
-        buyer_package_ref=package_id,
-        changes_applied=changes.changes_applied,
     )
 
 
@@ -998,7 +1000,6 @@ def _update_media_buy_impl(
                         # carried, not re-read: it is the value this branch just caused.
                         record = _package_changes(changes_by_package, pkg_update.package_id)
                         record.paused = pkg_update.paused
-                        record.changes_applied["paused"] = pkg_update.paused
 
                     # Handle budget updates
                     if pkg_update.budget is not None:
@@ -1073,7 +1074,6 @@ def _update_media_buy_impl(
                         # active.
                         record = _package_changes(changes_by_package, pkg_update.package_id)
                         record.budget = budget_amount
-                        record.changes_applied["budget"] = {"updated": budget_amount, "currency": currency}
 
                     # Handle creative_ids updates (AdCP v2.2.0+)
                     if pkg_update.creative_ids is not None:
@@ -1148,12 +1148,9 @@ def _update_media_buy_impl(
                         # Flush to persist assignment changes within the session
                         session.flush()
 
-                        # Store results for affected_packages response
-                        _package_changes(changes_by_package, pkg_update.package_id).changes_applied["creative_ids"] = {
-                            "added": list(added_ids),
-                            "removed": list(removed_ids),
-                            "current": pkg_update.creative_ids,
-                        }
+                        # Registers the package as affected; the response snapshot reads the
+                        # persisted effect back rather than a per-change dict.
+                        _package_changes(changes_by_package, pkg_update.package_id)
 
                     # Handle creatives (inline upload)
                     if pkg_update.creatives:
@@ -1219,12 +1216,7 @@ def _update_media_buy_impl(
                             )
 
                         # Track in affected_packages
-                        synced_ids = [
-                            r.creative_id for r in sync_response.creatives if r.action in ["created", "updated"]
-                        ]
-                        _package_changes(changes_by_package, pkg_update.package_id).changes_applied[
-                            "creatives_uploaded"
-                        ] = synced_ids
+                        _package_changes(changes_by_package, pkg_update.package_id)
 
                     # Handle creative_assignments (weight/placement updates) - adcp#208
                     if pkg_update.creative_assignments:
@@ -1367,9 +1359,7 @@ def _update_media_buy_impl(
                         session.flush()
 
                         # Track in affected_packages
-                        _package_changes(changes_by_package, pkg_update.package_id).changes_applied[
-                            "creative_assignments_updated"
-                        ] = updated_assignments
+                        _package_changes(changes_by_package, pkg_update.package_id)
 
                     # Handle targeting_overlay updates
                     if pkg_update.targeting_overlay is not None:
@@ -1395,9 +1385,7 @@ def _update_media_buy_impl(
                         )
 
                         # Track targeting update in affected_packages
-                        _package_changes(changes_by_package, pkg_update.package_id).changes_applied["targeting"] = (
-                            pkg_update.targeting_overlay
-                        )
+                        _package_changes(changes_by_package, pkg_update.package_id)
 
                     # Handle pacing updates. 3.2 media-buy/package-update.json declares
                     # pacing as "Updated package pacing, subordinate to media-buy pacing",
@@ -1422,9 +1410,7 @@ def _update_media_buy_impl(
                             # there and the same one get_media_buys reads back.
                             pacing=pkg_update.pacing.value,
                         )
-                        _package_changes(changes_by_package, pkg_update.package_id).changes_applied["pacing"] = (
-                            pkg_update.pacing
-                        )
+                        _package_changes(changes_by_package, pkg_update.package_id)
 
                     # Handle catalogs replacement. 3.2 media-buy/package-update.json:
                     # "Replace the catalogs this package promotes. Uses replacement
@@ -1444,9 +1430,7 @@ def _update_media_buy_impl(
                             pkg_update.package_id,
                             {**(catalog_pkg.package_config or {}), "catalogs": pkg_update.catalogs},
                         )
-                        _package_changes(changes_by_package, pkg_update.package_id).changes_applied["catalogs"] = (
-                            pkg_update.catalogs
-                        )
+                        _package_changes(changes_by_package, pkg_update.package_id)
 
             # A campaign-level budget update is not expressible in AdCP: the request
             # schema declares no top-level budget, so the block that lived here -- validating
@@ -1530,10 +1514,6 @@ def _update_media_buy_impl(
                 for package_id, changes in changes_by_package.items()
             ]
             logger.info(f"[update_media_buy] Final affected_packages before return: {affected_packages_list}")
-
-            # affected_packages_list contains AffectedPackage objects with both:
-            # - AdCP-required fields (package_id) for spec compliance
-            # - Internal tracking fields (buyer_package_ref, changes_applied) excluded via exclude=True
 
             _final_mb = uow.media_buys.get_by_id_or_raise(req.media_buy_id or "")
             _final_revision = _final_mb.revision

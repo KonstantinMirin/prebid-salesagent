@@ -1648,17 +1648,36 @@ class AffectedPackage(LibraryPackage):
     Library Package required fields:
     - package_id: Publisher's package identifier
     - paused: Boolean indicating whether package is paused (replaces old status enum)
+
+    TWO INTERNAL FIELDS ARE GONE, ``changes_applied`` and ``buyer_package_ref``. Neither
+    is declared by ``core/package.json`` -- measured on the node: the pinned ``Package``
+    declares 37 properties and neither name is among them, and neither appears anywhere in
+    the pinned bundle at 3.0, 3.1, 3.1.15 or 3.2.
+
+    Both were write-only. ``changes_applied`` already HAS its carrier: ``_PackageChanges``
+    in ``src/core/tools/media_buy_update.py`` is a plain dataclass that accumulates the
+    per-package record, and every mutation and every read in ``src/`` is against THAT
+    object. Copying it onto the response model produced a second representation nothing
+    consulted. ``buyer_package_ref`` was passed ``None`` at all nine adapter construction
+    sites and the package id at the one tool site, and read at zero sites in ``src/``,
+    ``scripts/`` or ``tests/``.
+
+    Adding nothing is the correct shape for this class: it exists so the response's
+    ``affected_packages`` names a type this seller owns, which is ownership rather than
+    content (see ``GetAdcpCapabilitiesRequest``).
     """
 
-    # Internal fields for tracking what changed (not in AdCP spec)
-    changes_applied: dict[str, Any] | None = Field(
-        None,
-        description="Internal: Detailed changes applied to package (creative_ids added/removed, etc.)",
-        exclude=True,
-    )
-    buyer_package_ref: str | None = Field(
-        None, description="Internal: Buyer's package reference (legacy compatibility)", exclude=True
-    )
+    # A RESPONSE model keeps nothing it was not declared. The SDK parent sets
+    # extra="allow", so deleting the two fields above was NOT enough on its own: the
+    # moment a construction site still passed one, the value came back as an EXTRA and
+    # serialized to the buyer. That is not a hypothetical here -- it is what
+    # test_response_shapes.py::TestUpdateMediaBuyResponseShape::test_internal_fields_excluded
+    # caught the instant the declarations were removed, with both names present in the
+    # dumped package. Same trap, same fix, as ``workflow_step_id`` on
+    # ``CreateMediaBuySuccess``. "ignore" rather than "forbid" for the reason given there:
+    # a response has no forward-compatibility reason to retain a sender's unknown keys and
+    # no reason to refuse them either.
+    model_config = ConfigDict(extra="ignore")
 
 
 class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySuccess, UpdateMediaBuyResult):
@@ -1720,10 +1739,9 @@ class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySucces
         """
         return cls(**kwargs)
 
-    # Override affected_packages to use our extended AffectedPackage type
-    # This allows us to include internal tracking fields (changes_applied, buyer_package_ref)
-    # while still being AdCP-compliant (those fields are excluded via exclude=True)
-    # Pydantic allows subclass override at runtime but mypy doesn't recognize this
+    # Narrowed to the local AffectedPackage. It used to carry the two internal tracking
+    # fields that are now deleted, so what the narrowing buys today is that the response
+    # names a type this seller owns and can narrow later; it adds no field.
     affected_packages: list[AffectedPackage] | None = None
 
     # Non-fatal advisories — see class docstring for the spec basis.
@@ -3693,24 +3711,26 @@ class CheckAXERequirementsResponse(SalesAgentBaseModel):
 
 # --- Signal Discovery ---
 class SignalDeployment(LibraryPlatformDeployment):
-    """Extends library PlatformDeployment with internal signal deployment fields.
+    """Extends library PlatformDeployment. Adds nothing; the statement is ownership.
 
     Library provides: platform, account, is_live, type, activation_key,
     deployed_at, estimated_activation_duration_minutes.
 
-    Local additions (internal-only, excluded from responses):
-    - scope: Derived from deployment type for internal routing
-    - decisioning_platform_segment_id: Platform-specific segment ID after activation
+    TWO INTERNAL FIELDS ARE GONE, ``scope`` and ``decisioning_platform_segment_id``.
+    Neither had a pinned home -- ``core/deployment.json`` declares the seven fields
+    above and neither of those two, measured on the node rather than by grepping the
+    bundle (``scope`` is declared on 58 OTHER pinned nodes, which is exactly the
+    substring hit that makes a name-wide search useless here).
+
+    They had no reader and no writer either. No site under ``src/`` or ``scripts/``
+    constructed this model at all: the only constructions were three test bodies, and
+    the only reads were the assertions in those same tests, so the fields existed to be
+    asserted. ``Field(exclude=True)`` meant the attribute was the only way to observe
+    them, which is what let them persist with nothing behind them. Same deletion, same
+    reason, as ``Signal``'s own four internal fields one release earlier.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-    scope: Literal["platform-wide", "account-specific"] = Field(
-        default="platform-wide", description="Deployment scope (internal)", exclude=True
-    )
-    decisioning_platform_segment_id: str | None = Field(
-        default=None, description="Platform-specific segment ID (internal)", exclude=True
-    )
 
 
 class Signal(LibrarySignal):
@@ -4029,6 +4049,19 @@ class GetMediaBuysMediaBuy(AlwaysIncludeFieldsMixin, LibraryGetMediaBuysMediaBuy
 
     # Not a library field — this seller carries the buyer's campaign reference back
     # on the item so a buyer can correlate without a second lookup.
+    #
+    # MEASURED AND LEFT IN PLACE, deliberately, under salesagent-gweku. The name is
+    # declared by ZERO pinned nodes and appears in ZERO non-bundled pinned schema files at
+    # 3.0, 3.1, 3.1.15 or 3.2 -- not on this item, and not on the create request a buyer
+    # would have had to send it on. By the adoption rule that would make it deletable. It
+    # is NOT deleted here because it is also APPLIED (echoed out of
+    # ``media_buys.raw_request``) and GRADED: ``BR-UC-019-query-media-buys.feature``
+    # carries a correlation obligation (POST-S6, "each media buy should include
+    # buyer_campaign_ref for correlation") and a dedicated degradation scenario whose own
+    # comment says it exists because nothing else would catch this field's removal.
+    # Declared + applied + graded is either a gap in the pin, which goes UPSTREAM, or two
+    # wrong scenarios, which get fixed or deleted -- and deciding which needs the
+    # conformance storyboard read, not this bead. Filed as salesagent-9zugt.
     buyer_campaign_ref: str | None = Field(default=None, description="Buyer campaign reference")
     packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")
 
@@ -4153,19 +4186,33 @@ class TaskSummary(LibraryTaskSummary):
     (``Domain`` is media-buy/signals/creative; ``AdcpProtocol`` adds four more). So the two
     responses below are built from one derivation, not two.
 
-    The extra fields are this seller's own and the pin permits them
-    (``additionalProperties: true`` on both response schemas). They are DECLARED rather than
-    passed through as extras so the shape a buyer receives is written down somewhere.
+    SIX NON-SPEC FIELDS ARE GONE, and they are the SAME SIX :class:`GetTaskStatusResponse`
+    deleted one release earlier -- that fix landed on one surface and not its sibling, so
+    ``list_tasks`` went on emitting them (salesagent-mm3uq). Measured per node rather than
+    by grepping the bundle: ``protocol/list-tasks-response.json``'s ``tasks[]`` item
+    declares exactly eight properties -- task_id, task_type, domain, status, created_at,
+    updated_at, completed_at, has_webhook -- and none of ``context_id``, ``tool_name``,
+    ``owner``, ``associated_objects``, ``error_message`` or ``summary`` is among them.
+    ``additionalProperties: true`` PERMITS an extra; it does not make one discoverable, so
+    a buyer could not validate or even find the six.
+
+    The item is also a POORER home than the get_task_status envelope, which is why four of
+    the six cannot simply move: that response composes ``core/protocol-envelope.json`` and
+    so has ``context_id`` and ``message`` to route ``error_message`` into, while this
+    ITEM composes nothing and declares neither. There is no pinned field here to carry
+    them, and ``ext`` is not on the item either.
+
+    ``associated_objects`` was the only consumer of the per-step mapping query in
+    ``_list_tasks_impl``, exactly as it was in ``_get_task_status_impl``; both are gone.
+
+    ``extra="ignore"`` rather than inheriting the parent's ``extra="allow"``: deleting a
+    field from an allow parent PROMOTES it to an extra the moment any construction site
+    still passes it, and the value reaches the buyer on every dump path -- measured on
+    ``workflow_step_id`` in ``CreateMediaBuySuccess``. Refusing what this model did not
+    declare is what makes the deletion real.
     """
 
-    context_id: str | None = Field(default=None, description="Workflow context this task belongs to")
-    tool_name: str | None = Field(default=None, description="Non-spec: the seller-side tool the step invokes")
-    owner: str | None = Field(default=None, description="Non-spec: principal | publisher | system")
-    associated_objects: list[dict[str, Any]] = Field(
-        default_factory=list, description="Non-spec: objects this task acts on"
-    )
-    error_message: str | None = Field(default=None, description="Non-spec: failure detail when the task failed")
-    summary: dict[str, Any] | None = Field(default=None, description="Non-spec: request highlights")
+    model_config = ConfigDict(extra="ignore")
 
 
 class GetAdcpCapabilitiesRequest(BuyerRequest, LibraryGetAdcpCapabilitiesRequest):
@@ -4212,10 +4259,8 @@ class ListTasksResponse(NestedModelSerializerMixin, LibraryListTasksResponse, Sa
 
     #: NOT redeclared as ``list[TaskSummary]``. The parent already types this
     #: ``list[Task]`` and ``TaskSummary`` extends ``Task``, so narrowing it would be an
-    #: invariance error for no gain: what reaches the wire is decided by the OBJECTS the
-    #: tool builds and by the nested-model serializer, not by the annotation:
-    #: ``TaskSummary`` carries six non-spec fields the parent's ``Task`` does not
-    #: declare, and serializing by the DECLARED type would drop them silently.
+    #: invariance error for no gain. ``TaskSummary`` now declares nothing the parent does
+    #: not, so there is nothing for a declared-type serialization to drop either.
 
 
 class GetTaskStatusResponse(LibraryGetTaskStatusResponse, SalesAgentAdcpResponse):

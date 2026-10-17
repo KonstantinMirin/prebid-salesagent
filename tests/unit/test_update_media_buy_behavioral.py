@@ -1370,8 +1370,13 @@ class TestUC003UploadInlineCreatives:
             # The sync call does NOT delete existing assignments -
             # it only creates new ones (additive semantics)
             assert len(result.affected_packages) >= 1
-            changes = result.affected_packages[0].changes_applied
-            assert "creatives_uploaded" in changes
+            # The upload registered the package as affected, named by the PINNED field.
+            # This read ``affected_packages[0].changes_applied["creatives_uploaded"]``
+            # until salesagent-gweku deleted that non-spec field: it was written by eight
+            # branches and read by nothing in src/, so the entry it checked for described
+            # the upload to no one. ``package_id`` is the observable the pin gives for the
+            # same fact.
+            assert result.affected_packages[0].package_id == "pkg_1"
 
     def test_sync_failure_returns_error(self):
         """Creative sync failure returns creative_sync_failed error.

@@ -1084,8 +1084,6 @@ class TestAdCPContract:
             account="123456789",
             is_live=True,
             type="platform",
-            scope="account-specific",
-            decisioning_platform_segment_id="gam_segment_123",
             estimated_activation_duration_minutes=0,
         )
 
@@ -1168,16 +1166,14 @@ class TestAdCPContract:
         assert signal.signal_agent_segment_id == "signal_auto_intenders_q1_2025", "Primary ID should work"
         assert signal.signal_type == "marketplace", "signal_type field should work"
 
-        # The internal half of the split, on the one class that still HAS one.
-        # ``SignalDeployment.scope`` is Field(exclude=True): carried on the model, absent from
-        # the wire, and the attribute is what existing means — there is no second dump shape
-        # to read it out of (CLAUDE.md pattern 4, one serializer seat).
-        #
-        # ``Signal``'s own four internal fields are not asserted here any more because they
-        # no longer exist: the loop this replaces read them off the model, and the deletion
-        # makes ``getattr`` an AttributeError rather than a None. Their absence is asserted
-        # positively above (``field not in Signal.model_fields``).
-        assert signal.deployments[0].scope == "account-specific", "deployment scope not carried on the model"
+        # There is no internal half left on this family. ``Signal``'s own four internal
+        # fields went one release earlier, and ``SignalDeployment``'s two -- ``scope`` and
+        # ``decisioning_platform_segment_id`` -- are gone with salesagent-gweku: neither is
+        # declared by ``core/deployment.json``, and the only sites that ever constructed or
+        # read them were this assertion and two sibling tests. Their absence is asserted
+        # positively instead, the way the Signal four are.
+        assert "scope" not in SignalDeployment.model_fields, "deployment scope is back on the model"
+        assert "decisioning_platform_segment_id" not in SignalDeployment.model_fields
         assert "scope" not in adcp_response["deployments"][0], "deployment scope reached the wire"
 
         # Verify field count expectations (flexible to allow AdCP spec evolution)

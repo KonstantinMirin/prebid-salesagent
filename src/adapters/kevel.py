@@ -491,8 +491,6 @@ class Kevel(AdServerAdapter):
                         AffectedPackage(
                             package_id=package_id,
                             paused=not is_resume,
-                            changes_applied=None,
-                            buyer_package_ref=None,
                         )
                     ],
                 )

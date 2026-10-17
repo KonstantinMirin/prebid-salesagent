@@ -596,12 +596,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 else:
                     self.log(f"[yellow]No Broadstreet advertisement IDs found for {media_buy_id}[/yellow]")
 
-                affected = [
-                    AffectedPackage(
-                        package_id=pkg.package_id, paused=is_pause, changes_applied=None, buyer_package_ref=None
-                    )
-                    for pkg in db_packages
-                ]
+                affected = [AffectedPackage(package_id=pkg.package_id, paused=is_pause) for pkg in db_packages]
 
                 return AdapterUpdateResult(media_buy_id=media_buy_id, affected_packages=affected)
 
@@ -645,11 +640,7 @@ class BroadstreetAdapter(AdServerAdapter):
 
                 return AdapterUpdateResult(
                     media_buy_id=media_buy_id,
-                    affected_packages=[
-                        AffectedPackage(
-                            package_id=package_id, paused=is_pause, changes_applied=None, buyer_package_ref=None
-                        )
-                    ],
+                    affected_packages=[AffectedPackage(package_id=package_id, paused=is_pause)],
                 )
 
         # Budget update: persist to database (Broadstreet has no budget API)
@@ -673,11 +664,7 @@ class BroadstreetAdapter(AdServerAdapter):
 
             return AdapterUpdateResult(
                 media_buy_id=media_buy_id,
-                affected_packages=[
-                    AffectedPackage(
-                        package_id=package_id, paused=False, changes_applied={"budget": budget}, buyer_package_ref=None
-                    )
-                ],
+                affected_packages=[AffectedPackage(package_id=package_id, paused=False)],
             )
         # Impressions update: persist to database (Broadstreet has no impressions API)
         if action == "update_package_impressions":
@@ -702,14 +689,7 @@ class BroadstreetAdapter(AdServerAdapter):
 
             return AdapterUpdateResult(
                 media_buy_id=media_buy_id,
-                affected_packages=[
-                    AffectedPackage(
-                        package_id=package_id,
-                        paused=False,
-                        changes_applied={"impressions": budget},
-                        buyer_package_ref=None,
-                    )
-                ],
+                affected_packages=[AffectedPackage(package_id=package_id, paused=False)],
             )
 
         # Should not reach here - all actions are handled above

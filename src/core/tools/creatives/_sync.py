@@ -420,7 +420,6 @@ def sync_creatives(
                         SyncCreativeResult(
                             creative_id=db_creative.creative_id,
                             action=CreativeAction.deleted,
-                            review_feedback=None,
                         )
                     )
 

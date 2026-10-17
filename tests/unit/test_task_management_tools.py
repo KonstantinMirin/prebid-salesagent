@@ -97,7 +97,6 @@ class TestListTasksTool:
 
         mock_workflow_repo.count_by_tenant.return_value = 1
         mock_workflow_repo.list_by_tenant.return_value = [sample_workflow_step]
-        mock_workflow_repo.get_mappings_for_steps.return_value = {"step_123": []}
 
         identity = self._make_identity(sample_tenant)
 
@@ -111,6 +110,21 @@ class TestListTasksTool:
         assert result.query_summary.total_matching == 1
         assert result.query_summary.returned == 1
 
+        # The six non-spec item fields are gone (salesagent-gweku), so the ROW a buyer
+        # receives carries only what ``protocol/list-tasks-response.json``'s tasks[] item
+        # declares. Asserted on the DUMP rather than the model, because the pinned parent
+        # is extra="allow": a stale construction site passing one of the six would put the
+        # value back on the wire as an extra, and only the dump can see that.
+        item = result.tasks[0].model_dump(mode="json")
+        for deleted in ("context_id", "tool_name", "owner", "associated_objects", "error_message", "summary"):
+            assert deleted not in item, f"non-spec '{deleted}' reached the list_tasks wire"
+        # The pinned members DO travel, so the absences above are a deletion, not an empty dump.
+        assert item["task_id"] == "step_123"
+        assert item["domain"] == "media-buy"
+
+        # No mapping read: ``associated_objects`` was that query's only consumer.
+        mock_workflow_repo.get_mappings_for_steps.assert_not_called()
+
     async def test_list_tasks_filters_by_status(
         self, mock_uow, mock_workflow_repo, sample_tenant, sample_workflow_step
     ):
@@ -119,7 +133,6 @@ class TestListTasksTool:
 
         mock_workflow_repo.count_by_tenant.return_value = 1
         mock_workflow_repo.list_by_tenant.return_value = [sample_workflow_step]
-        mock_workflow_repo.get_mappings_for_steps.return_value = {"step_123": []}
 
         identity = self._make_identity(sample_tenant)
 

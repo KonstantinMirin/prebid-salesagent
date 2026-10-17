@@ -183,19 +183,6 @@ def _task_timestamps(step: Any) -> tuple[Any, Any, Any]:
     return created_at, completed_at or created_at, completed_at
 
 
-def _request_summary(request_data: Any) -> dict[str, Any] | None:
-    """The non-spec ``summary`` highlights, or None. Extracted so the item build reads as one
-    expression instead of three conditional mutations of a dict."""
-    if not isinstance(request_data, dict) or not request_data:
-        return None
-    nested = request_data.get("request") or {}
-    return {
-        "operation": request_data.get("operation"),
-        "media_buy_id": request_data.get("media_buy_id"),
-        "po_number": nested.get("po_number") if isinstance(nested, dict) else None,
-    }
-
-
 def _list_tasks_response(tasks: list[TaskSummary], *, total: int | None, limit: int, offset: int) -> ListTasksResponse:
     """Wrap a page in the pinned envelope.
 
@@ -284,13 +271,13 @@ async def _list_tasks_impl(
             principal_id=principal_id,
         )
 
-        step_ids = [task.step_id for task in tasks]
-        all_mappings = uow.workflows.get_mappings_for_steps(step_ids)
+        # No mapping read, for the reason ``_get_task_status_impl`` already records: the
+        # object mappings fed a non-spec ``associated_objects`` field this item no longer
+        # declares, so fetching them was a per-page query whose only consumer was a field a
+        # buyer could not validate.
 
         formatted_tasks = []
         for task in tasks:
-            mappings = all_mappings.get(task.step_id, [])
-
             task_type = _spec_task_type(task)
             created_at, updated_at, completed_at = _task_timestamps(task)
 
@@ -303,14 +290,6 @@ async def _list_tasks_impl(
                     created_at=created_at,
                     updated_at=updated_at,
                     completed_at=completed_at,
-                    context_id=task.context_id,
-                    tool_name=task.tool_name,
-                    owner=task.owner,
-                    associated_objects=[
-                        {"type": m.object_type, "id": m.object_id, "action": m.action} for m in mappings
-                    ],
-                    error_message=(task.error_message if task.status == "failed" else None),
-                    summary=_request_summary(task.request_data),
                 )
             )
 

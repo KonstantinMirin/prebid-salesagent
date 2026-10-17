@@ -470,9 +470,7 @@ class TestSignalSchemaContract:
             "signal_type": "marketplace",
             "data_provider": "Test Data Provider",
             "coverage_percentage": 95.0,
-            "deployments": [
-                SignalDeployment(platform="test_platform", is_live=True, type="platform", scope="platform-wide")
-            ],
+            "deployments": [SignalDeployment(platform="test_platform", is_live=True, type="platform")],
             "pricing_options": [
                 # Through a TypeAdapter, not ``VendorPricingOption.model_validate``: adcp 9
                 # types VendorPricingOption as an Annotated UNION of its eleven arms rather

@@ -151,16 +151,13 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
     assert response.affected_packages is not None
     assert len(response.affected_packages) == 1
 
-    # Check affected_packages structure
+    # The affected package names the package by its PINNED field. The assertions that
+    # stood here read ``buyer_package_ref`` and ``changes_applied``, two non-spec fields
+    # deleted under salesagent-gweku -- the first was write-only and the second duplicated
+    # the ``_PackageChanges`` record that already carries it. What this test is for is the
+    # DATABASE effect, asserted below, which is where the creative ids actually land.
     affected = response.affected_packages[0]
-    assert affected.buyer_package_ref == "pkg_default"  # Internal field
-    assert affected.changes_applied is not None  # Internal field
-    assert "creative_ids" in affected.changes_applied
-
-    creative_changes = affected.changes_applied["creative_ids"]
-    assert set(creative_changes["added"]) == {"creative_1", "creative_2"}
-    assert creative_changes["removed"] == []
-    assert set(creative_changes["current"]) == {"creative_1", "creative_2"}
+    assert affected.package_id == "pkg_default"
 
     # Verify assignments were created in database
     with get_db_session() as session:

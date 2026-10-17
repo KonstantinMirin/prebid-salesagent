@@ -1527,8 +1527,6 @@ class MockAdServer(AdServerAdapter):
                         paused=bool(media_package.package_config.get("paused", False)),
                         budget=float(media_package.budget) if media_package.budget is not None else None,
                         product_id=media_package.package_config.get("product_id"),
-                        changes_applied={config_key: config_value},
-                        buyer_package_ref=None,
                     )
                 ],
             )

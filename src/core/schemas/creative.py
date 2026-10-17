@@ -556,7 +556,14 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
 
     Internal-only (not in AdCP spec, excluded from responses):
     - internal_status: review-routing state (renamed off the inherited spec `status`)
-    - review_feedback: platform review feedback
+
+    ``review_feedback`` IS GONE. ``sync-creatives-response.json``'s result item does not
+    declare it -- measured on the node -- and it was write-only: all five construction
+    sites in ``src/core/tools/creatives/`` passed the literal ``None``, and no site in
+    ``src/``, ``scripts/`` or ``tests/`` ever read it. ``Field(exclude=True)`` meant the
+    attribute was its only observable, so a field that was never set and never read looked
+    identical to one doing its job. The pin's channel for per-result feedback is the
+    inherited ``errors``/``warnings`` arrays.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -581,11 +588,6 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     # Writers materialize the list before appending (_append_warning in _sync.py).
     internal_status: str | None = Field(
         None, exclude=True, description="Internal review-routing status (INTERNAL - excluded from AdCP responses)"
-    )
-
-    # Internal-only fields (not in AdCP spec)
-    review_feedback: str | None = Field(
-        None, exclude=True, description="Feedback from platform review process (INTERNAL - excluded from responses)"
     )
 
     @model_validator(mode="after")
