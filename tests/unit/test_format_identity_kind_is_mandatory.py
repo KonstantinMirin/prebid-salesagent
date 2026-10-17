@@ -103,8 +103,9 @@ class TestTheArmExclusivityIsTheDTOsJob:
     """The second of the three mechanisms, graded because it was measured and not asserted.
 
     A kindless creative identity is kept out by three things: this arm exclusivity, the
-    creation gate (below), and the ``NOT NULL`` column
-    (``tests/integration/test_creatives_format_kind_not_null_migration.py``). When
+    creation gate (below), and the ``NOT NULL`` column -- which nothing asserts, because a
+    migration is not a thing to test: apply it and observe it works, revert it and observe
+    the previous state. When
     ``_validation`` stopped borrowing ``CreativeFormatIdentity``'s construction validator,
     the arm check was the half that stayed behind on the DTO -- I measured that it still
     held and then shipped without an assertion, which is how a mechanism nobody grades
