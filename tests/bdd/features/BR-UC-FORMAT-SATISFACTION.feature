@@ -381,6 +381,54 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     When the Buyer Agent assigns it to that package
     Then the sync succeeds and records an assignment error for that package
 
+  # ── The LIBRARY UPSERT path: a creative whose format resolves to no canonical kind ────
+  #
+  # Everything else in this module reaches the satisfaction function through a gate that
+  # already exists. These two reach the path that has NONE: sync_creatives writing a
+  # creative into the library with no assignment at all.
+  #
+  # MEASURED: `satisfies` is called once in creatives/_assignments.py and ZERO times in
+  # creatives/_processing.py, the upsert path. format_satisfaction.py is the only place that
+  # refuses kind=None, and it is not on this path -- so a legacy format_id with no canonical
+  # projection was STORED with format_kind NULL rather than refused.
+  #
+  # The user's ruling is "gate at writing, not write if we can't resolve it", so these grade
+  # the refusal AND the absence of the row: a wire envelope cannot tell a seller that refused
+  # before writing from one that wrote and then errored, and the second leaves the NULL
+  # behind for every later reader.
+  #
+  # THE PAIR DIFFERS IN ONE THING -- whether the claimed id has a canonical projection.
+  # Both ids are SERVED by the pinned agent, so neither row can pass or fail on
+  # resolvability over the wire, which is what makes the projection the only variable.
+  # Measured against the capture (71 formats) with the spec supplied as the live path
+  # supplies it: 64 project, 7 do not, and the 7 are the card/product-card variants.
+  # `product_card_standard` is one of them; `display_300x250_image` projects to `image`.
+  # The control id has to be SERVED as well as projectable -- `display_300x250` is projectable
+  # but ABSENT from the capture, so the authoring door refuses it before the gate is reached.
+  #
+  # @source repo=adcp ref=v3.2.3 path=registries/v1-canonical-mapping.json
+
+  @T-UC-FORMAT-SATISFACTION-upsert-unprojectable @creative_library_upsert @requires_db
+  Scenario: a creative whose format resolves to no canonical kind is refused, not stored
+    Given a packaged product declaring only the deprecated format_ids
+    And the buyer syncs a creative identified by format_id "product_card_standard"
+    When the Buyer Agent syncs it into the library
+    Then the buyer is refused UNSUPPORTED_FEATURE and nothing is stored
+
+  @T-UC-FORMAT-SATISFACTION-upsert-projectable @creative_library_upsert @requires_db
+  Scenario: a creative whose format does resolve is stored with its canonical kind
+    Given a packaged product declaring only the deprecated format_ids
+    And the buyer syncs a creative identified by format_id "display_300x250_image"
+    When the Buyer Agent syncs it into the library
+    Then the creative is stored carrying canonical kind "image"
+
+    # THE CONTROL, and without it the row above is satisfied by a seller that refuses every
+    # library upsert. Same tool, same When, same product, an id the same agent serves -- and
+    # it differs only in having a registry projection. It also pins the POSITIVE half of the
+    # write gate: the kind actually reaches the column, which is the thing a NOT NULL
+    # constraint alone would not show (a seller could satisfy NOT NULL by writing a wrong
+    # kind, which is what the fire-probe for this change perturbs).
+
     # The OTHER half of the asymmetry, and the control for the row above: same tool, same
     # lenient mode, same "this product will not take this creative" condition -- and the
     # legacy lane skips with a recorded error instead of refusing. Both rows are needed:

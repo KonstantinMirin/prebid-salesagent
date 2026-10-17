@@ -143,6 +143,17 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # scenario including the two that grade the lenient-mode asymmetry, which nothing
         # else in the suite observes.
         "format-satisfaction-sync",
+        # The LIBRARY UPSERT path's route, and the only one in this feature that leaves the
+        # creative-agent registry unpatched (RealRegistryCreativeSyncEnv). Pinned for the
+        # identical reason as the two rows above -- its tag is its own, so detect_uc returns
+        # None and no coarse uc bucket claims it, which means deleting the ENV_ROUTES row
+        # auto-xfails both scenarios at fixture setup while the run reads green.
+        #
+        # It matters more here than for its siblings: these two are the ONLY grading of the
+        # write gate, so a silently dormant pair would restore exactly the state
+        # salesagent-jzhea describes -- a creative stored with format_kind NULL and nothing
+        # asking.
+        "creative-library-upsert",
         # local-reporting-cadence-refusal's three scenarios, which dispatch a real
         # create_media_buy and carry their own @reporting_cadence identity tag — so
         # detect_uc claims none of them and deleting the row would auto-xfail all three

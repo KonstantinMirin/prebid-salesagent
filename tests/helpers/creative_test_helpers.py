@@ -174,20 +174,25 @@ def make_format_spec(
       every static format silently became a generative one the moment the lookup
       started working. Empty by default; pass a list to build a generative spec.
 
-    And a THIRD of the same shape, found the same way -- by production starting to read
-    an attribute the mock was invisibly answering. ``canonical_kind_for`` reads
-    ``spec.canonical`` and then its ``.kind``, and BOTH reads succeed on a bare ``Mock``,
-    so this did not raise: it returned ``str(Mock)``. Measured,
-    ``"<Mock name='mock.canonical.kind' id='4737355696'>"`` -- a fabricated kind that
-    satisfies the ``str`` annotation, belongs to no vocabulary, and reaches every
-    downstream closed-set check as though the agent had declared it.
+    AND A THIRD, OF THE SAME FAMILY: ``canonical`` left auto-specced.
+    ``canonical_kind_for`` reads ``spec.canonical`` and then ``.kind``, and BOTH succeed on
+    a bare ``Mock`` -- so it did not raise, it returned ``str(Mock)``. Measured, the literal
+    ``"<Mock name='mock.canonical.kind' id='4737355696'>"``: a FABRICATED kind that
+    satisfies the ``str`` annotation, belongs to no vocabulary, and which the seller's
+    vocabulary check then refuses downstream as ``action: "failed"``.
 
-    ``canonical`` is therefore explicit, and a ``SimpleNamespace`` rather than a ``Mock``
-    so that reading any OTHER attribute of it raises instead of auto-speccing a fourth
-    instance of this. ``canonical_kind`` defaults to the kind the real reference catalog
-    carries for the default ``format_id``; pass ``None`` to model a format with no
-    canonical projection, which is what sends ``canonical_kind_for`` down the registry
-    glob route the way an unprojectable format does in production.
+    That stayed invisible while the creative-sync write path resolved its identity without
+    a spec (only the registry glob was consulted, and a glob miss was tolerated). It
+    surfaced the moment the write gate started passing the spec, which is the correct
+    direction: the mock was again propping up the thing it should have caught.
+
+    An explicit ``SimpleNamespace(kind=...)``, not a ``Mock``, because the point is that an
+    attribute this helper does not name must not answer -- which is what would otherwise
+    produce a fourth instance of this. ``canonical_kind`` defaults to the kind the real
+    reference catalog carries for the default ``format_id``. ``canonical_kind=None`` builds
+    the UNPROJECTABLE arm -- a format the agent serves and declares no canonical projection
+    for -- which is what the write gate refuses, and the only way a test can ask for that
+    arm deliberately rather than by leaving an attribute loose.
     """
     spec = Mock()
     spec.format_id = create_test_format_id(format_id, agent_url=agent_url)

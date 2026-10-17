@@ -26,12 +26,13 @@ from pydantic import TypeAdapter, ValidationError
 
 from src.core.database.database_session import get_db_session
 from src.core.errors.details import (
+    CapabilityRefusalDetails,
     EntityRefDetails,
     FormatDeclarationDivergenceDetails,
     FormatOptionDivergenceSummary,
     PlatformExtensionCollisionDetails,
 )
-from src.core.exceptions import AdCPFormatNotFoundError, AdCPSalesAgentError
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPFormatNotFoundError, AdCPSalesAgentError
 from src.core.schemas import (
     CreativeFormatIdentity,
     Format,
@@ -205,20 +206,34 @@ def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
     )
 
 
-def creative_identity_of(creative: LibraryCreativeAsset, *, spec: Format | None = None) -> CreativeFormatIdentity:
+def creative_identity_of(creative: LibraryCreativeAsset, *, spec: Format | None) -> CreativeFormatIdentity:
     """A creative's format identity, with a legacy reference PROJECTED to its canonical kind.
 
     THE ONE edge where the two identities meet. ``creative_format_identity`` reads whichever
     arm the creative carries; this wraps it with the only direction that resolves, so every
     layer past here keys on ``identity.kind`` instead of branching on which arm arrived.
 
-    A projection that does not resolve leaves ``kind`` as ``None`` and is NOT a refusal. The
-    sixth normative step is to fail closed, and failing closed here means "this reference has
-    no canonical kind", not "this creative is invalid": ``core/creative-asset.json`` keeps
-    ``format_id`` as a supported branch through 4.x, so refusing a legacy creative whose id
-    no registry pattern matches would refuse spec-legal traffic. The retained assertion is
-    then the only identity the creative has, which is exactly what the one-way rule leaves a
-    seller holding.
+    A projection that does not resolve is a REFUSAL, and this is the one place it is raised.
+    ``format_kind`` is the canonical identifier every layer past here keys on, so a creative
+    whose reference has no canonical kind has no identity to store -- and the column is
+    ``NOT NULL`` precisely so that it cannot be stored anyway. Gating here rather than at
+    each write site is the root-cause shape: this function is the ONE edge the two identities
+    meet at, its three callers are two write paths and a factory, and a guard per caller
+    would leave the next caller to rediscover the rule.
+
+    THIS PARAGRAPH USED TO SAY THE OPPOSITE -- that a ``None`` kind is "NOT a refusal",
+    because ``core/creative-asset.json`` keeps ``format_id`` a supported branch through 4.x
+    and refusing it "would refuse spec-legal traffic". That argument confuses the branch being
+    legal with every id on it being SERVABLE. The pin permitting a buyer to send a legacy
+    reference says nothing about this seller being able to resolve one it has no canonical
+    mapping for: ``registries/v1-canonical-mapping.json`` is authoritative for v1 -> v2 and an
+    id absent from it, whose fetched declaration also carries no ``canonical``, HAS no
+    canonical kind anywhere. A seller that cannot serve a named format refuses it, which is
+    exactly what the pinned enum classifies ``UNSUPPORTED_FEATURE`` as -- ``correctable``,
+    "remove unsupported fields" -- leaving the buyer the lever to resend under a ref the
+    seller does serve. Storing the row with ``kind=NULL`` instead was the defect
+    (salesagent-jzhea): it admitted a creative no later layer could key on, and the write
+    succeeded silently.
 
     Args:
         creative: the pinned sync input, or this repo's DTO subclass of it. Typed rather than
@@ -233,8 +248,17 @@ def creative_identity_of(creative: LibraryCreativeAsset, *, spec: Format | None 
     if format_id is not None:
         try:
             kind = canonical_kind_for(format_id, spec=spec)
-        except ValueError:
-            logger.debug("No canonical projection for %r; the retained assertion is its only identity", format_id)
+        except ValueError as exc:
+            # ``from exc``: the boundary attaches the traceback when an error has a __cause__,
+            # so the unresolvable id's own ValueError is on the record without any raise site
+            # authoring a sentence about it.
+            raise AdCPCapabilityNotSupportedError(
+                details=CapabilityRefusalDetails(
+                    format_id=str(getattr(format_id, "id", format_id)),
+                    creative_id=creative.creative_id,
+                    capability="format_kind projection",
+                )
+            ) from exc
     return creative_format_identity(creative, kind=kind)
 
 

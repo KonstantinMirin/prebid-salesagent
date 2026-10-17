@@ -1008,7 +1008,9 @@ class TestUC003UpdateCreativeIds:
             c.status = statuses[i] if statuses else "active"
             # The four stored identity columns, through the production mapping. A MagicMock
             # answers a Mock for anything unstubbed, which is not a state they can hold.
-            stamp_format_identity(c, format_id=formats[i] if formats else "display", agent_url="http://test.com")
+            stamp_format_identity(
+                c, format_id=formats[i] if formats else "display_300x250", agent_url="http://test.com"
+            )
             creatives.append(c)
 
         # Creative existence/status via repository (shared validation helper).
@@ -1126,13 +1128,18 @@ class TestUC003UpdateCreativeIds:
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "active"
-            stamp_format_identity(c1, format_id="video", agent_url="http://test.com")
+            # A projectable id that is still INCOMPATIBLE with the product's
+            # display_300x250 below -- the mismatch is what this grades. A bare "video"
+            # has no canonical projection, so the write gate would refuse it
+            # UNSUPPORTED_FEATURE before the compatibility check ran, and the test would
+            # pass its raises() on the wrong error.
+            stamp_format_identity(c1, format_id="video_640x480", agent_url="http://test.com")
             uow.creatives.get_by_ids.side_effect = None
             uow.creatives.get_by_ids.return_value = [c1]
 
-            # Product with only "display" format
+            # Product with only "display_300x250" format
             mock_product = MagicMock()
-            mock_product.format_ids = [{"agent_url": "http://test.com", "id": "display"}]
+            mock_product.format_ids = [{"agent_url": "http://test.com", "id": "display_300x250"}]
             mock_product.name = "Display Product"
             uow.products.get_by_id.return_value = mock_product
 
@@ -1170,7 +1177,7 @@ class TestUC003UpdateCreativeIds:
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "active"
-            stamp_format_identity(c1, format_id="display", agent_url="http://test.com")
+            stamp_format_identity(c1, format_id="display_300x250", agent_url="http://test.com")
             uow.creatives.get_by_ids.side_effect = None
             uow.creatives.get_by_ids.return_value = [c1]
 
@@ -1273,7 +1280,7 @@ class TestUC003UploadInlineCreatives:
                                 {
                                     "creative_id": "c1",
                                     "name": "Creative 1",
-                                    "format_id": {"agent_url": "http://test.com", "id": "display"},
+                                    "format_id": {"agent_url": "http://test.com", "id": "display_300x250"},
                                     "assets": build_assets(
                                         image_spec("main", url="https://example.com/a1.png", width=300, height=250)
                                     ),
@@ -1281,7 +1288,7 @@ class TestUC003UploadInlineCreatives:
                                 {
                                     "creative_id": "c2",
                                     "name": "Creative 2",
-                                    "format_id": {"agent_url": "http://test.com", "id": "display"},
+                                    "format_id": {"agent_url": "http://test.com", "id": "display_300x250"},
                                     "assets": build_assets(
                                         image_spec("main", url="https://example.com/a2.png", width=300, height=250)
                                     ),
@@ -1348,7 +1355,7 @@ class TestUC003UploadInlineCreatives:
                                 {
                                     "creative_id": "c3",
                                     "name": "Creative 3",
-                                    "format_id": {"agent_url": "http://test.com", "id": "display"},
+                                    "format_id": {"agent_url": "http://test.com", "id": "display_300x250"},
                                     "assets": build_assets(
                                         image_spec("main", url="https://example.com/a3.png", width=300, height=250)
                                     ),
@@ -1398,7 +1405,7 @@ class TestUC003UploadInlineCreatives:
                                 {
                                     "creative_id": "c_fail",
                                     "name": "Bad Creative",
-                                    "format_id": {"agent_url": "http://test.com", "id": "display"},
+                                    "format_id": {"agent_url": "http://test.com", "id": "display_300x250"},
                                     "assets": build_assets(
                                         image_spec("main", url="https://example.com/fail.png", width=300, height=250)
                                     ),
@@ -2218,7 +2225,7 @@ class TestUC003ExtJ:
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "rejected"
-            stamp_format_identity(c1, format_id="display", agent_url="http://test.com")
+            stamp_format_identity(c1, format_id="display_300x250", agent_url="http://test.com")
             uow.creatives.get_by_ids.side_effect = None
             uow.creatives.get_by_ids.return_value = [c1]
 
@@ -2258,12 +2265,12 @@ class TestUC003ExtJ:
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "error"
-            stamp_format_identity(c1, format_id="display", agent_url="http://test.com")
+            stamp_format_identity(c1, format_id="display_300x250", agent_url="http://test.com")
 
             c2 = MagicMock()
             c2.creative_id = "C2"
             c2.status = "rejected"
-            stamp_format_identity(c2, format_id="display", agent_url="http://test.com")
+            stamp_format_identity(c2, format_id="display_300x250", agent_url="http://test.com")
 
             uow.creatives.get_by_ids.side_effect = None
             uow.creatives.get_by_ids.return_value = [c1, c2]
@@ -2333,7 +2340,7 @@ class TestUC003ExtK:
                                 {
                                     "creative_id": "c_fail",
                                     "name": "Fail",
-                                    "format_id": {"agent_url": "http://test.com", "id": "display"},
+                                    "format_id": {"agent_url": "http://test.com", "id": "display_300x250"},
                                     "assets": build_assets(
                                         image_spec("main", url="https://example.com/fail.png", width=300, height=250)
                                     ),
@@ -2386,7 +2393,7 @@ class TestUC003ExtK:
                                 {
                                     "creative_id": "c_fail",
                                     "name": "Fail",
-                                    "format_id": {"agent_url": "http://test.com", "id": "display"},
+                                    "format_id": {"agent_url": "http://test.com", "id": "display_300x250"},
                                     "assets": build_assets(
                                         image_spec("main", url="https://example.com/fail.png", width=300, height=250)
                                     ),

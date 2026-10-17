@@ -1027,7 +1027,12 @@ class Creative(Base):
     # exclusivity is not a CHECK constraint: it is a protocol rule the request and state
     # models both enforce as a oneOf on the way in, and restating it here would be another
     # place for it to drift.
-    format_kind: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # NOT NULL: the canonical identifier every layer keys on, so a row without one has no
+    # identity ``CreativeFormatIdentity.from_row`` can read. The write path refuses a
+    # creative whose reference has no canonical projection (``creative_identity_of``), and
+    # this constraint is what makes that refusal the only way in rather than a guard a new
+    # caller could route around. Migration b4f1a9c27d53 projects pre-existing NULL rows.
+    format_kind: Mapped[str] = mapped_column(String(100), nullable=False)
     format_option_ref: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     legacy_format_id: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     legacy_format_key: Mapped[str | None] = mapped_column(String, nullable=True)

@@ -65,7 +65,8 @@ from uuid import uuid4
 
 from adcp.types import AccountReferenceById
 
-from src.core.schemas import SyncCreativesRequest, SyncCreativesResponse
+from src.core.creative_agent_registry import _get_reference_formats
+from src.core.schemas import Format, SyncCreativesRequest, SyncCreativesResponse
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
@@ -1143,3 +1144,97 @@ class RealRegistryCreativeSyncEnv(CreativeSyncEnv):
             super()._configure_mocks()
         finally:
             del self.mock["registry"]
+
+
+class LibraryUpsertCreativeSyncEnv(RealRegistryCreativeSyncEnv):
+    """A real registry whose ``list_all_formats`` is actually EXECUTED.
+
+    ``RealRegistryCreativeSyncEnv`` alone is not enough, and the reason is a second stub a
+    layer below it. ``CreativeSyncEnv`` patches the sync bridge that ``_sync.py`` calls the
+    registry THROUGH::
+
+        self.mock["run_async"].side_effect = lambda coro: []
+
+    so the coroutine is discarded and the answer is ``[]`` no matter which registry is
+    installed. Measured on the way here: with the registry unpatched, ``_sync.py:151`` still
+    read ``registry=ReferenceFormatsRegistry len=0``. Swapping the registry buys nothing
+    while the call through it is blanked, and the mock's own comment -- "execute the
+    coroutine synchronously (return empty list)" -- describes a thing it does not do.
+
+    SO THIS ENV DROPS THAT PATCH, and its blast radius is exactly one call:
+    ``run_async_in_sync_context`` has a SINGLE call site in ``_sync.py`` (the
+    ``list_all_formats`` fetch), so the patch existed only to blank the fetch and dropping
+    it affects only the fetch. ``_processing.py`` already uses the real bridge, so this makes
+    the two halves of the tool agree rather than making one exotic.
+
+    ``get_format`` IS PATCHED HERE, and only ``get_format``, because the reference registry
+    is hermetic ONLY for the methods that consult its hook. Resolved against the MRO rather
+    than read off the class::
+
+        list_all_formats_with_errors   consults _operator_formats_override:  True   hermetic
+        get_format                     consults _operator_formats_override:  False  DIALS
+        build_creative                 consults _operator_formats_override:  False  DIALS
+
+    So ``get_format`` dials for ANY id, present or absent, and the write gate does not save
+    it: measured with the gate in place, the subject scenario still made 9 attempts on
+    ``https://creative.adcontextprotocol.org`` (3 per transport). That is why the gate
+    removing the dial would have been luck -- ``_validation.py`` reaches ``get_format`` well
+    upstream of any write. A dialing suite is not acceptable to hand over: it is precisely
+    how the ``rkuzz`` "flake" was misdiagnosed, where the one varying row varied only in the
+    run that reached the live agent.
+
+    THE PATCH ANSWERS FROM THE SAME CAPTURE, NOT FROM A MOCK. ``_get_reference_formats()`` is
+    the identical checked-in fixture ``_operator_formats_override`` serves, so a format is
+    found here exactly when the reference agent serves it and is ``None`` exactly when it does
+    not -- which keeps the refusal under test production's refusal rather than the harness's.
+    Deliberately NOT a fix to ``ReferenceFormatsRegistry.get_format`` itself: that class
+    dialing while claiming to serve the capture is **salesagent-1bc7l**, it has the same hole
+    in ``build_creative`` for a tool this seller does not serve, and the fix belongs there
+    with its own grading rather than absorbed into this bead.
+
+    Otherwise hermetic for the reason the parent gives: ``ReferenceFormatsRegistry`` answers
+    ``list_all_formats`` from its ``_operator_formats_override``, which short-circuits
+    ``list_all_formats_with_errors`` BEFORE ``_get_tenant_agents`` and before any fetch
+    (``creative_agent_registry.py:809``). No agent is enumerated, so no dial is attempted on
+    this path. The parent's warning about its NINE inherited methods still applies to every
+    other path and is not weakened here.
+
+    WHY A SUBCLASS AND NOT A FIX TO THE PARENT: the parent is routed by scenarios that grade
+    the egress seam through ``_processing.py``, where the real bridge is already in use and
+    the blanked fetch is harmless. Changing the parent would re-point those at a catalog of
+    71 formats to no purpose. salesagent-jzhea.
+    """
+
+    EXTERNAL_PATCHES = {
+        **{
+            name: target for name, target in RealRegistryCreativeSyncEnv.EXTERNAL_PATCHES.items() if name != "run_async"
+        },
+        "get_format": "src.core.creative_agent_registry.CreativeAgentRegistry.get_format",
+    }
+
+    def _configure_mocks(self) -> None:
+        """Absorb the parent's ``run_async`` wiring in a stand-in, then discard it.
+
+        The same shape, and for the same stated reason, as the parent's registry stand-in
+        directly above: the grandparent's ``_configure_mocks`` programs
+        ``self.mock["run_async"]`` inline, and this env does not create that mock -- so
+        without a stand-in ``__enter__`` dies with ``KeyError: 'run_async'`` before any
+        scenario runs. Forking the body to skip the one line would silently drop everything
+        the grandparent gains later, which is the failure mode its docstring records.
+        """
+        self.mock["run_async"] = MagicMock()
+        try:
+            super()._configure_mocks()
+        finally:
+            del self.mock["run_async"]
+
+        async def _format_from_capture(agent_url: str, format_id: str, **_kwargs: object) -> Format | None:
+            """The reference agent's answer for one id, read from the capture it serves.
+
+            Matched on ``format_id.id`` -- a reference ``Format`` carries a structured
+            ``FormatReferenceStructuredObject``, so comparing the object's repr finds nothing
+            and would make every id look unserved.
+            """
+            return next((fmt for fmt in _get_reference_formats() if fmt.format_id.id == format_id), None)
+
+        self.mock["get_format"].side_effect = _format_from_capture

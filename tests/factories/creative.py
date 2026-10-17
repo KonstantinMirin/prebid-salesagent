@@ -87,7 +87,22 @@ def seeded_format_identity(
             name="seeded identity",
             assets={},
             **identity_arm,
-        )
+        ),
+        # ``spec=None`` is a DECLARATION, not an omission, which is why the parameter is
+        # required and this passes it explicitly: a seeded identity has no fetched catalog
+        # to resolve against, so only the registry glob is available to project a legacy
+        # reference. The canonical arm needs no spec at all -- it already carries the kind.
+        #
+        # CONSEQUENCE A SCENARIO SHOULD KNOW: a legacy ``format_id`` the glob cannot project
+        # now RAISES ``AdCPCapabilityNotSupportedError`` here rather than seeding
+        # ``format_kind=NULL``. That is the production gate working, not a factory fault --
+        # a scenario cannot seed a creative the write path would refuse. The default
+        # ``display_300x250`` projects to ``image`` from the glob alone (measured), as does
+        # ``video_640x480`` -> ``video_hosted``; ids like ``display_300x250_image`` and
+        # ``audio_standard`` need the agent's declaration and so cannot be seeded through
+        # this helper. A scenario needing one of those seeds through the sync path, which
+        # has a catalog.
+        spec=None,
     )
 
 

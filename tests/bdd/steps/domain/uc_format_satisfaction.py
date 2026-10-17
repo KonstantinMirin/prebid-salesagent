@@ -30,6 +30,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import (
     parked_media_buy,
+    payload_or_none,
     stored_package_config,
     wire_absent,
     wire_entry,
@@ -717,6 +718,25 @@ def given_lenient(ctx: dict) -> None:
     ctx["validation_mode"] = "lenient"
 
 
+@when("the Buyer Agent syncs it into the library")
+def when_sync_library_only(ctx: dict) -> None:
+    """Dispatch a real sync_creatives that WRITES the creative and assigns it to nothing.
+
+    The sibling below assigns as well, and that difference is the whole point: the
+    assignment path has a satisfaction gate (``_assignments.py`` calls ``satisfies``) while
+    the library UPSERT path has none, so a scenario that assigns cannot tell which gate
+    refused. With no ``assignments`` member there is exactly one thing under test -- whether
+    the seller will STORE a creative whose format it cannot resolve to a canonical kind.
+    """
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    dispatch_request(
+        ctx,
+        account={"account_id": ctx["env"].setup_default_account().account_id},
+        creatives=ctx["creatives"],
+    )
+
+
 @when("the Buyer Agent assigns it to that package")
 def when_sync_assigns(ctx: dict) -> None:
     """Dispatch a real sync_creatives that syncs the creative AND assigns it to the package."""
@@ -880,6 +900,113 @@ def then_refused_invalid_request(ctx: dict) -> None:
     storyboard step states, and the code is what this grades.
     """
     ctx["result"].assert_wire_error("INVALID_REQUEST")
+
+
+@then(parsers.parse('the creative is stored carrying canonical kind "{kind}"'))
+def then_stored_with_canonical_kind(ctx: dict, kind: str) -> None:
+    """The POSITIVE half of the write gate: the projected kind reaches the column.
+
+    Read off the stored row rather than off the response, because the column is the subject
+    -- a NOT NULL constraint is satisfied by any non-null value, so what has to be shown is
+    that the value is the kind the registry projects and not merely that something was
+    written. The fire-probe for this change perturbs exactly that: make the projection
+    return a WRONG kind and this assertion is the one that must redden.
+
+    The sync is asserted to have SUCCEEDED first. Without that, an exception path that
+    stored nothing and answered an error would make the kind assertion fail for the wrong
+    reason and read as a projection bug.
+    """
+    from src.core.database.repositories.uow import CreativeUoW
+
+    result = ctx["result"]
+    assert result.is_success, f"the sync was expected to succeed but answered {result.error!r}"
+    # Read the VALUES inside the UoW, not the rows out of it: a ``Creative`` returned past
+    # the block is detached and every attribute read raises DetachedInstanceError.
+    with CreativeUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.creatives is not None
+        stored_kinds = {
+            c.creative_id: c.format_kind for c in uow.creatives.list_by_principal(ctx["principal"].principal_id)
+        }
+    assert _SYNC_CREATIVE_ID in stored_kinds, (
+        f"no creative {_SYNC_CREATIVE_ID!r} was stored; library holds {sorted(stored_kinds)}"
+    )
+    assert stored_kinds[_SYNC_CREATIVE_ID] == kind, (
+        f"stored format_kind={stored_kinds[_SYNC_CREATIVE_ID]!r}, expected {kind!r} -- the "
+        f"registry projects this legacy id to {kind!r}, so a different value means the "
+        f"projection was not the thing written"
+    )
+
+
+@then("the buyer is refused UNSUPPORTED_FEATURE and nothing is stored")
+def then_refused_and_nothing_stored(ctx: dict) -> None:
+    """The refusal AND the absence of the row, because the wire alone cannot show the write.
+
+    The user's ruling is "gate at writing, not write if we can't resolve it", and a wire
+    envelope cannot distinguish a seller that refused BEFORE writing from one that wrote the
+    row and then answered an error. Those are different sellers: the second leaves a
+    ``format_kind`` NULL behind for every later reader, which is the defect. So the state
+    that must NOT have changed is asserted alongside the code -- read back through
+    ``CreativeUoW``, the same repository production writes through, rather than by a raw
+    query that could see a different transaction.
+
+    BOTH halves, and each is needed. The code alone passes on a seller that stored the row
+    and refused afterwards; the empty library alone passes on a seller that refused for some
+    unrelated reason and never got near the write.
+
+    THE REFUSAL IS PER-CREATIVE, NOT A WIRE ENVELOPE, and this step asserted the envelope
+    first and was wrong to. ``sync_creatives`` is a BATCH tool: the pinned
+    ``sync-creatives-response.json`` carries the outcome per entry in ``creatives[]``, with
+    ``failed`` among the ``creative-action`` enum's members and an ``errors`` list on the
+    entry, so one unservable creative in a batch of three must not fail the other two. The
+    request itself therefore completes. Measured before the assertion was corrected:
+    production answered ``status=completed``, "Synced 0 creatives, 1 failed",
+    ``action=failed``, with ``UNSUPPORTED_FEATURE`` and ``recovery=correctable`` on the entry
+    -- the right behaviour failing a demand for the wrong shape. The entry is located by
+    ``creative_id`` rather than by position, so the obligation does not quietly become "and
+    it was first".
+
+    READ OFF THE TYPED PAYLOAD, not the wire dict. Indexing ``wire["creatives"][...]
+    ["errors"]`` is a step re-deriving where the spec puts a field, which
+    ``test_architecture_bdd_wire_discipline`` refuses by name -- and it refused this step
+    when it was written that way. ``assert_wire_error`` is not the remedy here either: that
+    asserts the ENVELOPE, and this is a batch tool whose request COMPLETES while one entry
+    fails. ``payload_or_none`` is the sanctioned reader that keeps the value's provenance,
+    and the typed model exposes ``action`` and ``errors`` as attributes, so no position is
+    restated. Same primitive the UC-006 per-creative steps use.
+    """
+    from src.core.database.repositories.uow import CreativeUoW
+
+    resp = payload_or_none(ctx)
+    assert resp is not None, (
+        f"the dispatch produced no payload, so the batch never answered about "
+        f"{_SYNC_CREATIVE_ID!r} ({ctx.get('error')!r})"
+    )
+    entries = {entry.creative_id: entry for entry in resp.creatives}
+    assert _SYNC_CREATIVE_ID in entries, f"the batch answered about {sorted(entries)}, not {_SYNC_CREATIVE_ID!r}"
+    entry = entries[_SYNC_CREATIVE_ID]
+    action = entry.action.value if hasattr(entry.action, "value") else str(entry.action)
+    assert action == "failed", (
+        f"the unprojectable creative was reported {action!r}; the gate is supposed to "
+        f"refuse it, and any other action means it was admitted"
+    )
+    codes = [error.code for error in entry.errors or []]
+    assert codes == ["UNSUPPORTED_FEATURE"], (
+        f"expected exactly UNSUPPORTED_FEATURE on the entry, got {codes!r}. The pinned enum "
+        f"classifies it correctable, which is what leaves the buyer a lever to resend under a "
+        f"ref this seller does serve"
+    )
+    # Values, not rows: a ``Creative`` read past the UoW is detached and raises on attribute
+    # access, which would surface as a DetachedInstanceError instead of this assertion.
+    with CreativeUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.creatives is not None
+        stored_kinds = {
+            c.creative_id: c.format_kind for c in uow.creatives.list_by_principal(ctx["principal"].principal_id)
+        }
+    assert _SYNC_CREATIVE_ID not in stored_kinds, (
+        f"the seller refused on the wire but STORED {_SYNC_CREATIVE_ID!r} anyway, with "
+        f"format_kind={stored_kinds[_SYNC_CREATIVE_ID]!r}. The ruling is to gate at the "
+        f"write, so a refusal that leaves the row behind is the defect rather than the fix."
+    )
 
 
 @then("the buyer is refused UNSUPPORTED_FEATURE")
