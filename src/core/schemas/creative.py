@@ -349,11 +349,23 @@ class Creative(LibraryCreative):
         return v
 
     # === AI Provenance (EU AI Act Article 50) ===
-    # Typed with the PINNED class itself (``Provenance`` is an alias for it, see above), so
-    # the library instance a request carries satisfies this slot as it arrives. The
-    # ``mode="before"`` validator that used to rebuild one local instance from one library
-    # instance is gone with the subclass that made it necessary.
-    provenance: Provenance | None = Field(default=None, description="AI provenance metadata per EU AI Act Article 50")
+    # NOT DECLARED HERE, and the pin is why. ``provenance`` belongs to the REQUEST item:
+    # ``core/creative-asset.json`` declares it, and the listing item this class extends
+    # (``creatives[]`` of list-creatives-response.json, 28 properties, measured on that node)
+    # does not. The field appeared on the pinned bundle's nodes 81 times and on none of them
+    # was it this one -- which is exactly why a substring search over the bundle cannot
+    # settle a question about a model.
+    #
+    # It existed here to carry a value two lines: ``_validate_creative_input`` copied it off
+    # the ``CreativeAssetRequest`` so ``check_provenance_policy`` could read it back. That
+    # check now reads the request item directly, which is both where the pin puts the field
+    # and where the value came from. Persistence never went through here either -- the stored
+    # document is built from the request item in ``_assets.py``.
+    #
+    # The cost of the declaration was not the copy. A field on this class is a field in the
+    # ADVERTISED list_creatives shape (``schema_validation.create_schema_registry`` serves
+    # it), so a buyer was shown a response property the spec does not define and could not
+    # validate against the pin.
 
     # === Internal Fields (excluded from AdCP responses) ===
     principal_id: str | None = Field(

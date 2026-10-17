@@ -242,8 +242,6 @@ def _list_creative_formats_impl(
                             platform_config=None,
                             category=None,
                             requirements=None,
-                            iab_specification=None,
-                            accepts_3p_tags=None,
                         )
                         formats.append(fmt)
                     except Exception as e:

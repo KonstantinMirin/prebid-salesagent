@@ -235,7 +235,13 @@ def sync_creatives(
                 # failure, caught below with every other correctable typed error. The first
                 # policy is the tenant-wide one.
                 if tenant_requires_provenance:
-                    check_provenance_policy(validated_creative, provenance_policies[0])
+                    # The REQUEST item is inspected -- that is where the pin declares
+                    # ``provenance`` -- with the resolved id for the refusal to name.
+                    check_provenance_policy(
+                        creative,
+                        provenance_policies[0],
+                        creative_id=validated_creative.creative_id,
+                    )
 
                 # Savepoint per creative: isolates this row's writes AND the effects
                 # queued while processing it, so a creative that fails takes its
