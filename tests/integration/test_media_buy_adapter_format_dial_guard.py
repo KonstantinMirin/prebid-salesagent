@@ -29,7 +29,9 @@ exercises an adapter-provided creative format on the create_media_buy path).
 from __future__ import annotations
 
 import pytest
+from adcp.types.domains.core.canonical_projection_ref import CanonicalProjectionReference
 
+from src.core.schemas import Format, FormatId
 from tests.factories import AuthorizedPropertyFactory, CreativeFactory
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.transport import Transport
@@ -40,6 +42,38 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 _ALL_TRANSPORTS = [Transport.A2A, Transport.REST, Transport.MCP]
 
 _BROADSTREET_FORMAT_ID = "broadstreet_display"
+
+
+def _broadstreet_format(agent_url: str) -> Format:
+    """The declaration the Broadstreet adapter serves for its own template.
+
+    SEEDING THE PRECONDITION THROUGH STEP 1 OF THE PROJECTION ORDER, which is the only
+    route an id outside the v1 registry has. ``registries/v1-canonical-mapping.json``
+    carries 38 globs and every one is ``display_*`` / ``video_*`` / ``audio_15s``, so
+    ``broadstreet_display`` is matched by none of them -- and ``creative_identity_of``
+    refuses a reference it cannot project, which refused the FACTORY and left this test
+    failing in its own fixture rather than at its subject.
+
+    ``core/format-id.json`` makes ``CanonicalProjectionReference.kind`` required when a
+    format declares one, precisely so a seller's own catalogue can carry ids the registry
+    never covered. Supplying it here is what makes step 1 graded at all: nothing else in
+    the suite exercises it, and renaming the id to a registry member would go green while
+    deleting the thing worth testing.
+
+    PRODUCTION CANNOT YET SUPPLY THIS ITSELF, and that is salesagent-zthsk: the sync
+    path's catalog comes from ``CreativeAgentRegistry.list_all_formats``, which walks
+    HTTP agents only, and the two sites that DO build Broadstreet Formats
+    (``src/core/tools/creative_formats.py``, ``src/adapters/broadstreet/adapter.py``) set
+    no ``canonical``. So the declaration is authored here, in the shape production should
+    author, and the wiring gap is filed rather than papered over. What THIS test grades is
+    unaffected: its subject is the create_media_buy RE-DIAL having no adapter-format
+    guard, and the row is only its precondition.
+    """
+    return Format(
+        format_id=FormatId(agent_url=agent_url, id=_BROADSTREET_FORMAT_ID),
+        name="Broadstreet Display",
+        canonical=CanonicalProjectionReference(kind="image"),
+    )
 
 
 class TestAdapterFormatCreativeSurvivesTheReDial:
@@ -68,6 +102,7 @@ class TestAdapterFormatCreativeSurvivesTheReDial:
                 creative_id="c_broadstreet",
                 format=_BROADSTREET_FORMAT_ID,
                 agent_url=agent_url,
+                format_spec=_broadstreet_format(agent_url),
                 data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
             )
 

@@ -85,19 +85,21 @@ class TestGenerativeCreatives:
             assert db_creative.data.get("url") == "https://example.com/generated.html"
 
     def test_static_format_calls_preview_creative(self, integration_db):
-        """Test that static formats (without output_format_ids) call preview_creative."""
-        from unittest.mock import MagicMock
+        """Test that static formats (without output_format_ids) call preview_creative.
 
-        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
-
+        The served format is a REAL ``Format`` through the env, not a hand-rolled
+        ``MagicMock``: the sync path hands the resolved spec to ``canonical_kind_for``,
+        whose first step reads ``spec.canonical.kind``, and a mock answers a child mock
+        there -- which ``CreativeFormatIdentity`` refuses as an out-of-vocabulary kind, so
+        the creative came back ``action='failed'``. ``CreativeSyncEnv.served_format``
+        states the kind instead of pretending to have one.
+        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
-            # Set up static format (no output_format_ids)
-            mock_format = MagicMock()
-            mock_format.format_id = LibraryFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250")
-            mock_format.agent_url = DEFAULT_AGENT_URL
-            mock_format.output_format_ids = None
+            # A static format -- no output_format_ids, so production takes the
+            # preview_creative branch rather than the generative build.
+            mock_format = env.served_format("display_300x250", canonical_kind="image", output_format_ids=[])
             env.set_run_async_result([mock_format])
 
             registry = env.mock["registry"].return_value

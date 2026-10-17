@@ -175,13 +175,21 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
     """Build three creative payloads (display/video/native) for one sync_creatives call.
 
     CreativeSyncEnv's mocked registry (``get_format``) returns a fixed truthy
-    format spec regardless of the requested format_id/agent_url, so distinct
-    format_ids resolve without per-format mock wiring — the scenario exercises
+    format spec regardless of the requested format_id/agent_url, so the EXISTENCE
+    check passes without per-format mock wiring — the scenario exercises
     "one call, three creatives, three per-creative results", not per-format
     catalog behavior (that is UC-005's concern).
+
+    THE PROJECTION IS A SECOND QUESTION and ``get_format`` is not on its path. The
+    canonical kind comes from ``find_format(all_formats, ...)``, which this env answers
+    with ``[]`` by default — so ``native_content``, which the reference agent SERVES and
+    no registry glob matches, had no canonical projection and was refused. Serving the
+    capture in process is what the e2e server does anyway, so the three transports now
+    resolve these three ids the same way.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
+    env.serve_reference_catalog()
     display = _creative_format_id_entry(ctx, env)
     agent_url = display["agent_url"]
     # The video and native formats must be ones the transport's agent SERVES: on

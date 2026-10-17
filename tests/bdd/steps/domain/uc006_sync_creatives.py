@@ -2513,6 +2513,12 @@ def given_creative_already_exists(ctx: dict, stored_name: str | None = None) -> 
         name=stored_name if stored_name is not None else creative_payload["name"],
         agent_url=fmt_id["agent_url"],
         format=fmt_id["id"],
+        # When the payload names a format THIS ENV serves, the row is seeded with that
+        # declaration. The factory otherwise resolves against the shared reference
+        # capture, which carries none of the env's own ids (``gen_banner``,
+        # ``static_300x250``), so the projection would be refused and the UPDATE branch
+        # this Given exists to reach would never be entered.
+        format_spec=(env.served_format_spec(fmt_id["id"]) if env.serves_format(fmt_id["id"]) else None),
     )
     env._commit_factory_data()
 
@@ -5298,6 +5304,11 @@ def given_generative_creative_exists_with_content(ctx: dict) -> None:
         name="Existing Generative Creative",
         agent_url=env.DEFAULT_AGENT_URL,
         format="display_gen",
+        # The declaration THIS ENV serves, because ``display_gen`` is this env's own id
+        # and no shared catalog carries it. Without it the factory resolves against the
+        # reference capture, finds nothing, and the projection is refused -- so the
+        # precondition raised before the update path under test ever ran.
+        format_spec=env.served_format_spec("display_gen"),
         data=existing_data,
     )
     env._commit_factory_data()

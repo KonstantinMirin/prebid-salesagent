@@ -10,8 +10,8 @@ from factory.alchemy import SQLAlchemyModelFactory
 from src.core.creative_agent_registry import PUBLIC_DEFAULT_AGENT_URL
 from src.core.database.models import Creative, CreativeAssignment
 from src.core.database.repositories.creative import _identity_columns
-from src.core.format_resolver import creative_identity_of
-from src.core.schemas import CreativeFormatIdentity, FormatId
+from src.core.format_resolver import creative_identity_of, find_format
+from src.core.schemas import CreativeFormatIdentity, Format, FormatId
 from src.core.schemas.creative import CreativeAssetRequest
 
 from .core import TenantFactory
@@ -33,6 +33,39 @@ from .principal import PrincipalFactory
 DEFAULT_CREATIVE_AGENT_URL = PUBLIC_DEFAULT_AGENT_URL
 
 
+def served_format_spec(agent_url: str, format_id: str) -> Format | None:
+    """The catalog declaration for ``(agent_url, format_id)``, or None if nothing serves it.
+
+    THE SAME CATALOG THE SERVER ANSWERS WITH. Under ``ADCP_TESTING`` the unpatched
+    registry is ``ReferenceFormatsRegistry``, which serves the checked-in capture
+    (``tests/fixtures/creative_formats/reference_formats.json``) and never dials -- so
+    this reads the identical 71 formats a synced creative is resolved against, through
+    production's own ``find_format`` rather than a second matching rule.
+
+    IT EXISTS BECAUSE A SEEDED CREATIVE AND A SYNCED ONE MUST AGREE. The sync path
+    resolves ``identity_spec = find_format(all_formats, creative.format_id)``
+    (``src/core/tools/creatives/_processing.py``), which is what makes step 1 of the
+    normative projection order -- the format's own ``canonical`` declaration -- reachable.
+    Measured on the pinned capture: 64 of the 71 formats declare ``canonical.kind``, while
+    only 22 are matched by a registry glob. So a factory that consulted no catalog could
+    seed 22 of the 71 and REFUSED the other 49, including every video, audio, html5 and
+    native format the agent serves.
+
+    Safe to apply by default, measured rather than assumed: of the 71 captured formats, 22
+    resolve by BOTH routes and all 22 agree (``canonical_kind_for(id)`` ==
+    ``canonical_kind_for(id, spec=fmt)``), 42 resolve only with the spec, and 7 resolve by
+    neither. So supplying the spec cannot change a kind a seeded row already had -- it can
+    only turn a refusal into the kind the agent declares.
+
+    None for an id no catalog carries, which keeps the gate real: ``gen_banner`` and
+    ``broadstreet_display`` are still refused unless a caller passes the declaration whose
+    seller actually serves them.
+    """
+    from src.core.format_cache import load_reference_formats
+
+    return find_format(load_reference_formats(), FormatId(agent_url=agent_url, id=format_id))
+
+
 def seeded_format_identity(
     *,
     agent_url: str = DEFAULT_CREATIVE_AGENT_URL,
@@ -40,6 +73,7 @@ def seeded_format_identity(
     format_params: dict[str, Any] | None = None,
     canonical_kind: str | None = None,
     format_option_ref: dict[str, Any] | None = None,
+    format_spec: Format | None = None,
 ) -> CreativeFormatIdentity:
     """The format identity a seeded creative carries, through the PRODUCTION accessor.
 
@@ -73,6 +107,12 @@ def seeded_format_identity(
     discriminated reference, so a scenario passes the document verbatim and the DTO picks
     its branch. It belongs to the canonical arm only: ``core/creative-asset.json`` is a
     oneOf on the identifier, so a legacy reference has no option to narrow.
+
+    ``format_spec`` is the catalog declaration the projection resolves against, and
+    defaults to whatever :func:`served_format_spec` finds in the capture the server
+    serves. A caller supplies one only for a format NO shared catalog carries -- an
+    adapter-served id like ``broadstreet_display``, whose declaration belongs to the
+    adapter rather than to a creative agent (salesagent-zthsk).
     """
     if format_option_ref is not None and canonical_kind is None:
         raise TypeError("format_option_ref narrows a canonical_kind; a legacy format_id has no option to narrow")
@@ -88,21 +128,26 @@ def seeded_format_identity(
             assets={},
             **identity_arm,
         ),
-        # ``spec=None`` is a DECLARATION, not an omission, which is why the parameter is
-        # required and this passes it explicitly: a seeded identity has no fetched catalog
-        # to resolve against, so only the registry glob is available to project a legacy
-        # reference. The canonical arm needs no spec at all -- it already carries the kind.
+        # THE CATALOG THE SERVER ANSWERS WITH, so a seeded row and a synced row resolve
+        # the same way. The canonical arm needs no spec at all -- it already carries the
+        # kind -- and ``served_format_spec`` answers None for it harmlessly.
         #
-        # CONSEQUENCE A SCENARIO SHOULD KNOW: a legacy ``format_id`` the glob cannot project
-        # now RAISES ``AdCPCapabilityNotSupportedError`` here rather than seeding
-        # ``format_kind=NULL``. That is the production gate working, not a factory fault --
-        # a scenario cannot seed a creative the write path would refuse. The default
-        # ``display_300x250`` projects to ``image`` from the glob alone (measured), as does
-        # ``video_640x480`` -> ``video_hosted``; ids like ``display_300x250_image`` and
-        # ``audio_standard`` need the agent's declaration and so cannot be seeded through
-        # this helper. A scenario needing one of those seeds through the sync path, which
-        # has a catalog.
-        spec=None,
+        # THIS PASSED ``spec=None`` AND CALLED THAT A DECLARATION. The reasoning was that
+        # "a seeded identity has no fetched catalog to resolve against", and it concluded
+        # that ids like ``display_300x250_image`` "cannot be seeded through this helper. A
+        # scenario needing one of those seeds through the sync path, which has a catalog."
+        # The premise was wrong: the catalog is a checked-in file this process can read,
+        # and it is the SAME file the sync path resolves against under ``ADCP_TESTING``. So
+        # the declaration made the factory stricter than production and refused 49 of the
+        # 71 formats the agent serves -- every video, audio, html5 and native one -- which
+        # is what regressed 16 nodeids naming ``video_1280x720``, ``video_1920x1080`` and
+        # ``native_content``, all three of them CATALOG ids the scenarios picked on purpose.
+        #
+        # CONSEQUENCE A SCENARIO SHOULD STILL KNOW: a legacy ``format_id`` that NO catalog
+        # carries and no registry glob matches RAISES ``AdCPCapabilityNotSupportedError``
+        # here rather than seeding ``format_kind=NULL``. That is the production gate
+        # working, not a factory fault.
+        spec=format_spec if format_spec is not None else served_format_spec(agent_url, format_id),
     )
 
 
@@ -114,6 +159,7 @@ def _seeded_identity(obj) -> CreativeFormatIdentity:
         format_params=obj.format_params,
         canonical_kind=obj.canonical_kind,
         format_option_ref=obj.format_option_ref_document,
+        format_spec=obj.format_spec,
     )
 
 
@@ -162,6 +208,7 @@ class CreativeFactory(SQLAlchemyModelFactory):
             "format_params",
             "canonical_kind",
             "format_option_ref_document",
+            "format_spec",
             "identity",
         )
 
@@ -183,11 +230,17 @@ class CreativeFactory(SQLAlchemyModelFactory):
     # and `format_option_ref_document` narrows that kind to one concrete product option.
     # That knob is named for the DOCUMENT it takes because `format_option_ref` is already a
     # COLUMN on this model below -- one factory field cannot be both the input and the output.
+    #
+    # `format_spec` overrides the catalog lookup `seeded_format_identity` does by default,
+    # and is for ONE case: a format whose declaration belongs to an ADAPTER rather than to
+    # a creative agent, so no shared catalog carries it (salesagent-zthsk). Everything the
+    # reference agent serves is found without it.
     agent_url = DEFAULT_CREATIVE_AGENT_URL
     format = "display_300x250"
     format_params = None
     canonical_kind = None
     format_option_ref_document = None
+    format_spec = None
     identity = factory.LazyAttribute(_seeded_identity)
     # Each column read off the ONE production mapping by its own name, so a column added to
     # the identity is a line here and nothing else -- never a second copy of the mapping.

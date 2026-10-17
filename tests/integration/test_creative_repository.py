@@ -16,7 +16,6 @@ from src.core.database.repositories.creative import (
     CreativeListResult,
     CreativeRepository,
 )
-from src.core.schemas import CreativeFormatIdentity, FormatId
 from tests.factories import (
     CreativeAssignmentFactory,
     CreativeFactory,
@@ -25,6 +24,7 @@ from tests.factories import (
     PrincipalFactory,
     ProductFactory,
     TenantFactory,
+    seeded_format_identity,
 )
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness._base import IntegrationEnv
@@ -250,9 +250,15 @@ class TestCreativeRepoCreate:
             result = repo.create(
                 creative_id="c_new",
                 name="Test Banner",
-                identity=CreativeFormatIdentity.of_legacy(
-                    FormatId(agent_url="https://agent.example.com", id="display_300x250")
-                ),
+                # Through the production accessor, not hand-built.
+                # ``CreativeFormatIdentity.of_legacy`` now REQUIRES the kind -- a creative
+                # whose reference projects to nothing is refused at the creation edge, so
+                # there is no caller with nothing to pass -- and this test passed none, so
+                # it died on the signature. ``seeded_format_identity`` is public for exactly
+                # this case (a test seeding through ``CreativeRepository.create`` rather than
+                # through ``CreativeFactory``) and runs the same v1 -> v2 projection the sync
+                # path runs, so the kind is derived rather than asserted here.
+                identity=seeded_format_identity(agent_url="https://agent.example.com", format_id="display_300x250"),
                 principal_id="p1",
                 data={"assets": build_assets(image_spec("banner"))},
             )
@@ -272,9 +278,7 @@ class TestCreativeRepoCreate:
             repo = CreativeRepository(session, "test_tenant")
             result = repo.create(
                 name="Auto ID",
-                identity=CreativeFormatIdentity.of_legacy(
-                    FormatId(agent_url="https://agent.example.com", id="display_300x250")
-                ),
+                identity=seeded_format_identity(agent_url="https://agent.example.com", format_id="display_300x250"),
                 principal_id="p1",
             )
 

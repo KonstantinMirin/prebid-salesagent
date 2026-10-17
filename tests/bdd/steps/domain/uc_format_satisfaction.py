@@ -630,6 +630,39 @@ def given_sync_canonical_creative(ctx: dict, kind: str) -> None:
     ]
 
 
+def _sync_legacy_claim(ctx: dict, format_id: str, **parameters: int) -> None:
+    """ONE legacy claim on the wire, against the catalog that answers it.
+
+    The three Givens below differ only in which of the reference's own parameterizing
+    fields the scenario names, so the payload and the catalog are set up here once.
+
+    Built through ``resolvable_format_ref`` rather than from the scenario's string
+    directly, because a CREATIVE's claim is resolved over the wire: the id has to be one
+    the creative agent actually serves, or the sync is refused REFERENCE_NOT_FOUND before
+    any satisfaction verdict exists to grade. The scenario still says WHICH id, and it
+    cannot name one that only the in-process registry mock would answer.
+
+    AND THE CATALOG HAS TO BE THERE, which is the half that was missing. The door
+    ``resolvable_format_ref`` guards asks whether the AGENT serves the id; the projection
+    then asks the agent what canonical kind it declares, and this env answers
+    ``all_formats = []`` by default -- so a claim on a served id that the registry glob
+    does not cover was refused UNSUPPORTED_FEATURE upstream of the gate under test.
+    ``serve_reference_catalog`` makes the two doors consult the same 71 formats, which is
+    what the e2e server does. Measured: ``video_1280x720`` is in the capture and declares
+    ``canonical.kind = video_hosted``, and no registry glob matches it.
+    """
+    from tests.factories.format import resolvable_format_ref
+    from tests.factories.request import CreativeAssetRequestFactory
+
+    ctx["env"].serve_reference_catalog()
+    ctx["creatives"] = [
+        CreativeAssetRequestFactory.payload(
+            creative_id=_SYNC_CREATIVE_ID,
+            format_id=resolvable_format_ref(format_id, **parameters),
+        )
+    ]
+
+
 @given(parsers.parse('the buyer syncs a creative identified by format_id "{format_id}"'))
 def given_sync_legacy_creative(ctx: dict, format_id: str) -> None:
     """The same payload identified by its DEPRECATED reference, for the legacy lane's row.
@@ -638,12 +671,6 @@ def given_sync_legacy_creative(ctx: dict, format_id: str) -> None:
     carries, which is what decides the lane -- so the lenient asymmetry's two rows differ in
     the creative's arm and the product's arm and nothing else.
 
-    Built through ``resolvable_format_ref`` rather than from the scenario's string directly,
-    because a CREATIVE's claim is resolved over the wire: the id has to be one the creative
-    agent actually serves, or the sync is refused REFERENCE_NOT_FOUND before any satisfaction
-    verdict exists to grade. The scenario still says WHICH id, and now it cannot name one
-    that only the in-process registry mock would answer.
-
     The factory's default asset -- one 300x250 image -- is kept DELIBERATELY under a video
     claim, and is left inconsistent rather than tidied. Nothing validates a creative's assets
     against the format it claims: ``creatives/_validation.py`` carries ``TODO(#767)`` exactly
@@ -651,15 +678,7 @@ def given_sync_legacy_creative(ctx: dict, format_id: str) -> None:
     evidence. Authoring a video asset here would make the fixture look right and remove the
     only thing in the suite that shows the check is missing.
     """
-    from tests.factories.format import resolvable_format_ref
-    from tests.factories.request import CreativeAssetRequestFactory
-
-    ctx["creatives"] = [
-        CreativeAssetRequestFactory.payload(
-            creative_id=_SYNC_CREATIVE_ID,
-            format_id=resolvable_format_ref(format_id),
-        )
-    ]
+    _sync_legacy_claim(ctx, format_id)
 
 
 @given(parsers.parse('the buyer syncs a creative identified by format_id "{format_id}" sized {width:d}x{height:d}'))
@@ -676,15 +695,7 @@ def given_sync_legacy_creative_sized(ctx: dict, format_id: str, width: int, heig
     The parameters go through ``resolvable_format_ref`` with the rest of the reference, so the
     pin's own field names are the only ones a scenario can spell.
     """
-    from tests.factories.format import resolvable_format_ref
-    from tests.factories.request import CreativeAssetRequestFactory
-
-    ctx["creatives"] = [
-        CreativeAssetRequestFactory.payload(
-            creative_id=_SYNC_CREATIVE_ID,
-            format_id=resolvable_format_ref(format_id, width=width, height=height),
-        )
-    ]
+    _sync_legacy_claim(ctx, format_id, width=width, height=height)
 
 
 @given(
@@ -701,15 +712,7 @@ def given_sync_legacy_creative_density(ctx: dict, format_id: str, width: int, he
     one of the two cases the rule has to refuse against a product that fixes one. A step
     defaulting the field would make that case unreachable.
     """
-    from tests.factories.format import resolvable_format_ref
-    from tests.factories.request import CreativeAssetRequestFactory
-
-    ctx["creatives"] = [
-        CreativeAssetRequestFactory.payload(
-            creative_id=_SYNC_CREATIVE_ID,
-            format_id=resolvable_format_ref(format_id, width=width, height=height, pixel_ratio=pixel_ratio),
-        )
-    ]
+    _sync_legacy_claim(ctx, format_id, width=width, height=height, pixel_ratio=pixel_ratio)
 
 
 @given("the buyer asks for lenient validation")

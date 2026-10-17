@@ -66,7 +66,7 @@ from uuid import uuid4
 from adcp.types import AccountReferenceById
 
 from src.core.creative_agent_registry import _get_reference_formats
-from src.core.schemas import Format, SyncCreativesRequest, SyncCreativesResponse
+from src.core.schemas import Format, FormatId, SyncCreativesRequest, SyncCreativesResponse
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
@@ -302,6 +302,10 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
 
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""
+        #: {format_id: declaration} for every format this env has been told to serve, so a
+        #: step that seeds a row in one can reach the declaration the sync path resolves
+        #: against (``served_format_spec``). Reset per env, with the mocks.
+        self._served_formats: dict[str, Format] = {}
         # Registry: return a mock that supports list_all_formats() + get_format()
         mock_registry = MagicMock()
         mock_registry.list_all_formats.return_value = []
@@ -720,7 +724,9 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
             "read-back), which is its own build"
         )
     )
-    def configure_agent_served_creative(self, *, generative: bool, format_id: str) -> dict[str, str]:
+    def configure_agent_served_creative(
+        self, *, generative: bool, format_id: str, canonical_kind: str = "image"
+    ) -> dict[str, str]:
         """Configure a format the creative agent actually serves, generative or not.
 
         ONE seam for both cells of the dry_run out-of-transaction outline, so the
@@ -728,20 +734,15 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         re-derived in a step body.
         """
         if generative:
-            return self.setup_generative_build(format_id=format_id)
+            return self.setup_generative_build(format_id=format_id, canonical_kind=canonical_kind)
 
-        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
-
-        mock_format = MagicMock()
-        mock_format.format_id = LibraryFormatId(agent_url=self.DEFAULT_AGENT_URL, id=format_id)
-        mock_format.agent_url = self.DEFAULT_AGENT_URL
-        mock_format.output_format_ids = []  # non-generative -> preview_creative branch
-        self.set_run_async_result([mock_format])
+        served = self.served_format(format_id, canonical_kind=canonical_kind, output_format_ids=[])
+        self.set_run_async_result([served])
         registry = self.mock["registry"].return_value
         registry.preview_creative = AsyncMock(
             return_value={"previews": [{"url": "https://preview.example.com/p.html"}]}
         )
-        registry.get_format = AsyncMock(return_value=mock_format)
+        registry.get_format = AsyncMock(return_value=served)
         return {"agent_url": self.DEFAULT_AGENT_URL, "id": format_id}
 
     @realize_e2e(
@@ -761,17 +762,94 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         self.mock["registry"].return_value.preview_creative = AsyncMock(return_value={})
         return fmt
 
+    def served_format(
+        self,
+        format_id: str,
+        *,
+        canonical_kind: str = "image",
+        output_format_ids: list[str] | None = None,
+        agent_url: str | None = None,
+    ) -> Format:
+        """One format this env's creative agent serves, as a REAL ``Format``.
+
+        A ``MagicMock`` STOOD HERE AND IT BROKE THE PROJECTION. The sync path resolves
+        ``identity_spec = find_format(all_formats, creative.format_id)`` and hands it to
+        ``canonical_kind_for``, whose FIRST normative step reads ``spec.canonical.kind``
+        -- and a MagicMock answers a fresh child mock for both. Measured: the kind came
+        back as the string ``"<MagicMock name='mock.canonical.kind' id=...>"`` and
+        ``CreativeFormatIdentity`` refused it ("Unknown canonical format kind"), so every
+        scenario configuring a served format recorded ``action='failed'``. A mock that
+        answers anything is indistinguishable from one that answers correctly right up to
+        the point something reads the value (CLAUDE.md: defensive code is a data-model
+        smell; the same applies to a stand-in with no shape).
+
+        So the declaration is REAL and the kind is a PARAMETER. ``core/format-id.json``
+        makes ``CanonicalProjectionReference.kind`` required when a format declares one,
+        which is exactly how a creative agent's own catalogue carries ids the v1 registry
+        never covered -- the 64-of-71 case in the pinned capture. Naming the kind here is
+        what makes step 1 of the projection order GRADED in process rather than merely
+        reachable.
+
+        ``output_format_ids`` non-empty is what makes the format GENERATIVE
+        (``format_resolver.is_generative``); ``[]`` takes the preview branch. The ids are
+        taken as plain strings and built into REFERENCES here, because the pinned field is
+        ``list[FormatReferenceStructuredObject]`` -- the mock this replaced held bare
+        strings, a shape the pin refuses and nothing noticed.
+        """
+        from adcp.types.domains.core.canonical_projection_ref import CanonicalProjectionReference
+
+        agent = agent_url or self.DEFAULT_AGENT_URL
+        served = Format(
+            format_id=FormatId(agent_url=agent, id=format_id),
+            name=f"Harness format {format_id}",
+            canonical=CanonicalProjectionReference(kind=canonical_kind),
+            output_format_ids=[FormatId(agent_url=agent, id=output) for output in output_format_ids or []],
+        )
+        self._served_formats[format_id] = served
+        return served
+
+    def serves_format(self, format_id: str) -> bool:
+        """Whether this env has been told to serve *format_id* itself.
+
+        For a GENERIC seeding helper, which takes whatever format the scenario's payload
+        carries: an id this env serves needs its declaration passed to the factory, and an
+        id it does not is left to the factory's own capture lookup. Asking rather than
+        reaching into the registry keeps the step out of the env's internals.
+        """
+        return format_id in self._served_formats
+
+    def served_format_spec(self, format_id: str) -> Format:
+        """The declaration this env already configured for *format_id*.
+
+        For a step that SEEDS an existing row in a format this env serves:
+        ``CreativeFactory`` resolves its spec against the shared reference capture, which
+        carries none of this env's own ids, so the row has to be seeded with the
+        declaration the env itself answers with -- otherwise the precondition is refused
+        and the scenario fails before its subject runs.
+
+        Raises rather than answering None for an unconfigured id: a silent None would
+        put the seed back on the capture lookup and reproduce exactly the refusal this
+        exists to avoid.
+        """
+        if format_id not in self._served_formats:
+            raise KeyError(
+                f"{format_id!r} is not a format this env serves. Call setup_generative_build() or "
+                f"configure_agent_served_creative() for it first; configured: {sorted(self._served_formats)}"
+            )
+        return self._served_formats[format_id]
+
     def setup_generative_build(
         self,
         format_id: str = "display_gen",
         agent_url: str | None = None,
         build_result: dict[str, Any] | None = None,
         gemini_api_key: str | None = "test-gemini-key",
+        canonical_kind: str = "image",
     ) -> dict[str, str]:
         """Configure harness for generative creative testing.
 
         Sets up:
-        - A format mock with output_format_ids (makes it generative)
+        - A served format with output_format_ids (makes it generative)
         - build_creative AsyncMock with the given return value
         - gemini_api_key on the config mock
         - run_async to return the generative format list
@@ -780,16 +858,17 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
 
             fmt = env.setup_generative_build(format_id="gen_banner")
             creative = {"creative_id": "c1", "name": "Test", "format_id": fmt, ...}
-        """
-        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
+        The Format itself is reachable through :meth:`served_format_spec`, which a step
+        that also SEEDS an existing row in this format has to pass to ``CreativeFactory``
+        -- the factory resolves against the shared capture, which carries none of this
+        env's own ids.
+        """
         agent = agent_url or self.DEFAULT_AGENT_URL
 
-        # Create format mock with matching FormatId
-        mock_format = MagicMock()
-        mock_format.format_id = LibraryFormatId(agent_url=agent, id=format_id)
-        mock_format.agent_url = agent
-        mock_format.output_format_ids = [format_id]  # Non-empty → generative
+        mock_format = self.served_format(
+            format_id, canonical_kind=canonical_kind, output_format_ids=[format_id], agent_url=agent
+        )
 
         # Configure run_async to return this format for list_all_formats
         self.set_run_async_result([mock_format])
@@ -857,6 +936,23 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         that wraps the async call in _sync.py.
         """
         self.mock["run_async"].side_effect = lambda coro: formats
+
+    def serve_reference_catalog(self) -> None:
+        """The sync path's catalog is the pinned capture -- what the e2e server serves.
+
+        FOR A SCENARIO WHOSE CREATIVE CLAIMS A CATALOG ID. ``all_formats`` in
+        ``_sync.py`` defaults to ``[]`` on this env, so ``find_format`` answers None,
+        ``canonical_kind_for`` never sees a spec, and the projection falls back to the
+        registry glob -- which covers only 22 of the 71 formats the reference agent
+        serves. A scenario that names one of the other 49 is then refused for the ENV's
+        reason instead of reaching its own subject. ``LibraryUpsertCreativeSyncEnv``'s
+        docstring records the same measurement for the same cause.
+
+        The capture is read through ``_get_reference_formats``, the identical function
+        ``ReferenceFormatsRegistry._operator_formats_override`` serves, so a format
+        resolves here exactly when the real agent would resolve it.
+        """
+        self.set_run_async_result(list(_get_reference_formats()))
 
     #: AdCP 3.1.1 makes idempotency_key REQUIRED on sync-creatives-request. Supplied here so
     #: every scenario gets a spec-conformant request without each of ~200 call sites naming a
