@@ -31,7 +31,9 @@ from __future__ import annotations
 import pytest
 import yaml
 
+from tests.unit import _architecture_helpers  # noqa: F401  (kept for repo_root below)
 from tests.unit._architecture_helpers import repo_root
+from tests.utils import ratchet_counters
 from tests.utils.derived_population import assert_derived_population
 from tests.utils.ratchet_counters import (
     ALL_RATCHETS,
@@ -117,3 +119,36 @@ def test_every_ratchet_names_an_enforcement_that_executes() -> None:
         "on push/PR to main|develop. File them under 'guard' (a test in the "
         "always-run unit suite) or 'gate' (the quality tox env)."
     )
+
+
+@pytest.mark.arch_guard
+def test_a_ratchet_counter_runs_once_per_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both assertions over one ratchet cost ONE measurement, not two.
+
+    ``assert_not_over_baseline`` and ``assert_not_slack`` each need the same number, and
+    each used to measure it for itself. For ``check-code-duplication`` one measurement is
+    three pylint R0801 processes, so a gate ran SIX for three answers -- which is how the
+    single-process ``quality`` env came to be the longest suite in every full run from
+    2026-09-09 and to decide the gate's wall-clock on its own: 50.6m of a 62.4m run,
+    48.9m of it this one counter measured twice (1752.3s + 1183.4s in
+    innet_171026_2038/quality.json).
+
+    Graded here rather than in ``tests/quality`` on purpose: the property is about the
+    caching, not about pylint, so it is measured with a counter that costs nothing and it
+    runs in the suite every executor runs.
+    """
+    monkeypatch.setattr(ratchet_counters, "_MEASURED", {})
+    runs: list[int] = []
+
+    def measure_once(_hook: object, _root: object) -> dict[str, int]:
+        runs.append(1)
+        return {"only": len(runs)}
+
+    counter = RatchetCounter(
+        "probe-counts-its-own-runs", "check_type_ignore_count", ".type-ignore-baseline", measure_once
+    )
+
+    first, second = counter.current(), counter.current()
+
+    assert len(runs) == 1, f"the counter ran {len(runs)} times for two reads of the same number"
+    assert first == second == {"only": 1}
