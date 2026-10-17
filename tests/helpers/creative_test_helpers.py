@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from uuid import uuid4
@@ -156,6 +157,7 @@ def make_format_spec(
     agent_url: str = "https://creative.adcontextprotocol.org",
     name: str = "Medium Rectangle",
     output_format_ids: list[str] | None = None,
+    canonical_kind: str | None = "image",
 ) -> Mock:
     """A registry listing entry shaped the way production's actually is.
 
@@ -171,12 +173,28 @@ def make_format_spec(
       decide whether a format is generative, and a bare Mock attribute is truthy, so
       every static format silently became a generative one the moment the lookup
       started working. Empty by default; pass a list to build a generative spec.
+
+    AND A THIRD, OF THE SAME FAMILY: ``canonical`` left auto-specced.
+    ``canonical_kind_for`` reads ``spec.canonical`` and then ``.kind``, and BOTH succeed on
+    a bare ``Mock`` -- so it did not raise, it returned ``str(Mock)``: a FABRICATED kind,
+    which the seller's vocabulary check then refuses downstream as ``action: "failed"``.
+    That stayed invisible while the creative-sync write path resolved its identity without
+    a spec (only the registry glob was consulted, and a glob miss was tolerated). It
+    surfaced the moment the write gate started passing the spec, which is the correct
+    direction: the mock was again propping up the thing it should have caught.
+
+    An explicit ``SimpleNamespace(kind=...)``, not a ``Mock``, because the point is that an
+    attribute this helper does not name must not answer. ``canonical_kind=None`` builds the
+    UNPROJECTABLE arm -- a format the agent serves and declares no canonical projection for
+    -- which is what the write gate refuses, and the only way a test can ask for that arm
+    deliberately rather than by leaving an attribute loose.
     """
     spec = Mock()
     spec.format_id = create_test_format_id(format_id, agent_url=agent_url)
     spec.agent_url = agent_url
     spec.name = name
     spec.output_format_ids = output_format_ids or []
+    spec.canonical = SimpleNamespace(kind=canonical_kind) if canonical_kind is not None else None
     return spec
 
 
