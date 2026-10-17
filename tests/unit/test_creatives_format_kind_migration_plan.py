@@ -14,11 +14,12 @@ round-trip is graded against a MIGRATED database (``migration_db``), which is th
 a migration-created constraint exists -- ``integration_db`` builds its schema with
 ``Base.metadata.create_all`` and cannot see one.
 
-THE PROJECTION AVAILABLE TO A MIGRATION IS THE REGISTRY GLOB ONLY. ``canonical_kind_for``
-resolves the agent's own declaration first and the glob second, and the first needs a fetched
-format spec -- which a migration cannot obtain, because it must not dial the creative agent.
-That asymmetry is the subject of half these tests: an id the glob resolves migrates, and an
-id that needs the declaration aborts even though the sync path resolves it fine.
+THE PROJECTION AVAILABLE TO A MIGRATION IS THE REGISTRY ONLY. ``canonical_kind_for`` resolves
+the agent's own declaration first, then the registry -- the glob against the id, and, failing
+that, against the id the registry's parameterized upgrade normalizes it to. Only the first
+step needs a fetched format spec, which a migration cannot obtain because it must not dial the
+creative agent. That asymmetry is the subject of half these tests: an id the registry resolves
+migrates, and an id that needs the declaration aborts even though the sync path resolves it.
 """
 
 from __future__ import annotations
@@ -92,13 +93,24 @@ class TestRowsThatProject:
 
 class TestRowsThatAbort:
     def test_a_reference_needing_the_agents_declaration_cannot_be_migrated(self, plan_projection: Any) -> None:
-        """``display_300x250_image`` is served and resolvable AT SYNC, and not here.
+        """``video_standard_30s`` is served and resolvable AT SYNC, and not here.
 
         This is the asymmetry an operator reading the abort needs to understand: the row is
         not corrupt, it just cannot be projected by a process with no catalog. Listing it is
         what lets them re-sync it instead of deleting it.
+
+        The id is one ``database.py`` SEEDS into the demo tenant's ``auto_approve_format_ids``,
+        so the abort it demonstrates is one a real operator can actually be handed -- the
+        registry carries no ``video_standard_30s`` mapping and the only route left is the
+        agent's own ``canonical`` declaration, which needs the catalog.
+
+        It used to be ``display_300x250_image``, on the premise that the sync path resolved it.
+        It did not: that id reached the same refusal, in 101 of the 376 nodeids regressed on
+        land (salesagent-iz7dm), because the registry covers it through ``display_image``'s
+        parameterized upgrade and the projection matched the glob against the raw slug only.
+        It now projects to ``image`` HERE as well, which is why it cannot stand for this case.
         """
-        projected, unprojectable = plan_projection([_row("cr-needs-spec", "display_300x250_image")])
+        projected, unprojectable = plan_projection([_row("cr-needs-spec", "video_standard_30s")])
 
         assert (projected, unprojectable) == ([], ["cr-needs-spec"])
 

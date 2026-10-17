@@ -657,3 +657,44 @@ class TestFormatKeyCanonicalization:
         fmt = _make_format()
         other_agent = LibraryFormatId(agent_url="https://someone-else.example.com", id=fmt.format_id.id)
         assert find_format([fmt], other_agent) is None
+
+
+class TestCanonicalKindForSizeEncodedIds:
+    """``canonical_kind_for`` on an id whose size is encoded in the slug.
+
+    The registry's ``display_image`` mapping carries ``parameter_mappings`` and says in its
+    own note that it exists so "one legacy format definition identif[ies] every size/density
+    combination without retina-specific format ids". So ``display_300x250_image`` is a MEMBER
+    of that mapping, reachable through the registry's parameterized upgrade -- not an id the
+    registry declines to cover. Matching the glob against the raw slug alone misses it, and
+    the kind then has to come from somewhere, which is the one thing the sixth normative step
+    forbids: the function fails closed instead.
+
+    That is not an abstract gap. ``display_300x250_image`` is what this repo SEEDS --
+    ``database.py`` writes it into the demo tenant's ``auto_approve_format_ids`` and into
+    ``prod_1``'s formats, and both admin paths default to it -- so the refusal lands on a
+    tenant created by the project's own bootstrap (salesagent-iz7dm).
+    """
+
+    @pytest.mark.parametrize(
+        ("format_id", "kind", "why"),
+        [
+            ("display_300x250_image", "image", "upgrades onto display_image, which the glob maps"),
+            ("display_728x90_image", "image", "same template, different size"),
+            ("display_300x250", "image", "the glob matches the raw slug: unchanged by the fallback"),
+            ("display_image", "image", "the template itself"),
+            ("video_640x480", "video_hosted", "the mirror case: glob resolves, upgrade adds nothing"),
+            ("display_300x250_image_2x", "image", "has its own literal glob entry"),
+        ],
+    )
+    def test_a_size_encoded_id_projects_through_the_registry_upgrade(self, format_id, kind, why):
+        from src.core.format_resolver import canonical_kind_for
+
+        assert canonical_kind_for(format_id) == kind, why
+
+    def test_an_id_the_registry_cannot_reach_at_all_still_fails_closed(self):
+        """The fallback must not become a guess: an unknown slug has no kind to project to."""
+        from src.core.format_resolver import canonical_kind_for
+
+        with pytest.raises(ValueError, match="no canonical projection"):
+            canonical_kind_for("publisher_bespoke_takeover_unit")

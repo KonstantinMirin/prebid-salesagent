@@ -15,7 +15,12 @@ from dataclasses import dataclass
 from fnmatch import fnmatch
 from typing import Any
 
-from adcp.canonical_formats import CANONICAL_CREATIVE_AGENT_URL, format_is_supported, load_default_registry
+from adcp.canonical_formats import (
+    CANONICAL_CREATIVE_AGENT_URL,
+    format_is_supported,
+    load_default_registry,
+    upgrade_legacy_format_id,
+)
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from adcp.types.domains.core.package_format_snapshot import PackageFormatSnapshot as LibraryPackageFormatSnapshot
 from adcp.types.domains.core.product_format_declaration import (
@@ -143,6 +148,22 @@ def format_reference(ref: FormatRef) -> LibraryFormatId:
     return ref
 
 
+def _glob_canonical(legacy_id: str) -> str | None:
+    """The canonical kind a registry glob maps ``legacy_id`` to, or ``None`` if none matches.
+
+    The registry's ``v1_pattern`` is a closed two-arm union, and the arms ARE two of the
+    normative steps: ``format_id_glob`` is step 3 (38 of the 45 mappings), ``structural`` is
+    step 4 (the other 7). Discriminated by type rather than by ``getattr``, so the untried
+    arm is a visible skip instead of a silent miss -- a structural entry needs the format's
+    declared shape, which an id alone does not carry.
+    """
+    for mapping in load_default_registry().mappings:
+        pattern = mapping.v1_pattern
+        if isinstance(pattern, LibraryV1GlobPattern) and fnmatch(legacy_id, pattern.format_id_glob):
+            return str(mapping.v2.canonical)
+    return None
+
+
 def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
     """The canonical ``format_kind`` a deprecated ``format_id`` projects to.
 
@@ -159,9 +180,15 @@ def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
     1. **The agent's own projection.** ``core/format-id.json`` lets a format declare its
        canonical projection, and ``CanonicalProjectionReference.kind`` is required when it
        does. An explicit declaration outranks any inference, so it is consulted first.
-    2. **The registry glob.** 45 mappings carry a ``v1_pattern.format_id_glob`` and a
-       ``v2.canonical``; measured, all 7 distinct targets are members of the pinned
-       vocabulary, so a match yields a usable kind without further checking.
+    2. **The registry glob**, matched twice. 38 of the 45 mappings carry a
+       ``v1_pattern.format_id_glob`` and a ``v2.canonical``; measured, all 7 distinct targets
+       are members of the pinned vocabulary, so a match yields a usable kind without further
+       checking. The first match is against the id as given. The second is against the id the
+       registry's own parameterized upgrade normalizes it to, because a size-encoded slug is
+       not spelled like the template that covers it: ``display_300x250_image`` is a member of
+       the ``display_image`` mapping, and matching the raw slug alone missed every such id
+       (salesagent-iz7dm -- 101 of 376 nodeids regressed on land). Both matches read the kind
+       off the mapping they hit, so neither infers anything from the slug's shape.
 
     The remaining steps -- structural match and ambiguous-family -- need the format's
     declared structure rather than its id, and a seller-published
@@ -190,15 +217,23 @@ def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
 
     legacy_id = format_ref_id(ref)
     if legacy_id is not None:
-        for mapping in load_default_registry().mappings:
-            # The registry's ``v1_pattern`` is a closed two-arm union, and the arms ARE the
-            # two normative steps: ``format_id_glob`` is step 3 (38 of the 45 mappings),
-            # ``structural`` is step 4 (the other 7). Discriminated by type rather than by
-            # ``getattr``, so the untried arm is a visible skip instead of a silent miss --
-            # a structural entry needs the format's declared shape, which this does not have.
-            pattern = mapping.v1_pattern
-            if isinstance(pattern, LibraryV1GlobPattern) and fnmatch(legacy_id, pattern.format_id_glob):
-                return str(mapping.v2.canonical)
+        kind = _glob_canonical(legacy_id)
+        if kind is not None:
+            return kind
+
+        # The glob is matched against the raw slug, and a size-encoded id is not spelled
+        # like the template it belongs to: the registry covers ``display_300x250_image``
+        # through ``display_image``'s ``parameter_mappings``, whose own note says the
+        # mapping exists so "one legacy format definition identif[ies] every size/density
+        # combination without retina-specific format ids". So the upgrade is the step that
+        # makes membership visible, and the kind still comes from the matched mapping --
+        # nothing is inferred from the slug's shape.
+        upgraded = upgrade_legacy_format_id(legacy_id)
+        upgraded_id = format_ref_id(upgraded) if upgraded is not None else None
+        if upgraded_id is not None and upgraded_id != legacy_id:
+            kind = _glob_canonical(upgraded_id)
+            if kind is not None:
+                return kind
 
     raise ValueError(
         f"no canonical projection for legacy format_id {legacy_id!r}: the agent declares none "

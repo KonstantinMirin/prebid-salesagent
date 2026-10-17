@@ -582,12 +582,18 @@ def _legacy_route(
     product resolved to the 300x250 declaration and was accepted (salesagent-t0uoo).
 
     WHEN THE REFERENCE NORMALIZES TO A KIND AND NOTHING ELSE, the kind route grades it.
-    The registry's two directions do not agree on coverage -- measured,
-    ``canonical_kind_for('display_300x250_image')`` raises while
-    ``upgrade_legacy_format_id`` of it yields 300x250, and ``video_640x480`` is the mirror
-    image -- so a reference can arrive with a kind and no projected params. Grading empty
-    params against a whole declaration would refuse it on dimensions the reference never
-    claimed, so what the normalization produced (a kind) is what is graded.
+    The two directions still do not agree on coverage -- measured, ``video_640x480`` yields
+    a kind (``video_hosted``) while ``upgrade_legacy_format_id`` of it projects no params --
+    so a reference can arrive with a kind and no projected params. Grading empty params
+    against a whole declaration would refuse it on dimensions the reference never claimed,
+    so what the normalization produced (a kind) is what is graded.
+
+    The mirror case USED to be ``display_300x250_image``, on the measurement that
+    ``canonical_kind_for`` raised for it while the upgrade yielded 300x250. That asymmetry
+    was a defect in the projection, not a property of the registry: it skipped the upgrade
+    before matching the glob, so a size-encoded id never reached the ``display_image``
+    mapping it belongs to. Fixed in salesagent-iz7dm, where it was 101 of the 376 nodeids
+    regressed on land. The id now answers ``image`` in both directions.
     """
     from src.core.format_resolver import format_identity_or_none
 
