@@ -2470,7 +2470,23 @@ async def _create_media_buy_impl(
             field_prefix="push_notification_config",
         )
 
-    validate_setup_complete(tenant.tenant_id)
+    # The tenant's readiness to serve REAL inventory is not a precondition for a SANDBOX
+    # request, which serves simulated data and makes no real ad-platform call. Measured
+    # before this argument existed: a sandbox account on a GAM tenant with no synced
+    # inventory was refused CONFIGURATION_ERROR here -- at :2473 -- while adapter
+    # selection, where sandbox isolation is actually applied, is at :3107, six hundred
+    # lines later. So the request never reached the code that would have isolated it; it
+    # was refused by a check about the platform it was never going to touch
+    # (salesagent-blugj, salesagent-9imdq).
+    #
+    # Reads the ACCOUNT, which is a real input the boundary resolved -- never a test flag.
+    # The same ``identity.account is not None and identity.account.sandbox`` spelling the
+    # other sandbox readers in this codebase use (adapter_helpers, the creative sync and
+    # listing paths); ``bool`` because the column is nullable and this parameter is not.
+    validate_setup_complete(
+        tenant.tenant_id,
+        sandbox=bool(identity.account is not None and identity.account.sandbox),
+    )
 
     # No second webhook-URL verdict here: the stored-then-fetched URLs already
     # got their correctable refusal at the registration gate above, before any
