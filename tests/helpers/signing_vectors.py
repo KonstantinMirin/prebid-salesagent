@@ -125,6 +125,28 @@ def load_vector_manifest() -> dict[str, Any]:
 #: map to ``profile-3.2/positive/001-post-with-content-digest.json``."
 _PROFILE_SLUG_EXCEPTIONS: dict[str, str] = {"positive/basic-post": "001-post-with-content-digest"}
 
+#: Profile-3.2 vectors with no root counterpart, driven under their OWN ids. ENUMERATED, not
+#: globbed, because the two orphans are not equivalent and one of them must stay out.
+#:
+#: ``001-base64url-sf-binary`` is in: ``src/core/signing/algorithms.py`` names it as the thing
+#: that grades its MUST ("Base64URL characters are not valid inside 3.2 request ``sf-binary``
+#: and MUST be rejected as ``request_signature_header_malformed``", security.mdx
+#: §"Request-profile binary value encoding"), and nothing local ran it — so the rule whose
+#: absence WAS salesagent-8qela.1 had no detector outside a box run. It is gradeable because
+#: checklist step 1 is a PARSE: ``_rejects``'s default transplants the URL without re-signing,
+#: so the base64url token reaches the wire verbatim and is refused before the signature's
+#: validity against the transplanted URL is ever evaluated.
+#:
+#: ``002-multiple-trailing-dots`` is OUT, and the reason generalises: its mutation IS the URL
+#: authority, so transplanting it onto a real route replaces the authority and DELETES THE
+#: THING THE VECTOR GRADES, after which the stale signature fails as
+#: ``request_signature_invalid`` — a red that reads as a finding and is a fixture defect. That
+#: is the inverse of a vacuous pass: a fixture made gradeable by removing its subject.
+#: Measured, not assumed. The storyboard reaches the same conclusion by a shorter route and
+#: reports it ``not_selected``: "HTTP transport cannot route to an intentionally malformed DNS
+#: authority; verified at the library level."
+_PROFILE_ONLY_VECTORS: tuple[str, ...] = ("profile-3.2/negative/001-base64url-sf-binary",)
+
 
 @lru_cache(maxsize=1)
 def load_root_signing_vectors() -> dict[str, dict[str, Any]]:
@@ -159,8 +181,15 @@ def load_signing_vectors() -> dict[str, dict[str, Any]]:
     performs, which reports the root vectors it drops as ``profile_excluded``.
 
     Keyed on the ROOT id on purpose, so the vector registries and
-    ``test_all_forty_vectors_are_accounted_for`` keep naming one stable set and the
+    ``test_every_vector_is_accounted_for`` keep naming one stable set and the
     graded count cannot quietly fall when a counterpart appears or disappears.
+
+    A profile-3.2 vector with NO root counterpart is the one case that keying by root id
+    cannot express, so those are added under their OWN ids by
+    :data:`_PROFILE_ONLY_VECTORS`. Both facts matter and only one of them is obvious: 28 of
+    the 30 profile-3.2 documents ARE driven by the substitution above (their keys are
+    root-named, which is what makes the corpus look root-only), and the remaining two are
+    orphans. Only one of those is gradeable here — see the constant.
     """
     out: dict[str, dict[str, Any]] = {}
     for bucket in ("positive", "negative"):
@@ -175,6 +204,11 @@ def load_signing_vectors() -> dict[str, dict[str, Any]]:
             named = _PROFILE_SLUG_EXCEPTIONS.get(f"{bucket}/{slug}")
             source = VECTORS_DIR / "profile-3.2" / bucket / f"{named}.json" if named else counterparts.get(slug, path)
             out[f"{bucket}/{path.stem}"] = json.loads(source.read_text())
+    for vector_id in _PROFILE_ONLY_VECTORS:
+        path = VECTORS_DIR / f"{vector_id}.json"
+        if not path.is_file():
+            raise AssertionError(f"Profile-only conformance vector not vendored: {path}")
+        out[vector_id] = json.loads(path.read_text())
     return out
 
 
@@ -648,6 +682,15 @@ TRANSPLANT: dict[str, VectorPlan] = {
         "request_signature_header_malformed",
         notes="Vector URL names sync_creatives; the transplant moves it into the required bucket. "
         "Outcome unchanged (rejects at step 1). verifier_capability NOT rewritten.",
+    ),
+    # The one profile-3.2 orphan driven under its own id; see _PROFILE_ONLY_VECTORS for why
+    # this one is gradeable and its sibling is not. Defaults are load-bearing: no re-sign, so
+    # the base64url token travels verbatim, and step 1 refuses it as a parse failure.
+    "profile-3.2/negative/001-base64url-sf-binary": _rejects(
+        "profile-3.2/negative/001-base64url-sf-binary",
+        "request_signature_header_malformed",
+        notes="Mutation is the Signature VALUE, so it must not be re-signed; the URL transplant "
+        "is harmless because step 1 parses before it verifies.",
     ),
     "negative/012-missing-expires-param": _rejects(
         "negative/012-missing-expires-param", "request_signature_params_incomplete"

@@ -900,7 +900,7 @@ def test_replayed_nonce_vector(integration_db, conformance_app) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_all_forty_vectors_are_accounted_for() -> None:
+def test_every_vector_is_accounted_for() -> None:
     """12 positive + 28 negative, each driven by exactly one test above. 0 skipped.
 
     The census is what stops a row from going quiet. Every vector is in exactly one of
@@ -912,7 +912,7 @@ def test_all_forty_vectors_are_accounted_for() -> None:
     a row moving between groups has to be moved here too, with a reason.
     """
     assert len(_POSITIVES) == 12, _POSITIVES
-    assert len(_NEGATIVES) == 28, _NEGATIVES
+    assert len(_NEGATIVES) == 29, _NEGATIVES
     assert set(_POSITIVES) | set(_NEGATIVES) == set(_VECTORS)
 
     assert _UNROUTED == [
@@ -924,7 +924,7 @@ def test_all_forty_vectors_are_accounted_for() -> None:
     ], f"the set of rows that cannot reach the resolver changed: {_UNROUTED}"
 
     assert len(_DRIVEN_POSITIVES) == 8, _DRIVEN_POSITIVES
-    assert len(_SINGLE_SHOT_NEGATIVES) == 25, "016 runs its own two-submission test; 018 is profile-inapplicable"
+    assert len(_SINGLE_SHOT_NEGATIVES) == 26, "016 runs its own two-submission test; 018 is profile-inapplicable"
     assert _PROFILE_INAPPLICABLE == ["negative/018-digest-covered-when-forbidden"], (
         f"the set of vectors whose posture a 3.2 verifier cannot hold changed: {_PROFILE_INAPPLICABLE}"
     )
