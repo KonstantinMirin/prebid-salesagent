@@ -499,12 +499,17 @@ class TestMultipleInvalidCreativesAccumulated:
         mock_package = MagicMock()
         mock_package.creative_ids = ["creative_1", "creative_2", "creative_3"]
 
-        # Three creatives, each with different validation failures
+        # Three creatives, each with different validation failures. Their format ids are
+        # three DISTINCT registry globs rather than ``format_1``/``format_2``/``format_3``:
+        # ``stamp_format_identity`` derives the stored columns through the production
+        # projection, which refuses a reference with no canonical kind, so the invented ids
+        # made this test die in its own setup. Distinctness is what the loop needs (three
+        # creatives, not one), and all three project to ``image`` from the glob alone.
         creatives = []
-        for i in range(1, 4):
+        for creative_index, format_id in enumerate(("display_300x250", "display_728x90", "display_970x250"), start=1):
             c = MagicMock()
-            c.creative_id = f"creative_{i}"
-            stamp_format_identity(c, format_id=f"format_{i}", agent_url="https://creative.example.com")
+            c.creative_id = f"creative_{creative_index}"
+            stamp_format_identity(c, format_id=format_id, agent_url="https://creative.example.com")
             c.data = {}
             creatives.append(c)
 

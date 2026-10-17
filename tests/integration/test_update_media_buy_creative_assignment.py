@@ -17,6 +17,15 @@ from tests.helpers.media_buy_write_seam import (
     read_media_buy_state,
 )
 
+#: The format the seeded creatives carry. Pure scenery for these tests -- they grade which
+#: ASSIGNMENT rows an update writes, and never read the format -- but it still has to be a
+#: reference the seller can resolve: ``stamp_format_identity`` derives the stored columns
+#: through the production projection, which refuses a reference with no canonical kind.
+#: ``display`` stood here and is matched by no registry glob and served by no catalog, so
+#: all four tests died in their own setup. ``display_300x250`` is the registry's own glob
+#: and projects to ``image`` with no catalog at all.
+_ASSIGNABLE_FORMAT_ID = "display_300x250"
+
 
 @pytest.mark.requires_db
 def test_update_media_buy_assigns_creatives_to_package(integration_db):
@@ -103,7 +112,7 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
             data={"platform_creative_id": "gam_456"},
         )
         for creative in (creative1, creative2):
-            stamp_format_identity(creative, format_id="display")
+            stamp_format_identity(creative, format_id=_ASSIGNABLE_FORMAT_ID)
         session.add_all([creative1, creative2])
         session.commit()
 
@@ -265,7 +274,7 @@ def test_update_media_buy_replaces_creatives(integration_db):
             data={},
         )
         for creative in (creative1, creative2, creative3):
-            stamp_format_identity(creative, format_id="display")
+            stamp_format_identity(creative, format_id=_ASSIGNABLE_FORMAT_ID)
         session.add_all([creative1, creative2, creative3])
 
         # Create existing assignments (creative_1 already assigned)
@@ -431,7 +440,7 @@ def test_creative_assignments_with_weights(integration_db):
             data={},
         )
         for creative in (creative1, creative2):
-            stamp_format_identity(creative, format_id="display")
+            stamp_format_identity(creative, format_id=_ASSIGNABLE_FORMAT_ID)
         session.add_all([creative1, creative2])
         session.commit()
 
@@ -577,7 +586,7 @@ def test_creative_assignments_replaces_all(integration_db):
                 status="ready",
                 data={},
             )
-            stamp_format_identity(creative, format_id="display")
+            stamp_format_identity(creative, format_id=_ASSIGNABLE_FORMAT_ID)
             session.add(creative)
         session.flush()
 

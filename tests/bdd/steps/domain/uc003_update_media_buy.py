@@ -1877,7 +1877,13 @@ def given_creative_assignments_with_state(ctx: dict, creative_state: str) -> Non
             creative_id=cid,
             tenant=ctx["tenant"],
             principal=ctx["principal"],
-            format="video_vast_4",  # incompatible with display product
+            # Incompatible with the display product, which is the whole of what this
+            # fixture needs. ``video_vast_4`` stood here and is an invented id the
+            # registry's v1 -> v2 mapping does not carry, so seeding the row was refused
+            # before the scenario's own subject ran. ``video_640x360_vast`` is the
+            # registry's own VAST glob and projects to ``video_vast`` with no catalog --
+            # still a video against a display product, so the incompatibility is intact.
+            format="video_640x360_vast",
             approved=True,
             data={"assets": {"primary": {"url": f"https://example.com/{cid}.mp4"}}},
         )

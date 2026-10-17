@@ -41,7 +41,15 @@ from tests.harness.transport import TransportResult
 #: not validated) and moves the creative to the default, which the agent serves. The
 #: first version of this file used display_300x250_image, which is the e2e stack's
 #: default format -- so on e2e_rest both cases quietly became "same format" and failed.
-_OTHER_FORMAT_ID = "display_300x250_other"
+#:
+#: IT ALSO HAS TO BE PROJECTABLE, which ``display_300x250_other`` -- the invented id that
+#: stood here -- is not. "A row is not validated" stopped being true of its IDENTITY:
+#: ``creative_identity_of`` now refuses a reference with no canonical projection, so
+#: seeding the row raised before the scenario's own subject ran. ``display_728x90``
+#: differs from both defaults (in-process ``display_300x250``, e2e
+#: ``display_300x250_image``) and is matched by the registry's own ``display_728x90``
+#: glob, so it projects to ``image`` with no catalog at all.
+_OTHER_FORMAT_ID = "display_728x90"
 
 
 def _creative(ctx: dict, creative_id: str, name: str, *, format_id: str | None = None) -> dict:

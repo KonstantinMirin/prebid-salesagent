@@ -153,7 +153,18 @@ class TestCreativeLifecycleMCP:
 
     @pytest.fixture(autouse=True)
     def mock_format_registry(self):
-        """Mock creative agent format registry to avoid real API calls."""
+        """Mock creative agent format registry to avoid real API calls.
+
+        THE VIDEO ID IS A REGISTRY GLOB and not an invented one. ``video_instream_15s``
+        stood here, and this fixture patches ``get_format`` only -- the EXISTENCE check --
+        while the canonical projection resolves its spec from ``list_all_formats``, keyed
+        on the whole ``(agent_url, id)`` identity. These references name
+        ``https://test.com``, which no catalog serves, so the projection falls through to
+        the registry glob and an invented id has no canonical kind: the write gate refused
+        the creative and three tests here went red. ``video_pre_roll_15s`` is one of the
+        registry's own 38 globs and projects to ``video_hosted`` from the id alone, with no
+        catalog and no agent_url agreement needed. The two display ids already were globs.
+        """
         from tests.helpers.adcp_factories import create_test_format
 
         # Mock formats that tests use - create with factory
@@ -170,8 +181,8 @@ class TestCreativeLifecycleMCP:
                 type="display",
                 description="Leaderboard banner",
             ),
-            "video_instream_15s": create_test_format(
-                format_id="video_instream_15s",
+            "video_pre_roll_15s": create_test_format(
+                format_id="video_pre_roll_15s",
                 name="Video Instream 15s",
                 type="video",
                 description="15 second instream video",
@@ -283,7 +294,7 @@ class TestCreativeLifecycleMCP:
                 description="Test product for creative lifecycle test",
                 format_ids=[
                     {"agent_url": "https://test.com", "id": "display_300x250_image"},
-                    {"agent_url": "https://test.com", "id": "video_instream_15s"},
+                    {"agent_url": "https://test.com", "id": "video_pre_roll_15s"},
                     {"agent_url": "https://test.com", "id": "display_728x90_image"},
                 ],
                 targeting_template={},
@@ -331,7 +342,7 @@ class TestCreativeLifecycleMCP:
             {
                 "creative_id": "creative_video_1",
                 "name": "Video Ad 30sec",
-                "format_id": {"agent_url": "https://test.com", "id": "video_instream_15s"},
+                "format_id": {"agent_url": "https://test.com", "id": "video_pre_roll_15s"},
                 "assets": build_assets(image_spec("banner")),
             },
             {
@@ -389,7 +400,7 @@ class TestCreativeLifecycleMCP:
             assert display_creative.status == "approved"  # Auto-approved due to approval_mode setting
 
             # Verify video creative
-            video_creative = next((c for c in db_creatives if _asserted_format_id(c) == "video_instream_15s"), None)
+            video_creative = next((c for c in db_creatives if _asserted_format_id(c) == "video_pre_roll_15s"), None)
             assert video_creative is not None
 
             # Verify leaderboard creative
@@ -743,7 +754,7 @@ class TestCreativeLifecycleMCP:
                     creative_id="search_test_video_1",
                     principal_id=self.test_principal_id,
                     name="Holiday Video Ad",
-                    format_id="video_instream_15s",
+                    format_id="video_pre_roll_15s",
                     status="approved",
                     data={"assets": build_assets(image_spec("banner"))},
                 ),
