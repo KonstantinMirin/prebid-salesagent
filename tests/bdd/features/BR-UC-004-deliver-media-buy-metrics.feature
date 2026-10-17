@@ -742,11 +742,26 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: sort_by metric available - seller uses requested metric
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports reporting dimension "placement"
+    And the seller reports placement "pl-A" with 3000 impressions, 150 spend and 30 clicks
+    And the seller reports placement "pl-B" with 1500 impressions, 200 spend and 10 clicks
+    And the seller reports placement "pl-C" with 500 impressions, 50 spend and 50 clicks
     And the seller reports metric "clicks"
     When the Buyer Agent requests delivery metrics for "mb-001" with reporting_dimensions {"placement": {"sort_by": "clicks"}}
     Then the response is compliant with the get_media_buy_delivery spec
     And the response placement breakdown should be sorted by "clicks"
+    And the response placement breakdown should be ordered "pl-C", "pl-A", "pl-B"
     # BR-RULE-091 INV-6 counter-example: sort_by metric reported -> uses requested metric
+    # The three placement rows are the same ones the fallback sibling above names, and
+    # they are here for the same reason: each sortable metric ranks them differently
+    # (spend B > A > C, impressions A > B > C, clicks C > A > B), so the named ORDER is
+    # the only form that separates "sorted by the REQUESTED metric" from "sorted by
+    # something". The seller used to synthesize a split from one weight vector when the
+    # adapter reported none, which is rank-identical across every metric; that branch was
+    # deleted because it returned invented placement ids to every real tenant, and the
+    # rows now come from the mock adapter's simulate_breakdowns. This scenario was left
+    # relying on the deleted synthesis and went red on all four transports
+    # (salesagent-1c6sr).
+    # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/media-buy/get-media-buy-delivery-response.json property=by_placement
 
   @T-UC-004-dim-multi @invariant @BR-RULE-091 @reporting-dimensions
   Scenario: Multiple dimensions requested simultaneously
