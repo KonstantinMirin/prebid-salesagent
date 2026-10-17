@@ -1097,12 +1097,12 @@ Feature: BR-UC-018 List Creatives
 
   @T-UC-018-format-kinds-filter-matches-the-projected-kind @schema-v3.2 @list-filter @format-kind
   Scenario: A creative synced by a legacy format_id is returned by a format_kinds filter naming the kind that reference projects to
-    Given the buyer synced a creative on legacy format_id "display_300x250" and one on "audio_30s", which no registry pattern projects
+    Given the buyer synced a creative on legacy format_id "display_300x250" and was refused a creative on "audio_30s", which no registry pattern projects
     When the Buyer Agent sends list_creatives with filters.format_kinds ["image"]
     Then the response is compliant with the list_creatives spec
     And the creatives array should contain exactly the creative synced on "display_300x250"
     And that creative should be listed by format_id, carrying no format_kind
-    And the creatives array should NOT include the creative whose format_id projects to no canonical kind
+    And the library holds no creative for the reference that projects to no canonical kind
 
     # The both-arms rule, and it is the one a reasonable reading gets backwards.
     # registries/v1-canonical-mapping.json is "authoritative for v1 -> v2 projection
@@ -1115,12 +1115,21 @@ Feature: BR-UC-018 List Creatives
     # that returned only canonically-synced rows here would be treating `format_kind` as
     # an arm marker instead of as the identity.
     #
-    # The second creative is the fail-closed half, and it is a REAL row rather than a
-    # constructed one: `audio_30s` is in the registry the A2A path validates against, and
-    # no registry pattern projects it, so its canonical identity is genuinely absent
-    # rather than merely unset. The sixth normative step is to fail closed, so a creative
-    # that is not KNOWN to be any kind matches no kind -- it must not be coalesced to a
-    # default and answered as if it were.
+    # The second reference is the fail-closed half, and the OUTCOME IT NAMES MOVED. It
+    # used to be a seeded ROW carrying `format_kind` NULL, and the claim was that a
+    # creative "not KNOWN to be any kind matches no kind". That row is now unrepresentable:
+    # `creatives.format_kind` is NOT NULL and `creative_identity_of` refuses a reference
+    # with no canonical projection, so the write is REFUSED instead of stored unresolved
+    # (salesagent-jzhea). Asserting the old absence-from-a-filter would mean seeding a
+    # state this seller cannot reach, which grades a seller no deployment runs.
+    #
+    # So the sixth normative step is graded where it now fires -- at the WRITE -- and the
+    # read-side claim becomes the consequence: the reference never enters the library, so
+    # no kind filter can return it. That is strictly more than the old pair said. It names
+    # the refusal AND the absence, and a seller that quietly stored kind=NULL again would
+    # fail the first half rather than passing the second by accident.
+    # `audio_30s` is still the reference, and still a REAL one: it is in the registry the
+    # A2A path validates against, and no registry pattern projects it.
     # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/creative-filters.json property=format_kinds
     # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/creative/list-creatives-response.json property=format_kind
 

@@ -96,6 +96,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
 
+import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from src.core.schemas import CreativeFormatIdentity, FormatId, canonical_agent_url
@@ -110,7 +111,14 @@ from tests.helpers.pinned_schema import validator_for
 # different formats" precondition. All three are in the standard format registry:
 # the A2A path round-trips format_id through a string and re-validates it against
 # known formats, so an unregistered id would be rejected on that transport.
-_SYNCED_FORMATS = ("display_300x250", "video_640x480", "audio_30s")
+#
+# The audio id is ``audio_15s`` and not ``audio_30s``, which is the only audio id the
+# registry's v1 -> v2 mapping carries -- measured against the pinned
+# registries/v1-canonical-mapping.json, whose 38 globs are display_*, video_* and
+# ``audio_15s`` alone. ``audio_30s`` projects to no canonical kind and the write gate
+# refuses it, so seeding the row raised. What this precondition needs is three DIFFERENT
+# kinds (image / video_hosted / audio_hosted), which the duration does not change.
+_SYNCED_FORMATS = ("display_300x250", "video_640x480", "audio_15s")
 
 # Bind the UC-018 feature. Whole-feature binding via scenarios() is the repo convention
 # the CI shard-splitter requires (scripts/ci/shard_split.py).
@@ -1940,48 +1948,51 @@ def given_creatives_on_canonical_kinds(ctx: dict, first: str, second: str) -> No
 
 @given(
     parsers.parse(
-        'the buyer synced a creative on legacy format_id "{projecting}" and one on "{unprojectable}", '
-        "which no registry pattern projects"
+        'the buyer synced a creative on legacy format_id "{projecting}" and was refused a creative '
+        'on "{unprojectable}", which no registry pattern projects'
     )
 )
 def given_creatives_on_legacy_ids(ctx: dict, projecting: str, unprojectable: str) -> None:
-    """Seed two legacy-arm creatives: one whose reference projects to a kind, one whose does not.
+    """One legacy-arm creative that projects, and one the write path REFUSES.
 
-    Both go through ``_seed_creative``, which derives the stored columns with the same
-    production accessor the sync path runs — including the v1 -> v2 projection. So which of
-    the two ends up with a canonical kind is decided by the seller's own registry order
-    rather than by this fixture, which is what makes the pair falsifiable: a fixture that
+    ``_seed_creative`` derives the stored columns with the same production accessor the
+    sync path runs — including the v1 -> v2 projection — so which reference resolves is
+    decided by the seller's own registry order rather than by this fixture. A fixture that
     stamped the kinds itself would grade its own arithmetic.
 
-    The projection is then asserted to have gone BOTH WAYS before the filter runs. Without
-    that, a registry change that started projecting ``audio_30s`` (or stopped projecting
-    ``display_300x250``) would turn this scenario into a vacuous pass — two rows that match
-    or two that do not, with the partition gone and nothing saying so.
+    THE SECOND HALF IS A REFUSAL AND NOT A ROW, which is where this scenario moved. It
+    used to seed both and assert ``kinds[unprojectable] is None``: a creative carrying no
+    canonical kind, which the read filter then had to decline to match. That state is
+    unrepresentable now — ``creatives.format_kind`` is NOT NULL and
+    ``creative_identity_of`` refuses a reference with no canonical projection — so the
+    assertion is on the REFUSAL, which is what fails closed today. The partition is still
+    asserted BOTH WAYS before the filter runs, so a registry change that started
+    projecting ``audio_30s`` (or stopped projecting ``display_300x250``) reddens this step
+    instead of making the scenario pass vacuously.
+
+    ``AdCPCapabilityNotSupportedError`` and not a bare ``Exception``: the code the gate
+    raises is ``UNSUPPORTED_FEATURE``, and matching anything would let a database error,
+    an authentication failure or a typo in the id satisfy the precondition.
     """
+    from src.core.exceptions import AdCPCapabilityNotSupportedError
+
     env = ctx["env"]
     tenant, principal = _get_or_create_tenant_and_principal(env)
-    rows = {
-        format_id: _seed_creative(tenant, principal, format_id, name=_legacy_label(format_id))
-        for format_id in (projecting, unprojectable)
-    }
-    kinds = {format_id: CreativeFormatIdentity.from_row(row).kind for format_id, row in rows.items()}
-    assert kinds[projecting] in _CANONICAL_FORMAT_KINDS, (
+    row = _seed_creative(tenant, principal, projecting, name=_legacy_label(projecting))
+    projected_kind = CreativeFormatIdentity.from_row(row).kind
+    assert projected_kind in _CANONICAL_FORMAT_KINDS, (
         f"the scenario needs {projecting!r} to project to a canonical kind, but the seeded row "
-        f"carries kind={kinds[projecting]!r}; the partition this scenario grades does not exist"
+        f"carries kind={projected_kind!r}; the partition this scenario grades does not exist"
     )
-    assert kinds[unprojectable] is None, (
-        f"the scenario needs {unprojectable!r} to project to NOTHING, but the seeded row carries "
-        f"kind={kinds[unprojectable]!r}; the fail-closed half of this scenario would pass vacuously"
-    )
+    with pytest.raises(AdCPCapabilityNotSupportedError):
+        _seed_creative(tenant, principal, unprojectable, name=_legacy_label(unprojectable))
 
     ctx["tenant"] = tenant
     ctx["principal"] = principal
-    ctx["library"] = [
-        _Seeded(row.creative_id, _legacy_label(format_id), "approved", (), None) for format_id, row in rows.items()
-    ]
-    ctx["projected_kind"] = kinds[projecting]
-    # Which row the fail-closed Then excludes is recorded here rather than spelled there, so
-    # the id lives once -- in the scenario -- and the step cannot name a different one.
+    ctx["library"] = [_Seeded(row.creative_id, _legacy_label(projecting), "approved", (), None)]
+    ctx["projected_kind"] = projected_kind
+    # Which label the fail-closed Then looks for is recorded here rather than spelled there,
+    # so the id lives once -- in the scenario -- and the step cannot name a different one.
     ctx["unprojectable_label"] = _legacy_label(unprojectable)
 
 
@@ -2095,19 +2106,31 @@ def then_legacy_creative_listed_by_format_id(ctx: dict) -> None:
     )
 
 
-@then("the creatives array should NOT include the creative whose format_id projects to no canonical kind")
+@then("the library holds no creative for the reference that projects to no canonical kind")
 def then_unprojectable_creative_excluded(ctx: dict) -> None:
-    """Fail closed: a creative with no canonical identity matches no kind.
+    """Fail closed: a reference with no canonical identity never becomes a row.
 
-    The Given has already asserted that this row's projection genuinely did not resolve, so
-    an exclusion here is the seller declining to guess rather than the fixture agreeing with
-    itself.
+    THE CONSEQUENCE OF THE GIVEN'S REFUSAL, asserted on the wire rather than inferred from
+    it. The Given has already shown the write path refuses the reference; this shows the
+    buyer's own view agrees -- no entry under that name comes back, so there is no row for
+    a kind filter to have to decline.
+
+    IT IS NOT IMPLIED BY THE GIVEN'S ``pytest.raises``, which is why it is still here. A
+    raise says the call ended in an error; it does not say nothing was written. A seller
+    that inserted the row and THEN failed the projection leaves exactly the state this
+    scenario is about -- a creative with no canonical identity in the library -- and the
+    wire envelope cannot tell the two apart. The buyer's own read can.
+
+    Matched on the NAME and not on a creative_id, because the refused creative has no id:
+    it was never created. ``_ids_labelled`` would refuse the lookup rather than answer an
+    empty set, so there is no way to write this as an id intersection that could fail.
     """
-    excluded = _ids_labelled(ctx, ctx["unprojectable_label"])
-    returned = set(_wire_creative_ids(ctx))
-    assert not (returned & excluded), (
-        f"the filter returned a creative with no canonical kind, so a NULL identity was "
-        f"treated as matching {ctx['projected_kind']!r}: {sorted(returned & excluded)}"
+    label = ctx["unprojectable_label"]
+    stored = [entry.get("name") for entry in _wire_creatives(ctx)]
+    assert label not in stored, (
+        f"a creative was stored for a reference with no canonical projection, so the write "
+        f"gate did not fail closed before inserting: the buyer's library carries {label!r} "
+        f"and the filter answered it as matching {ctx['projected_kind']!r}. Returned: {stored}"
     )
 
 
