@@ -71,7 +71,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from src.core.errors.details import CapabilityRefusalDetails, SelectorConflictDetails, SelectorRouteSummary
 from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPConflictingSelectorsError
-from src.core.schemas import CreativeFormatIdentity, FormatOptionIdentity
+from src.core.schemas import FormatOptionIdentity, FormatSelector
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +197,7 @@ class FormatRoute:
     :func:`satisfies`.
     """
 
-    claim: CreativeFormatIdentity
+    claim: FormatSelector
     params: Mapping[str, Any] | None = None
     #: The request field this route was read from, for the refusal's ``field`` pointer.
     #: ``None`` for a stored creative, whose identity is columns and not a request arm --
@@ -527,7 +527,7 @@ def _unsatisfied_params(claimed: Mapping[str, Any], accepted: Mapping[str, Any])
 
 
 def _legacy_route(
-    identity: CreativeFormatIdentity,
+    identity: FormatSelector,
     declarations: Sequence[LibraryFormatDeclaration],
     params: Mapping[str, Any] | None,
 ) -> FormatSatisfaction:
@@ -779,7 +779,7 @@ def _kind_route(
 
 
 def _canonical_lane(
-    identity: CreativeFormatIdentity,
+    identity: FormatSelector,
     declarations: Sequence[LibraryFormatDeclaration],
     params: Mapping[str, Any] | None,
 ) -> FormatSatisfaction:
@@ -811,7 +811,7 @@ def _canonical_lane(
 
 
 def _legacy_lane(
-    identity: CreativeFormatIdentity,
+    identity: FormatSelector,
     legacy_references: tuple[LibraryFormatId, ...],
 ) -> FormatSatisfaction:
     """Grade a claim against a product that declares only the deprecated ``format_ids``.
@@ -958,13 +958,13 @@ def selector_routes(
     for option_ref in format_option_refs or []:
         routes.append(
             FormatRoute(
-                CreativeFormatIdentity(option=FormatOptionIdentity.of_reference(option_ref)),
+                FormatSelector(option=FormatOptionIdentity.of_reference(option_ref)),
                 field="format_option_refs",
             )
         )
     if format_kind is not None:
         # The ONE route ``params`` belongs to: a buyer's params accompany ``format_kind``.
-        routes.append(FormatRoute(CreativeFormatIdentity(kind=format_kind), params=params or {}, field="format_kind"))
+        routes.append(FormatRoute(FormatSelector(kind=format_kind), params=params or {}, field="format_kind"))
     for legacy_ref in format_ids or []:
         kind: str | None = None
         try:
@@ -973,7 +973,7 @@ def selector_routes(
             logger.debug(
                 "No canonical projection for package selector %r; the reference is its only identity", legacy_ref
             )
-        routes.append(FormatRoute(CreativeFormatIdentity.of_legacy(legacy_ref, kind=kind), field="format_ids"))
+        routes.append(FormatRoute(FormatSelector.of_legacy(legacy_ref, kind=kind), field="format_ids"))
     return tuple(routes)
 
 
@@ -1143,7 +1143,7 @@ def resolve_routes(
 
 
 def satisfies(
-    identity: CreativeFormatIdentity,
+    identity: FormatSelector,
     declarations: Any,
     *,
     params: Mapping[str, Any] | None = None,

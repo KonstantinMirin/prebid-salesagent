@@ -260,7 +260,7 @@ def _process_assignments(
                             # declaring ``format_options[]`` imposed no restriction here.
                             stored_identity = CreativeFormatIdentity.from_row(db_creative_result)
                             verdict = satisfies(
-                                stored_identity, product.format_options, legacy_catalog=product.format_ids
+                                stored_identity.as_selector(), product.format_options, legacy_catalog=product.format_ids
                             )
 
                             if not verdict:

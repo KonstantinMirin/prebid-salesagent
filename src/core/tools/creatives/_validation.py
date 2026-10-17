@@ -5,7 +5,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from adcp.types.canonical_creative import CanonicalFormatKindStr
 from adcp.types.legacy import LegacyCreativeAsset as CreativeAsset
+from pydantic import TypeAdapter
+from pydantic import ValidationError as PydanticValidationError
 
 from src.core.errors.details import EntityRefDetails, ValidationDetails
 from src.core.exceptions import (
@@ -22,8 +25,11 @@ from src.core.schemas import (
     CreativePolicy,
     CreativeStatusEnum,
     canonical_agent_url,
-    creative_format_identity,
 )
+
+#: The pinned canonical-kind vocabulary as a validator. Built once: a TypeAdapter compiles
+#: its core schema on construction, and this is the only vocabulary check on the sync path.
+_CANONICAL_KIND: TypeAdapter[CanonicalFormatKindStr] = TypeAdapter(CanonicalFormatKindStr)
 
 logger = logging.getLogger(__name__)
 
@@ -117,21 +123,33 @@ def _validate_creative_input(
     if not creative.name or str(creative.name).strip() == "":
         raise AdCPValidationError(field="name")
 
-    # The format identity, by whichever arm the creative carries. This used to demand
-    # ``format_id`` and refuse anything without it -- so a canonical creative, which the spec
-    # says new creatives should send, cleared the boundary and was then rejected by name on a
-    # field it was never required to supply.
-    try:
-        identity = creative_format_identity(creative)
-    except ValueError as exc:
-        # Neither arm, both arms, or a format_kind outside the pinned vocabulary. The model's
-        # oneOf refuses the first two on construction, so what reaches here is the third.
-        raise AdCPValidationError(
-            details=ValidationDetails(rejected_value=str(creative.format_kind)),
-            field="format_kind",
-        ) from exc
+    # THE VOCABULARY CHECK, asked of the pinned type directly. This used to build a
+    # ``CreativeFormatIdentity`` purely to borrow that type's construction validator -- but
+    # this function holds no projection, and the identity's ``kind`` is mandatory, so it was
+    # constructing an identity it had no business owning and could no longer supply. The
+    # user's ruling on exactly this shape: a function other than the creation path that
+    # needs to derive a kind is reading the wrong field.
+    #
+    # It is still a real check and not redundant, measured rather than assumed:
+    # ``Creative.format_kind`` is annotated ``str | None``, so the DTO accepts
+    # ``format_kind="not_a_kind"`` and this is the only place on the sync path that refuses
+    # it. What the DTO DOES already enforce is the arm exclusivity -- both arms and neither
+    # arm are both refused on construction above -- which is the other half the identity
+    # construction used to provide here.
+    if creative.format_kind is not None:
+        try:
+            _CANONICAL_KIND.validate_python(creative.format_kind)
+        except PydanticValidationError as exc:
+            raise AdCPValidationError(
+                details=ValidationDetails(rejected_value=str(creative.format_kind)),
+                field="format_kind",
+            ) from exc
 
-    if identity.assertion is None:
+    # The retained assertion, read off the arm the creative carries rather than off an
+    # identity. ``format_id`` IS the assertion verbatim; the identity's ``assertion`` member
+    # was only ever a copy of it.
+    assertion = creative.format_id
+    if assertion is None:
         # No retained assertion, so the creative named a KIND from a closed vocabulary rather
         # than a reference to a format some agent hosts. There is no agent to ask: the
         # registry walk below does not apply and the vocabulary check above is the whole of
@@ -145,9 +163,9 @@ def _validate_creative_input(
 
     # The retained assertion names a format a creative agent must actually serve. Canonical
     # agent_url, because a comparison requires it and because this is the value that gets
-    # dialled — the same form ``identity.legacy`` is keyed on.
-    agent_url = canonical_agent_url(identity.assertion.agent_url)
-    format_id = identity.assertion.id
+    # dialled — the same form the identity's ``legacy`` key is built from.
+    agent_url = canonical_agent_url(assertion.agent_url)
+    format_id = assertion.id
 
     # Skip external validation for adapter-provided formats (non-HTTP URLs)
     # These formats are served by the adapter itself (e.g., broadstreet://default)

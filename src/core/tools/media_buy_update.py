@@ -490,7 +490,7 @@ def _validate_creatives_for_assignment(
         # The stored identity, through the ONE row reader, with BOTH arms -- the canonical
         # kind and option as well as the retained legacy assertion.
         stored = CreativeFormatIdentity.from_row(creative)
-        verdict = satisfies(stored, product.format_options, legacy_catalog=product.format_ids)
+        verdict = satisfies(stored.as_selector(), product.format_options, legacy_catalog=product.format_ids)
         if verdict:
             continue
         if verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED:
