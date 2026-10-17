@@ -99,30 +99,37 @@ rolls back on a raise, and repositories hang off it. Nothing about the repositor
 changes either: it owns queries, tenant scoping and the business rules about which rows a
 caller may see.
 
-What changes is the repository's **return type**:
+**THE REPOSITORY'S RETURN TYPE DOES NOT CHANGE.** It keeps returning ORM rows, callers keep
+mutating them, and the Unit of Work keeps flushing — which is what SQLAlchemy's identity map
+and unit of work are for. An earlier version of this document said the opposite, that
+repositories must return domain models, and that rule was wrong. It was not solving a problem:
 
-```python
-# today — the ORM row escapes upward
-def get_by_id(self, creative_id: str, principal_id: str) -> Creative: ...
+- it required a carrier (`StoredCreative`) because a `CreativeAsset` alone does not hold
+  `created_at`/`updated_at`, which the response needs;
+- frozen, that carrier broke every write path, because `_update_existing_creative` uses the
+  row as its working object (`.updated_at`, `.name`, `.status` across three branches) and
+  nothing calls save — the row is session-attached and the UoW flushes the assignments;
+- unfrozen, it would have been worse: the assignments would succeed against a detached copy
+  and silently never reach the database;
+- and it put row -> carrier -> row transformations in the path for no gain.
 
-# with the layer — the row stays inside
-def get_by_id(self, creative_id: str, principal_id: str) -> CreativeAsset | None: ...
-```
+So the layer does one thing: it owns the translation between a row and the pinned shape, at
+the edges that need one. Nothing is required to stop using the ORM as an ORM.
 
-So the layering becomes:
+## The problem it actually solves
 
-```
-_impl / service        domain models only
-    |
-repository            queries, tenant scoping, business rules   <- owns the mapper
-    |   to_row / to_domain
-row (ORM)             private to persistence
-    |
-UoW                   session lifetime
-```
+Measured at `ea3a3e54a`: **21 sites outside the repositories read the storage layout
+directly** — `creative.data["rejection_reason"]`, `creative.data.get("tags", [])`,
+`creative.data["media_buy_id"]`, `creative.data["ai_review"]`. Each one has to know that the
+value lives inside a JSON blob and under that exact key.
 
-A repository is already named as a persistence edge in CLAUDE.md pattern #4, which is what
-permits it to turn a model into a document. The mapper is that permission given a type.
+That is the coupling worth removing, and it is how `tags` came to have four readers and no
+writer (`salesagent-gxudh`): no single place owned the key, so the write path simply never
+wrote it while three readers and two pinned filters read it.
+
+Routing those 21 sites through the mapper names the layout once. It changes no return type,
+no write path and no wire output.
+
 
 ### Where a repository-owned column lives
 
@@ -151,24 +158,42 @@ and leaves the domain model — which is the shape the whole exercise is for.
 - **A data migration.** No column moves in the first cut. The mapper describes the schema
   that exists; changing the schema is a separate, later decision with its own gate.
 
-## Proving it on Creative
+## Status: steps 1 and 2 are landed, and that is where this stops
 
-In order, each step measurable on its own:
-
-1. `src/core/database/mapping/_base.py` — the protocol and the derived coverage check. Its
-   own grading is a fire-probe: construct a mapper that omits a real column and confirm it
-   raises, then add the column and confirm it does not.
+1. `src/core/database/mapping/_base.py` — the `RowMapper` base and the derived coverage check
+   that refuses at class definition. **Landed** (`194d8f06f`), fire-probed seven ways in both
+   directions against the real 16-column `creatives` table, including: append a column to the
+   live table and the unchanged mapper refuses, which is what proves the omission set is
+   derived and not a snapshot.
 2. `src/core/database/mapping/creative.py` — the `CreativeAsset` ↔ `Creative` mapper,
-   absorbing `_identity_columns` and the twelve blob fields.
-3. `CreativeRepository` returns domain models. Its ~12 read methods and `create` /
-   `set_identity` change signature; the ~18 call sites in `src/core/tools/creatives/` and
-   `src/admin/blueprints/` stop reading ORM attributes.
-4. `Creative.principal_id` deleted from the domain model, now repository-owned.
+   absorbing `_identity_columns`. **Landed** (`0e1433115`). Accounting: 2 domain + 8
+   repository_owned + 6 override = 16 columns, zero unaccounted.
 
-**The grading is behavioural, per the epic's second directive.** The creative BDD scenarios
-on a2a, mcp, rest and e2e_rest must pass exactly as before, measured on a cassini box run
-against a named baseline, judged per nodeid. This change is a refactor: a nodeid that passed
-before and fails after is a defect in the mapper, and a nodeid that was xfailed before and
+**Steps 3 and 4 are CANCELLED**, and the reason is recorded rather than left for someone to
+rediscover. They were "the repository returns domain models" and "delete
+`Creative.principal_id` from the domain model", and both followed from the return-type rule
+this document used to state. With that rule gone they answer no question. Three beads existed
+only to resolve problems they created and are closed as refuted: `salesagent-eusx2` (what
+carries the repository-owned columns on a read), `salesagent-6aa6y` (whether `to_domain`
+should refuse a row that `list_creatives` deliberately degrades), `salesagent-pyvcb` (how a
+frozen carrier expresses the upsert's mutations).
+
+**What remains worth doing, and it is small:** route the 21 blob-reading sites through the
+mapper so the layout is named once. No return type changes, no write path changes, no wire
+output changes.
+
+**Graded behaviourally.** The creative BDD scenarios on a2a, mcp, rest and e2e_rest must pass
+exactly as before, measured on a box run against a named baseline, judged per nodeid. A nodeid
+that passed before and fails after is a defect in the mapper; one that was xfailed before and
 passes after needs explaining before it is believed.
 
 No schema change, no data change, no wire change. If the wire moves, the mapper is wrong.
+
+## What this document got wrong, kept so it is not repeated
+
+The first version made a rule ("repositories return domain models") out of something that was
+never a problem, and the rule generated all of the following before anything measured it: a
+carrier type, a frozen-versus-unfrozen question, a tolerance conflict with `list_creatives`,
+a mutation problem with the sync upsert, and a scope of ~31 call sites across six directories
+in place of the ~18 in two that it claimed. The problem it was reaching for — 21 sites knowing
+the JSON blob layout — needed none of that.
