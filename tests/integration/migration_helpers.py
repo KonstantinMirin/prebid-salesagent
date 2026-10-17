@@ -115,13 +115,25 @@ def reset_to_revision(
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM accounts"))
         conn.execute(text("DELETE FROM tenants"))
+        has_host_name = conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'tenants' AND column_name = 'virtual_host_name'"
+            )
+        ).first()
+        host_name_column = "virtual_host_name, " if has_host_name else ""
+        host_name_value = ":vhost, " if has_host_name else ""
         conn.execute(
             text(
-                "INSERT INTO tenants (tenant_id, name, subdomain, virtual_host, ad_server, is_active) "
-                "VALUES (:tid, :name, :subdomain, :vhost, 'mock', true)"
+                "INSERT INTO tenants "
+                f"(tenant_id, name, subdomain, virtual_host, {host_name_column}ad_server, is_active) "
+                f"VALUES (:tid, :name, :subdomain, :vhost, {host_name_value}'mock', true)"
             ),
             # virtual_host is NOT NULL from revision 7f31c0ab94d2 and its index is UNIQUE, so
             # the value is derived from the tenant_id to stay distinct across seeded tenants.
+            # That revision ADDS virtual_host_name in the same step and makes it NOT NULL too,
+            # so it is written only when the caller's revision is at or past it -- three of the
+            # four callers target earlier revisions where the column does not exist yet.
             {
                 "tid": tenant_id,
                 "name": tenant_name,
