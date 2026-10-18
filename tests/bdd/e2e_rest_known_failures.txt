@@ -390,12 +390,19 @@ tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_
 tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-nested_populated native postal map and metros-geo_metros.nielsen_dma=true, geo_postal_areas US=["zip"]-geo_metros equals {nielsen_dma: true} and geo_postal_areas has US containing "zip"]
 tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-postal_areas_native DE/CH/AT via native country-keyed map-geo_postal_areas DE=["plz"] CH=["plz"] AT=["plz"]-geo_postal_areas equals {DE: [plz], CH: [plz], AT: [plz]}]
 
-# salesagent-3cs7o.54 — asset-level provenance is absent from the stored creative over
-# e2e_rest only; the same scenario passes on a2a, mcp and rest. The pin mandates the
-# behaviour (core/creative-asset.json /properties/provenance: an asset with its own
-# provenance "replaces this object entirely (no field-level merging)"), and production
-# carries it on every hop readable from the source — the DTO, deep_strip_to_schema,
-# _build_creative_data, the JSONType serializer, the generative overwrite, the update
-# merge and _validation — each eliminated by direct measurement and listed on the ticket.
-# The remaining step is a live-stack probe, so this is ledgered rather than guessed at.
-tests/bdd/test_uc006_sync_creatives.py::test_inv5__assetlevel_provenance_replaces_creativelevel_entirely[e2e_rest]
+# Graduated: test_uc006_sync_creatives.py::test_inv5__assetlevel_provenance_replaces_
+# creativelevel_entirely[e2e_rest]. The entry read "asset-level provenance is absent from
+# the stored creative over e2e_rest only ... production carries it on every hop readable
+# from the source ... each eliminated by direct measurement ... the remaining step is a
+# live-stack probe". The probe has been taken and the answer was that nothing was absent:
+# the THEN read next(iter(stored_assets.values())) — whichever asset the stored document
+# lists first — and 1883dedc4 made the in-process payload two assets (banner_image +
+# click_url) where it had been one, so the assertion read the url asset and found no
+# provenance on it. Measured on noetis-b-vm, the read-back lists click_url first. The Given
+# now records the role it attached the declaration to and both THENs read that asset.
+# Evidence: in-process a2a/mcp/rest went 3 failed -> 3 passed on a narrowed box run with
+# nothing else changed, and the full in-network run innet_181026_0036 (host noetis-b-vm,
+# run 0c551f12a08c463daaf5cfe62758dfe3) reports this nodeid XPASSED, which is what un-routes
+# it here. Production stores asset-level provenance, as salesagent-gxudh already records
+# (provenance is one of the three pinned fields that DO reach the row).
+# salesagent-3cs7o.54
