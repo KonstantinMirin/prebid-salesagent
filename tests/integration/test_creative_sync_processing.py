@@ -463,36 +463,56 @@ class TestStaticPreviewUpdate:
 
     BDD: UC-006-EXT-H-01/02 (update path)
 
-    Static creatives require preview validation via the creative agent.
-    The format must be in all_formats for the preview call to execute.
+    Static creatives require preview validation via the creative agent. The format must
+    be in all_formats for the preview call to execute — and it is, by default: the env's
+    registry serves the committed capture, which carries ``DEFAULT_FORMAT_REFERENCE``'s
+    static ``display_300x250_image``. A ``_setup_static_format`` helper used to narrow
+    the catalogue to a hand-rolled ``MagicMock`` format for that purpose, in two
+    identical copies in this file; both are gone. A stand-in format is the defect
+    1883dedc4 names: ``canonical_kind_for`` reads ``spec.canonical.kind`` off it and puts
+    a child mock's repr through the pinned vocabulary.
     """
 
-    def _setup_static_format(self, env):
-        """Set up a static format in all_formats so preview_creative is called."""
-        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
-
-        mock_format = MagicMock()
-        mock_format.format_id = LibraryFormatId(agent_url=DEFAULT_AGENT_URL, id=DEFAULT_FORMAT_REFERENCE["id"])
-        mock_format.agent_url = DEFAULT_AGENT_URL
-        mock_format.output_format_ids = None  # Static (not generative)
-        env.set_served_catalogue([mock_format])
-
     def test_update_no_format_no_url_fails(self, integration_db):
-        """Update creative: no matching format in registry AND no media_url → action=failed.
+        """Update creative: NO PREVIEWS from the agent and no media_url → action=failed.
 
         BDD: UC-006-EXT-H-01 (update path)
-        When the creative has no matching format_obj and no user-provided media_url,
-        the system returns action=failed.
-        Lines covered: 392-418 (_processing.py)
+
+        KNOWN RED — a production defect, filed as salesagent-2je8o. The refusal this
+        asserts exists on the CREATE path and not on the UPDATE path, measured by
+        nesting rather than by reading the message:
+
+            _create_new_creative        refusal at indent 20, inside the
+                                        `if format_obj and is_agent_backed(...)` arm
+                                        (the `else` of `if preview_result and
+                                        preview_result.get("previews")`)
+            _update_existing_creative   the SAME refusal at indent 16, as the `else` of
+                                        `if format_obj and is_agent_backed(...)` itself
+
+        So an update whose format resolves and whose agent returns no previews proceeds
+        to 'updated' with no url at all, while the identical create is rejected
+        CREATIVE_REJECTED/no_previews. The update's copy is also attached to a branch
+        where no preview was attempted, so its own message ("Preview generation returned
+        nothing") describes something that did not happen.
+
+        The premise this file used to state — "no matching format_obj" — was not
+        reachable: it held only while the harness served an EMPTY catalogue to
+        `list_all_formats` and a MagicMock to `get_format`, i.e. while two stand-ins
+        disagreed. Under a reference-formats deployment (every test deployment and the
+        e2e server) both reads consult one override, so a format that passes validation
+        is always in all_formats. The reachable premise is the one named above, and it
+        is the premise this test's assertion was always really about.
         """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            # Do NOT set up all_formats → format_obj will be None
 
-            # Create succeeds (no format validation without format_obj)
+            # Create succeeds: the default asset carries a url, so the create path's
+            # own no-previews branch takes its has_media_url arm.
             env.call_impl(creatives=[_creative(creative_id="c_no_preview_up")])
 
-            # Update: format still not in all_formats, no url in assets
+            # Update with no url anywhere. The agent returns no previews (the env's
+            # preview_creative recorder answers {} — salesagent-1bc7l owns the missing
+            # capture), which is exactly the state the create path refuses.
             result = env.call_impl(
                 creatives=[
                     _creative(
@@ -546,7 +566,6 @@ class TestStaticPreviewUpdate:
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            self._setup_static_format(env)
 
             # preview_creative returns valid result for create
             env.mock["registry"].return_value.preview_creative = AsyncMock(
@@ -579,15 +598,6 @@ class TestStaticPreviewDimensionExtraction:
     Lines covered: 351-383 (update), 687-702 (create)
     """
 
-    def _setup_static_format(self, env):
-        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
-
-        mock_format = MagicMock()
-        mock_format.format_id = LibraryFormatId(agent_url=DEFAULT_AGENT_URL, id=DEFAULT_FORMAT_REFERENCE["id"])
-        mock_format.agent_url = DEFAULT_AGENT_URL
-        mock_format.output_format_ids = None
-        env.set_served_catalogue([mock_format])
-
     def test_update_preview_dimensions_extracted(self, integration_db):
         """Update: preview agent returns dimensions → stored in DB."""
         from unittest.mock import AsyncMock
@@ -607,7 +617,6 @@ class TestStaticPreviewDimensionExtraction:
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            self._setup_static_format(env)
 
             # Create with a basic preview
             env.mock["registry"].return_value.preview_creative = AsyncMock(
@@ -652,7 +661,6 @@ class TestStaticPreviewDimensionExtraction:
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            self._setup_static_format(env)
 
             env.mock["registry"].return_value.preview_creative = AsyncMock(return_value=preview_with_dims)
             # Use empty assets so preview URL is not overshadowed by user URL
@@ -695,12 +703,16 @@ class TestFormatChangeOnUpdate:
                 ]
             )
 
-            # Update with format B
+            # Update with format B. Both halves of the change must be formats the
+            # reference agent SERVES, or the update is refused at validation and the
+            # test reads 'failed' instead of grading the replacement: the bare
+            # ``display_728x90`` is not one of the capture's 71 ids, ``_image`` is.
+            format_b = "display_728x90_image"
             result = env.call_impl(
                 creatives=[
                     _creative(
                         creative_id="c_fmt_change",
-                        format_id={"id": "display_728x90", "agent_url": DEFAULT_AGENT_URL},
+                        format_id={"id": format_b, "agent_url": DEFAULT_AGENT_URL},
                     )
                 ]
             )
@@ -710,7 +722,7 @@ class TestFormatChangeOnUpdate:
             with get_db_session() as session:
                 db = session.scalars(select(DBCreative).filter_by(creative_id="c_fmt_change")).first()
                 stored = CreativeFormatIdentity.from_row(db).assertion
-                assert stored is not None and str(stored.id) == "display_728x90", (
+                assert stored is not None and str(stored.id) == format_b, (
                     f"the update must replace the stored format reference with format B; stored {stored!r}"
                 )
 
