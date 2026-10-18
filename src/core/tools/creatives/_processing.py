@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
@@ -43,8 +43,70 @@ logger = logging.getLogger(__name__)
 
 #: Fields a full upsert rewrites on every update. They used to be reported as changed
 #: unconditionally, which made ``action: unchanged`` unreachable: a resync of identical
-#: data always listed all five. They are now compared against the row's prior values.
+#: data always listed all five. Now only the ones the BUYER submitted are compared, each
+#: against the row's prior value -- see :class:`SubmittedUpsertFields`, which also says why
+#: the agent's back-fill of the ones the buyer left empty is not compared at all.
 _UPSERT_FIELDS = ("url", "click_url", "width", "height", "duration")
+
+
+@dataclass(frozen=True)
+class SubmittedUpsertFields:
+    """The BUYER's own values for the upsert fields -- the one input to change detection.
+
+    ``changes`` is "Field names that were modified"
+    (creative/sync-creatives-response.json, 3.2.3), and what a sync modifies is what the
+    buyer sent. A value the seller DERIVES for itself -- the creative agent's preview
+    answer, and the ``url``/``width``/``height``/``duration`` it back-fills into keys the
+    buyer left empty -- is not an axis of "did this creative change", for two reasons that
+    both bite:
+
+    * It is re-derived from unchanged inputs on every sync, so counting it makes
+      ``unchanged`` -- a pinned member of ``enums/creative-action.json`` -- unreachable for
+      a creative nobody edited, and leaves a buyer no way to tell a no-op from a real edit.
+    * ``dry_run`` "returns what would be created/updated/deleted"
+      (sync-creatives-request.json#/properties/dry_run), and a preview MUST NOT fire the
+      agent request (an outbound call is not undoable by the transaction's rollback, which
+      is why ``CreativeRepository.outbound`` suppresses it). So the preview branch
+      structurally cannot know the agent's answer, and the only way its ``changes`` can
+      equal the live run's is if the agent's answer is not an input to ``changes`` at all.
+      That makes this a forced reading of the pin, not a preference.
+
+    The pinned response agrees on where a preview belongs: it carries the render on its own
+    ``creatives[].preview_url`` field, "Preview URL for generative creatives (only present
+    for generative formats)" -- a separate channel from ``changes``.
+
+    WHY A TYPE AND NOT THE ``data`` DICT. ``data`` is the PERSISTENCE document and the
+    agent block mutates it in place, so handing ``data`` to change detection is exactly how
+    a re-rendered preview came to be reported as a buyer's edit (salesagent-8s2p0: an
+    identical re-sync answered ``updated`` on 4 rows, and a dry run could not match the
+    live run on 6 more). :meth:`submitted_by` COPIES the buyer's values out before the
+    agent can reach them, and the builder takes this class rather than a mapping -- so
+    there is no spelling of "compare the enriched document" left to write, and no list for
+    an agent-derived key to be appended to.
+    """
+
+    #: Only the keys the buyer gave a VALUE. ``_build_creative_data`` writes all five
+    #: unconditionally, ``None`` where the buyer sent nothing, and the agent back-fills
+    #: exactly those ``None``\ s (every write is guarded on ``not data.get(key)``) -- so
+    #: "the buyer supplied it" is "not None here", and it reads the same on the preview
+    #: branch, where the agent never ran.
+    values: dict[str, Any]
+
+    @classmethod
+    def submitted_by(cls, data: Mapping[str, Any]) -> SubmittedUpsertFields:
+        """Snapshot the buyer's upsert values. Call BEFORE any agent enrichment of ``data``."""
+        return cls(values={key: data[key] for key in _UPSERT_FIELDS if data.get(key) is not None})
+
+    def changed_against(self, prior: PriorCreativeState) -> list[str]:
+        """The submitted fields whose value differs from the row's.
+
+        Iterates the SUBMITTED keys, not all five: a field the buyer omitted was not
+        modified by this sync, and comparing its absence against the row would report a
+        change on every resync of a creative whose url the agent supplies.
+        """
+        return [
+            key for key in _UPSERT_FIELDS if key in self.values and self.values[key] != prior.upsert_fields.get(key)
+        ]
 
 
 @dataclass(frozen=True)
@@ -120,28 +182,31 @@ def build_update_sync_result(
     creative: CreativeAsset,
     prior: PriorCreativeState,
     identity: CreativeFormatIdentity,
-    data: Mapping[str, Any],
-    agent_derived_changes: Sequence[str] = (),
+    submitted: SubmittedUpsertFields,
     internal_status: str | None = None,
 ) -> SyncCreativeResult:
     """The ONE place an ``updated`` or ``unchanged`` sync result is built, for both branches.
 
-    ``changes`` is ``[name?, format?] + agent-derived + the upsert fields whose value
-    differs from the row's``, each field once. The last group used to be all five
-    unconditionally, which made ``unchanged`` -- a member of the pinned
-    enums/creative-action.json -- unreachable: a resync of identical data always
-    reported five changed fields. Comparing against the row's prior values is what
-    lets identical data answer ``unchanged`` and a real change name the field.
+    ``changes`` is ``[name?, format?] + the SUBMITTED upsert fields whose value differs
+    from the row's``, each field once. That group used to be all five unconditionally,
+    which made ``unchanged`` -- a member of the pinned enums/creative-action.json --
+    unreachable: a resync of identical data always reported five changed fields.
+    Comparing against the row's prior values is what lets identical data answer
+    ``unchanged`` and a real change name the field.
+
+    There is no agent-derived group, and the ``agent_derived_changes`` parameter that
+    carried one is gone: a preview render and a generative build are the SELLER's
+    derivations, they are re-made on every sync, and a preview transaction cannot make
+    them at all -- see :class:`SubmittedUpsertFields` for the two pinned sentences that
+    force this and for what used to go wrong. The agent still writes its answer to
+    ``data``; ``data`` is simply not what change detection reads.
 
     ``internal_status`` is absent for an in-request duplicate, which has no row to
     read a status from. The field is ``exclude=True``, so it never reaches the
     wire and its absence cannot make a preview diverge from a live run.
     """
-    changed_upsert_fields = [key for key in _UPSERT_FIELDS if data.get(key) != prior.upsert_fields.get(key)]
     # dict.fromkeys: each field once, first occurrence's position kept.
-    changes = list(
-        dict.fromkeys([*comparison_changes(creative, prior, identity), *agent_derived_changes, *changed_upsert_fields])
-    )
+    changes = list(dict.fromkeys([*comparison_changes(creative, prior, identity), *submitted.changed_against(prior)]))
 
     action: Literal["updated", "unchanged"] = "updated" if changes else "unchanged"
 
@@ -177,6 +242,68 @@ def _failed_sync_result(creative_id: str, source: AdCPSalesAgentError) -> SyncCr
         errors=[AdCPErrorDetail.from_exception(source)],
         assigned_to=None,
         assignment_errors=None,
+    )
+
+
+def _no_previews_refusal(
+    creative_id: str,
+    *,
+    creative: CreativeAsset,
+    data: Mapping[str, Any],
+    is_preview: bool,
+) -> SyncCreativeResult | None:
+    """The ONE policy for "the agent-backed branch came back with no previews".
+
+    Returns the refusal, or ``None`` when the sync may proceed. Called from the ``else``
+    of ``if preview_result and preview_result.get("previews")`` on BOTH the create and the
+    update path, which is the whole point of it existing: the two paths carried the same
+    refusal and it had drifted one nesting level apart (salesagent-2je8o). The update's
+    copy sat on the ``else`` of ``if format_obj and is_dialled_agent_format(...)``, i.e. on
+    "the format did not resolve", so
+
+    * an update whose format DID resolve and whose agent returned no previews was accepted
+      as ``updated`` with no media_url at all, while the identical create was refused
+      ``CREATIVE_REJECTED``/``no_previews`` -- one tool, two policies for one state; and
+    * the refusal it did have fired on a branch where no preview was ever requested, so a
+      buyer whose format is simply not in the catalogue was told the agent failed to render.
+
+    One function reached from one branch position is what makes a second divergence
+    unspellable; there is no longer a copy to drift.
+    """
+    if is_preview:
+        # The boundary SUPPRESSED the call (an outbound request is not undoable by the
+        # transaction's rollback), so a falsy result here means "we did not ask", NOT "the
+        # agent had none". Asked of the TRANSACTION, deliberately: testing
+        # ``preview_result is None`` would conflate those two, which is the confusion this
+        # branch exists to prevent. Failing the entry would report a fault that does not
+        # exist and would break the pinned dry_run contract: a preview "returns what would
+        # be created/updated/deleted" (sync-creatives-request.json#/properties/dry_run),
+        # not a refusal blaming the creative agent.
+        logger.info(
+            "[sync_creatives] dry_run: skipped preview generation for %s; the preview reports what it would do",
+            creative_id,
+        )
+        return None
+
+    # No previews is only acceptable if the creative carries a media_url of its own (a
+    # direct URL to the asset); such a static creative does not need a render.
+    if bool(getattr(creative, "url", None) or data.get("url")):
+        logger.warning(
+            "[sync_creatives] Preview generation returned no previews for %s (static creative with media_url)",
+            creative_id,
+        )
+        return None
+
+    logger.error(
+        "[sync_creatives] Preview generation returned nothing for %s and no media_url",
+        creative_id,
+    )
+    return _failed_sync_result(
+        creative_id,
+        AdCPCreativeRejectedError(
+            field="media_url",
+            details=CreativeRejectionDetails(creative_id=creative_id, reasons=["no_previews"]),
+        ),
     )
 
 
@@ -273,11 +400,6 @@ def _update_existing_creative(
     # is the only way the two branches can agree — see build_update_sync_result.
     prior = PriorCreativeState.from_row(existing_creative)
 
-    # `changes` here accumulates ONLY the agent-derived entries (generative build,
-    # preview render). The comparison-based and always-changed parts are added by
-    # the builder at the end, in the order the live path has always produced.
-    changes: list[str] = []
-
     # Upsert mode: update provided fields. Assignment stays guarded on `is not
     # None`; the comparison that decides whether `name` counts as changed lives in
     # comparison_changes and deliberately does NOT share that guard.
@@ -335,6 +457,14 @@ def _update_existing_creative(
     # Full upsert semantics (replace all data, not merge)
     url = _extract_url_from_assets(creative)
     data = _build_creative_data(creative, url)
+
+    # The buyer's own upsert values, COPIED out before the creative agent below can
+    # back-fill any of them. From here on `data` is the persistence document only: it is
+    # what gets written to the row, and `submitted` is what change detection reads. Taking
+    # the snapshot here -- above the agent block, on the one line that builds the buyer's
+    # document -- is what makes the preview branch and the live branch report the same
+    # `changes` by construction instead of by a residual-divergence note.
+    submitted = SubmittedUpsertFields.submitted_by(data)
 
     # ALWAYS validate updates with creative agent
     if creative_format:
@@ -423,7 +553,6 @@ def _update_existing_creative(
                             data["generative_build_result"] = build_result
                             data["generative_status"] = build_result.get("status", "draft")
                             data["generative_context_id"] = build_result.get("context_id")
-                            changes.append("generative_build_result")
 
                             # Extract creative output if available
                             if build_result.get("creative_output"):
@@ -433,7 +562,6 @@ def _update_existing_creative(
                                 user_provided_assets = creative.assets
                                 if creative_output.get("assets") and not user_provided_assets:
                                     data["assets"] = _generative_assets(creative_output["assets"])
-                                    changes.append("assets")
                                     logger.info("[sync_creatives] Using assets from generative output (update)")
                                 elif user_provided_assets:
                                     logger.info(
@@ -444,13 +572,11 @@ def _update_existing_creative(
                                 if creative_output.get("output_format"):
                                     output_format = creative_output["output_format"]
                                     data["output_format"] = output_format
-                                    changes.append("output_format")
 
                                     # Only use generative URL if user didn't provide one
                                     if isinstance(output_format, dict) and output_format.get("url"):
                                         if not data.get("url"):
                                             data["url"] = output_format["url"]
-                                            changes.append("url")
                                             logger.info(
                                                 f"[sync_creatives] Got URL from generative output (update): "
                                                 f"{data['url']}"
@@ -531,7 +657,6 @@ def _update_existing_creative(
                     # Store full preview response for UI (per AdCP PR #119)
                     # This preserves all variants and renders for UI display
                     data["preview_response"] = preview_result
-                    changes.append("preview_response")
 
                     # Also extract primary preview URL for backward compatibility
                     first_preview = preview_result["previews"][0]
@@ -543,7 +668,6 @@ def _update_existing_creative(
                         # This preserves user-provided URLs in assets instead of overwriting with preview URLs
                         if first_render.get("preview_url") and not data.get("url"):
                             data["url"] = first_render["preview_url"]
-                            changes.append("url")
                             logger.info(f"[sync_creatives] Got preview URL from creative agent: {data['url']}")
                         elif data.get("url"):
                             logger.info(
@@ -556,49 +680,37 @@ def _update_existing_creative(
                         dimensions = first_render.get("dimensions", {})
                         if dimensions.get("width") and not data.get("width"):
                             data["width"] = dimensions["width"]
-                            changes.append("width")
                         if dimensions.get("height") and not data.get("height"):
                             data["height"] = dimensions["height"]
-                            changes.append("height")
                         if dimensions.get("duration") and not data.get("duration"):
                             data["duration"] = dimensions["duration"]
-                            changes.append("duration")
 
-                logger.info(
-                    f"[sync_creatives] Preview data populated for update: "
-                    f"url={bool(data.get('url'))}, "
-                    f"width={data.get('width')}, "
-                    f"height={data.get('height')}, "
-                    f"variants={len(preview_result.get('previews', []) if preview_result else [])}"
-                )
-            else:
-                # Preview generation returned no previews
-                # Only acceptable if creative has a media_url (direct URL to creative asset)
-                has_media_url = bool(getattr(creative, "url", None) or data.get("url"))
-
-                if has_media_url:
-                    # Static creatives with media_url don't need previews
-                    warning_msg = f"Preview generation returned no previews for {existing_creative.creative_id} (static creative with media_url)"
-                    logger.warning(f"[sync_creatives] {warning_msg}")
-                    # Continue with update - preview is optional for static creatives
+                    logger.info(
+                        f"[sync_creatives] Preview data populated for update: "
+                        f"url={bool(data.get('url'))}, "
+                        f"width={data.get('width')}, "
+                        f"height={data.get('height')}, "
+                        f"variants={len(preview_result.get('previews', []))}"
+                    )
                 else:
-                    # Creative agent should have generated previews but didn't
-                    logger.error(
-                        "[sync_creatives] Preview generation returned nothing for %s and no media_url",
+                    # No previews came back from an agent-backed format. ONE policy, shared
+                    # with the create path -- see _no_previews_refusal for why this sits
+                    # here and not on the `else` of the agent-backed test above.
+                    refusal = _no_previews_refusal(
                         existing_creative.creative_id,
+                        creative=creative,
+                        data=data,
+                        is_preview=creative_repo.is_preview,
                     )
-                    return (
-                        _failed_sync_result(
-                            existing_creative.creative_id,
-                            AdCPCreativeRejectedError(
-                                field="media_url",
-                                details=CreativeRejectionDetails(
-                                    creative_id=existing_creative.creative_id, reasons=["no_previews"]
-                                ),
-                            ),
-                        ),
-                        False,
-                    )
+                    if refusal is not None:
+                        return (refusal, False)
+            # NO `else` for the agent-backed test: a format this seller serves but will not
+            # dial (unresolved, or an adapter pseudo-URL with no host) is processed with no
+            # external validation and no preview fetched -- BR-RULE-035 INV-2, as
+            # is_dialled_agent_format's own docstring states, and exactly what the create
+            # path does. The refusal that used to live here fired when NO preview had been
+            # requested, so it told a buyer whose format is simply not in the catalogue
+            # that the agent had failed to render (salesagent-2je8o).
 
         except AdCPConfigurationError as config_error:
             # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
@@ -667,19 +779,19 @@ def _update_existing_creative(
                 False,
             )
 
+    # `data` carries the agent's enrichment and is what gets PERSISTED. It is deliberately
+    # not what the result below reports on.
     creative_repo.update_data(existing_creative, data)
 
-    # Record result for updated creative. The builder adds the comparison-based
-    # entries and the always-changed five around the agent-derived ones collected
-    # above, preserving the order this function has always emitted.
+    # Record result for updated creative, from the buyer's submission and the row's prior
+    # state -- the two things a preview transaction can read exactly as well as a live one.
     return (
         build_update_sync_result(
             existing_creative.creative_id,
             creative=creative,
             prior=prior,
             identity=incoming_identity,
-            data=data,
-            agent_derived_changes=changes,
+            submitted=submitted,
             internal_status=existing_creative.status,
         ),
         needs_approval,
@@ -919,51 +1031,19 @@ def _create_new_creative(
                         f"height={data.get('height')}, "
                         f"variants={len(preview_result.get('previews', []))}"
                     )
-                elif creative_repo.is_preview:
-                    # The boundary SUPPRESSED the call (an outbound request is not
-                    # undoable by the transaction's rollback), so a falsy result
-                    # here means "we did not ask", NOT "the agent had none".
-                    # Asked of the TRANSACTION, deliberately: testing
-                    # `preview_result is None` would conflate those two, which is
-                    # the confusion this branch exists to prevent.
-                    # Failing the entry would report a fault that does not exist
-                    # and would break the pinned dry_run contract: a preview
-                    # "returns what would be created/updated/deleted"
-                    # (sync-creatives-request.json#/properties/dry_run), not a
-                    # SERVICE_UNAVAILABLE blaming the creative agent. The
-                    # agent-derived fields are simply absent from the preview --
-                    # the known residual divergence build_update_sync_result's
-                    # docstring already records, not a failure.
-                    logger.info(
-                        f"[sync_creatives] dry_run: skipped preview generation for "
-                        f"{creative_id}; the preview reports the create it would make."
-                    )
                 else:
-                    # Preview generation returned no previews
-                    # Only acceptable if creative has a media_url (direct URL to creative asset)
-                    has_media_url = bool(getattr(creative, "url", None) or data.get("url"))
-
-                    if has_media_url:
-                        # Static creatives with media_url don't need previews
-                        warning_msg = f"Preview generation returned no previews for {creative_id} (static creative with media_url)"
-                        logger.warning(f"[sync_creatives] {warning_msg}")
-                        # Continue with creative creation - preview is optional for static creatives
-                    else:
-                        # Creative agent should have generated previews but didn't
-                        logger.error(
-                            "[sync_creatives] Preview generation returned nothing for %s and no media_url",
-                            creative_id,
-                        )
-                        return (
-                            _failed_sync_result(
-                                creative_id,
-                                AdCPCreativeRejectedError(
-                                    field="media_url",
-                                    details=CreativeRejectionDetails(creative_id=creative_id, reasons=["no_previews"]),
-                                ),
-                            ),
-                            False,
-                        )
+                    # No previews came back from an agent-backed format. ONE policy, shared
+                    # with the update path -- see _no_previews_refusal, which also owns the
+                    # "a preview transaction did not ask" arm that used to be an `elif`
+                    # here.
+                    refusal = _no_previews_refusal(
+                        creative_id,
+                        creative=creative,
+                        data=data,
+                        is_preview=creative_repo.is_preview,
+                    )
+                    if refusal is not None:
+                        return (refusal, False)
 
         except AdCPConfigurationError as config_error:
             # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
