@@ -169,10 +169,27 @@ and leaves the domain model — which is the shape the whole exercise is for.
    absorbing `_identity_columns`. **Landed** (`0e1433115`). Accounting: 2 domain + 8
    repository_owned + 6 override = 16 columns, zero unaccounted.
 
-**Steps 3 and 4 are CANCELLED**, and the reason is recorded rather than left for someone to
-rediscover. They were "the repository returns domain models" and "delete
-`Creative.principal_id` from the domain model", and both followed from the return-type rule
-this document used to state. With that rule gone they answer no question. Three beads existed
+**Step 3 is CANCELLED. Step 4 is NOT** — an earlier version of this section said both were,
+and that was wrong.
+
+Step 3 was "the repository returns domain models", which is the return-type rule this document
+used to state and the owner overruled. With the rule gone it answers no question.
+
+Step 4 was "delete `Creative.principal_id` from the domain model, now repository-owned", and
+that survives on its own: removing a seller-state field from a wire model does not require the
+repository to change what it returns. It is also larger than the one field it named. Measured
+at `2e09d1063`, TEN fields are declared `Field(exclude=True)` on a wire model and absent from
+the pin:
+
+    Creative.principal_id          Product.allowed_principal_ids
+    Format.is_standard             Product.countries
+    Format.platform_config         Product.implementation_config
+    Format.requirements            SyncCreativeResult.internal_status
+    PackageRequest.creative_ids    PackageRequest.impressions
+
+`exclude=True` strips a field from the wire AND persistence AND the idempotency hash, so each
+of these cannot do the job it was added for. The owner's rule: "if we need it for persistence
+then it becomes the persistence model." That is step 4's real scope. Three beads existed
 only to resolve problems they created and are closed as refuted: `salesagent-eusx2` (what
 carries the repository-owned columns on a read), `salesagent-6aa6y` (whether `to_domain`
 should refuse a row that `list_creatives` deliberately degrades), `salesagent-pyvcb` (how a
