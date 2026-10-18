@@ -76,6 +76,7 @@ from adcp.types import AccountReferenceById
 
 from src.core.creative_agent_registry import (
     PUBLIC_DEFAULT_AGENT_URL,
+    FormatFetchResult,
     ReferenceFormatsRegistry,
     _get_reference_formats,
 )
@@ -255,7 +256,8 @@ class HarnessCreativeAgentRegistry(ReferenceFormatsRegistry):
     transports were served a stand-in while e2e_rest was served the capture, and the same
     scenario graded two different sellers.
 
-    What this subclass adds is exactly two recorders, and no catalogue of its own:
+    What this subclass adds is two recorders, two counters and one fault, and no
+    catalogue of its own:
 
     ``preview_creative`` / ``build_creative`` are OUTBOUND AdCP operations with NO
     capture. ``_get_reference_formats`` covers ``list_creative_formats`` only;
@@ -266,6 +268,15 @@ class HarnessCreativeAgentRegistry(ReferenceFormatsRegistry):
     ``https://creative.adcontextprotocol.org``. That is **salesagent-1bc7l**, which owns
     the gap and the remedy. Until a capture exists these two are recorded here, which is
     also what the ~40 call sites asserting ``registry.build_creative.call_args`` read.
+
+    ``catalogue_reads`` / ``format_fetches`` count the two reads -- the whole catalogue,
+    and one format -- and ``fail_format_fetch_with`` makes ``get_format`` raise. Neither
+    is a stand-in: production's method still runs (the counter increments and delegates
+    to ``super()``), the fault answers nothing and records nothing, and no Format can be
+    invented by either. They exist because an obligation about WHETHER a read happened
+    (once per sync, never for an adapter format) and one about a TRANSIENT agent failure
+    both need an observation point, and the only one a ``MagicMock`` offered came
+    attached to a mock's answers.
 
     Everything else is production: ``list_all_formats``, ``list_all_formats_with_errors``,
     ``get_format``, ``get_formats_for_agent`` and ``search_formats`` all consult the one
@@ -288,11 +299,47 @@ class HarnessCreativeAgentRegistry(ReferenceFormatsRegistry):
         # preview answer is the no-previews case _processing.py already guards for.
         self.preview_creative = AsyncMock(return_value={})
         self.build_creative = AsyncMock(return_value={})
+        #: Reads of the WHOLE catalogue, through production's own
+        #: ``list_all_formats``/``list_all_formats_with_errors``. ``_sync.py:151``
+        #: performs exactly one per request, and "once per sync, not once per
+        #: creative" is the obligation UC-006-MAIN-MCP-09 states, so a count is the
+        #: whole observation. It is an INTEGER on a real registry rather than a
+        #: ``call_count`` on a stand-in: a Mock's counter came with a Mock's answers.
+        self.catalogue_reads = 0
+        #: Reads of ONE format, through production's own ``get_format`` -- which
+        #: ``_validation.py`` performs once per creative and SKIPS entirely for an
+        #: adapter (non-HTTP) agent_url. Counted separately because that is a
+        #: different obligation from the catalogue fetch above.
+        self.format_fetches = 0
+        #: What :meth:`get_format` raises instead of answering. The registry types
+        #: every network failure (429 -> AdCPRateLimitError, 5xx/timeout/connect ->
+        #: AdCPServiceUnavailableError) and a scenario whose subject is a transient
+        #: agent failure needs one raised from the real method, so that
+        #: ``fetch_format_spec`` -> ``_validation.py`` -> the per-item handler see
+        #: exactly the exception production hands them. A FAULT, not a stand-in: it
+        #: answers nothing, records nothing, and cannot invent a Format.
+        self._format_fetch_error: BaseException | None = None
 
     def _operator_formats_override(self) -> list[Format] | None:
         if self._catalogue is None:
             return _get_reference_formats()
         return list(self._catalogue)
+
+    async def list_all_formats_with_errors(self, *args: Any, **kwargs: Any) -> FormatFetchResult:
+        """Production's catalogue read, counted. ``list_all_formats`` delegates here."""
+        self.catalogue_reads += 1
+        return await super().list_all_formats_with_errors(*args, **kwargs)
+
+    async def get_format(self, *args: Any, **kwargs: Any) -> Format | None:
+        """Production's single-format read, counted -- or the configured fault."""
+        self.format_fetches += 1
+        if self._format_fetch_error is not None:
+            raise self._format_fetch_error
+        return await super().get_format(*args, **kwargs)
+
+    def fail_format_fetch_with(self, exc: BaseException) -> None:
+        """Make every subsequent :meth:`get_format` raise *exc*."""
+        self._format_fetch_error = exc
 
     def serve_only(self, formats: list[Format]) -> None:
         """Narrow what every read answers from to exactly *formats*."""
@@ -1039,6 +1086,52 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         bridge is production's.
         """
         self.mock["registry"].return_value.serve_only(formats)
+
+    @property
+    def catalogue_reads(self) -> int:
+        """How many times this env's registry has been asked for the WHOLE catalogue.
+
+        ``_sync.py:151`` asks once per request, so this is how "the registry is queried
+        once per sync, not once per creative" is observed. Named on the env rather than
+        read off ``mock["registry"]`` for the reason
+        :meth:`set_gemini_api_key` states: a step that has to know the registry's shape
+        to express an observation breaks when the harness reorganises, and the reach is
+        invisible to the e2e-escape-hatch guard.
+        """
+        return int(self.mock["registry"].return_value.catalogue_reads)
+
+    @property
+    def format_fetches(self) -> int:
+        """How many times this env's registry has been asked for ONE format.
+
+        ``_validation.py`` asks once per creative with a dialled agent_url and not at
+        all for an adapter (non-HTTP) one, so zero is the observation "external format
+        validation was skipped".
+        """
+        return int(self.mock["registry"].return_value.format_fetches)
+
+    def fail_format_fetch(self, exc: BaseException) -> None:
+        """Make the registry's single-format read RAISE *exc* from here on.
+
+        In-process only, and not decorated ``realize_e2e``: the three scenarios that
+        need it run on impl/mcp/a2a/rest, so the decorator would have no caller to
+        dispatch -- and 35f6a5a83's ruling is that ``e2e_unsupported`` is not a thing to
+        add. If a wire scenario ever needs a transient agent failure, the answer is a
+        server whose registry can be put into that state, not a declaration here.
+
+        For a scenario whose subject is a typed TRANSIENT agent failure: the registry
+        types every network error (429 -> ``AdCPRateLimitError``, 5xx/timeout/connect ->
+        ``AdCPServiceUnavailableError``) and those must keep their recovery semantics all
+        the way to the wire rather than degrade to a terminal per-item ``failed``. The
+        raise comes out of production's own ``get_format``, so ``fetch_format_spec``,
+        ``_validation.py`` and ``_sync.py``'s per-item handler see exactly what they see
+        in production; nothing stands in for the method and nothing answers in its place.
+
+        The catalogue read (``list_all_formats``) is deliberately left alone: it happens
+        once, before the loop, and faulting it would raise out of ``_sync.py`` ahead of
+        the per-item handler this grades -- a pass for the wrong reason.
+        """
+        self.mock["registry"].return_value.fail_format_fetch_with(exc)
 
     def serve_reference_catalog(self) -> None:
         """Serve the pinned capture, unrestricted -- what the e2e server serves.
