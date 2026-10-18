@@ -1,8 +1,10 @@
 # SDK type generation: the principles it is missing
 
 **Status:** design. Rewritten 2026-10-18 after a review refuted the first version's central
-claim. What that version got wrong is recorded in §8, because the wrong story is still the
-intuitive one and will be proposed again.
+claim, then audited again the same night against the installed wheel; that audit removed the
+namespace flattening from the plan and corrected the `extra=` paragraph. What each earlier
+version got wrong is recorded in §8, because the wrong story is still the intuitive one and
+will be proposed again. §1.1 says which claims are measured and which are inherited.
 
 **Provenance convention.** This document cites three different trees and they disagree. Every
 citation is tagged:
@@ -21,8 +23,9 @@ is how it came to recommend extending a function the pin had deleted.
 
 The Python SDK's generated surface is **named by position in places where the schema carries
 an identity**, and every other defect here either follows from that or was hidden by a guard
-keyed on a name. The TypeScript SDK is better on three of the five principles below and worse
-or equal on two; it is a reference for specific mechanisms, not a model to copy wholesale.
+keyed on a name. Of the ten principles below the TypeScript SDK holds P2, P6 and P8, fails P4
+and P5, and holds P1 only for titled arms; it is a reference for specific mechanisms, not a
+model to copy wholesale — and §3.1 names the axes where Python is built to exceed it.
 
 **The response arms are not the generator's doing.** `CreateMediaBuyResponse1/2/3` comes from
 one line of this repo's own emitter:
@@ -53,6 +56,35 @@ the pinned bundle by equality:
 The wheel already ships `CreateMediaBuyRequestExplicitPackagesWithFixedAllocation` and its
 siblings. So the work is to **wire the rungs into the response-arm emitter**, not to invent a
 naming scheme and not to file 327 upstream tickets.
+
+### 1.1 What is measured, and what is inherited
+
+This document has been wrong five times in one night. A reader deciding whether to act on it
+needs to know which claims were measured against the wheel and which are text carried forward
+from a draft. The list is short on purpose; everything not on it is either a principle (an
+argument, not a measurement) or marked "not established" in §9.
+
+| claim | replaced | established by |
+|---|---|---|
+| Response-arm numbering is one line of this repo's emitter, `post_generate_fixes.py:6454` (pin), defended at `:6449-6453` and `:6408-6411` | "the cause is the missing `--use-title-as-name`" | the three lines read at `f33d4fc71`; re-verified in the audit |
+| The rungs name 556 of 557 root branches; one is unnameable | "327 untitled arms no generator can name" | `tests/test_union_branch_names.py:66-73` (pin), equality over the bundle |
+| `adcp.types.<SemanticName>` binds to a `canonical_creative` subclass of the generated arm, for every canonical name (`Product`, `Format`, `Package`, `CreateMediaBuyRequest`, `CreateMediaBuySuccessResponse`, …) | "four of our imports could switch today" | `__module__` of each name in salesagent's venv (pin) |
+| The generator already derives `extra` from `additionalProperties`: `extra='forbid'` at 1002 sites and `extra='allow'` at 1187 in the non-bundled domain modules; the bundle has 256 root-level `additionalProperties: false` | "`AdCPBaseModel`'s `extra="ignore"` is a live P3 violation" (rev 5) | `grep` over `adcp/types/domains` and the 3.2 bundle; `types/base.py:316-320` (pin) states the rule |
+| `adcp.types.media_buy`, `.creative`, `.signals`, `.protocol`, `.core`, `.error_details` already exist as hand-written modules, four of them the curated partials guarded by `tests/test_lazy_types.py` | "flatten to `adcp.types.<domain>.<Class>`" (rev 5) | `ls adcp/types/*.py` (pin); `_PARTIAL_MODULES` at `types/__init__.py:1086` |
+| 335 class names are declared in more than one module of the same domain, 145 with differing shapes; the generated domain root binds only once-declared names | the depth table alone | AST walk over `adcp/types/domains` (pin); `domains/core/__init__.py` docstring |
+| This repo has 108 `from adcp.types.domains…` statements in 33 `src/` files, 124 names, 16 of them multiply-declared in their domain | "five of this repo's eleven deep imports" | AST walk over `src/` |
+| The import path already moved once this major: `adcp.types.generated_poc` → `adcp.types.domains`, codemod shipped 2026-04-20 | not mentioned | `adcp/migrate/v3_to_v4.py` (pin); `types/__init__.py` docstring, removal in v10 |
+| The success arm of `create-media-buy-response` and `update-media-buy-response` has **no** `status` const; only the submitted arm does | "detect the success arm from the schema's `status` const" (rev 3) | the two schema files in the 3.2 bundle |
+| The rung module's `pascal_case` and the generator's `generated_root_class_name` disagree on 115 root titles; 5 roots get a branch prefix that does not match their generated base class | item 1 named one function and the rungs use the other | both functions run over the bundle from the pin's venv |
+| `emit_branch_classes` is wired (`post_generate_fixes.py:8778`, fix list `:9174`) and 19 generated roots (12 exported on `adcp.types`) dispatch at runtime through `BranchDispatchMixin`; `CreateMediaBuyResponse` is a plain union and does not | "not wired" (`tests/test_branch_classes.py:11`, stale) | the fix list at the pin; `_branch_models` declared on 19 classes in the generated tree; probe S11 |
+| `CreateMediaBuyErrorResponse` and `CreateMediaBuySubmittedResponse` are in `adcp.types.__all__` | "two of the three arms have no name a caller can import" (rev 4) | `aliases.py:634,637` (pin) |
+| The `ActivationKey` names were wrong at birth; two are `_eager.py` synonyms | "drifted from four arms to two" | git archaeology at `5c63decdd` (not re-verified in the audit) |
+| The seven-stage plan is replaced by one change | the staged plan | the user's constraint, not a measurement |
+
+Still carried forward without measurement: the P1 nested-family census (206 / 85 / 9) and the
+`(ts)` cells of §3, both from the first version. The decisions the plan rests on that are NOT
+measurements — the layer choice in §5 item 2, the alias placement in §5 — are stated as
+decisions, with their reasons, and §9 names what would still falsify them.
 
 ---
 
@@ -104,7 +136,7 @@ becomes a loud `ImportError` instead of a silent repoint.
 
 ### P2 — One schema node, one class; a `$ref` is a reference
 
-Forbids a copy by any route — remote-ref resolution (§3.2) and `create_model` copies alike;
+Forbids a copy by any route — remote-ref resolution (§4.2) and `create_model` copies alike;
 the canonical layer used to build 32 public classes that way
 (`tests/test_canonical_models_are_subclasses.py`, #1368, pin).
 
@@ -120,25 +152,28 @@ Already the SDK's own stated principle — the `--strict-types` rationale at
 `generate_types.py:1266-1279` (pin) says the point is that the two validators the SDK ships
 do not disagree about the same bytes. §4.3 is a live violation of it.
 
-**And `extra` is part of the accepted set, so it is derived too.** `AdCPBaseModel` sets
-`extra="ignore"` for every model. Wherever a schema declares `additionalProperties: false`,
-that base setting makes the model accept what the schema rejects — which is a P3 violation,
-**not** a deliberate divergence to be excluded. A schema declaring
-`additionalProperties: false` generates `extra="forbid"`, so an unknown field raises at
-assignment instead of being dropped silently.
+**`extra` is part of the accepted set, and the generator already derives it.** The fifth
+revision of this document claimed `AdCPBaseModel`'s `extra="ignore"` made every model wider
+than a schema declaring `additionalProperties: false`, and called that a live P3 violation. It
+is not. The 3.2 bundle declares `additionalProperties: false` on 256 roots and 9729 nodes
+(non-bundled), and the generated domain modules carry `extra='forbid'` at 1002 sites and
+`extra='allow'` at 1187 — `core/media-buy.json` is `false` and `domains/core/media_buy.py:32`
+(pin) is `forbid`; `core/warning.json` is `true` and `domains/core/warning.py` is `allow`.
+`types/base.py:316-320` (pin) states the rule. The base class's `ignore` applies only where the
+schema says nothing, and there the accepted sets agree (both accept the unknown field; one
+retains it and one drops it, which is not a P3 question). So there is no `extra` divergence to
+fix and none to exclude — P3's check needs no exclusion list, and §5 no longer carries an
+assertion about one.
 
-The environment-dependent choice belongs to the **consumer**, at the consumer's boundary, not
-to the SDK's base class. This repo already makes it: `get_pydantic_extra_mode()` selects
-`ignore` in production for forward compatibility and `forbid` in development so an
-unimplemented spec field is loud (CLAUDE.md pattern #7). An SDK that hardcodes one of the two
-takes that decision away from every caller.
+The consumer-side choice this repo makes — `get_pydantic_extra_mode()` selects `ignore` in
+production and `forbid` in development (CLAUDE.md pattern #7) — sits on the consumer's own
+subclasses and does not conflict with the derived value on the library class underneath.
 
-This also removes the only reason P3's check needed an exclusion list. With `extra` derived
-there is no standing divergence to exclude, and an exclusion list was a declared table — the
-thing P5 and P8 reject.
-
-**TS:** holds at the type level (`warnings?: (Warning & { code?: 'a' | 'b' })[]`). Runtime not
-established — the Zod layer was not examined.
+**TS:** holds at the type level (`warnings?: (Warning & { code?: 'a' | 'b' })[]`). Runtime
+not established — the Zod layer was not examined. Structurally the TypeScript SDK cannot hold
+P3 as a property of one object: `generate-types` and `generate-zod-schemas`
+(`scripts/generate-zod-schemas.ts:4`, `json-schema-to-zod`) are two generators over the same
+cache, exported at `.` and `./schemas` `(ts)`, and nothing makes them agree. §3.1 axis A.
 
 ### P4 — Identity is graded by shape, not by name
 
@@ -168,7 +203,7 @@ untitled arm is the example — unless a rung derives it, it goes.
 `generate-types.ts:368-384`, a hand handler for the title `Size-mode mutex` at `:986-1003`,
 and `export type { Error as TaskErrorDetail }` at `src/lib/index.ts:1296` `(ts)`.
 
-**The question this document cannot yet answer, and it blocks the work:** *which class does a
+**The question the first versions could not answer, decided in §5 item 2:** *which class does a
 derived alias bind to?* Verified from salesagent's venv:
 
 ```
@@ -181,8 +216,12 @@ alias subclasses arm True
 
 The semantic alias resolves to a **subclass in the canonical layer**, with legacy format
 identity removed — not to the generated arm. So "switch to the semantic name" is a
-**base-class change**, not a rename, and the canonical-versus-wire-faithful layering has to be
-decided before P5 can say what a name means.
+**base-class change**, not a rename. This is not special to the media-buy arms: every canonical
+name on `adcp.types` (`Product`, `Format`, `Package`, `Creative`, `CreativeAsset`,
+`CreateMediaBuyRequest`, `GetProductsResponse`, `UpdateMediaBuySuccessResponse`) resolves to
+`adcp.types.canonical_creative` (pin). The pin's rule, never written down, is: the flat
+namespace is the canonical layer; the domain path is the wire-faithful class. §5 item 2 writes
+it down and keeps it.
 
 ### P6 — A name that shadows a host-language builtin never claims the bare public slot
 
@@ -198,11 +237,44 @@ first version of this document called that patch a guard protecting the defect; 
 *order being total* (necessary) with *which order was chosen* (cosmetic). Already enforced by
 `tests/test_code_generation.py:3189::test_codegen_input_order_is_total` (pin).
 
-### P8 — The import path is one namespace level, and the generation layout is private
+### P8 — A caller imports by domain; the schema module is the path for a name the domain declares twice
 
-A caller writes `adcp.types.<domain>.<Class>` and nothing deeper. The per-schema-file module is
-an artifact of how generation works, not a contract, so it moves under a private package and
-the domain package re-exports from it.
+A caller writes `adcp.types.domains.<domain>.<Class>` for a name the domain declares once, and
+`adcp.types.domains.<domain>.<schema>.<Class>` for a name it declares more than once. Nothing
+deeper, and nothing under an underscore. That is what the pin already does — the generated
+domain root (`domains/core/__init__.py`, pin) is a lazy PEP 562 facade binding exactly the
+once-declared names, and its docstring sends the rest to the schema module — so P8 is a rule
+the build must refuse violations of, not a move.
+
+The fifth revision of this document proposed flattening to `adcp.types.<domain>.<Class>` with
+the schema modules made private. The audit refuted it on three measurements:
+
+- **The target is occupied.** `adcp/types/media_buy.py`, `creative.py`, `signals.py`,
+  `protocol.py`, `core.py` and `error_details.py` exist at the pin as hand-written modules — six
+  of the 26 domain names. Four are the curated partials (`_PARTIAL_MODULES`,
+  `types/__init__.py:1086`), whose docstrings say they "never expose the internal generated
+  layer" and which `tests/test_lazy_types.py::test_partial_modules_never_import_generated_layer`
+  (pin) holds to that. `types/core.py` is 408 lines of hand-written types. The hand modules and
+  the generated domains overlap on 33 names in `media_buy`, 47 in `error_details`, 15 in
+  `protocol`.
+- **Privatising the schema module orphans the names the domain root cannot bind.** 335 class
+  names are declared in more than one module of the same domain, 145 with differing shapes
+  (`core` 190 / 98; `Location` 14 modules / 4 shapes, `Identifier` 7 / 6, `Authentication`
+  6 / 5). Item 4 of §5 collapses the 190 identical-shape duplicates (P2: the same node generated
+  twice). The 145 are distinct nodes sharing a bare name, and §5 has no rule for naming nested
+  classes by content — so after a flattening they have no public path at all. This repo imports
+  16 of them (`Identifier`, `Unit`, `Authentication`, `Creative`, `Account`, `Setup`, `Source`,
+  `Provenance`, `Parameters`, `DateRangeSupport`, `MediaBuyDelivery`, `EventType`,
+  `NotificationType`, `DeliveryAuth`).
+- **The path has already moved once this major.** `adcp.types.generated_poc` →
+  `adcp.types.domains`, codemod `adcp migrate v3-to-v4` (pin, SDK commit 32bfbeb88,
+  2026-04-20), old path removed in v10. A second move inside the first move's deprecation window
+  is the pattern §5 forbids.
+
+So the `domains` token stays. It costs one word per import and buys an uncolliding package for
+26 generated domains beside the hand-written ones. The flattening is **rejected, not deferred**:
+a later flattening would be the third rewrite, and this document says no to it now so that it
+is not proposed as a small follow-up.
 
 Measured depth today, excluding the `bundled/` mirror:
 
@@ -214,28 +286,34 @@ Measured depth today, excluding the `bundled/` mirror:
   5 levels    39 modules   adcp.types.domains.core.async_response_refs.creative...
 ```
 
-So the common case is three levels and the worst is five:
+So the common case is three levels and the worst is five. Under P8 as stated the caller sees
+two for a once-declared name and three for the rest, and the four- and five-level modules
+(`core/assets/`, `core/async_response_refs/`) are reached only through their domain root or
+their schema module — the subdirectory is generation layout and the build refuses an import
+that names it:
 
 ```
-today   adcp.types.domains.core.warning.Warning
-        adcp.types.domains.media_buy.create_media_buy_response.CreateMediaBuyResponse1
-target  adcp.types.core.Warning
-        adcp.types.media_buy.CreateMediaBuySuccess
+today      adcp.types.domains.core.warning.Warning
+           adcp.types.domains.media_buy.create_media_buy_response.CreateMediaBuyResponse1
+after §5   adcp.types.domains.core.Warning
+           adcp.types.domains.media_buy.CreateMediaBuySuccess          (declared once)
+           adcp.types.domains.core.property.Identifier                 (declared 7 times)
 ```
 
-`domains` carries no information — every type is in a domain. The schema stem repeats the
-class name. Both are generation detail leaking into the caller's import.
+**Cost:** none to existing imports — every path that resolves today keeps resolving. The
+cost is the one that was already paid: a caller who wants the one-level
+`import { CreateMediaBuySuccess } from '@adcp/sdk'` form does not get it from Python, because
+`adcp.types.CreateMediaBuySuccess` is the canonical layer (§5 item 2) and the domain path is
+the wire-faithful one. That is a real difference between the two SDKs and this document stops
+pretending it can be closed without a third rewrite.
 
-**Cost:** this breaks every deep import, including five of this repo's eleven. That is why it
-belongs in the one change in §5 and nowhere else — flattening the namespace later would be a
-second break, which the §5 constraint forbids.
+**The flat loader is a separate, additive item.** `adcp.schemas.load_schema("adcp-agents.json")`
+makes a caller name a package, a verb, and a filename with an extension. One accessor at the
+root taking a schema name is the ergonomic form; adding it moves no name, so it lands before
+the change (§5).
 
-**The same applies to the flat loader.** `adcp.schemas.load_schema("adcp-agents.json")` makes a
-caller name a package, a verb, and a filename with an extension. One accessor at the root
-taking a schema name is the ergonomic form.
-
-**TS holds this and exceeds Python:** a caller writes
-`import { CreateMediaBuySuccess } from '@adcp/sdk'` — one level, no domain, no file stem.
+**TS exceeds Python here and keeps doing so:** one level, no domain, no file stem. The
+compensating advantages are in §3.1.
 
 ### P9 — The spec version is read from the SDK, never written as a literal
 
@@ -269,43 +347,52 @@ regression without a human who already knows the answer.
 compare asserts a property — the committed tree equals `f(schemas, pinned generator)` — and
 carries no blessed value at all. P7's determinism is what makes that `f` a function.
 
-**Rules derived:** R1←P1, R2←P2, R3←P3, R4←P5, R5←P4, R6←P5. Nothing in the first version
-followed from P6 through P10, and its headline thesis followed from none of them. P10 also
-retires R5 as the first version stated it: see §5.
+Nothing in the first version followed from P6 through P10, and its headline thesis followed
+from none of them. P10 is also what retires the committed shape fixture the first version put
+first: see §5.
 
 ---
 
 ## 3. The developer-experience requirements
 
-These eight requirements are normative. A generator change satisfies them or it is not done.
+These twelve requirements are normative. A generator change satisfies them or it is not done.
 They are not a test artifact bolted on afterwards: each one states a question a caller asks
 the SDK, and each failure below is a caller getting the wrong answer or no answer.
 
-`scripts/audit/sdk_dx_probes.py` in the salesagent repository measures the Python column. The
-TypeScript column is measured statically against `adcp-client` `main` — the generated files and
-both root index files — because the two languages share no test harness.
+`scripts/audit/sdk_dx_probes.py` in the salesagent repository measures the Python column
+(probes S1–S8, S11, S12; DX9 and DX10 were measured by hand and are not yet probed). The
+TypeScript column is measured statically against `adcp-client` `main` — the generated files
+and both root index files — because the two languages share no test harness. A TypeScript cell
+reads **n/a** where the requirement is one the language cannot state at runtime, which is the
+point of §3.1.
 
 | # | Requirement | Python | TypeScript |
 |---|---|---|---|
 | DX1 | A caller resolves a tool's request and response types from `<Tool>Request` / `<Tool>Response` | **PASS** 10/10 | **PASS** all five tools |
-| DX2 | A caller resolves every arm of a multi-arm response by the arm's own schema title | **FAIL** 0/9 | **PASS** all three arms exported |
-| DX3 | The model accepts exactly what the schema accepts | **FAIL** validators disagree | not established at runtime |
+| DX2 | A caller resolves every arm of a multi-arm response by the arm's own schema title | **FAIL** 0/9 by title (6 reachable under a hand alias with a `Response` suffix) | **PASS** all three arms exported |
+| DX3 | The model accepts exactly what the schema accepts | **FAIL** validators disagree | not established at runtime; two generated artifacts (`generate-types`, `generate-zod-schemas`) |
 | DX4 | A caller emits an error, including a code the registry does not list | **PASS** | **PASS**, and exceeds Python |
 | DX5 | A caller emits a non-blocking observation | **FAIL** | **FAIL** |
 | DX6 | A caller extends a response type with their own fields | **FAIL** 98 of 260 | **PASS** by language |
 | DX7 | A semantic name resolves to the class the schema describes | **FAIL** | **PASS** |
 | DX8 | No positional name appears in the surface a caller imports | **FAIL** 39 + 949 | **PASS** 1 |
-| DX9 | A caller imports a type with one namespace level, `adcp.types.<domain>.<Class>` | **FAIL** 3 levels typical, 5 worst | **PASS** 1, flat root export |
+| DX9 | A caller imports a type by domain, `adcp.types.domains.<domain>.<Class>`, and reaches a schema module only for a name the domain declares more than once | **PARTIAL** the domain root binds once-declared names today; 335 names (145 after P2) need the schema module; nothing refuses a deeper import | **PASS** 1 level, flat root export — and exceeds Python, see P8 |
 | DX10 | Nothing in the SDK names a spec version as a literal | **FAIL** symlink alias | not examined |
+| DX11 | A caller validates a document against a root with branches and gets the branch's class back, on every path (`Root(**d)`, `model_validate`, nested, `TypeAdapter`) | **PARTIAL** 19 roots dispatch; the response roots are plain unions with hand guards | **n/a** types are erased; a discriminated union is compile-time and the guard is hand-written |
+| DX12 | A refusal names the JSON-Schema keyword that failed, so it can be projected onto `core/error.json`'s `issues[].keyword` without a mapping table | **PARTIAL** `anyOf`/`oneOf` named on the 19 dispatch roots; `missing`, `string_too_short`, … are pydantic's names | **n/a** Zod issues carry Zod codes |
 
-Python satisfies two of ten; TypeScript satisfies six, fails one, and leaves two
-unexamined. The findings behind each row:
+Python satisfies two of twelve outright and three partially; TypeScript satisfies seven, fails
+one, leaves two unexamined, and cannot state two. The findings behind each row:
 
 - **DX2.** TypeScript declares `CreateMediaBuySuccess`, `CreateMediaBuyError` and
   `CreateMediaBuySubmitted` as named interfaces and exports all three from
-  `src/lib/types/index.ts:162-164`. Python exports `CreateMediaBuyResponse1` and resolves
-  **neither** `CreateMediaBuyError` nor `CreateMediaBuySubmitted` under any top-level name —
-  two of the three arms of a tool this seller serves have no name a caller can import.
+  `src/lib/types/index.ts:162-164`. Python's titles are the same three strings
+  (`create-media-buy-response.json` arm titles, pin) and none resolves on `adcp.types`. What
+  does resolve is a hand alias per arm with a `Response` suffix —
+  `CreateMediaBuySuccessResponse`, `CreateMediaBuyErrorResponse`,
+  `CreateMediaBuySubmittedResponse` (`aliases.py:631-637`, pin) — so the failure is "not by
+  the schema's own name", not "no name". The fourth revision of this document said the latter;
+  §8 item 19.
 - **DX3.** TypeScript preserves the narrowing in the type (`Warning & { code?: 'a' | 'b' }`) and
   ships runtime schemas from a separate entry point, `@adcp/sdk/schemas`. Whether those
   schemas preserve the narrowing was not examined, so the cell reads unestablished rather than
@@ -323,8 +410,8 @@ unexamined. The findings behind each row:
   what Python should do with `Warning` instead of omitting it.
 - **DX5 is the shared failure, and it is not a generator defect.** Neither root index exports
   `Warning`, `WarningCode` or `WarningAffectedResource`, and the vocabulary is three closed
-  members in both. §6 covers it: the channel cannot express the condition, so the fix is a
-  spec change, not a codegen change.
+  members in both. The channel cannot express the condition, so the fix is a spec change, not
+  a codegen change, and no section of this document plans one.
 - **DX6.** A TypeScript interface extends without ceremony. Python's 98 annotated aliases
   cannot serve as a base class, which is §4.4.
 - **DX7.** TypeScript's index takes `CreateMediaBuySuccess` from `./tools.generated`, one
@@ -334,15 +421,93 @@ unexamined. The findings behind each row:
   is `PreviewRenderV3`, a version suffix rather than a traversal index.
 
 **What this settles.** TypeScript is the reference for DX2, DX4, DX6, DX7 and DX8, and the one
-change in §4 is what moves Python onto all five. DX3 is Python's own behavior defect and lands
-before that change. DX5 is shared, belongs upstream in the schema, and no amount of generator
-work reaches it.
+change in §5 is what moves Python onto all five. DX3's sweep lands before that change and its
+fix inside it (§5). DX5 is shared, belongs upstream in the schema, and no amount of generator
+work reaches it. DX9 TypeScript keeps. DX11 and DX12 are Python's to win, and §3.1 says how.
+
+### 3.1 Where Python exceeds TypeScript, and what the SDK must do to realise it
+
+The body above treats TypeScript as the reference. That is right for five rows and wrong as a
+ceiling: a TypeScript type is erased at runtime, and everything the SDK does with a type at
+runtime — validate, dispatch, refuse with a reason, extend with the contract intact — is a
+separate artifact there and the same object here. The audit tested six candidate axes against
+the wheel. Four hold and are design intent; two do not survive and are recorded so nobody
+re-proposes them.
+
+**A. One object is the type and the validator (DX3, made a property).** TypeScript ships
+`generate-types` and `generate-zod-schemas` as two generators over the same cache, exported at
+`.` and `./schemas` `(ts)`; nothing makes their accepted sets agree, and nothing can short of a
+third generator comparing them. A pydantic class is one artifact, so "the model accepts
+exactly what the schema accepts" can be a property OF THE CLASS rather than a hoped-for
+agreement between files. It is not held at the pin — §4.3 is the counterexample — and nothing
+grades it: the 19 pin tests that import `jsonschema` are conformance tests of other things.
+*What the SDK changes:* the P3 instrument in §5 becomes a per-class property test, `model_validate(x)`
+succeeds iff `jsonschema.validate(x, node)` succeeds, over the bundle's 113 root `examples` and
+a generated negative per node (one required field removed, one enum value replaced). *How a
+caller observes it:* `Model.model_json_schema()` and the bundle node accept the same documents,
+so a caller validating with either gets one answer; today they get two.
+
+**B. Runtime branch dispatch, with the refusal naming the combinator (DX11, DX12).** The SDK
+already ships this for 19 generated roots, 12 of them exported on `adcp.types`:
+`BranchDispatchMixin` (`types/_branch_dispatch.py`, pin) makes
+a root with branches validate as the branch the document satisfies on all four paths — direct
+construction, `model_validate`, nested field, `TypeAdapter` — and a document satisfying no
+branch is refused with `type: 'anyOf'` and the selecting field names in `ctx`
+(`_conditions.py:636 name_the_combinator`, pin), which is the keyword `core/error.json`
+requires on `issues[]`. Measured: `WebhookChallengeResponse(challenge=…)` returns
+`WebhookChallengeResponseChallenge`; `model_validate({"token": …})` returns
+`WebhookChallengeResponseToken`; `{"x": 1}` is refused with one `anyOf` error. The response
+roots are NOT among the 19: `adcp.types.CreateMediaBuyResponse` is a plain `types.UnionType`
+over the three canonical arms, a `TypeAdapter` over it picks an arm by pydantic's smart union
+with no keyword on refusal, and the SDK carries ~30 hand-written `TypeGuard`s instead
+(`guards.py:176 is_create_media_buy_success`, listed in `_EAGER_ONLY_EXTRAS`, pin) — which is
+exactly the TypeScript shape. *What the SDK changes:* §5 item 1 routes the response-arm
+emitter through `emit_branch_classes` (`post_generate_fixes.py:8778`, pin, already wired for
+partitioning roots), so the response base carries the mixin; the hand guards are then
+derivable (`isinstance(r, CreateMediaBuySuccess)`) and are deleted with the other hand tables
+in item 3. *How a caller observes it:* `CreateMediaBuyResponse.model_validate(payload)` returns
+`CreateMediaBuySuccess`, `CreateMediaBuyError` or `CreateMediaBuySubmitted`, and a payload
+matching none is refused with `keyword: oneOf` and the three titles. TypeScript cannot: the
+union is compile-time and the guard is a function someone wrote.
+
+**C. A refusal projects onto the spec's error shape without a mapping table (DX12 beyond the
+combinators).** `core/error.json` requires `issues[].keyword` to be a JSON-Schema keyword. A
+pydantic error carries `type` (`missing`, `string_too_short`, `literal_error`, `enum`), `loc`
+and `ctx`; the mapping from those to `required`, `minLength`, `const`, `enum` is finite and
+mechanical, and `_conditions.name_the_combinator` and `error_narrowing.narrow_union_errors`
+(pin) already do the two hardest cases. Zod issue codes (`invalid_type`, `too_small`) are Zod's
+vocabulary, not the schema's, and the TypeScript server maps them by hand. *What the SDK
+changes:* one function on `AdCPBaseModel` — `issues_from(exc: ValidationError) -> list[Issue]`
+— finishing the projection for every pydantic error type the generated classes can raise,
+graded by a test that raises each one and checks the keyword is in the JSON-Schema vocabulary.
+*How a caller observes it:* a seller's `INVALID_REQUEST` carries spec-valid `issues[]` from the
+model's own refusal, with no table in the seller's code.
+
+**D. A subclass inherits the parent's validators, and that is graded (DX6, strengthened).**
+A TypeScript `interface X extends Y` carries Y's fields and none of Y's runtime checks, because
+Y has none. `tests/test_canonical_models_are_subclasses.py` (pin) grades that every canonical
+model inherits every `model_validator` of its generated parent — a property the language can
+state and TypeScript cannot. It is undercut today by the 98 `TypeAlias` annotations (§4.4),
+which make a public name un-subclassable. *What the SDK changes:* §5 item 3 drops the
+annotations; the subclass test stays and widens to every public name. *How a caller observes
+it:* `class MyProduct(adcp.types.Product)` validates as `Product` does and adds fields, with
+`mypy` clean. The §3 table marks the TypeScript cell "by language"; counting validators it is
+the weaker of the two.
+
+**Discarded.** *Behaviour on the error type* (`Error.is_standard`, `Error.recovery` as
+methods): `adcp.types.Error` has no public method of its own and `ErrorCode` is a closed
+120-member `StrEnum` with no metadata (pin); the TypeScript helpers exist in Python already,
+server-side and off the type (`adcp.server.helpers.STANDARD_ERROR_CODES:145`,
+`adcp.server.translate._recovery_for_code:97`, pin). Moving them onto the class is a small
+ergonomic gain, not an inherent advantage — DX4's verdict stands and TypeScript's shape is the
+one to adopt. *`__init_subclass__`*: used nowhere in `adcp/types/*.py` (pin) and no caller-
+visible requirement follows from it.
 
 ---
 
 ## 4. The defects, as consequences
 
-### 3.1 Positional names, and the live swap
+### 4.1 Positional names, and the live swap
 
 `src/core/tools/creatives/listing.py:10-11` in this repo:
 
@@ -366,7 +531,7 @@ said.
 
 It also shows why P4 must key on **name sets, not counts**: both arms have four fields.
 
-### 3.2 A remote `$ref` is resolved as a copy
+### 4.2 A remote `$ref` is resolved as a copy
 
 Demonstrated on a three-file tree with production's flags: with `--allow-remote-refs`, the
 first referencing module gets a fresh copy named from the URL stem and the canonical class
@@ -386,7 +551,7 @@ under one name**. Worst: `Creative` 9 modules / 8 shapes, `Account` 8/8, `Scope`
 `tasks-get-response.json` declare inline anonymous `properties.error` objects — genuinely
 distinct shapes, correctly generated, **named `Error` from the property name**.
 
-### 3.3 An `allOf` enum narrowing is lost — P3 violated
+### 4.3 An `allOf` enum narrowing is lost — P3 violated
 
 `media-buy-commitment-response.json` narrows `warnings[].code` to two members; the generated
 model accepts a third. `jsonschema` rejects the payload, `model_validate` accepts it. The
@@ -394,7 +559,7 @@ merge **unioned** the vocabularies and left `_1`-suffixed aliases of its own mem
 tell. The `const` case is correct, so the defect is specific to `enum`. **Scope not
 established** — one site demonstrated, no sweep run, and the sweep is a prerequisite.
 
-### 3.4 Two declaration forms for one kind of name
+### 4.4 Two declaration forms for one kind of name
 
 `aliases.py` (pin): 136 plain assignments, 98 annotated `X: TypeAlias = Y`. Only the plain
 form can be inherited from (`Invalid base class [misc]`). 92 of the 98 resolve to a class and
@@ -402,7 +567,7 @@ form can be inherited from (`Invalid base class [misc]`). 92 of the 98 resolve t
 `CreateMediaBuySuccessResponse` and `UpdateMediaBuySuccessResponse` have identical roles and
 are declared two different ways. **Dropping the annotation is the cheapest item here.**
 
-### 3.5 The `ActivationKey` names were wrong on day one
+### 4.5 The `ActivationKey` names were wrong on day one
 
 Two of them are not in `aliases.py` at all — `_eager.py:1097-1098` (pin) declares
 `PropertyIdActivationKey = SegmentIdActivationKey` and
@@ -414,7 +579,7 @@ key-value.
 
 So the first version's story — drift from a four-arm schema — is wrong. They are compat
 synonyms that were mislabelled at birth, which means they leave through the deprecation
-staging in §4, not silently.
+staging in §5, not silently.
 
 ---
 
@@ -430,19 +595,33 @@ being complained about, written down as a plan.
 The rule instead: **every change that moves a public name happens in one release, or it does
 not happen.**
 
+The audit of the fifth revision tested whether its six items could land together. One could not
+land at all (the namespace flattening — P8 records why, and it is out), one moved a public name
+while labelled additive (the narrowing fix, now inside the change), one described a fix the pin
+already has (`extra=`, now nothing), two had unstated dependencies that are now stated (the
+success-arm rule and the naming-function pair in item 1; the layer decision in item 2), and one
+decision the document left open is now made (where the deprecated positional aliases live). The
+result is still one change. It did not have to become two, and the reason is worth saying: the
+only item that would have forced a second break was the flattening, and it is rejected rather
+than deferred.
+
 ### Before the change — additive only, no public name moves
 
 Neither of these touches a name, so neither is a rewrite and neither needs staging. They land
 first so the one structural change is *measured* rather than asserted.
 
-- **The narrowing intersect (P3).** Sweep for every `allOf`+`enum` narrowing site, fix the
-  merge to intersect, assert accepts-iff-schema-accepts over the found sites. A behaviour fix
-  with no rename. Build the check as a **sampled** instrument — the bundle resolves offline
-  once `/3.2.3/` is aliased to `/3.2/`, and 113 of 1057 schemas carry root `examples` as a
-  payload source. It is not total, and that is acceptable: today nothing checks P3 at all.
-  Each **deliberate** divergence gets its own assertion naming why (`AdCPBaseModel` sets
-  `extra="ignore"`, so wherever a schema says `additionalProperties: false` the model is wider
-  on purpose). One assertion per divergence, never a ledger of them.
+- **The P3 instrument, and the sweep it runs (P3).** Build the accepts-iff-schema-accepts check
+  as a **sampled** property test over every generated class — the bundle resolves offline once
+  the version derivation of item 6 is in, 113 of 1057 schemas carry root `examples` as a payload
+  source, and one negative per node is generated (a required field removed, an enum value
+  replaced). It is not total, and that is acceptable: today nothing checks P3 at all. Run it to
+  find every `allOf`+`enum` narrowing site (§4.3) and every other divergence; record the list in
+  the pull request, not in the tree. **The fix to the merge is NOT here** — see item 7 below; it
+  removes enum members, and an enum member is a public name. There is no `extra=` assertion to
+  write: the generator already derives it (P3), and the fifth revision's "one assertion per
+  deliberate divergence" named a divergence that does not exist.
+- **The root schema accessor (P8).** One function at the package root taking a schema name,
+  beside `adcp.schemas.load_schema`. A new name, no moved name.
 
 **The shape fixture is NOT part of this, and must not be committed.** The first version of
 this document put it first. Under P10 it fails: it records whatever the tree held when someone
@@ -454,34 +633,79 @@ Once P1 lands, the swap the fixture exists to detect cannot occur.
 
 ### The one change
 
-Six things that each move public names, landed together because landing them apart is six
-breaks instead of one:
+Seven things that each move public names, landed together because landing them apart is seven
+breaks instead of one. The order below is a dependency order, not a sequence of releases:
+(2) is a decision the rest read; (1) and (4) change what exists; (3) derives the bindings over
+the result; (5) and (6) are independent of all of them.
 
-1. **Name every union branch by the rungs (P1).** Delete `post_generate_fixes.py:6454`'s index
-   naming, `:6449-6453`'s reorder, and `:6408-6411`'s `endswith("1")` success detection —
-   detect the success arm from the schema's `status` const. Use
-   `generated_names.generated_root_class_name` / `generated_nested_class_name`, **not**
-   `_schema_title_to_class_name`, which the pin deleted as wrong for 94 of 946 roots.
-2. **Decide the layer, once (P5).** Whether a semantic name binds to the generated arm or to
-   the `canonical_creative` subclass. Today it is the subclass and nobody chose that. This is
-   the base-class change, and it is the one structural change being accepted.
+1. **Name every union branch by the rungs (P1), and emit the response base with dispatch.**
+   Delete `post_generate_fixes.py:6454`'s index naming, `:6449-6453`'s reorder, and
+   `:6408-6411`'s `endswith("1")` success detection. **The success arm is not found by a
+   `status` const** — on `create-media-buy-response.json` and `update-media-buy-response.json`
+   (pin) the success arm carries no const, the error arm carries none, and only the submitted
+   arm pins `status: submitted`; the commitment response pins all three. The rule that holds on
+   every response root in the bundle: the arm that gets `_normalize_legacy_status` is the one
+   whose schema requires neither `errors` nor `task_id` — the backfill exists precisely for the
+   arm whose status the schema leaves unpinned. Two naming functions exist at the pin and they
+   disagree on 115 root titles (`A2UIBoundValue` / `A2UiBoundValue`, `CSSAsset` / `CssAsset`):
+   `union_branch_names.pascal_case` and `generated_names.generated_root_class_name`, the latter
+   being what the wheel's root classes are actually named by. The rungs keep deriving the
+   *branch* name (titled branches: 0 of 302 disagree) and take the *parent prefix* from
+   `generated_root_class_name`, so a const- or required-set-named branch shares its base class's
+   spelling; 5 roots change under that rule (`a2ui/bound-value`, `adagents`, `daast-asset`,
+   `vast-asset`, and one more), none of them yet shipped. `_schema_title_to_class_name` stays
+   deleted. Route the response-arm emitter through `emit_branch_classes`
+   (`post_generate_fixes.py:8778`, pin) so the response base carries `BranchDispatchMixin` like
+   the 19 partitioning roots already do (§3.1 axis B).
+2. **The layer, decided (P5).** A semantic name on `adcp.types` binds to the
+   `canonical_creative` subclass where the canonical layer declares one, and to the generated
+   class otherwise; the domain path always binds the wire-faithful generated class. This is
+   what the pin does for every canonical name (`Product`, `Format`, `Package`,
+   `CreateMediaBuyRequest`, … all resolve to `adcp.types.canonical_creative`) and what
+   `canonical_creative.py:1-6` (pin) says the layer is for — "the primary application-facing
+   models". Writing it down changes nothing at the pin; it decides what items 1 and 3 emit. The
+   rename in item 1 therefore produces `domains.media_buy.CreateMediaBuySuccess` (generated) and
+   `adcp.types.CreateMediaBuySuccess` (canonical subclass of it), the same pairing `Product`
+   has today. **A caller who needs the wire-faithful arm as a base class imports it from the
+   domain path.** This repo does (`src/core/schemas/_base.py:107-112` subclasses the generated
+   arm), and the comment at `_base.py:1261` that calls the base `CreateMediaBuySuccessResponse`
+   is wrong about which layer it subclasses; it is corrected when the imports move.
 3. **Derive the whole binding layer (P5).** `aliases.py`, `_eager.py`, both `__init__` files,
-   and `KNOWN_COLLISIONS` — generated from the module tree under the decision in (2), with the
-   98 `TypeAlias` annotations gone.
+   `KNOWN_COLLISIONS`, and the hand `TypeGuard`s (`guards.py`, `_EAGER_ONLY_EXTRAS`) — generated
+   from the module tree under (2), with the 98 `TypeAlias` annotations gone. Depends on (1),
+   (2) and (4) having run.
 4. **Local refs only (P2).** Shrink `PRESERVE_CANONICAL_URL_REFS` to empty and fix the
    sibling-document alias case. This is in the same change because removing a duplicate class
-   removes a public name.
-5. **Flatten the namespace to `adcp.types.<domain>.<Class>` (P8).** Move the per-file modules
-   under a private package and re-export from the domain package. This breaks every deep
-   import, so it cannot be a later step — a second namespace break is what the constraint at
-   the top of this section forbids. Give the flat schema loader one root accessor at the same
-   time.
+   removes a public name. It also collapses 190 of the 335 intra-domain duplicate names (the
+   identical-shape ones), which is what makes the DX9 residue 145.
+5. **Refuse the deep import (P8).** No flattening. The domain root already binds once-declared
+   names; add the rule that refuses an import naming a generation subdirectory
+   (`domains.core.assets.<module>`) or an underscore module, and nothing else moves. In the
+   change rather than before it only because the refusal is what the deprecation shim in (8)
+   is measured against.
 6. **Derive the spec version (P9).** Replace the `/3.2.3/` → `/3.2/` symlink and every version
    literal with the derivation, failing closed when no bundle matches.
+7. **Intersect the `allOf`+`enum` narrowing (P3).** The fix the instrument above found the
+   sites for. At the one known site it deletes `Code.inventory_shortfall_forecast_1`,
+   `Code.flight_change_creates_pacing_risk_1` and `Code.fields_ignored_due_to_precedence` from
+   `media_buy_commitment_response.py:37-42` (pin) — three public enum members — so it belongs
+   here and not in the additive set, where the fifth revision put it.
 
-Emitted together: semantic names as the real classes, positional names as deprecated aliases,
-one snapshot regeneration under review (`test_public_api.py:505-520`'s `repointed` check fires
-for every renamed class — intended), one `DeprecationWarning` cycle, one major for removal.
+8. **Where the deprecated positional names live — decided.** Every positional name
+   (`CreateMediaBuyResponse1`, …) is emitted as an alias **in the module that declares it
+   today** — the schema module, the domain root, and `adcp.types` for the ones exported there —
+   bound to the renamed class, with a `DeprecationWarning` raised on access through each
+   module's `__getattr__` (the mechanism `adcp.types` already uses for `generated_poc`, pin).
+   Because no module path moves (item 5), a deep import of a positional name keeps working for
+   the whole window, which is the only reading of §7's "aliases through one major" under which
+   the promise means anything to the callers who actually import deep. The aliases are
+   generated by item 3's derivation, not hand-listed, and are deleted in the following major.
+   Nothing goes behind a `domains` shim, because `domains` is not moving.
+
+Emitted together: semantic names as the real classes, positional names as deprecated aliases
+where they are now, one snapshot regeneration under review (`test_public_api.py:505-520`'s
+`repointed` check fires for every renamed class — intended), one `DeprecationWarning` cycle,
+one major for removal.
 
 ### After, and not part of it
 
@@ -490,10 +714,15 @@ for every renamed class — intended), one `DeprecationWarning` cycle, one major
   rungs cannot name.
 - **The nested positional names** (~1045) stay. The root-branch rungs do not reach them, this
   document has no rule for them (§9), and inventing one would be the third rewrite. They are
-  ratcheted shrink-only and left alone until a rule exists that is worth one more break.
+  ratcheted shrink-only and left alone until a rule exists that is worth one more break. This
+  is also why the schema module stays public (P8): 145 of them share a bare name with a
+  differently-shaped sibling in the same domain, and the schema module is the only path that
+  names them.
 
-**For this repo:** the 11 positional imports move exactly once, after the change, in one
-commit. Not before — switching early is the base-class change without the decision behind it.
+**For this repo:** the 108 `adcp.types.domains` import statements (33 files) keep resolving
+through the window; the 15 positional names among them move exactly once, after the change, in
+one commit, to the domain path of the renamed generated class. Not to the `adcp.types` alias —
+that is the canonical layer (item 2) and a base-class change this repo has not asked for.
 
 ---
 
@@ -511,12 +740,14 @@ ones that actually pin the wrongness were not on its list.
 | `KNOWN_COLLISIONS` (13 at pin) | **REPLACE** then delete | Its comments state the rule 13 times by hand. Derive it; keep `_enforce_every_class_is_reachable` and `test_collision_guard.py`. |
 | `scripts/collision_allowlist.json` | **DELETE now** | Dead; referenced only from a doc. |
 | `PRESERVE_CANONICAL_URL_REFS` | **REPLACE** | A carve-out, not a guard. Shrink to empty, then fail the build on any surviving remote ref. |
-| `stabilize_inlined_core_refs` | **DELETE** after Stage 6 | Exists only because of remote refs. |
+| `stabilize_inlined_core_refs` | **DELETE** with §5 item 4 | Exists only because of remote refs. |
 | `stabilize_nested_discriminators` | **KEEP** | Unrelated to refs — it drops a flattened duplicate discriminator pydantic rejects at import. |
 | `_eager.py:1097-1098` synonyms | **DELETE** via staging | Mislabelled at birth; still a compat surface. |
 | 98 `TypeAlias` annotations | **DELETE** | §4.4. |
 | `test_asset_aliases_stable.py`, `test_collision_aliases.py` | **DELETE after the change** | Hand-listed expectations per alias — blessed values. Until the change they are the only thing holding the hand table honest; afterwards the alias *is* the derivation and they assert a tautology. |
 | `test_lazy_types.py::test_partial_modules_avoid_numbered_codegen_names` | **KEEP, widen** | A regex over `__all__`, no blessed value. Widen to the whole surface; it becomes P1's grade. |
+| `test_lazy_types.py::test_partial_modules_never_import_generated_layer` | **KEEP** | The guard that refuses the fifth revision's flattening: `adcp.types.media_buy` is a curated partial, not a generated domain. A derived property, no blessed value. |
+| `BranchDispatchMixin`, `name_the_combinator` | **KEEP, extend** | The runtime dispatch and the keyword-named refusal (§3.1 B, C). Extend to the response roots through item 1; the hand `TypeGuard`s in `guards.py` are then derived and go with the hand tables. |
 | `post_generation_manifest.json` | **REPLACE** | Keep the rule (a fix that changes nothing fails the run), drop the per-fix table. The seven fixes it records as no-ops at this pin are dead code; delete them. |
 | `test_union_branch_names.py` | **SPLIT** | Keep the partition identity (`named + classless + refused == total`) and the single-refusal assertion — both derived. Drop the five equality counts (557/169/82/27/1); they are a ledger. |
 | `union_branch_names` rung 4 (fail closed) | **KEEP** | A build failure, not a value. This is P1's enforcement, and it is what found the one unnameable arm. |
@@ -527,26 +758,37 @@ ones that actually pin the wrongness were not on its list.
 **Churn versus correctness.** The positional→semantic rename of response arms is *required* by
 P1, so it beats the emitter sites that defend the numbering. Re-exporting `Warning` on
 `adcp.types` is ergonomics and P6 argues against it — it loses. Switching salesagent's four
-"switchable" imports is neither: it is a layering decision, and the layer comes first.
+"switchable" imports to the `adcp.types` aliases is neither: under §5 item 2 those aliases are
+the canonical layer, and this repo subclasses the wire-faithful arm, so the imports move to the
+renamed domain-path class and nowhere else.
 
 ---
 
 ## 7. What must not change
 
 - Every class already named by its schema title (`CreateMediaBuyRequest`, `Product`,
-  `Warning`, …) keeps its name. **The module paths do not survive** — P8 flattens
-  `adcp.types.domains.<domain>.<schema_stem>` to `adcp.types.<domain>`, and the first version
-  of this document was wrong to list the deep paths as fixed. The class names are the
-  contract; the paths are generation detail.
+  `Warning`, …) keeps its name. The rungs name branches, not roots, and the parent prefix they
+  use is the generator's own root name (§5 item 1), so no root is renamed by the change.
+- **Every module path that resolves at the pin keeps resolving.** `adcp.types.domains.<d>`,
+  `adcp.types.domains.<d>.<schema>`, and the curated partials `adcp.types.media_buy` /
+  `.creative` / `.signals` / `.protocol` / `.buyer` / `.seller`. The fifth revision said the
+  deep paths do not survive; the audit found the flat target occupied and the deep path the
+  only one for 145 names (P8), so they stay. What is new is a refusal of the paths that were
+  never a contract: generation subdirectories and underscore modules.
+- The `generated_poc` → `domains` deprecation window, closing in v10 as the pin states. Nothing
+  in §5 opens a second one over the same paths.
 - The 136 plain-assignment alias *names*. Only their provenance becomes derived.
 - The request-side split classes the pin already emits
   (`CreateMediaBuyRequestExplicitPackagesWithFixedAllocation`, …) — already correct under P1.
 - `_generated` bare-name resolution for every non-colliding name.
 - The codegen flags (`--strict-types bool int float`, `--reuse-model`, `--use-annotated`, …),
   `rewrite_refs` itself, and `flatten_validation_oneof`.
-- `adcp.types`' PEP 562 lazy mechanism. Stage 2 generates the *contents* of `__init__` /
-  `_eager.py`; it does not replace the loading shape.
-- Positional names as deprecated aliases through one major.
+- `adcp.types`' PEP 562 lazy mechanism, and the per-domain lazy facades. §5 item 3 generates
+  the *contents* of `__init__` / `_eager.py`; it does not replace the loading shape.
+- Positional names as deprecated aliases through one major, **at the module that declares them
+  today** (§5 item 8).
+- `BranchDispatchMixin`'s four-path dispatch on the 19 roots that have it, and the `anyOf` /
+  `oneOf` keyword on their refusals. Item 1 adds roots to it; nothing removes one.
 
 ---
 
@@ -585,23 +827,84 @@ Recorded because each wrong claim is the intuitive one and will be proposed agai
     and adopter churn — the repeated-rewrite pattern this work exists to end, proposed as the
     way to end it. §5 is now one change.
 
+The fifth revision (`131df0569`, the same night) added three items and a reviewer's audit
+against the wheel refuted two of them and found four more errors in the body. Recorded in the
+same spirit:
+
+14. **"Flatten the namespace to `adcp.types.<domain>.<Class>`; the module paths do not
+    survive."** The target is occupied by six hand-written modules, four of them the curated
+    partials a kept guard protects; privatising the schema modules orphans 145 differently-
+    shaped names that share a bare name within a domain; and the path already moved once this
+    major (`generated_poc` → `domains`, April 2026). Rejected, not deferred — P8.
+15. **"`AdCPBaseModel`'s `extra="ignore"` is a live P3 violation; derive `extra="forbid"` from
+    `additionalProperties: false`."** The generator already does: 1002 `forbid` and 1187 `allow`
+    sites in the non-bundled domain modules, `types/base.py:316-320` (pin) states the rule. The
+    same revision's §5 called the same divergence "wider on purpose" and asked for an assertion
+    per divergence; the two paragraphs contradicted each other and both described a pin that
+    does not exist.
+16. **"This breaks every deep import, including five of this repo's eleven."** 108 import
+    statements in 33 `src/` files, 124 names, 16 with no flat destination. The eleven were the
+    positional imports; the sentence was about deep imports.
+17. **"Detect the success arm from the schema's `status` const."** The success arm of the
+    create and update responses has no `status` const (pin); only the submitted arm does. The
+    rule as written selects nothing.
+18. **"Use `generated_names.generated_root_class_name`"**, while the rungs being wired use
+    `union_branch_names.pascal_case` — two functions that disagree on 115 root titles and on
+    the parent prefix of 5 roots' branches. Item 1 now names both and says which does what.
+19. **"Python resolves neither `CreateMediaBuyError` nor `CreateMediaBuySubmitted` under any
+    top-level name — two of the three arms have no name a caller can import."** `aliases.py:634`
+    and `:637` (pin) export `CreateMediaBuyErrorResponse` and `CreateMediaBuySubmittedResponse`
+    on `adcp.types.__all__`. The failure is "not by the schema's own title", which DX2 measures
+    correctly; the text overstated it.
+20. **"The narrowing intersect is additive — a behaviour fix with no rename."** It deletes
+    three members of a public `StrEnum` at the one known site (`Code`,
+    `media_buy_commitment_response.py:37-42`, pin). Moved into the one change as item 7.
+21. **Text the rewrite left standing from the first version:** "three of the five principles"
+    (there were ten); "R1←P1 … R6←P5" (rules defined nowhere); "the one change in §4" and "§6
+    covers it" (wrong sections); §4's subsections numbered 3.1–3.5 with cross-references that
+    disagreed among themselves; "Stage 2" and "Stage 6" from the retired plan; and §8 item 6's
+    parenthesis "the gate still lands first" beside §8 item 12 and §5 saying it must not be
+    committed. All corrected in the body; item 6 is left as written above so the contradiction
+    stays on record.
+22. **"Whether `branch_classes`' emitter is wired" (§9).** It is: `post_generate_fixes.py:8778`,
+    in the fix list at `:9174` (pin). The docstring at `tests/test_branch_classes.py:11` that
+    says otherwise is stale, and §9 carried the stale text as an open question.
+
 ---
 
 ## 9. Not established
 
-- Whether `branch_classes`' emitter is wired for all eleven split roots or only some — its
-  test docstring says "not wired into the generation pipeline", yet the wheel carries the
-  split classes for `create-media-buy-request`.
+What the design rests on that is not yet measured, and what would measure it:
+
+- **The layer decision (§5 item 2) rests on the pin's behaviour being the intended one.** The
+  pin binds every canonical name to `canonical_creative`; no commit message or document in the
+  SDK was found saying that was chosen rather than accumulated. If upstream disagrees, items 1
+  and 3 emit the other pairing and nothing else in the plan changes. Verifier: upstream's
+  answer; until then `test_canonical_models_are_subclasses.py` grades whichever layer is public.
+- **The success-arm rule in item 1** ("requires neither `errors` nor `task_id`") was checked on
+  the three response roots named in this document, not on every response root in the bundle.
+  Verifier: run it over every `*-response.json` with branches and assert exactly one arm
+  matches, or the emitter fails closed.
+- **How many enum members the narrowing fix (item 7) removes across the bundle.** Three at
+  the one known site. The P3 instrument's sweep is the measurement; until it runs, item 7's
+  public-name footprint is one site.
+- **Whether any caller constructs a model with a value the unioned vocabulary accepts and the
+  intersected one refuses.** This repo does not touch the commitment response's warnings (grep
+  empty); other adopters not examined.
+- **The sibling-document `allOf` re-derivation** (item 4): the generator condition behind it is
+  not established, and the audit did not measure the case.
 - Whether the 98 `TypeAlias` annotations were deliberate. No rule or comment found.
 - Whether the 9 cascade families reach zero after a fixed-point naming pass — name the leaves,
-  collapse identical shapes, re-key. Not iterated.
-- Whether any bundle schema sets `additionalProperties: false`. If none does, the
-  `extra="ignore"` divergence is empty at this pin and P3's exclusion set is empty with it.
-- The scope of P3 divergences beyond §4.3. The sampled check is how to find out.
-- The scope of the `allOf`+`enum` narrowing loss beyond one field (§4.3).
-- The generator condition behind the sibling-document `allOf` re-derivation.
+  collapse identical shapes, re-key. Not iterated. The 145 differing-shape intra-domain names
+  (P8) overlap this set; how far they shrink under such a pass is not established either.
+- The scope of P3 divergences beyond §4.3, now that `extra=` is known not to be one.
 - Whether `Warning`'s absence from `adcp.types.__all__` is builtin-shadowing policy or an
   omission (P6 wants it to be policy either way).
-- Whether each of this repo's positional use sites needs a base class or only a type position.
-- Whether the TS SDK validates at runtime as Python does; the Zod layer was not examined.
+- Whether each of this repo's positional use sites needs a base class or only a type position
+  (15 positional names imported; `_base.py:107-112` is a base-class use).
+- Whether the TS SDK's Zod layer preserves the `allOf` narrowing that its types preserve. Two
+  generators make disagreement possible; whether it occurs was not examined.
+- Whether the mapping in §3.1 axis C from pydantic error types to JSON-Schema keywords is total
+  over the error types the generated classes can raise. Enumerate them from the core schemas
+  and check; not done.
 - Go and Java SDKs.
