@@ -642,19 +642,31 @@ def _sync_legacy_claim(ctx: dict, format_id: str, **parameters: int) -> None:
     any satisfaction verdict exists to grade. The scenario still says WHICH id, and it
     cannot name one that only the in-process registry mock would answer.
 
-    AND THE CATALOG HAS TO BE THERE, which is the half that was missing. The door
+    AND THE CATALOG IS ALREADY THERE, which is why this step arranges none. The door
     ``resolvable_format_ref`` guards asks whether the AGENT serves the id; the projection
-    then asks the agent what canonical kind it declares, and this env answers
-    ``all_formats = []`` by default -- so a claim on a served id that the registry glob
-    does not cover was refused UNSUPPORTED_FEATURE upstream of the gate under test.
-    ``serve_reference_catalog`` makes the two doors consult the same 71 formats, which is
-    what the e2e server does. Measured: ``video_1280x720`` is in the capture and declares
-    ``canonical.kind = video_hosted``, and no registry glob matches it.
+    then asks the agent what canonical kind it declares, and both now read the committed
+    capture on every env this step routes to -- ``CreativeSyncEnv`` installs production's
+    ``ReferenceFormatsRegistry`` serving all 71 formats (1883dedc4), and
+    ``LibraryUpsertCreativeSyncEnv`` leaves ``get_creative_agent_registry`` unpatched, so
+    the registry it reaches serves the same capture for itself. Measured:
+    ``video_1280x720`` is in the capture and declares ``canonical.kind = video_hosted``,
+    and no registry glob matches it.
+
+    THIS STEP USED TO CALL ``serve_reference_catalog()`` HERE, AND MUST NOT AGAIN. That
+    method writes through ``mock["registry"]``, a key ``LibraryUpsertCreativeSyncEnv``
+    DELETES after ``__enter__`` (the trap its own docstring names), so the two
+    ``@creative_library_upsert`` scenarios routed there died in this Given with
+    ``KeyError: 'registry'`` on all four transports -- measured red at
+    ``tests/harness/creative_sync.py:1148`` in box run innet_171026_2156, and before
+    1883dedc4 renamed the key, as ``KeyError: 'run_async'`` in innet_171026_2038. The call
+    bought nothing on either env: it only UNDOES a prior narrowing, no Given here narrows,
+    and the capture is the default. A catalogue a scenario needs narrowed says so with
+    ``set_served_catalogue``, which is a different sentence and not available on the
+    real-registry env at all.
     """
     from tests.factories.format import resolvable_format_ref
     from tests.factories.request import CreativeAssetRequestFactory
 
-    ctx["env"].serve_reference_catalog()
     ctx["creatives"] = [
         CreativeAssetRequestFactory.payload(
             creative_id=_SYNC_CREATIVE_ID,

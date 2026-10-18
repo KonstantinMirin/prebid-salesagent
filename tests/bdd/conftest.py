@@ -6878,28 +6878,40 @@ ENV_ROUTES: list[EnvRoute] = [
     ),
     EnvRoute(
         tag="creative-library-upsert",
-        # The LIBRARY UPSERT path, and the ONE route in this feature that leaves both the
-        # creative-agent registry AND the sync bridge it is called through unpatched.
-        # ``RealRegistryCreativeSyncEnv`` says why the registry has to be real -- "a refusal
-        # produced by a mock proves nothing about production" -- and
-        # ``LibraryUpsertCreativeSyncEnv`` says why that is not sufficient on its own: the
-        # parent still blanks the fetch, measured at ``registry=ReferenceFormatsRegistry
-        # len=0``.
+        # The LIBRARY UPSERT path, and the ONE route in this feature that leaves the
+        # creative-agent registry unpatched. ``RealRegistryCreativeSyncEnv`` says why that
+        # is worth having -- "a refusal produced by a mock proves nothing about
+        # production".
         #
-        # MEASURED, and it is why these two scenarios cannot share the sibling row above:
-        # ``CreativeSyncEnv._configure_mocks`` sets
-        # ``mock_registry.list_all_formats.return_value = []``, so ``all_formats`` arrives
-        # EMPTY at the write site (probed: ``all_formats=0``, ``registry=MagicMock``). With
-        # no catalog, ``find_format`` answers None, the spec never reaches
-        # ``canonical_kind_for``, and the projection falls back to the registry glob -- which
-        # raises for ``display_300x250_image`` and leaves ``format_kind`` NULL. The control
-        # scenario would then fail for the ENV's reason rather than production's, which is
-        # the vacuous-pass shape inverted (salesagent-jzhea).
+        # THE CATALOGUE IS NO LONGER THE REASON THIS ROW EXISTS, and the two measurements
+        # that used to be written here ("``CreativeSyncEnv`` sets
+        # ``list_all_formats.return_value = []``, so ``all_formats`` arrives EMPTY",
+        # "the parent still blanks the fetch, measured at len=0") WERE TRUE AND ARE NOW
+        # FALSE: 1883dedc4 installs production's own ``ReferenceFormatsRegistry`` on the
+        # parent and deleted the ``run_async`` patch, so BOTH envs serve the committed
+        # 71-format capture with nothing arranged. They are recorded as retired rather
+        # than deleted because they are what made the Given for these two scenarios reach
+        # for ``mock["registry"]`` -- a key this env DELETES -- and died there with
+        # ``KeyError`` on all four transports from the day the scenarios were written
+        # (``KeyError: 'run_async'`` in box run innet_171026_2038,
+        # ``KeyError: 'registry'`` in innet_171026_2156). Nothing here needs the
+        # catalogue arranged; see ``_sync_legacy_claim``.
         #
-        # Hermetic BY CONSTRUCTION, not by luck: under ADCP_TESTING the unpatched registry
-        # is ``ReferenceFormatsRegistry``, which serves the checked-in capture and never
-        # dials -- measured at 71 formats, with ``display_300x250_image`` projecting to
-        # ``image`` once the spec is supplied.
+        # THE CATALOGUE IS HERMETIC HERE; THE PREVIEW IS NOT, and the paragraph this
+        # replaces claimed the env "never dials" on the strength of the catalogue alone.
+        # Resolution is hermetic: under ADCP_TESTING the unpatched registry is
+        # ``ReferenceFormatsRegistry``, which answers all 71 formats from the checked-in
+        # capture, ``display_300x250_image`` projecting to ``image``. The PREVIEW is a
+        # real request: with the Given fixed and the gate reached, production's own
+        # ``preview_creative`` runs for a static agent-backed format, and the projectable
+        # scenario was measured dialling ``https://creative.adcontextprotocol.org`` for
+        # real -- three failed MCP handshakes, then a live session answering
+        # ``variants=1`` -- on every in-process transport. The GRADE is unaffected (the
+        # canonical kind comes from the capture, not from the agent), but the row's green
+        # mark now depends on a third party being up. That is **salesagent-1bc7l**, which
+        # owns the missing ``preview_creative``/``build_creative`` capture; routing these
+        # rows to the parent would trade the dial for an ``AsyncMock`` in the BDD layer,
+        # which is not a fix.
         #
         # ITS OWN TAG, and the tag deliberately does NOT contain "format_satisfaction":
         # these rows are PREDICATE-routed by substring, so a tag sharing a prefix with a
