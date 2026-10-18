@@ -176,10 +176,13 @@ literal `"forbid"` (`src/adapters/base.py` ×5, `src/core/schemas/capability_dec
 `src/core/schemas/notification.py`, `src/core/resolved_identity.py`,
 `src/core/signing/posture.py`) and 7 literal `"ignore"`, all in `src/core/schemas/_base.py`
 (lines 1495, 1681, 1703, 2069, 2284, 2840, 4230) — the serializer mixins every wire model
-inherits. Within `src/core/schemas/` alone: 48 calls, 38 derived, 3 forbid, 7 ignore. A
-`grep` for the substring `ConfigDict` also catches `SettingsConfigDict(extra="ignore")` at
-`src/core/config.py:42`, which is pydantic-settings env loading and not a wire model; an earlier
-figure of 61 / 8 included it and is wrong. A literal on a wire model is the one place the
+inherits. Within `src/core/schemas/` alone: 48 calls, 38 derived, 3 forbid, 7 ignore.
+**Excluded by name:** the two `SettingsConfigDict(..., extra="ignore", ...)` sites at
+`src/core/config.py:42` and `:442`. Those are pydantic-settings environment loading, where
+`extra="ignore"` means "tolerate unrelated variables in the process environment"; they say
+nothing about what a buyer may send on the wire, which is what the dev-forbid / prod-ignore
+rule governs. A substring `grep` for `ConfigDict` catches the single-line one, and an earlier
+figure of 61 / 8 counted it and is wrong. A literal on a wire model is the one place the
 dev/prod split of pattern #7 does not apply, and nothing in the repo says which of the 17 chose
 that on purpose — whether a comment beside each states a reason was not graded, because a
 comment-line count is not a measurement of a reason. That is a salesagent defect to grade in
