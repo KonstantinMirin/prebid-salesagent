@@ -270,44 +270,101 @@ Without it, `make validate-generated`'s byte compare and every snapshot are mean
 *Order being total* is necessary; *which order was chosen* is cosmetic.
 `tests/test_code_generation.py:3189::test_codegen_input_order_is_total` (pin) enforces it.
 
-### P8 — A caller imports by domain; the schema module is the path for a name the domain declares twice
+### P8 — Two public paths, one name per type: the flat root and the domain
 
-A caller writes `adcp.types.domains.<domain>.<Class>` for a name the domain declares once, and
-`adcp.types.domains.<domain>.<schema>.<Class>` for a name it declares more than once. Nothing
-deeper, and nothing under an underscore. That is what the pin does: the generated domain root
-(`domains/core/__init__.py`, pin) is a lazy PEP 562 facade binding exactly the once-declared
-names, and its docstring sends the rest to the schema module. So P8 is a rule the build must
-refuse violations of, not a move.
+The export surface is exactly this, and nothing else is public:
 
-Flattening to `adcp.types.<domain>.<Class>` with the schema modules made private is rejected on
-three measurements:
+```python
+from adcp.types import MediaBuyStatus          # the flat root: every public type
+from adcp.types.media_buy import MediaBuyStatus  # the domain path: the same object
+```
 
-- **The target is occupied.** `adcp/types/media_buy.py`, `creative.py`, `signals.py`,
-  `protocol.py`, `core.py`, and `error_details.py` exist at the pin as hand-written modules, six
-  of the 26 domain names. Four are the curated partials (`_PARTIAL_MODULES`,
+- **`adcp.types.<Class>`** is the flat root and binds every public generated type. It is the
+  form a caller reaches for and the one TypeScript already has.
+- **`adcp.types.<domain>.<Class>`** is the same object under its domain, for a reader who wants
+  the domain stated and for an editor completing within one area.
+- **The schema module is private.** `adcp.types.<domain>.<schema>.<Class>` goes away, along with
+  the `domains` token. A name has one object and two paths to it; there is no third path, nothing
+  under an underscore, and no path that exists only for a name the domain could not bind.
+
+One name per type is what makes both paths work, and the build enforces it rather than hoping
+for it: **generation fails on a name that is not unique at the root.** That is the same refusal
+P1 applies to a root it cannot derive, and it is why the flattening is safe to do -- a collision
+cannot reach a release.
+
+Measured on the current branch, the names that collide today are the ones P1's nested rule
+renames. 291 names appear in more than one domain, and they are the same bare property keys that
+collide inside a domain: `Type` in 10 domains, `Status` in 9, `Action` in 7, `Reason`, `Country`,
+`Scope` in 6, and `Field1` -- a positional name -- in 6. Qualifying a nested definition by its
+parent resolves the cross-domain collisions and the intra-domain ones together, because both have
+the one cause.
+
+The surface this replaces, and why it was not kept:
+
+- **The target is occupied, and the occupants move.** `adcp/types/media_buy.py`, `creative.py`,
+  `signals.py`, `protocol.py`, `core.py`, and `error_details.py` exist at the pin as hand-written
+  modules, six of the 26 domain names. Four are the curated partials (`_PARTIAL_MODULES`,
   `types/__init__.py:1086`), whose docstrings say they "never expose the internal generated
-  layer" and which `tests/test_lazy_types.py::test_partial_modules_never_import_generated_layer`
-  (pin) holds to that. `types/core.py` is 408 lines of hand-written types. The hand modules and
-  the generated domains overlap on 33 names in `media_buy`, 47 in `error_details`, and 15 in
-  `protocol`.
-- **Privatizing the schema module orphans the names the domain root cannot bind.** 335 class
-  names are declared in more than one module of the same domain, 145 with differing shapes
-  (`core` 190 / 98; `Location` 14 modules / 4 shapes, `Identifier` 7 / 6, `Authentication`
-  6 / 5). Item 4 of §5 collapses the 190 identical-shape duplicates (P2: the same node generated
-  twice). The 145 are distinct nodes sharing a bare name, and §5 has no rule for naming nested
-  classes by content, so after a flattening they have no public path at all. This repo imports
-  16 of them (`Identifier`, `Unit`, `Authentication`, `Creative`, `Account`, `Setup`, `Source`,
-  `Provenance`, `Parameters`, `DateRangeSupport`, `MediaBuyDelivery`, `EventType`,
-  `NotificationType`, `DeliveryAuth`).
+  layer"; `types/core.py` is 408 lines of hand-written types. They overlap the generated domains
+  on 33 names in `media_buy`, 47 in `error_details`, and 15 in `protocol`.
+
+  Each overlap is one name with two definitions, so each is a decision, and the decision is the
+  one §5 item 2 already makes: the canonical layer's declaration is what the public name binds,
+  and the generated class keeps the wire-faithful shape underneath it. A hand-written module
+  merges into its domain rather than sitting beside it, and
+  `test_lazy_types.py::test_partial_modules_never_import_generated_layer` -- the guard that
+  encodes the separation -- goes with it. That guard is listed as KEEP in the table below on the
+  strength of the rejection this section withdraws; it is a DELETE.
+- **Names collide inside a domain, and most of the collisions are this document's own defect.**
+  Measured on the current branch, which already carries the naming and narrowing passes:
+  4430 class definitions under 3801 distinct `(domain, name)` pairs. 297 of those definitions
+  are redundant copies -- same name, same bases, same body -- which P2 removes because they are
+  one schema node generated more than once. After collapsing them, **332 names still bind two
+  or more different shapes**, 8.7% of the flattened surface.
+
+  Those 332 are not irreducible conflicts. They are bare property keys:
+
+  | name | distinct shapes | copies |
+  |---|---|---|
+  | `core.Status` | 13 | 16 |
+  | `core.Reason` | 11 | 11 |
+  | `core.Type` | 7 | 12 |
+  | `core.Unit` | 7 | 9 |
+  | `core.Kind` | 6 | 8 |
+  | `core.Identifier` | 6 | 7 |
+  | `core.Location` | 5 | 14 |
+  | `media_buy.Status` | 5 | 10 |
+
+  `core.Location`'s five shapes are two concepts: a geographic `lat`/`lng` and an error
+  `context`/`field`/`occurrence`. `core.Origin` is a travel origin and a connection origin.
+  `content_standards.Pagination` is a cursor page and a batch page. Each is a nested definition
+  named after the property key it hangs from, with nothing of its parent in the name -- which is
+  the SAME defect as a response arm named by its position. A traversal detail supplies the name
+  where the schema identity should, and the schema identity of a nested node includes the node
+  that contains it.
+
+  So P1 already decides these; it simply had no spelling for a nested name. It gets one:
+  a nested definition's name derives from its parent and its property (`MediaBuyStatus`, not
+  `Status` #13), and generation fails on a nested name it cannot qualify, exactly as it fails on
+  a root it cannot derive.
 - **The path has moved once this major.** `adcp.types.generated_poc` →
   `adcp.types.domains`, codemod `adcp migrate v3-to-v4` (`adcp/migrate/v3_to_v4.py`, pin, SDK
   commit 32bfbeb88, 2026-04-20), old path removed in v10 as the `types/__init__.py` docstring
   states. A second move inside the first move's deprecation window is the pattern §5 forbids.
 
-So the `domains` token stays. It costs one word per import and buys an uncolliding package for
-26 generated domains beside the hand-written ones. The flattening is **rejected, not deferred**:
-a later flattening is the third rewrite, and this document says no to it so that nobody
-proposes it as a small follow-up.
+**The flattening lands, inside the one release.** An earlier version of this section rejected
+it, on two grounds that do not hold. The first was that hand-written modules already occupy
+`adcp.types.<domain>`; that is work to do, not a property of the problem, and restructuring the
+SDK is in scope. The second was that 145 same-named nested classes would lose their only import
+path; that counted the defect as a constraint. Both the redundant copies and the unqualified
+names are things P1 and P2 remove, so the surface that gets flattened is the one that exists
+after they run, not the one that exists now.
+
+The order follows from that, and it is the order the epic already has: collapse the redundant
+copies, qualify the nested names, then flatten. Flattening first would mint 332 collisions and
+force a choice between them; flattening last is a move of names that are already unique.
+`adcp.types.<domain>.<Class>` is then the public path, the `domains` token goes, and because the
+whole move is inside the one release there is no second break.
 
 Measured depth at the pin, excluding the `bundled/` mirror:
 
@@ -319,8 +376,9 @@ Measured depth at the pin, excluding the `bundled/` mirror:
   5 levels    39 modules   adcp.types.domains.core.async_response_refs.creative...
 ```
 
-So the common case is three levels and the worst is five. Under P8 as stated, the caller sees
-two for a once-declared name and three for the rest. The four- and five-level modules
+So the common case is three levels and the worst is five. Under P8 the caller sees one
+(`adcp.types.X`) or two (`adcp.types.<domain>.X`), never the generation layout. The four- and
+five-level modules
 (`core/assets/`, `core/async_response_refs/`) are reached only through their domain root or
 their schema module; the subdirectory is generation layout, and the build refuses an import
 that names it:
@@ -405,7 +463,7 @@ one the language cannot state at runtime, which is the point of §3.1.
 | DX6 | A caller extends a response type with their own fields | **FAIL** 98 of 260 | **PASS** by language |
 | DX7 | A semantic name resolves to the class the schema describes | **FAIL** | **PASS** |
 | DX8 | No positional name appears in the surface a caller imports | **FAIL** 39 + 949 | **PASS** 1 |
-| DX9 | A caller imports a type by domain, `adcp.types.domains.<domain>.<Class>`, and reaches a schema module only for a name the domain declares more than once | **PARTIAL** the domain root binds once-declared names at the pin; 335 names (145 after P2) need the schema module; nothing refuses a deeper import | **PASS** 1 level, flat root export, and exceeds Python; see P8 |
+| DX9 | A caller imports a type as `adcp.types.<Class>` or `adcp.types.<domain>.<Class>`, and no deeper path is public | **FAIL** the public path is `adcp.types.domains.<domain>[.<schema>].<Class>`; 332 names bind more than one shape so no flat root is possible at the pin; nothing refuses a deeper import | **PASS** flat root export, 1 level; Python reaches parity under P8 |
 | DX10 | Nothing in the SDK names a spec version as a literal | **FAIL** symlink alias | not examined |
 | DX11 | A caller validates a document against a root with branches and gets the branch's class back, on every path (`Root(**d)`, `model_validate`, nested, `TypeAdapter`) | **PARTIAL** 19 roots dispatch; the response roots are plain unions with hand guards | **n/a** types are erased; a discriminated union is compile-time and the guard is hand-written |
 | DX12 | A refusal names the JSON-Schema keyword that failed, so it can be projected onto `core/error.json`'s `issues[].keyword` without a mapping table | **PARTIAL** 55 of 104 error types mapped; 4 reachable types unmapped, 2 mis-mapped on dicts | **n/a** Zod issues carry Zod codes |
@@ -721,8 +779,10 @@ written down as a plan.
 The rule instead: **every change that moves a public name happens in one release, or it does
 not happen.**
 
-The only item that forces a second break is the namespace flattening, and P8 rejects it rather
-than defers it. Everything else lands together as one change. The narrowing fix moves a public
+The namespace flattening moves more public names than anything else here, which is precisely
+why it is IN this release and not after it: deferring it is what would make a second break
+inevitable. It lands last within the change, because it depends on every name already being
+unique. The narrowing fix moves a public
 name, so it is inside the change (item 7); the success-arm rule and the naming-function pair
 are stated in item 1; the layer decision is item 2; where the deprecated positional aliases
 live is item 8.
@@ -815,13 +875,16 @@ the result; (5) and (6) are independent of all of them.
    annotations gone. Depends on (1), (2), and (4) having run.
 4. **Local refs only (P2).** Shrink `PRESERVE_CANONICAL_URL_REFS` to empty and fix the
    sibling-document alias case. This is in the same change because removing a duplicate class
-   removes a public name. It also collapses 190 of the 335 intra-domain duplicate names (the
-   identical-shape ones), which is what makes the DX9 residue 145.
-5. **Refuse the deep import (P8).** No flattening. The domain root binds once-declared
-   names; add the rule that refuses an import naming a generation subdirectory
-   (`domains.core.assets.<module>`) or an underscore module, and nothing else moves. It is in
-   the change rather than before it only because the refusal is what the deprecation shim in
-   (8) is measured against.
+   removes a public name. It also collapses the 297 redundant definitions -- same name, same
+   bases, same body -- which is what leaves 332 names needing qualification rather than 629.
+5. **Qualify every nested name (P1), then flatten (P8).** A nested definition takes its name
+   from its parent and its property, so `MediaBuyStatus` replaces the thirteenth `Status`, and
+   generation fails on a nested name it cannot qualify. With every name unique, the public
+   surface becomes `adcp.types.<Class>` and `adcp.types.<domain>.<Class>`, the schema modules
+   and the `domains` token go private, and the hand-written modules merge into their domains
+   under item 2's rule. Strictly after (4): flattening before the copies are collapsed would
+   mint 332 collisions and force a choice between them, where flattening after moves names that
+   are already unique. The build refuses a non-unique root name, so a collision cannot ship.
 6. **Derive the spec version (P9).** Replace the `/3.2.3/` → `/3.2/` symlink and every version
    literal with the derivation, failing closed when no bundle matches.
 7. **Intersect the `allOf`+`enum` narrowing (P3).** The fix for the sites the P3 instrument
@@ -851,12 +914,13 @@ cycle, one major for removal.
 - **One metadata PR upstream:** a `title` for
   `content-standards/get-content-standards-response.json#/oneOf/0`, the single branch the
   resolution rules cannot name.
-- **The nested positional names** (~1045) stay. The root-branch resolution rules do not reach
-  them, this document has no rule for them (§8), and inventing one is the third rewrite. They
-  are ratcheted shrink-only and left alone until a rule exists that is worth one more break.
-  This is also why the schema module stays public (P8): 145 of them share a bare name with a
-  differently shaped sibling in the same domain, and the schema module is the only path that
-  names them.
+- **The nested positional names** (~1045) are renamed in this change, not deferred. An earlier
+  version of this section kept them, on the grounds that the root-branch resolution rules do not
+  reach them and that this document had no rule for them. The first half is true and the second
+  is no longer: P1's nested rule names a nested definition from its parent and its property, and
+  generation fails on one it cannot qualify. Keeping them was also the stated reason the schema
+  module stayed public, so that reason goes too. `Field1` -- a positional name living in six
+  domains -- is the clearest case that these and the numbered response arms are one defect.
 
 **For this repo:** the 108 `adcp.types.domains` import statements (33 files, 124 names) keep
 resolving through the window; the 15 positional names among them move exactly once, after the
@@ -886,7 +950,7 @@ and stay; the code that pins the positional names is the emitter's own, and it g
 | 98 `TypeAlias` annotations | **DELETE** | §4.4. |
 | `test_asset_aliases_stable.py`, `test_collision_aliases.py` | **DELETE after the change** | Hand-listed expectations per alias, which are blessed values. Until the change they are the only thing holding the hand table honest; afterwards the alias *is* the derivation and they assert a tautology. |
 | `test_lazy_types.py::test_partial_modules_avoid_numbered_codegen_names` | **KEEP, widen** | A regex over `__all__`, no blessed value. Widen to the whole surface; it becomes P1's grade. |
-| `test_lazy_types.py::test_partial_modules_never_import_generated_layer` | **KEEP** | The guard that refuses the flattening P8 rejects: `adcp.types.media_buy` is a curated partial, not a generated domain. A derived property, no blessed value. |
+| `test_lazy_types.py::test_partial_modules_never_import_generated_layer` | **DELETE** with P8 | It encodes the separation between a curated partial and its generated domain. P8 merges them, so the property it asserts stops being true by design. Listed KEEP in an earlier version, on the strength of a flattening rejection this document withdraws. |
 | `BranchDispatchMixin`, `name_the_combinator` | **KEEP, extend** | The runtime dispatch and the keyword-named refusal (§3.1 B, C). Extend to the response roots through item 1; the hand-written `TypeGuard` functions in `guards.py` are then derived and go with the hand tables. |
 | `post_generation_manifest.json` | **REPLACE** | Keep the rule (a fix that changes nothing fails the run), drop the per-fix table. The seven fixes it records as no-ops at this pin are dead code; delete them. |
 | `test_union_branch_names.py` | **SPLIT** | Keep the partition identity (`named + classless + refused == total`) and the single-refusal assertion, both derived. Drop the five equality counts (557/169/82/27/1); they are a ledger. |
@@ -909,12 +973,15 @@ renamed domain-path class and nowhere else.
 - Every class named by its schema title (`CreateMediaBuyRequest`, `Product`, `Warning`, …)
   keeps its name. The resolution rules name branches, not roots, and the parent prefix they
   use is the generator's own root name (§5 item 1), so the change renames no root.
-- **Every module path that resolves at the pin keeps resolving.** `adcp.types.domains.<d>`,
-  `adcp.types.domains.<d>.<schema>`, and the curated partials `adcp.types.media_buy` /
-  `.creative` / `.signals` / `.protocol` / `.buyer` / `.seller`. The flat target is occupied,
-  and the deep path is the only one for 145 names (P8), so the deep paths stay. The change adds
-  a refusal of the paths that were never a contract: generation subdirectories and underscore
-  modules.
+- **Every module path that resolves at the pin keeps resolving through the deprecation window,
+  and `adcp.types.<Class>` keeps resolving forever.** The flat root is the path that survives;
+  P8 makes it total, so a caller already importing from `adcp.types` is unaffected by the
+  flattening. `adcp.types.domains.<d>` and `adcp.types.domains.<d>.<schema>` become deprecated
+  aliases that emit a `DeprecationWarning` on attribute access and resolve for the window, then
+  go in the following major. The curated partials `adcp.types.media_buy` / `.creative` /
+  `.signals` / `.protocol` / `.buyer` / `.seller` keep their paths permanently -- P8 merges the
+  generated domain INTO them, so the path is the one that stays and only its contents grow.
+  Generation subdirectories and underscore modules were never a contract and are refused.
 - The `generated_poc` → `domains` deprecation window, closing in v10 as the pin states. Nothing
   in §5 opens a second one over the same paths.
 - The 136 plain-assignment alias *names*. Only their provenance becomes derived.
