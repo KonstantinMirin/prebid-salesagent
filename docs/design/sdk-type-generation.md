@@ -1,7 +1,7 @@
 # SDK type generation: the principles it is missing
 
 **Status:** design. Rewritten 2026-10-18 after a review refuted the first version's central
-claim. What that version got wrong is recorded in §7, because the wrong story is still the
+claim. What that version got wrong is recorded in §8, because the wrong story is still the
 intuitive one and will be proposed again.
 
 **Provenance convention.** This document cites three different trees and they disagree. Every
@@ -97,7 +97,7 @@ by name; nothing inlined.
 
 Already the SDK's own stated principle — the `--strict-types` rationale at
 `generate_types.py:1266-1279` (pin) says the point is that the two validators the SDK ships
-do not disagree about the same bytes. §3.3 is a live violation of it.
+do not disagree about the same bytes. §4.3 is a live violation of it.
 
 **TS:** holds at the type level (`warnings?: (Warning & { code?: 'a' | 'b' })[]`). Runtime not
 established — the Zod layer was not examined.
@@ -165,7 +165,70 @@ followed from P6 or P7, and its headline thesis followed from neither.
 
 ---
 
-## 3. The defects, as consequences
+## 3. The developer-experience requirements
+
+These eight requirements are normative. A generator change satisfies them or it is not done.
+They are not a test artifact bolted on afterwards: each one states a question a caller asks
+the SDK, and each failure below is a caller getting the wrong answer or no answer.
+
+`scripts/audit/sdk_dx_probes.py` in the salesagent repository measures the Python column. The
+TypeScript column is measured statically against `adcp-client` `main` — the generated files and
+both root index files — because the two languages share no test harness.
+
+| # | Requirement | Python | TypeScript |
+|---|---|---|---|
+| DX1 | A caller resolves a tool's request and response types from `<Tool>Request` / `<Tool>Response` | **PASS** 10/10 | **PASS** all five tools |
+| DX2 | A caller resolves every arm of a multi-arm response by the arm's own schema title | **FAIL** 0/9 | **PASS** all three arms exported |
+| DX3 | The model accepts exactly what the schema accepts | **FAIL** validators disagree | not established at runtime |
+| DX4 | A caller emits an error, including a code the registry does not list | **PASS** | **PASS**, and exceeds Python |
+| DX5 | A caller emits a non-blocking observation | **FAIL** | **FAIL** |
+| DX6 | A caller extends a response type with their own fields | **FAIL** 98 of 260 | **PASS** by language |
+| DX7 | A semantic name resolves to the class the schema describes | **FAIL** | **PASS** |
+| DX8 | No positional name appears in the surface a caller imports | **FAIL** 39 + 949 | **PASS** 1 |
+
+Python satisfies two of eight; TypeScript satisfies five, fails one, and leaves one
+unestablished. The findings behind each row:
+
+- **DX2.** TypeScript declares `CreateMediaBuySuccess`, `CreateMediaBuyError` and
+  `CreateMediaBuySubmitted` as named interfaces and exports all three from
+  `src/lib/types/index.ts:162-164`. Python exports `CreateMediaBuyResponse1` and resolves
+  **neither** `CreateMediaBuyError` nor `CreateMediaBuySubmitted` under any top-level name —
+  two of the three arms of a tool this seller serves have no name a caller can import.
+- **DX3.** TypeScript preserves the narrowing in the type (`Warning & { code?: 'a' | 'b' }`) and
+  ships runtime schemas from a separate entry point, `@adcp/sdk/schemas`. Whether those
+  schemas preserve the narrowing was not examined, so the cell reads unestablished rather than
+  pass.
+- **DX4, where TypeScript exceeds Python.** `error.code` is `string` in both, matching the
+  schema's open vocabulary. TypeScript then ships `STANDARD_ERROR_CODES`,
+  `isStandardErrorCode()` and `getErrorRecovery()` (`src/lib/index.ts:1294-1301`) and exports
+  no `ErrorCode` type at all. That is the right shape for a documentary vocabulary: a caller
+  asks whether a code is standard instead of being refused for using one that is not. Python
+  exports a closed `ErrorCode` enum, which invites exactly the refusal the schema forbids.
+  **Python should adopt the TypeScript shape here**, and this is the one row where matching is
+  not enough.
+- **DX4, second TypeScript lesson.** `export type { Error as TaskErrorDetail }` dodges the
+  JavaScript global rather than leaving the name unexported. That is P6 applied, and it is
+  what Python should do with `Warning` instead of omitting it.
+- **DX5 is the shared failure, and it is not a generator defect.** Neither root index exports
+  `Warning`, `WarningCode` or `WarningAffectedResource`, and the vocabulary is three closed
+  members in both. §6 covers it: the channel cannot express the condition, so the fix is a
+  spec change, not a codegen change.
+- **DX6.** A TypeScript interface extends without ceremony. Python's 98 annotated aliases
+  cannot serve as a base class, which is §4.4.
+- **DX7.** TypeScript's index takes `CreateMediaBuySuccess` from `./tools.generated`, one
+  definite projection. Python's semantic alias resolves to a `canonical_creative` subclass
+  (§2, P5).
+- **DX8.** Exactly one name in a TypeScript root index matches the positional pattern, and it
+  is `PreviewRenderV3`, a version suffix rather than a traversal index.
+
+**What this settles.** TypeScript is the reference for DX2, DX4, DX6, DX7 and DX8, and the one
+change in §4 is what moves Python onto all five. DX3 is Python's own behavior defect and lands
+before that change. DX5 is shared, belongs upstream in the schema, and no amount of generator
+work reaches it.
+
+---
+
+## 4. The defects, as consequences
 
 ### 3.1 Positional names, and the live swap
 
@@ -243,7 +306,7 @@ staging in §4, not silently.
 
 ---
 
-## 4. Implementation: ONE structural change, and the constraint that forces it
+## 5. Implementation: ONE structural change, and the constraint that forces it
 
 **The governing constraint, from the user: this is the second large rewrite of this surface in
 a month, and there must not be a third.** So the sequence this document first proposed is
@@ -300,7 +363,7 @@ for every renamed class — intended), one `DeprecationWarning` cycle, one major
   `content-standards/get-content-standards-response.json#/oneOf/0`, the single branch the
   rungs cannot name.
 - **The nested positional names** (~1045) stay. The root-branch rungs do not reach them, this
-  document has no rule for them (§8), and inventing one would be the third rewrite. They are
+  document has no rule for them (§9), and inventing one would be the third rewrite. They are
   ratcheted shrink-only and left alone until a rule exists that is worth one more break.
 
 **For this repo:** the 11 positional imports move exactly once, after the change, in one
@@ -308,7 +371,7 @@ commit. Not before — switching early is the base-class change without the deci
 
 ---
 
-## 5. Guards: keep, replace, delete
+## 6. Guards: keep, replace, delete
 
 The first version implied most of these were worthless. Three of them are load-bearing and the
 ones that actually pin the wrongness were not on its list.
@@ -325,7 +388,7 @@ ones that actually pin the wrongness were not on its list.
 | `stabilize_inlined_core_refs` | **DELETE** after Stage 6 | Exists only because of remote refs. |
 | `stabilize_nested_discriminators` | **KEEP** | Unrelated to refs — it drops a flattened duplicate discriminator pydantic rejects at import. |
 | `_eager.py:1097-1098` synonyms | **DELETE** via staging | Mislabelled at birth; still a compat surface. |
-| 98 `TypeAlias` annotations | **DELETE** | §3.4. |
+| 98 `TypeAlias` annotations | **DELETE** | §4.4. |
 | `test_asset_aliases_stable.py`, `test_collision_aliases.py` | **KEEP** | The P4 precedent already in the tree. |
 | `test_lazy_types.py::test_partial_modules_avoid_numbered_codegen_names` | **KEEP, widen** | The one existing refusal of positional names. |
 | `post_generation_manifest.json` | **KEEP** | A fix that fires nothing fails the run. |
@@ -338,7 +401,7 @@ P1, so it beats the emitter sites that defend the numbering. Re-exporting `Warni
 
 ---
 
-## 6. What must not change
+## 7. What must not change
 
 - Module paths `adcp.types.domains.<domain>.<schema_stem>`, and every class already named by
   its schema title (`CreateMediaBuyRequest`, `Product`, `Warning`, …). Semantic arm classes
@@ -355,7 +418,7 @@ P1, so it beats the emitter sites that defend the numbering. Re-exporting `Warni
 
 ---
 
-## 7. What the first version of this document got wrong
+## 8. What the first version of this document got wrong
 
 Recorded because each wrong claim is the intuitive one and will be proposed again.
 
@@ -385,11 +448,11 @@ Recorded because each wrong claim is the intuitive one and will be proposed agai
     part of 2.
 12. **A seven-stage plan.** Three separate public breaks, each with its own deprecation window
     and adopter churn — the repeated-rewrite pattern this work exists to end, proposed as the
-    way to end it. §4 is now one change.
+    way to end it. §5 is now one change.
 
 ---
 
-## 8. Not established
+## 9. Not established
 
 - Whether `branch_classes`' emitter is wired for all eleven split roots or only some — its
   test docstring says "not wired into the generation pipeline", yet the wheel carries the
@@ -397,7 +460,7 @@ Recorded because each wrong claim is the intuitive one and will be proposed agai
 - Whether the 98 `TypeAlias` annotations were deliberate. No rule or comment found.
 - A nested-class naming rule. The root-branch rungs do not reach the ~1045 nested positional
   names, and this document has no mechanism for them.
-- The scope of the `allOf`+`enum` narrowing loss beyond one field (§3.3).
+- The scope of the `allOf`+`enum` narrowing loss beyond one field (§4.3).
 - The generator condition behind the sibling-document `allOf` re-derivation.
 - Whether `Warning`'s absence from `adcp.types.__all__` is builtin-shadowing policy or an
   omission (P6 wants it to be policy either way).
