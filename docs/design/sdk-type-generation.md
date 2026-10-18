@@ -181,8 +181,12 @@ inherits. Within `src/core/schemas/` alone: 48 calls, 38 derived, 3 forbid, 7 ig
 `src/core/config.py:42` and `:442`. Those are pydantic-settings environment loading, where
 `extra="ignore"` means "tolerate unrelated variables in the process environment"; they say
 nothing about what a buyer may send on the wire, which is what the dev-forbid / prod-ignore
-rule governs. A substring `grep` for `ConfigDict` catches the single-line one, and an earlier
-figure of 61 / 8 counted it and is wrong. A literal on a wire model is the one place the
+rule governs. A line-oriented `grep` sees only the first of the two, because the second call
+wraps and its `extra=` sits on the line after the `ConfigDict` token — which is both why an
+earlier figure of 61 / 8 counted exactly one of them and why this census is specified as an
+AST count rather than a search: a wrapped call is invisible to a line-oriented instrument, and
+that is the general form of the error, not a property of this file. A literal on a wire model
+is the one place the
 dev/prod split of pattern #7 does not apply, and nothing in the repo says which of the 17 chose
 that on purpose — whether a comment beside each states a reason was not graded, because a
 comment-line count is not a measurement of a reason. That is a salesagent defect to grade in
