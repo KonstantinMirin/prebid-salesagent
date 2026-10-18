@@ -3965,9 +3965,48 @@ def given_asset_with_provenance_source_type(ctx: dict, source_type: str) -> None
     """
     creative_payload = ctx["creatives"][-1]
     assets = creative_payload.get("assets", {})
-    first_key = next(iter(assets))
-    assets[first_key]["provenance"] = {"digital_source_type": source_type}
+    role = next(iter(assets))
+    assets[role]["provenance"] = {"digital_source_type": source_type}
     ctx["asset_provenance_source_type"] = source_type
+    #: WHICH asset carries it. The two Thens below used to read
+    #: ``next(iter(stored_assets.values()))`` -- "whichever asset the stored document
+    #: happens to list first" -- which was only ever the right asset while the payload
+    #: carried exactly ONE. It carries two now (``banner_image`` + ``click_url``, the
+    #: capture format's reference), and the stored document does not preserve the
+    #: request's key order: measured on the box, the read-back lists ``click_url``
+    #: first, so the assertion read the url asset, found no provenance on it, and
+    #: reported a production gap that production does not have. An assertion must read
+    #: the asset the precondition named.
+    ctx["asset_provenance_role"] = role
+
+
+def _provenance_bearing_asset(ctx: dict, data: dict) -> dict:
+    """The stored asset the provenance precondition attached its declaration to.
+
+    ONE definition, because both INV-5 Thens need the same asset and both used to take
+    "the first stored one" -- a read that is correct only for a single-asset payload and
+    silently moves to a different asset the moment the payload or the storage order
+    changes. The role is recorded by
+    :func:`given_asset_with_provenance_source_type`; a scenario that reaches a Then
+    without it is a wiring error and says so rather than falling back to an arbitrary
+    asset.
+    """
+    role = ctx.get("asset_provenance_role")
+    assert role is not None, (
+        "no asset was named by a provenance precondition — this Then requires the Given "
+        "'an asset within the creative declaring digital_source_type ...'"
+    )
+    assets = data.get("assets") or {}
+    assert assets, (
+        "SPEC-PRODUCTION GAP: creative.data has no 'assets' key — asset-level provenance "
+        "storage not implemented in production. BR-RULE-094 INV-5: asset-level provenance "
+        "should replace creative-level."
+    )
+    assert role in assets, (
+        f"the stored creative does not carry the asset the precondition named: expected "
+        f"role {role!r}, stored roles {sorted(assets)}"
+    )
+    return assets[role] or {}
 
 
 @then(
@@ -3992,12 +4031,8 @@ def then_asset_has_provenance_not_inherited(ctx: dict, expected: str, inherited:
     # This is a band-aid, kept only so the next run reports the obligation instead of a
     # crash — the defect is the untyped traversal itself: FIXME(#2236) on
     # `_get_creative_from_db`.
-    assets = data.get("assets") or {}
-    assert assets, (
-        "SPEC-PRODUCTION GAP: creative.data has no 'assets' key — asset-level provenance storage not implemented in production. BR-RULE-094 INV-5: asset-level provenance should replace creative-level."
-    )
-    first_asset = next(iter(assets.values())) or {}
-    asset_provenance = (first_asset or {}).get("provenance") or {}
+    asset = _provenance_bearing_asset(ctx, data)
+    asset_provenance = asset.get("provenance") or {}
     asset_source = asset_provenance.get("digital_source_type")
     assert asset_source is not None, (
         "SPEC-PRODUCTION GAP: asset-level provenance.digital_source_type not stored in creative.data.assets — production may not support per-asset provenance yet. BR-RULE-094 INV-5."
@@ -4022,13 +4057,8 @@ def then_no_field_level_merging(ctx: dict) -> None:
     # `or {}` at every hop — see the sibling step above: a .get default does not fire on a
     # key that is present and null, which is how the live server stores an undeclared
     # block. Band-aid, same FIXME(#2236).
-    assets = data.get("assets") or {}
-    assert assets, (
-        "SPEC-PRODUCTION GAP: creative.data has no 'assets' key — cannot verify no-merge semantics. BR-RULE-094 INV-5."
-    )
     creative_provenance = data.get("provenance") or {}
-    first_asset = next(iter(assets.values())) or {}
-    asset_provenance = (first_asset or {}).get("provenance") or {}
+    asset_provenance = _provenance_bearing_asset(ctx, data).get("provenance") or {}
     assert asset_provenance, (
         "SPEC-PRODUCTION GAP: no asset-level provenance stored — cannot verify replacement semantics. BR-RULE-094 INV-5."
     )
@@ -4346,15 +4376,17 @@ def then_processed_without_external_validation(ctx: dict) -> None:
     )
     # The external validation IS the creative-agent registry lookup: _validation.py
     # resolves a dialled agent_url through fetch_format_spec -> registry.get_format,
-    # and skips that call for an adapter (non-HTTP) agent_url. CreativeSyncEnv patches
-    # that registry, so "no external validation" is measurable as "get_format was never
-    # awaited". This used to look for validate_creative / external_validation /
-    # creative_agent_validate -- names no env has ever wired -- and refused on the
-    # missing mock, which parked every scenario carrying the sentence.
-    get_format = ctx["env"].mock["registry"].return_value.get_format
-    assert get_format.await_count == 0, (
+    # and skips that call for an adapter (non-HTTP) agent_url. So "no external
+    # validation" is measurable as "the registry's single-format read never ran" --
+    # counted on the env's real registry, not read as an await_count off a stand-in
+    # (the registry is production's ReferenceFormatsRegistry now, whose get_format is a
+    # method and has no mock counters). This used to look for validate_creative /
+    # external_validation / creative_agent_validate -- names no env has ever wired --
+    # and refused on the missing mock, which parked every scenario carrying the sentence.
+    fetches = ctx["env"].format_fetches
+    assert fetches == 0, (
         f"an adapter (non-HTTP) format must not be looked up with the creative agent, "
-        f"but registry.get_format was awaited {get_format.await_count} time(s)"
+        f"but the registry's single-format read ran {fetches} time(s)"
     )
 
 

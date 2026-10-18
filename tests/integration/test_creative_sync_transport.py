@@ -377,9 +377,13 @@ class TestSyncRegistryCachingTransport:
 
             assert result.is_success
             assert_envelope(result, transport)
-            # list_all_formats called once per sync, not per creative
-            registry = env.mock["registry"].return_value
-            assert registry.list_all_formats.call_count == 1
+            # Read off the real registry's own counter: production's list_all_formats
+            # ran, and it ran once for three creatives. A call_count on a stand-in
+            # would have said the same thing about a method that never executed.
+            assert env.catalogue_reads == 1, (
+                f"the catalogue must be fetched once per sync, not once per creative; "
+                f"3 creatives produced {env.catalogue_reads} catalogue read(s)"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -765,9 +769,12 @@ class TestFormatValidationAdapter:
             assert len(result.payload.creatives) == 1
             assert result.payload.creatives[0].action == "created"
 
-            # registry.get_format should NOT be called for adapter formats
-            registry = env.mock["registry"].return_value
-            assert not registry.get_format.called, "get_format should not be called for adapter-provided formats"
+            # _validation.py skips the fetch entirely for a non-HTTP agent_url, so the
+            # real registry's own counter must still read zero.
+            assert env.format_fetches == 0, (
+                f"an adapter-provided format must not be looked up with the creative "
+                f"agent, but get_format ran {env.format_fetches} time(s)"
+            )
 
 
 @pytest.mark.requires_db
@@ -802,10 +809,10 @@ class TestFormatValidationUnreachable:
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
-            # Override: get_format raises the typed error the registry actually
-            # raises for network failures (side_effect on the env's existing
-            # AsyncMock — mock-cap guard).
-            env.mock["registry"].return_value.get_format.side_effect = AdCPServiceUnavailableError()
+            # The fault goes on production's own get_format: it raises the typed error
+            # the registry raises for a connect failure or timeout, rather than a
+            # stand-in answering in its place.
+            env.fail_format_fetch(AdCPServiceUnavailableError())
 
             result = env.call_via(
                 transport,

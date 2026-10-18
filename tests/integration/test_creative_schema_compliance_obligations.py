@@ -21,6 +21,7 @@ from tests.factories.creative_asset import (
     text_spec,
     video_spec,
 )
+from tests.factories.format import AGENT_URL, FormatIdFactory
 from tests.harness import CreativeListEnv, CreativeSyncEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -78,6 +79,16 @@ class TestAllAssetTypesAcceptedThroughSync:
         """Sync creatives with each of the 11 asset types through real DB.
 
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-10
+
+        KNOWN RED — salesagent-pwryp, blocked on salesagent-1bc7l. image/video/audio
+        pass; the five content-only types (text, markdown, html, css, javascript) are
+        refused CREATIVE_REJECTED/no_previews, because they carry no url for
+        `_extract_url_from_assets` to find and the env's `preview_creative` recorder
+        answers `{}` — there is no no-dial capture for it, so no preview is ever
+        produced for any creative in process. Greening this needs either that capture or
+        a stand-in that MANUFACTURES a preview response; the second is forbidden. The
+        bead also records the stronger reading: this drives all eleven asset types
+        through ONE image format, and the format is what says which assets it accepts.
         """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
@@ -380,15 +391,20 @@ class TestCreativeActionEnumThroughSync:
         ``if failed: assert failed[0].action == "failed"``, which passed whether or not
         anything failed.
         """
-        from unittest.mock import AsyncMock
-
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            # Format unknown to the registry: clears the request schema, fails validation.
-            env.mock["registry"].return_value.get_format = AsyncMock(return_value=None)
+
+            # A format the reference agent genuinely does not serve, so the REAL
+            # registry answers None and _validation.py refuses the entry. This used to
+            # replace get_format with an AsyncMock(return_value=None), which asserted
+            # the same thing about a method that never ran; the registry is production's
+            # own now and the capture's 71 ids are the whole of what it serves.
+            unserved = FormatIdFactory(agent_url=AGENT_URL, id="format_no_agent_serves")
 
             response = env.call_impl(
-                creatives=[_make_creative_asset(creative_id="c_unknown_format", name="Unknown Format")],
+                creatives=[
+                    _make_creative_asset(creative_id="c_unknown_format", name="Unknown Format", format_id=unserved)
+                ],
                 validation_mode="strict",
             )
 

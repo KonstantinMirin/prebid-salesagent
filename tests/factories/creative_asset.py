@@ -208,15 +208,23 @@ def assert_assets(stored_assets: Mapping, *specs: AssetSpec) -> None:
 
 
 def make_test_banner_creative(**overrides: object) -> CreativeAsset:
-    """Minimal valid banner CreativeAsset (``c_test_1`` / ``display_300x250``) for sync tests.
+    """Minimal valid banner CreativeAsset (``c_test_1`` / ``display_300x250_image``).
 
     Canonical replacement for per-module ``_make_creative_asset`` helpers —
     see #1430 DRY extraction.
+
+    FOR SYNC TESTS, which is why the format must be one the reference agent actually
+    serves. This defaulted to ``display_300x250`` — a format that is NOT among the 71 in
+    ``tests/fixtures/creative_formats/reference_formats.json``, so every creative built
+    here is refused by ``_validation.py`` with ``AdCPFormatNotFoundError`` and comes back
+    ``action='failed'``. That was invisible while the harness served a stand-in
+    catalogue; it is the real catalogue now, in process and on the wire alike.
+    ``CreativeAssetFactory`` above, in this same file, already named the served id.
     """
     defaults: dict = {
         "creative_id": "c_test_1",
         "name": "Test Banner",
-        "format_id": FormatId(agent_url=AGENT_URL, id="display_300x250"),
+        "format_id": FormatId(agent_url=AGENT_URL, id="display_300x250_image"),
         "assets": build_assets(image_spec("banner")),
     }
     defaults.update(overrides)
