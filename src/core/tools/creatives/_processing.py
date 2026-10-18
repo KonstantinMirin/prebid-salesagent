@@ -251,6 +251,7 @@ def _no_previews_refusal(
     creative: CreativeAsset,
     data: Mapping[str, Any],
     is_preview: bool,
+    preview_requested: bool = True,
 ) -> SyncCreativeResult | None:
     """The ONE policy for "the agent-backed branch came back with no previews".
 
@@ -270,6 +271,23 @@ def _no_previews_refusal(
     One function reached from one branch position is what makes a second divergence
     unspellable; there is no longer a copy to drift.
     """
+    if not preview_requested:
+        # THE GENERATIVE BRANCH NEVER ASKS. It sets ``preview_result = None`` on purpose --
+        # "skip preview_creative since we already have the output" -- because
+        # ``build_creative`` produced the asset. So a falsy result here is the same "we did
+        # not ask" state the ``is_preview`` arm below describes, arriving by a different
+        # route, and refusing it told the buyer the agent failed to render a creative no
+        # agent was asked to render.
+        #
+        # This is the third state the docstring's warning anticipated: it says testing
+        # ``preview_result is None`` would conflate "we did not ask" with "the agent had
+        # none", and the generative branch produced exactly that conflation one level up.
+        # A generative creative also has no ``url`` before its build, so the media_url
+        # escape below cannot save it -- every generative update was refused
+        # CREATIVE_REJECTED/no_previews (salesagent-hkq9p: 3 BDD identifiers on a2a, mcp
+        # and rest, plus 5 integration tests).
+        return None
+
     if is_preview:
         # The boundary SUPPRESSED the call (an outbound request is not undoable by the
         # transaction's rollback), so a falsy result here means "we did not ask", NOT "the
@@ -481,6 +499,7 @@ def _update_existing_creative(
             # is_dialled_agent_format, not is_agent_backed: an adapter-served format
             # declares a pseudo-URL with no host, so entering this branch for one sends
             # preview_creative at a url the egress seam then refuses (salesagent-zufx8).
+            preview_requested = True
             if format_obj and is_dialled_agent_format(format_obj):
                 if is_generative(format_obj):
                     # Generative creative update - rebuild using AI
@@ -608,6 +627,9 @@ def _update_existing_creative(
 
                     # Skip preview_creative call since we already have the output
                     preview_result = None
+                    # ... and say so, rather than leaving the refusal below to read a falsy
+                    # result as "the agent returned nothing" (salesagent-hkq9p).
+                    preview_requested = False
                 else:
                     # Static creative - use preview_creative
                     # Build creative manifest from available data
@@ -701,6 +723,7 @@ def _update_existing_creative(
                         creative=creative,
                         data=data,
                         is_preview=creative_repo.is_preview,
+                        preview_requested=preview_requested,
                     )
                     if refusal is not None:
                         return (refusal, False)
@@ -846,6 +869,7 @@ def _create_new_creative(
 
             # is_dialled_agent_format, not is_agent_backed — see the note at the update
             # site above (salesagent-zufx8).
+            preview_requested = True
             if format_obj and is_dialled_agent_format(format_obj):
                 if is_generative(format_obj):
                     # Generative creative - call build_creative
@@ -950,6 +974,9 @@ def _create_new_creative(
 
                     # Skip preview_creative call since we already have the output
                     preview_result = None
+                    # ... and say so, rather than leaving the refusal below to read a falsy
+                    # result as "the agent returned nothing" (salesagent-hkq9p).
+                    preview_requested = False
                 else:
                     # Static creative - use preview_creative
                     # Build creative manifest from available data
@@ -1041,6 +1068,7 @@ def _create_new_creative(
                         creative=creative,
                         data=data,
                         is_preview=creative_repo.is_preview,
+                        preview_requested=preview_requested,
                     )
                     if refusal is not None:
                         return (refusal, False)
