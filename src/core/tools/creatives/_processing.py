@@ -34,7 +34,13 @@ from src.core.security.outbound_http import OperatorEndpoint, OutboundError
 from src.core.tenant_context import TenantContext
 from src.core.validation_helpers import run_async_in_sync_context
 
-from ._assets import _build_creative_data, _extract_message_from_assets, _extract_url_from_assets, _generative_assets
+from ._assets import (
+    ASSET_MAP,
+    _build_creative_data,
+    _extract_message_from_assets,
+    _extract_url_from_assets,
+    _generative_assets,
+)
 
 if TYPE_CHECKING:
     from src.core.database.repositories.creative import CreativeRepository
@@ -129,6 +135,13 @@ class PriorCreativeState:
     #: The upsert-rewritten data fields as the row held them, so an update can report
     #: which of them it actually changed instead of listing all five every time.
     upsert_fields: dict[str, Any]
+    #: The asset map as the row held it -- the JSON the column wrote, so it is compared
+    #: through ``ASSET_MAP`` rather than against the submitted models directly.
+    assets: Any
+    #: Whether that map is the buyer's submission rather than the agent's output. Absent on
+    #: a row written before it was recorded, which reads as the agent's -- the conservative
+    #: side, since it only declines to report a change.
+    assets_are_buyer_submitted: bool
 
     @classmethod
     def from_row(cls, existing_creative) -> PriorCreativeState:
@@ -137,6 +150,8 @@ class PriorCreativeState:
             name=existing_creative.name,
             identity=CreativeFormatIdentity.from_row(existing_creative),
             upsert_fields={key: row_data.get(key) for key in _UPSERT_FIELDS},
+            assets=row_data.get("assets"),
+            assets_are_buyer_submitted=bool(row_data.get("assets_are_buyer_submitted")),
         )
 
 
@@ -173,6 +188,32 @@ def comparison_changes(
     # same agent, and comparing raw spellings reported a format change on every respelling.
     if identity != prior.identity:
         changes.append("format")
+
+    # ``assets`` is required on every creative (core/creative-asset.json, 3.2.3) and is the
+    # buyer's whole submission for a generative format, where the prompt IS an asset. It was
+    # absent from change detection, so an update that rewrote the message answered
+    # ``unchanged`` -- the four generative-update cases in
+    # tests/integration/test_creative_sync_processing.py.
+    #
+    # Compared only when the buyer SUBMITTED assets, which is the same rule the upsert
+    # fields follow and here it is what keeps the agent out of the comparison: the
+    # generative branches overwrite ``data["assets"]`` ONLY when the buyer provided none
+    # (see the ``not user_provided_assets`` guard), so a submitted map is the buyer's on
+    # both sides and an omitted one is never read back.
+    #
+    # Through ``ASSET_MAP`` because the two sides arrive in different forms -- the
+    # submitted map holds asset MODELS, the row's holds the JSON the column wrote -- and a
+    # raw ``!=`` between them differs always, which would make ``unchanged`` unreachable
+    # again. ``ASSET_MAP`` is the pinned annotation itself and this is validation, not
+    # serialization, so it carries no edge concern.
+    # Compared when the buyer submits a map OR the row's map is one they submitted before,
+    # so EMPTYING the assets reports a change too. Both sides false is the generative case
+    # where the agent supplies the map: there the row holds a value the buyer never sent,
+    # and comparing their empty submission against it would report a change on every
+    # resync -- the regression this whole class exists to prevent.
+    if creative.assets or prior.assets_are_buyer_submitted:
+        if ASSET_MAP.validate_python(creative.assets or {}) != ASSET_MAP.validate_python(prior.assets or {}):
+            changes.append("assets")
     return changes
 
 

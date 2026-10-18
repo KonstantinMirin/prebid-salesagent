@@ -32,6 +32,7 @@ from tests.bdd.steps.domain.uc006_sync_creatives import (
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import CreativeFactory, MediaBuyFactory, MediaPackageFactory, ProductFactory
+from tests.factories.creative_asset import build_assets, image_spec, url_spec
 from tests.factories.request import CreativeAssetRequestFactory
 from tests.harness.transport import TransportResult
 
@@ -125,6 +126,40 @@ def _case_two_differ(ctx: dict):
         assert "name" in (_entries(live)[1].get("changes") or []), _entries(live)[1]
 
     return {"creatives": payload}, expect
+
+
+def _case_only_an_asset_differs(ctx: dict):
+    """Two entries alike but for one asset slot, so only the asset map can report the change.
+
+    ``changes`` is "Field names that were modified"
+    (creative/sync-creatives-response.json), and ``assets`` is a creative field -- required
+    on every creative at the pin (core/creative-asset.json ``required``), and the buyer's
+    whole submission for a generative format, where the prompt IS an asset. So a sync that
+    rewrites an asset owes ``updated`` and owes ``assets`` in the list.
+
+    The rewritten slot is ``click_url`` on purpose. ``_extract_url_from_assets`` returns the
+    first slot carrying one, which is ``banner_image``, so the derived ``url`` is identical
+    across the two entries; and ``click_url`` is not a declared creative field at the pin, so
+    it is not in the compared set either. Nothing but the asset map can see this edit --
+    which is what makes the case grade the comparison rather than the url extraction.
+    """
+    first = _creative(ctx, "asset_c1", "Same Name")
+    second = copy.deepcopy(first)
+    second["assets"] = build_assets(
+        image_spec("banner_image", url="https://example.com/banner.png"),
+        url_spec("click_url", url="https://example.com/landing-v2"),
+    )
+
+    def expect(live: TransportResult) -> None:
+        assert _actions(live) == ["created", "updated"], _actions(live)
+        entry = _entries(live)[1]
+        changes = entry.get("changes") or []
+        assert "assets" in changes, entry
+        # Non-vacuity: name and format are byte-identical across the two entries, so neither
+        # can be what produced "updated". If they appear, the case is grading something else.
+        assert "name" not in changes and "format" not in changes, entry
+
+    return {"creatives": [first, second]}, expect
 
 
 def _case_third_entry(ctx: dict):
@@ -292,6 +327,7 @@ def _case_format_mismatch_lenient(ctx: dict):
 _CASES: dict[str, Callable[[dict], tuple[dict, Callable[[TransportResult], None]]]] = {
     "two identical entries on one id": _case_two_identical,
     "two entries on one id that differ": _case_two_differ,
+    "two entries on one id differing only in an asset": _case_only_an_asset_differs,
     "third entry resolves against what the second left": _case_third_entry,
     "distinct creative ids are not collapsed": _case_distinct_ids,
     "single entry update of a seeded creative": _case_single_update,

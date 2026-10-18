@@ -144,6 +144,15 @@ def _build_creative_data(creative: CreativeAsset, url: str | None) -> dict[str, 
     }
     if creative.assets:
         data["assets"] = creative.assets
+    # Whether ``assets`` on this row is the BUYER's submission or the creative agent's
+    # output. The generative branches overwrite ``data["assets"]`` only when the buyer
+    # provided none, so the two are indistinguishable in the row once written -- and change
+    # detection has to tell them apart. It compares an asset map the buyer submitted and
+    # must not compare one the seller derived, which is re-derived on every sync and would
+    # make ``unchanged`` unreachable. Recording the one bit at the point where it is still
+    # known is what lets a buyer EMPTYING their assets be reported as a change while a
+    # resync that never submitted any stays ``unchanged``.
+    data["assets_are_buyer_submitted"] = bool(creative.assets)
     snippet = getattr(creative, "snippet", None)
     if snippet:
         data["snippet"] = snippet

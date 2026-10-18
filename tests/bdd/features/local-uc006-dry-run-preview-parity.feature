@@ -43,6 +43,7 @@ Feature: UC-006 sync_creatives — a dry_run preview describes the outcome the l
       | case                                              |
       | two identical entries on one id                   |
       | two entries on one id that differ                 |
+      | two entries on one id differing only in an asset  |
       | third entry resolves against what the second left |
       | distinct creative ids are not collapsed           |
       | single entry update of a seeded creative          |
