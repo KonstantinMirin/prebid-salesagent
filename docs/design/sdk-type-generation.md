@@ -169,18 +169,22 @@ The consumer-side choice this repo makes — `get_pydantic_extra_mode()` selects
 production and `forbid` in development (CLAUDE.md pattern #7) — sits on the consumer's own
 subclasses and does not conflict with the derived value on the library class underneath.
 
-**The `extra=` deviation that does exist is this repo's, not the SDK's.** Of the 61
-`ConfigDict(extra=…)` sites under `src/`, 43 read `get_pydantic_extra_mode()` and 18 write a
-literal: 10 `"forbid"` (`src/adapters/base.py` ×5, `capability_declarations.py` ×2,
-`notification.py`, `resolved_identity.py`, `signing/posture.py`) and 8 `"ignore"`
-(`src/core/schemas/_base.py` ×7, `config.py`). A literal on a wire model is the one place the
-dev/prod split of pattern #7 does not apply, and nothing in the repo says which of the 18 chose
-that on purpose; the `_base.py` seven are the serializer mixins every wire model inherits.
-That is a salesagent defect to grade in salesagent (a guard over `src/core/schemas` refusing a
-literal `extra=` on a wire model), and it is recorded here only so it is not mistaken for the
-SDK divergence the fifth revision described. Counted by `grep -rn 'extra=' src/` filtered to
-`ConfigDict` / `model_config` lines; the count the review that found this quoted (10 of 48) was
-over a different selection and is not the one above.
+**The `extra=` deviation that does exist is this repo's, not the SDK's.** The census is every
+`ConfigDict(...)` call under `src/` that passes `extra=`, found by AST and classified by whether
+the value is the call `get_pydantic_extra_mode()` or a string literal. 60 calls: 43 derived, 10
+literal `"forbid"` (`src/adapters/base.py` ×5, `src/core/schemas/capability_declarations.py` ×2,
+`src/core/schemas/notification.py`, `src/core/resolved_identity.py`,
+`src/core/signing/posture.py`) and 7 literal `"ignore"`, all in `src/core/schemas/_base.py`
+(lines 1495, 1681, 1703, 2069, 2284, 2840, 4230) — the serializer mixins every wire model
+inherits. Within `src/core/schemas/` alone: 48 calls, 38 derived, 3 forbid, 7 ignore. A
+`grep` for the substring `ConfigDict` also catches `SettingsConfigDict(extra="ignore")` at
+`src/core/config.py:42`, which is pydantic-settings env loading and not a wire model; an earlier
+figure of 61 / 8 included it and is wrong. A literal on a wire model is the one place the
+dev/prod split of pattern #7 does not apply, and nothing in the repo says which of the 17 chose
+that on purpose — whether a comment beside each states a reason was not graded, because a
+comment-line count is not a measurement of a reason. That is a salesagent defect to grade in
+salesagent (a guard over `src/core/schemas` refusing a literal `extra=` on a wire model), and it
+is recorded here only so it is not mistaken for the SDK divergence the fifth revision described.
 
 **TS:** holds at the type level (`warnings?: (Warning & { code?: 'a' | 'b' })[]`). Runtime
 not established — the Zod layer was not examined. Structurally the TypeScript SDK cannot hold
