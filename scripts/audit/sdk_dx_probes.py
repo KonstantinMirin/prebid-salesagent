@@ -30,7 +30,33 @@ import adcp.types as T
 RESULTS: list[tuple[str, str, str, str]] = []  # (id, verdict, headline, detail)
 
 TOOLS = ("GetProducts", "CreateMediaBuy", "UpdateMediaBuy", "SyncCreatives", "GetMediaBuyDelivery")
-SCHEMAS = pathlib.Path(adcp.__file__).parent / "_schemas" / "3.2"
+
+
+def _bundle_root() -> pathlib.Path:
+    """Return the schema bundle directory for the spec version the SDK reports.
+
+    A literal `"3.2"` here is a defect waiting for the next pin bump: the SDK would report
+    a newer spec while every probe kept grading the older bundle, and the suite would pass
+    against a contract nobody ships. `adcp.get_adcp_spec_version()` is the authority.
+
+    The directory does not always equal the spec version -- the SDK reports `3.2.3` and
+    bundles `3.2` -- so this takes the exact directory when it exists, else the longest
+    dotted prefix of the spec version. No match raises, because a probe suite that silently
+    grades the wrong bundle is worse than one that does not run.
+    """
+    spec = adcp.get_adcp_spec_version()
+    root = pathlib.Path(adcp.__file__).parent / "_schemas"
+    names = {p.name for p in root.iterdir() if p.is_dir()}
+    if spec in names:
+        return root / spec
+    parts = spec.split(".")
+    for stop in range(len(parts) - 1, 0, -1):
+        if (candidate := ".".join(parts[:stop])) in names:
+            return root / candidate
+    raise FileNotFoundError(f"no schema bundle for spec version {spec!r} under {root}; found {sorted(names)}")
+
+
+SCHEMAS = _bundle_root()
 
 
 def record(pid: str, ok: bool | None, headline: str, detail: str = "") -> None:
