@@ -197,9 +197,17 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
     # v1-reference-formats.json) answers, and an unserved id is a failed entry with no
     # status -- which would grade the catalog, not the per-creative status. Their asset
     # slots are the catalog's required ones for the same reason.
+    # VIDEO IS NOT FORKED. ``serve_reference_catalog()`` above serves the in-process
+    # transports the same committed capture the e2e server reads, so the rule this
+    # docstring states -- name a format the agent SERVES -- now has one answer for all
+    # four. The in-process half named ``video_30s``, which the capture's 71 formats do
+    # not carry, so production refused it with AdCPFormatNotFoundError and the entry came
+    # back action="failed" with no status: 3 regressed nodeids [a2a, mcp, rest] in box run
+    # innet_181026_0202. ``video_file`` is the capture's one required slot for this format.
+    video_id = "video_standard_30s"
+    video_assets = build_assets(video_spec("video_file", url="https://example.com/video.mp4"))
     if is_e2e(ctx):
-        video_id, native_id = "video_standard_30s", "native_standard"
-        video_assets = build_assets(video_spec("video_file", url="https://example.com/video.mp4"))
+        native_id = "native_standard"
         native_assets = build_assets(
             text_spec("title", content="Discover something new"),
             text_spec("description", content="A native placement"),
@@ -208,8 +216,7 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
             text_spec("sponsored_by", content="Acme"),
         )
     else:
-        video_id, native_id = "video_30s", "native_content"
-        video_assets = build_assets(video_spec("video", url="https://example.com/video.mp4"))
+        native_id = "native_content"
         native_assets = build_assets(
             text_spec("headline", content="Discover something new"),
             image_spec("main_image", url="https://example.com/native.png"),
