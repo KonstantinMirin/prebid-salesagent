@@ -2,11 +2,6 @@
 
 This module contains tool implementations following the MCP/A2A shared
 implementation pattern from CLAUDE.md.
-
-SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
-- [valid-type] on lines ~98, ~236: SDK asset class unions (ImageFormatAsset |
-  VideoFormatAsset | ...) are dynamically resolved type factories; mypy cannot
-  validate the union. Permanent until upstream ships StrEnum.
 """
 
 import asyncio
@@ -15,22 +10,14 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-# FIXME(#1388): FormatId has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp.types import (
-    AudioFormatAsset,
-    CreativeAgentCapability,
-    HtmlFormatAsset,
-    ImageFormatAsset,
-    TextFormatAsset,
-    UrlFormatAsset,
-    VideoFormatAsset,
-)
+from adcp.types import CreativeAgentCapability
 from adcp.types.legacy import LegacyFormat as AdcpFormat
 from adcp.utils.format_assets import get_format_assets
 
 # Format subclass preserved through backward-compatibility helper (PEP 695 type param below).
 from src.core.exceptions import AdCPSalesAgentError, AdCPServiceUnavailableError
 from src.core.helpers import enum_value
+from src.core.helpers.adapter_helpers import adapter_served_creative_formats
 
 logger = logging.getLogger(__name__)
 
@@ -86,53 +73,6 @@ if TYPE_CHECKING:
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse, format_id_identity
 
 
-def _infer_asset_type(asset_id: str) -> str:
-    """Infer asset type from asset ID naming convention.
-
-    Args:
-        asset_id: Asset identifier (e.g., "front_image", "youtube_url", "headline")
-
-    Returns:
-        Asset type string (image, video, text, url)
-    """
-    asset_lower = asset_id.lower()
-    if "image" in asset_lower or "logo" in asset_lower:
-        return "image"
-    elif "video" in asset_lower or "youtube" in asset_lower:
-        return "video"
-    elif "url" in asset_lower or "click" in asset_lower:
-        return "url"
-    elif "html" in asset_lower:
-        return "html"
-    else:
-        return "text"  # Default to text for headlines, body, captions, etc.
-
-
-# Each adcp Assets variant uses a Literal discriminator for asset_type.
-# Map asset type strings to the correct class.
-_ASSET_TYPE_TO_CLASS: dict[str, type] = {
-    "image": ImageFormatAsset,
-    "video": VideoFormatAsset,
-    "audio": AudioFormatAsset,
-    "text": TextFormatAsset,
-    "html": HtmlFormatAsset,
-    "url": UrlFormatAsset,
-}
-
-
-def _make_asset(
-    asset_id: str, asset_type: str, required: bool
-) -> ImageFormatAsset | VideoFormatAsset | AudioFormatAsset | TextFormatAsset | HtmlFormatAsset | UrlFormatAsset:  # type: ignore[valid-type]
-    """Build the correct Assets variant for a given asset type string."""
-    cls = _ASSET_TYPE_TO_CLASS.get(asset_type, TextFormatAsset)  # default to text
-    return cls(
-        item_type="individual",
-        asset_id=asset_id,
-        asset_type=asset_type,
-        required=required,
-    )
-
-
 def _list_creative_formats_impl(
     req: ListCreativeFormatsRequest | None, identity: PublicIdentity
 ) -> ListCreativeFormatsResponse:
@@ -185,78 +125,17 @@ def _list_creative_formats_impl(
         finally:
             loop.close()
 
-    formats = fetch_result.formats
+    # The seller's catalogue is the dialled agents' formats PLUS the ones its own
+    # ad-server adapter serves (Broadstreet acting as both sales and creative agent).
+    # Those used to be BUILT here, inline, in a 60-line block that set no ``canonical``
+    # and had two FIXME(#1566) silent-degradation handlers; the adapter declares them now
+    # and ``adapter_served_creative_formats`` is the one read of that declaration.
+    # ``sync_creatives`` composes its catalogue from the SAME two parts through the SAME
+    # reader, so the formats a buyer discovers here are exactly the formats a creative may
+    # name there -- which is what it could not do while this function was the only place
+    # they existed (salesagent-zthsk).
+    formats = [*fetch_result.formats, *adapter_served_creative_formats(tenant.tenant_id)]
     agent_errors = _route_agent_failures(fetch_result, req)
-
-    # Get formats from adapter if it provides them (e.g., Broadstreet acting as both sales and creative agent)
-    # Check adapter type from tenant config and load formats without instantiating the full adapter
-    try:
-        from src.core.database.repositories.uow import TenantConfigUoW
-
-        with TenantConfigUoW(tenant.tenant_id) as uow:
-            assert uow.tenant_config is not None
-            config_row = uow.tenant_config.get_adapter_config()
-            adapter_type = config_row.adapter_type if config_row else None
-
-            if adapter_type == "broadstreet":
-                # Import Broadstreet templates and convert to formats
-                from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
-                from src.core.schemas import Format, FormatId
-
-                agent_url = f"broadstreet://{tenant.tenant_id}"
-
-                for template_id, template in BROADSTREET_TEMPLATES.items():
-                    try:
-                        format_id = FormatId(
-                            id=f"broadstreet_{template_id}",
-                            # The WIRE STRING, not an AnyUrl: the pinned SDK (#1396, "keep the
-                            # format-reference agent_url as the wire string") types
-                            # FormatReferenceStructuredObject.agent_url as ``str``, so an
-                            # AnyUrl is refused and its normalisation (a trailing slash on a
-                            # bare origin) is no longer applied on this field.
-                            agent_url=agent_url,
-                        )
-
-                        # Build assets list using the correct Assets variant per type
-                        assets_list: list[  # type: ignore[valid-type]
-                            ImageFormatAsset
-                            | VideoFormatAsset
-                            | AudioFormatAsset
-                            | TextFormatAsset
-                            | HtmlFormatAsset
-                            | UrlFormatAsset
-                        ] = []
-                        for asset_id in template.get("required_assets", []):
-                            asset_type = _infer_asset_type(asset_id)
-                            assets_list.append(_make_asset(asset_id, asset_type, required=True))
-                        for asset_id in template.get("optional_assets", []):
-                            asset_type = _infer_asset_type(asset_id)
-                            assets_list.append(_make_asset(asset_id, asset_type, required=False))
-
-                        fmt = Format(
-                            format_id=format_id,
-                            name=str(template["name"]),
-                            description=str(template["description"]) if template.get("description") else None,
-                            assets=assets_list if assets_list else None,
-                            is_standard=False,
-                            platform_config=None,
-                            requirements=None,
-                        )
-                        formats.append(fmt)
-                    except Exception as e:
-                        # FIXME(#1566): silent per-item failure — unparseable template is
-                        # dropped from the formats response with no signal to the caller.
-                        # Allowlisted in test_architecture_no_silent_loop_failures.py.
-                        logger.warning(f"Failed to parse Broadstreet template {template_id}: {e}")
-                        continue
-
-                logger.info(f"Added {len(BROADSTREET_TEMPLATES)} Broadstreet formats")
-    except Exception as e:
-        # FIXME(#1566): silent degradation — the adapter's formats are dropped from
-        # the response with no errors[] entry, so a failed lookup is indistinguishable
-        # from "this adapter provides none".
-        # Allowlisted in test_architecture_no_silent_loop_failures.py.
-        logger.debug(f"Could not get adapter formats: {e}")
 
     # Apply filters from request
     if req.format_ids:

@@ -415,40 +415,40 @@ class TestAssetTypesFilterExclusion:
 class TestBroadstreetTemplateAssetParsing:
     """Regression: Broadstreet templates must parse with real assets.
 
-    The production code uses _make_asset() to construct the correct format asset
-    variant class (ImageFormatAsset for image, VideoFormatAsset for video, etc.) for each
-    template asset. Previously, the code used ImageFormatAsset(asset_type=AssetContentType(...))
-    which failed because ImageFormatAsset.asset_type is Literal['image'], not an enum.
+    The pinned ``Format.assets`` variants carry a Literal ``asset_type`` discriminator,
+    so the CLASS is the asset type; the code once passed
+    ``ImageFormatAsset(asset_type=AssetContentType(...))`` for every asset and nothing
+    constructed.
+
+    BOTH TESTS NOW CALL PRODUCTION. They used to re-run the production loop against
+    ``creative_formats._make_asset``, assembling their own ``Format`` -- so an adapter
+    that stopped building assets at all would not have reddened either of them. The
+    builder moved to ``BroadstreetAdapter.creative_formats`` (salesagent-zthsk) and these
+    assert on what it answers.
     """
 
     def test_all_broadstreet_templates_produce_formats_with_assets(self):
         """Every Broadstreet template must produce a Format with non-empty assets."""
+        from src.adapters.broadstreet import BroadstreetAdapter
         from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
-        from src.core.tools.creative_formats import _infer_asset_type, _make_asset
+
+        by_id = {f.format_id.id: f for f in BroadstreetAdapter.creative_formats("test")}
 
         for tid, tmpl in BROADSTREET_TEMPLATES.items():
-            assets_list = []
-            for asset_id in tmpl.get("required_assets", []):
-                at = _infer_asset_type(asset_id)
-                assets_list.append(_make_asset(asset_id, at, required=True))
-            for asset_id in tmpl.get("optional_assets", []):
-                at = _infer_asset_type(asset_id)
-                assets_list.append(_make_asset(asset_id, at, required=False))
-
-            fmt = Format(
-                format_id=FormatId(id=f"broadstreet_{tid}", agent_url="broadstreet://test"),
-                name=str(tmpl["name"]),
-                assets=assets_list if assets_list else None,
-                is_standard=False,
-            )
+            fmt = by_id[f"broadstreet_{tid}"]
             assert fmt.assets, f"Template {tid} must have non-empty assets list"
             assert len(fmt.assets) == len(tmpl.get("required_assets", [])) + len(tmpl.get("optional_assets", [])), (
                 f"Template {tid} asset count mismatch"
             )
 
     def test_asset_type_literals_match_inferred_type(self):
-        """Each constructed asset must have asset_type matching the inferred string."""
-        from src.core.tools.creative_formats import _infer_asset_type, _make_asset
+        """Each constructed asset carries the asset_type its id names."""
+        from src.adapters.broadstreet import BroadstreetAdapter
+
+        # One format per asset id below, chosen so each id appears in it.
+        asset_types = {
+            a.asset_id: a.asset_type for f in BroadstreetAdapter.creative_formats("test") for a in (f.assets or [])
+        }
 
         for asset_id, expected_type in [
             ("front_image", "image"),
@@ -458,11 +458,8 @@ class TestBroadstreetTemplateAssetParsing:
             ("headline", "text"),
             ("html", "html"),
         ]:
-            inferred = _infer_asset_type(asset_id)
-            assert inferred == expected_type, f"{asset_id}: expected {expected_type}, got {inferred}"
-            asset = _make_asset(asset_id, inferred, required=True)
-            assert asset.asset_type == expected_type, (
-                f"{asset_id}: asset_type should be '{expected_type}', got '{asset.asset_type}'"
+            assert asset_types[asset_id] == expected_type, (
+                f"{asset_id}: asset_type should be '{expected_type}', got '{asset_types[asset_id]}'"
             )
 
 
