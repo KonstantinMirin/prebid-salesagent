@@ -169,6 +169,19 @@ The consumer-side choice this repo makes — `get_pydantic_extra_mode()` selects
 production and `forbid` in development (CLAUDE.md pattern #7) — sits on the consumer's own
 subclasses and does not conflict with the derived value on the library class underneath.
 
+**The `extra=` deviation that does exist is this repo's, not the SDK's.** Of the 61
+`ConfigDict(extra=…)` sites under `src/`, 43 read `get_pydantic_extra_mode()` and 18 write a
+literal: 10 `"forbid"` (`src/adapters/base.py` ×5, `capability_declarations.py` ×2,
+`notification.py`, `resolved_identity.py`, `signing/posture.py`) and 8 `"ignore"`
+(`src/core/schemas/_base.py` ×7, `config.py`). A literal on a wire model is the one place the
+dev/prod split of pattern #7 does not apply, and nothing in the repo says which of the 18 chose
+that on purpose; the `_base.py` seven are the serializer mixins every wire model inherits.
+That is a salesagent defect to grade in salesagent (a guard over `src/core/schemas` refusing a
+literal `extra=` on a wire model), and it is recorded here only so it is not mistaken for the
+SDK divergence the fifth revision described. Counted by `grep -rn 'extra=' src/` filtered to
+`ConfigDict` / `model_config` lines; the count the review that found this quoted (10 of 48) was
+over a different selection and is not the one above.
+
 **TS:** holds at the type level (`warnings?: (Warning & { code?: 'a' | 'b' })[]`). Runtime
 not established — the Zod layer was not examined. Structurally the TypeScript SDK cannot hold
 P3 as a property of one object: `generate-types` and `generate-zod-schemas`
