@@ -2090,8 +2090,18 @@ class Format(LibraryFormat):
     )
     # ``iab_specification``, ``accepts_3p_tags`` and ``category`` are DELETED. All three were
     # write-only: the one site that named any of them (``src/core/tools/creative_formats.py``)
-    # passed ``None``, and no site anywhere under ``src/``, ``scripts/`` or ``tests/`` read one
-    # back. The pinned ``core/format.json`` declares 20 properties and no node in the bundle
+    # passed ``None``.
+    #
+    # THE SWEEP THAT SAID "no site reads one back" WAS WRONG, and it cost two admin endpoints.
+    # ``src/admin/blueprints/format_search.py`` read ``fmt.category`` into the JSON of both
+    # ``/format-search/search`` and ``/format-search/list``, so after the deletion both raised
+    # ``AttributeError`` and answered 500 -- and the admin suite stayed green, because nothing
+    # grades either endpoint. The value was always ``None``, and the three JS consumers all
+    # spell it ``fmt.category || <fallback>``, so dropping the key is outcome-identical for
+    # them; the Python reads are gone. Next deletion here: grep ``src/admin`` and the
+    # templates, not just ``src/core``.
+    #
+    # The pinned ``core/format.json`` declares 20 properties and no node in the bundle
     # declares any of the three -- 3836 pinned nodes walked by ``__annotations__``, zero hits
     # for ``category`` on ``core.format`` or anywhere else -- so there was no spec reading to
     # preserve and no value to route to a carrier: CLAUDE.md pattern #4's "delete if genuinely

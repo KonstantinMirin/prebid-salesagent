@@ -58,7 +58,6 @@ def search_formats():
                 "agent_url": fmt.agent_url,
                 "format_id": format_id_str,
                 "name": fmt.name,
-                "category": fmt.category,
                 "description": fmt.description,
                 "is_standard": fmt.is_standard,
             }
@@ -136,7 +135,6 @@ def list_all_formats():
                 {
                     "format_id": format_id_value,  # Nested object, not flattened string
                     "name": fmt.name,
-                    "category": fmt.category,
                     "description": fmt.description,
                     "is_standard": fmt.is_standard,
                     "dimensions": dimensions_str,  # Add dimensions for size matching
