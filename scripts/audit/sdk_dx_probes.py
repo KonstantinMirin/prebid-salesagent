@@ -1,0 +1,280 @@
+"""Developer-experience probes for the pinned adcp SDK.
+
+Each probe is one thing a developer actually does with the SDK, with a pass criterion
+that does not depend on knowing the SDK's internals. The point is a number that moves:
+run it against the pin, run it again after a change, compare.
+
+A probe FAILS when a developer doing the obvious thing gets the wrong answer or no
+answer. It does not fail for an ugly name -- ergonomics are reported separately from
+correctness, because only one of the two is worth breaking a public surface over.
+
+Run:  cd <repo> && unset VIRTUAL_ENV && UV_FROZEN=1 uv run python scripts/audit/sdk_dx_probes.py
+"""
+
+from __future__ import annotations
+
+import json
+import pathlib
+import re
+import sys
+import warnings
+from typing import Any
+
+# jsonschema deprecates RefResolver without shipping a drop-in replacement for a
+# file-backed bundle. The warning is the library's, not this script's finding.
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="jsonschema")
+
+import adcp
+import adcp.types as T
+
+RESULTS: list[tuple[str, str, str, str]] = []  # (id, verdict, headline, detail)
+
+TOOLS = ("GetProducts", "CreateMediaBuy", "UpdateMediaBuy", "SyncCreatives", "GetMediaBuyDelivery")
+SCHEMAS = pathlib.Path(adcp.__file__).parent / "_schemas" / "3.2"
+
+
+def record(pid: str, ok: bool | None, headline: str, detail: str = "") -> None:
+    verdict = "PASS" if ok else ("FAIL" if ok is False else "PARTIAL")
+    RESULTS.append((pid, verdict, headline, detail))
+
+
+def _schema(rel: str) -> dict[str, Any] | None:
+    p = SCHEMAS / rel
+    return json.loads(p.read_text()) if p.exists() else None
+
+
+# ─── S1 · Can I find a tool's types by a predictable name? ────────────────────────
+def s1_discovery() -> None:
+    missing, found = [], []
+    for tool in TOOLS:
+        req = getattr(T, f"{tool}Request", None)
+        resp = getattr(T, f"{tool}Response", None)
+        (found if req is not None else missing).append(f"{tool}Request")
+        (found if resp is not None else missing).append(f"{tool}Response")
+    record(
+        "S1 discovery",
+        not missing,
+        f"{len(found)}/{len(found) + len(missing)} tool types reachable as adcp.types.<Tool>{{Request,Response}}",
+        f"missing: {missing}" if missing else "",
+    )
+
+
+# ─── S2 · Can I name the arms of a multi-arm response? ────────────────────────────
+def s2_named_branches() -> None:
+    rows = []
+    for tool in TOOLS:
+        doc = _schema(f"media-buy/{_kebab(tool)}-response.json") or _schema(f"creative/{_kebab(tool)}-response.json")
+        if doc is None:
+            continue
+        arms = doc.get("oneOf") or doc.get("anyOf") or []
+        if not arms:
+            continue
+        for i, arm in enumerate(arms):
+            title = arm.get("title")
+            by_title = getattr(T, title, None) if title else None
+            positional = getattr(T, f"{tool}Response{i + 1}", None)
+            rows.append((tool, i, title, by_title is not None, positional is not None))
+    unreachable = [r for r in rows if not r[3]]
+    record(
+        "S2 named branches",
+        not unreachable,
+        f"{len(rows) - len(unreachable)}/{len(rows)} response arms importable by their schema title",
+        "; ".join(f"{t}.arm{i} title={ti!r} positional_exists={p}" for t, i, ti, _, p in unreachable[:6]),
+    )
+
+
+def _kebab(camel: str) -> str:
+    return re.sub(r"(?<!^)(?=[A-Z])", "-", camel).lower()
+
+
+# ─── S3 · Does the model accept exactly what the schema accepts? ──────────────────
+def s3_validation_agreement() -> None:
+    """The one case measured in the design doc, run as a probe rather than quoted."""
+    try:
+        import jsonschema
+        from adcp.types.domains.media_buy.media_buy_commitment_response import Warning as NarrowedWarning
+    except Exception as exc:  # noqa: BLE001
+        record("S3 validation agreement", None, "could not run", f"{type(exc).__name__}: {exc}")
+        return
+
+    doc = _schema("media-buy/media-buy-commitment-response.json")
+    node = _find_warnings_items(doc) if doc else None
+    if node is None:
+        record("S3 validation agreement", None, "narrowed warnings[] node not located", "")
+        return
+
+    payload = {
+        "code": "fields_ignored_due_to_precedence",
+        "message": "m",
+        "affected_resource": {"resource_type": "media_buy", "media_buy_id": "mb_1"},
+    }
+    resolver = jsonschema.RefResolver(base_uri=f"{(SCHEMAS).as_uri()}/", referrer=node)
+    try:
+        jsonschema.validate(payload, node, resolver=resolver)
+        schema_accepts = True
+    except Exception:  # noqa: BLE001
+        schema_accepts = False
+    try:
+        NarrowedWarning.model_validate(payload)
+        model_accepts = True
+    except Exception:  # noqa: BLE001
+        model_accepts = False
+
+    record(
+        "S3 validation agreement",
+        schema_accepts == model_accepts,
+        f"schema_accepts={schema_accepts} model_accepts={model_accepts} on a narrowed enum",
+        "the two validators the SDK ships disagree about the same bytes" if schema_accepts != model_accepts else "",
+    )
+
+
+def _find_warnings_items(node: Any) -> dict[str, Any] | None:
+    if isinstance(node, dict):
+        w = node.get("properties", {}).get("warnings") if isinstance(node.get("properties"), dict) else None
+        if isinstance(w, dict) and isinstance(w.get("items"), dict) and "allOf" in json.dumps(w["items"])[:400]:
+            return w["items"]
+        for v in node.values():
+            if (found := _find_warnings_items(v)) is not None:
+                return found
+    elif isinstance(node, list):
+        for v in node:
+            if (found := _find_warnings_items(v)) is not None:
+                return found
+    return None
+
+
+# ─── S4 · Can I emit an error, including a code the registry does not list? ───────
+def s4_errors() -> None:
+    Err = getattr(T, "Error", None) or getattr(adcp, "Error", None)
+    code_enum = getattr(T, "ErrorCode", None)
+    if Err is None:
+        record("S4 errors", False, "Error not reachable from adcp or adcp.types", "")
+        return
+    try:
+        Err.model_validate({"code": "UNSUPPORTED_FEATURE", "message": "m"})
+        registered = True
+    except Exception:  # noqa: BLE001
+        registered = False
+    try:
+        Err.model_validate({"code": "SELLER_SPECIFIC_THING", "message": "m"})
+        unregistered = True
+    except Exception:  # noqa: BLE001
+        unregistered = False
+    record(
+        "S4 errors",
+        registered and unregistered,
+        f"Error importable=True code_enum_exported={code_enum is not None} "
+        f"registered_code={registered} unregistered_code={unregistered}",
+        "error-code.json declares the vocabulary documentary, so an unregistered code must validate"
+        if not unregistered
+        else "",
+    )
+
+
+# ─── S5 · Can I emit a non-blocking observation? ──────────────────────────────────
+def s5_warnings() -> None:
+    W = getattr(T, "Warning", None) or getattr(adcp, "Warning", None)
+    WC = getattr(T, "WarningCode", None) or getattr(adcp, "WarningCode", None)
+    vocab = (_schema("enums/warning-code.json") or {}).get("enum") or []
+    detail = f"vocabulary={len(vocab)} members {vocab}"
+    if W is None or WC is None:
+        record(
+            "S5 warnings",
+            False,
+            f"Warning exported={W is not None} WarningCode exported={WC is not None}",
+            detail + " · reachable only by deep module path",
+        )
+        return
+    try:
+        W.model_validate(
+            {
+                "code": "capability_requested_not_honoured",
+                "message": "m",
+                "affected_resource": {"resource_type": "media_buy", "media_buy_id": "mb_1"},
+            }
+        )
+        extensible = True
+    except Exception:  # noqa: BLE001
+        extensible = False
+    record("S5 warnings", extensible, f"unregistered warning code accepted={extensible}", detail)
+
+
+# ─── S6 · Can I extend a response type with internal fields? ──────────────────────
+def s6_extension() -> None:
+    """salesagent's actual use case: subclass a success arm to attach a serializer mixin."""
+    from adcp.types import aliases
+
+    src = pathlib.Path(aliases.__file__).read_text()
+    annotated = len(re.findall(r"^\s*\w+\s*:\s*TypeAlias\s*=", src, re.M))
+    plain = len(re.findall(r"^\s*\w+\s*=\s*\w", src, re.M))
+    record(
+        "S6 extension",
+        annotated == 0,
+        f"semantic aliases usable as a base class: {plain} plain, {annotated} TypeAlias-annotated",
+        "mypy refuses an explicit TypeAlias as a base class, so the annotated ones cannot be subclassed"
+        if annotated
+        else "",
+    )
+
+
+# ─── S7 · Does a semantic name resolve to the class the schema describes? ─────────
+def s7_binding() -> None:
+    from adcp.types import aliases
+    from adcp.types.domains.media_buy import create_media_buy_response as arm_mod
+
+    alias = getattr(aliases, "CreateMediaBuySuccessResponse", None)
+    arm = getattr(arm_mod, "CreateMediaBuyResponse1", None)
+    if alias is None or arm is None:
+        record("S7 binding", None, "could not resolve both names", "")
+        return
+    record(
+        "S7 binding",
+        alias is arm,
+        f"semantic alias is the generated arm: {alias is arm}",
+        f"alias -> {alias.__module__}.{alias.__name__}; arm -> {arm.__module__}.{arm.__name__}; "
+        f"subclass={issubclass(alias, arm)}",
+    )
+
+
+# ─── S8 · Is a positional name in the surface a developer imports? ────────────────
+def s8_positional_surface() -> None:
+    exported = [n for n in (getattr(T, "__all__", None) or []) if re.search(r"\d+$", n)]
+    gen = getattr(T, "_generated", None)
+    gen_all = [n for n in (getattr(gen, "__all__", None) or []) if re.search(r"\d+$", n)] if gen else []
+    record(
+        "S8 positional surface",
+        not exported and not gen_all,
+        f"positional names in adcp.types.__all__={len(exported)} · in _generated.__all__={len(gen_all)}",
+        f"e.g. {sorted(set(exported + gen_all))[:6]}" if (exported or gen_all) else "",
+    )
+
+
+def main() -> int:
+    for probe in (
+        s1_discovery,
+        s2_named_branches,
+        s3_validation_agreement,
+        s4_errors,
+        s5_warnings,
+        s6_extension,
+        s7_binding,
+        s8_positional_surface,
+    ):
+        try:
+            probe()
+        except Exception as exc:  # noqa: BLE001
+            record(probe.__name__, None, "probe raised", f"{type(exc).__name__}: {exc}")
+
+    width = max(len(r[0]) for r in RESULTS)
+    print(f"\nadcp pin: {getattr(adcp, '__version__', '?')}\n")
+    for pid, verdict, headline, detail in RESULTS:
+        print(f"{verdict:8} {pid:{width}}  {headline}")
+        if detail:
+            print(f"{'':8} {'':{width}}  └─ {detail}")
+    bad = sum(1 for r in RESULTS if r[1] != "PASS")
+    print(f"\n{len(RESULTS) - bad}/{len(RESULTS)} pass\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
