@@ -87,18 +87,31 @@ each member by (field-name set, required-name set, `Literal` const defaults), wh
 nested form of the root resolution rules:
 
 ```
-206 of 238 families   key is injective -> every member gets a content-derived name
- 85 colliding groups  IDENTICAL shape -> P2 failures; one class, so no name needed
-  9 colliding groups  differ only in a field typed as ANOTHER numbered class
+146 of 241 families   key is injective -> every member gets a content-derived name
+ 84 colliding groups  IDENTICAL shape -> one node generated more than once
+ 11 colliding groups  differ, and 9 of the 11 differ only through a cascade
 ```
 
-The 1045 and 4076 counts are measured against the wheel; the family census (206 / 85 / 9) is
-carried from a single measurement and is not re-measured.
+A runtime-shape census produces those figures. An earlier count of 206 / 85 / 9 does not
+reproduce, so disregard it.
 
-So the nested residue is not a naming gap. 85 of the 94 collisions are the same node generated
-several times, and the 9 remaining differ only through a cascade one level down
-(`MacroDeclaration` holding `Location6` versus `Location8`). **No arm in the wheel differs only
-by a scalar constraint** such as `maxLength`.
+The nested residue is not a naming gap, and it is smaller than the 84 suggests. Of those
+groups, 2 are aliases, 69 are chains — reuse-model empty subclasses and the `allOf` products
+from §4.2, where the composed class is the one to keep — and 13 are independent siblings, of
+which 8 are byte-identical copies of one node and 5 differ only in description text. So the
+duplication to collapse is 13 groups, and fixing the `allOf` copy removes the 69 chains as a
+side effect.
+
+The 11 differing groups resolve individually. Six vanish once identical leaves collapse. Two
+take their names from a leaf const — the `asset_union` `MacroDeclaration` groups become
+`MacroDeclarationLocationUrl` and `MacroDeclarationLocationContent`, from
+`vast-asset.json#/oneOf/0,1/properties/macro_declarations/items/properties/location`.
+`Subject3` takes its name from a title at `core/attestation-subject.json#/oneOf/0..2`. The
+last two, `CheckGovernanceRequest2/3` and `BoundedValueLevel31/21`, need the fixed-point
+pass. **No arm in the wheel differs only by a scalar constraint** such as `maxLength`.
+
+Nothing downstream moves. This repository has 124 domain imports and none of them names a
+member of a colliding group.
 
 **Which rule names a branch, and why it matters.** The rule decides churn under upstream
 change. A full-field-set key renames the class whenever the spec adds an *optional* field,
@@ -547,6 +560,27 @@ under one name**. Worst: `Creative` 9 modules / 8 shapes, `Account` 8/8, `Scope`
 `tasks-get-response.json` declare inline anonymous `properties.error` objects, genuinely
 distinct shapes, correctly generated, **named `Error` from the property name**.
 
+**The sibling-document copy has a different cause, and `--allow-remote-refs` is not it.** A
+root `allOf` whose single member is a `$ref` to a document whose own root carries `oneOf` or
+`anyOf` makes the generator re-parse the target's arms under the referring schema's name and
+path, minting every arm again. A discriminator makes no difference, and local relative refs
+reproduce it, so "local refs give zero duplication" holds for plain-object targets only. The
+site is `datamodel_code_generator/parser/jsonschema.py:3379-3388` in `_parse_all_of_item`;
+the plain-object branch at `:3390` does the right thing, adding a reference, a base class, and
+an import, and the fast path at `:3544` never applies to a file reference.
+
+This is a generator defect rather than a schema one: `allOf: [{$ref}]` is draft-07's only way
+to keep a `title` beside a `$ref`, so the schemas are written correctly and nothing goes
+upstream.
+
+Of the bundle's 113 root single-`$ref` `allOf`s, 100 target an object (36 already inherit
+cleanly), 10 sit under `mcp/` which the generator excludes, and 3 target a `oneOf`. Only two
+of those three are defects: `media-buy/accept-proposal-response.json` and
+`media-buy/buy-products-response.json` add no narrowing, so the copy is pure duplication,
+while `core/package-signal-targeting.json` adds properties, which makes distribution the
+correct output and the source of the `PackageSignalTargeting4..7` chains. **A fix that
+collapses that third case is wrong.**
+
 ### 4.3 An `allOf` enum narrowing is lost — P3 violated
 
 `media-buy-commitment-response.json` narrows `warnings[].code` to two members; the generated
@@ -661,6 +695,23 @@ the result; (5) and (6) are independent of all of them.
    generated arm), and the comment at `_base.py:1261` that calls the base
    `CreateMediaBuySuccessResponse` is wrong about which layer it subclasses; correct it when the
    imports move.
+
+   **The layer is deliberate.** Commit `b5c6f1644` (2026-07-29, #994) is a breaking release
+   titled "make canonical models primary in v7", and `canonical_creative.py:1-7` states the
+   purpose: legacy named-format identity removed at every depth. So this pairing implements a
+   decision rather than codifying an accident.
+
+   **Membership is hand-maintained and has drifted, so derive it.** Of 940 public names, 862
+   resolve into `domains` and 43 into `canonical_creative`. Three of the 33
+   `PRIMARY_CANONICAL_MODELS` are shadowed on `adcp.types` by a generated class: `MediaBuy`
+   resolves to `domains.core.media_buy.MediaBuy`, which is not the canonical class's parent;
+   `MediaBuyPackage` resolves to `get_media_buys_response.Package` through
+   `_generated.py:3761`; and `DeliveryCreative` resolves to
+   `get_creative_delivery_response.Creative`. A fourth inconsistency mixes layers inside one
+   union: `GetProductsSuccessResponse` is canonical while `GetProductsSubmittedResponse` is
+   generated. The rule stated earlier — canonical if and only if the canonical layer declares
+   one — flips exactly those three names and that union, and replacing the membership list
+   with the rule is what stops the drift recurring.
 3. **Derive the whole binding layer (P5).** `aliases.py`, `_eager.py`, both `__init__` files,
    `KNOWN_COLLISIONS`, and the hand-written `TypeGuard` functions (`guards.py`,
    `_EAGER_ONLY_EXTRAS`) are generated from the module tree under (2), with the 98 `TypeAlias`
@@ -788,11 +839,6 @@ renamed domain-path class and nowhere else.
 
 What the design rests on that is not yet measured, and what would measure it:
 
-- **The layer decision (§5 item 2) rests on the pin's behaviour being the intended one.** The
-  pin binds every canonical name to `canonical_creative`; no commit message or document in the
-  SDK was found saying that was chosen rather than accumulated. If upstream disagrees, items 1
-  and 3 emit the other pairing and nothing else in the plan changes. Verifier: upstream's
-  answer; until then `test_canonical_models_are_subclasses.py` grades whichever layer is public.
 - **The success-arm rule in item 1** ("requires neither `errors` nor `task_id`") was checked on
   the three response roots named in this document, not on every response root in the bundle.
   Verifier: run it over every `*-response.json` with branches and assert exactly one arm
@@ -803,12 +849,7 @@ What the design rests on that is not yet measured, and what would measure it:
 - **Whether any caller constructs a model with a value the unioned vocabulary accepts and the
   intersected one refuses.** This repo does not touch the commitment response's warnings (grep
   empty); other adopters not examined.
-- **The sibling-document `allOf` re-derivation** (item 4): the generator condition behind it is
-  not established, and the audit did not measure the case.
 - Whether the 98 `TypeAlias` annotations were deliberate. No rule or comment found.
-- Whether the 9 cascade families reach zero after a fixed-point naming pass — name the leaves,
-  collapse identical shapes, re-key. Not iterated. The 145 differing-shape intra-domain names
-  (P8) overlap this set; how far they shrink under such a pass is not established either.
 - The scope of P3 divergences beyond §4.3, now that `extra=` is known not to be one.
 - Whether `Warning`'s absence from `adcp.types.__all__` is builtin-shadowing policy or an
   omission (P6 wants it to be policy either way).
