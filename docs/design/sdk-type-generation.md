@@ -14,10 +14,21 @@ not established, it says so instead of guessing.
 ## 1. The verdict
 
 The Python SDK's public type surface is **named by traversal order rather than by the
-schema**, and that single property causes or hides every other defect in this document. It
-emits 1077 classes whose names end in a digit, across 240 stems, with sparse numbering
-(`Assets29` exists, `Assets30` does not, `Assets94` does) — so the number is an artifact of
-generation order, not an identity.
+schema**, and that single property causes or hides every other defect in this document. The
+numbering is sparse — `Assets29` exists, `Assets30` does not, `Assets94` does — so the number
+is an artifact of generation order, not an identity.
+
+Two counts, because two instruments were used and neither is wrong:
+
+```
+1077  across 240 stems   live attribute walk of adcp.types.*  (undercounts: 198 of the
+                                                               lazy-resolution paths raise)
+1798  excluding bundled/ AST over the generated files         (1893 including the mirror)
+1014  of those are in some package __all__; 879 are reachable only by deep module path
+```
+
+Deep paths are not a safety barrier — this repo reaches 5 of its 11 that way — so the exposed
+surface is the whole 1798, not the 29 that reach `adcp` / `adcp.types`.
 
 The TypeScript SDK generates from the *same schemas* and does not have this problem, because
 `json-schema-to-typescript` uses a subschema's `title` as its type name by default. The
@@ -83,6 +94,12 @@ The two arms differ by exactly one field. A reorder makes `MediaItem` the text s
 type error and nothing red. Both arms are **untitled**, so no amount of title-based renaming
 fixes this one — only a field-shape gate can.
 
+**And it must key on field NAME SETS, not field counts.** Both arms have four fields, four
+required, and share three of the four names; the symmetric difference is
+`{'content', 'content_uri'}`. A snapshot keyed on class name plus field *count* — which is the
+obvious-sounding design, and was the first sketch of this gate — ships this swap green. The
+instrument that is right already exists; the one that sounds equivalent is the trap.
+
 **The flag alone is not the fix, and claiming otherwise would be wrong.** Of the root-level
 arms at 3.2 (excluding the `bundled/` and `mcp/` mirrors) 142 have PascalCase-identifier
 titles, 88 have prose titles, and **327 have no title at all**. `--use-title-as-name` is
@@ -96,26 +113,64 @@ which 26 files / 58 classes rename with zero collision. The 8 collisions are `*S
 arms colliding with the class generated from the separate async-response-submitted file, a
 case the repo already tools for.
 
-### 2.2 The semantic names cannot be used for inheritance
+### 2.2 The alias surface is split between two declaration forms, and the split has no rule
 
-`aliases.py` declares its names as `TypeAlias`, and mypy refuses a `TypeAlias` as a base
-class. This repo records the consequence at `src/core/schemas/_base.py:125-131`:
+`aliases.py` declares 234 semantic names in two different ways, measured by AST:
+
+```
+plain assignments  (X = Y)            136
+annotated          (X: TypeAlias = Y)  98
+```
+
+Only one form can be inherited from. Proven against this repo's own mypy config:
+
+```python
+class FromPlainAssignment(CreateMediaBuySuccessResponse): pass   # no error
+class FromTypeAlias(UpdateMediaBuySuccessResponse): pass
+# error: Invalid base class "UpdateMediaBuySuccessResponse"  [misc]
+```
+
+So **98 of 234 semantic names are unusable as base classes**, and nothing separates them from
+the 136 that are: `CreateMediaBuySuccessResponse` and `UpdateMediaBuySuccessResponse` have
+identical roles and are declared two different ways. A consumer that subclasses — as this repo
+must, to attach `WireSerializerMixin` — cannot predict which form it will get. **This is a
+third independent defect, and the cheapest fix in this document: drop the annotation.**
+
+This repo records the consequence at `src/core/schemas/_base.py:125-131`:
 
 > The concrete class, NOT `adcp.types.aliases.LegacyUpdateMediaBuySuccessResponse`. That
 > alias is declared `X: TypeAlias = UpdateMediaBuyResponse1`, and mypy refuses an explicit
 > TypeAlias as a base class ("Invalid base class") even though it is a plain class at
 > runtime.
 
-So every consumer that *subclasses* a generated type — which this repo must, to attach its
-serializer mixin — is forced onto positional names. **This fixes the direction of the rename:
-the semantic name must be the real class and the positional name the alias, never the
-reverse.** An alias-only rename leaves the entire 154-name semantic surface unusable for
-inheritance.
+That note is correct about the name it cites and **over-generalises**: the name it names is
+annotated, but `_base.py:108` is on the other side of the split. Mapping this repo's 11
+positional imports against both forms:
 
-Downstream exposure in this repo is 11 positional imports: `_base.py` ×6
-(`CreateMediaBuyResponse1/2/3`, `UpdateMediaBuyResponse1/3`), `creative.py`
-(`SyncCreativesResponse1`), `account.py` (`Accounts1`), `signing/trust_root.py`
-(`BrandDiscovery3`), `listing.py` ×2.
+| positional class | arm title | plain alias (inheritable) | annotated only |
+|---|---|---|---|
+| `CreateMediaBuyResponse1` | `CreateMediaBuySuccess` | `CreateMediaBuySuccessResponse` | — |
+| `CreateMediaBuyResponse2` | `CreateMediaBuyError` | `CreateMediaBuyErrorResponse` | — |
+| `CreateMediaBuyResponse3` | `CreateMediaBuySubmitted` | `CreateMediaBuySubmittedResponse` | — |
+| `UpdateMediaBuyResponse1` | `UpdateMediaBuySuccess` | — | `UpdateMediaBuySuccessResponse` |
+| `UpdateMediaBuyResponse3` | `UpdateMediaBuySubmitted` | — | `UpdateMediaBuySubmittedResponse` |
+| `SyncCreativesResponse1` | `SyncCreativesSuccess` | — | `SyncCreativesSuccessResponse` |
+| `AccountReference1` | **none** | `AccountReferenceById` | — |
+| `Accounts1` | not resolved | — | — |
+| `BrandDiscovery3` | not resolved | — | — |
+| `CreativeItem1` | **none** | — | — |
+| `CreativeItem2` | **none** | — | — |
+
+Four could switch today; three are blocked *only* by the annotation.
+
+**And one row argues against the whole title-based framing.** `AccountReference1` has a
+semantic alias despite its arm being **untitled** — so the hand-maintained table already
+reaches further than any title-driven rename can. Titles are not the limiting mechanism, which
+is why the gate outranks the rename in §5.
+
+**The direction of the rename is fixed by this:** the semantic name must be the real class and
+the positional name the alias, never the reverse. An alias-only rename leaves every
+subclassing consumer pinned to positional names permanently.
 
 ### 2.3 A remote `$ref` is resolved as a copy, orphaning the canonical class
 
@@ -331,8 +386,13 @@ from the module tree, with the semantic name as the **real class** and the posit
 a deprecated alias (R2 of §2.2: never the reverse, or subclassing consumers stay stuck).
 
 **R5 — Identity is the field shape, not the name.** The regeneration gate compares per-class
-**field sets**, not names. This is the only rule that covers the 327 untitled arms and the
-only one that would have caught either live bug in §2.1.
+**field name sets** — not names alone, and specifically not field counts, which §2.1 shows
+would miss the live case. This is the only rule that covers the 327 untitled arms and the only
+one that would have caught either live bug.
+
+**R6 — One declaration form.** A generated alias is a plain assignment, never
+`X: TypeAlias = Y`, so every public name can be inherited from. §2.2 shows 98 of 234 names
+currently cannot, with no rule separating them.
 
 ---
 
@@ -341,24 +401,24 @@ only one that would have caught either live bug in §2.1.
 Ordered so that each stage is measurable by the stage before it. Stage 0 first is not a
 preference: without it, no later stage can be shown not to have changed behaviour.
 
-**Stage 0 — the field-shape gate (R5).** `scripts/diff_generated_types.py` already AST-walks
-the tree and returns `{path: {ClassName: [fields]}}`; `generate_types.py:1609-1616` writes it
-to `SCHEMA_DELTAS.md` and returns 0. Commit that snapshot as a fixture beside
-`public_api_snapshot.json` and assert it in the same test module. An arm reorder then fails
-with "`CreateMediaBuyResponse1` lost `media_buy_id`, gained `errors`". *Cheapest item,
-largest coverage, no behaviour change, nothing else depends on it.*
+**Stage 0 — the field-name-set gate (R5).** `scripts/diff_generated_types.py` already AST-walks
+the tree and returns `{path: {ClassName: [field_name, ...]}}`; `generate_types.py:1609-1616`
+writes it to `SCHEMA_DELTAS.md` and returns 0. Commit that snapshot as a fixture beside
+`public_api_snapshot.json` and assert it in the same test module. A reorder then fails with
+"`CreativeItem1` lost `content_uri`, gained `content`". **Key it on name sets, not counts.**
+*Largest coverage — all 1798 regardless of titles — no behaviour change, nothing else depends
+on it, and it is the only item that would have caught either live bug.*
 
-**Stage 1 — the narrowing intersect (R3).** First sweep the tree for every `allOf` + `enum`
+**Stage 1 — drop the `: TypeAlias` annotations (R6).** 98 names, no rename, no behaviour
+change, no schema involvement: the declaration form changes and the names become inheritable.
+Unblocks `_base.py:131`, `:134` and `creative.py:36` in this repo immediately. *Cheapest item
+in the document and independent of every other stage — it could ship first if Stage 0 slips.*
+
+**Stage 2 — the narrowing intersect (R3).** First sweep the tree for every `allOf` + `enum`
 narrowing site, because the one known instance is a sample and the scope is unestablished.
 Then fix the merge to intersect, and assert the model-accepts-iff-schema-accepts invariant
 over the found sites. *This is a correctness fix shipping a wrong accepted set today; it is
 independent of all naming work.*
-
-**Stage 2 — local refs only (R2).** Shrink `PRESERVE_CANONICAL_URL_REFS` one entry at a time,
-each time checking whether the `stabilize_*` compensation is still needed. Then establish the
-sibling-document `allOf` trigger from §2.3 and either extend `rewrite_refs` to cover
-root-level sibling refs or special-case the pure-alias shape to a module-level re-export.
-Stage 0 measures this: duplicate class definitions should fall and no field set should change.
 
 **Stage 3 — semantic arm classes (R1).** Emit the arm `title` as the class name where it is a
 PascalCase identifier and does not collide — the measured 78 classes across 34 files — with
@@ -373,16 +433,32 @@ files. This is what retires the four wrong `ActivationKey` aliases permanently i
 correcting them once.
 
 **Stage 5 — upstream the titles, then close the loop.** File the 327 untitled root-level arms
-against `adcontextprotocol/adcp`; no generator change can name them. When titles exist, flip
-R1's ratchet to a hard build failure.
+against `adcontextprotocol/adcp`; no generator change can name them.
+`core/creative-item.json`'s two arms are the first candidate — a URI-versus-inline-content
+pair with obvious names, and the pair §2.1's live bug sits on. When titles exist, flip R1's
+ratchet to a hard build failure.
+
+**Stage 6 — local refs only (R2).** Shrink `PRESERVE_CANONICAL_URL_REFS` one entry at a time,
+each time checking whether the `stabilize_*` compensation is still needed. Then establish the
+sibling-document `allOf` trigger from §2.3 and either extend `rewrite_refs` to cover
+root-level sibling refs or special-case the pure-alias shape to a module-level re-export.
+Stage 0 measures this: duplicate class definitions should fall and no field set should change.
+*Last deliberately: this is bloat plus an `isinstance` hazard, it carries no silent-swap risk,
+and it touches no downstream name.*
 
 **Breaking-change staging.** Removing `CreateMediaBuyResponse1` is breaking. Minor N emits the
 semantic name and keeps the positional one as an alias listed in the public API snapshot, so
 no adopter breaks and both resolve to the same class. Minor N+1 adds a `DeprecationWarning`
 on the positional name. A major removes it. Blast radius upstream: `aliases.py`, `_eager.py`,
 `legacy.py`, `consolidate_exports.py`, the snapshot fixture, `SCHEMA_DELTAS.md`. Downstream in
-this repo: the 11 imports in §2.2, which can move to semantic names the moment Stage 3 makes
-them real classes.
+this repo: the 11 imports in §2.2.
+
+**Do not switch this repo's four switchable imports before Stage 0.** They *can* switch today
+— the `create_media_buy` trio plus `AccountReference1` are plain assignments — but a
+hand-maintained alias buys no drift protection, and §2.1 shows that table has already drifted.
+Switching early trades a name that is honestly positional for one that reads semantic and is
+equally unguarded. After Stage 0, switch all eleven; `listing.py:10-11` is the pair the gate
+exists to protect.
 
 ---
 
@@ -416,6 +492,14 @@ it changes buyer-visible outcomes in two tools and is not this document's subjec
 
 - Whether omitting `--use-title-as-name` was deliberate. Every other flag in
   `generate_types.py` carries a rationale comment; this one has no comment either way.
+- Whether the 98 `TypeAlias` annotations were deliberate. No rule or comment was found
+  separating them from the 136 plain assignments.
+- What `Accounts1` and `BrandDiscovery3` correspond to in the schema bundle. The stem→schema
+  mapping did not resolve them, so their arm titles are unknown and whether Stage 3 reaches
+  them is undetermined.
+- Whether each of the four switchable use sites in this repo needs a base class or only a type
+  position. The declaration *form* was shown to permit inheritance; the use sites were not
+  audited individually.
 - The exact generator condition that makes a root-level sibling-document `allOf` alias
   re-derive rather than import (§2.3).
 - Whether the three `PRESERVE_CANONICAL_URL_REFS` entries still need to be carve-outs
