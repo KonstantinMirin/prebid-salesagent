@@ -177,11 +177,22 @@ because a comment-line count is not a measurement of a reason. That is a salesag
 grade in salesagent, with a guard over `src/core/schemas` refusing a literal `extra=` on a wire
 model. It is recorded here so that nobody mistakes it for an SDK divergence.
 
-**TS:** holds at the type level (`warnings?: (Warning & { code?: 'a' | 'b' })[]`). Runtime
-not established; the Zod layer was not examined. Structurally the TypeScript SDK cannot hold
-P3 as a property of one object: `generate-types` and `generate-zod-schemas`
-(`scripts/generate-zod-schemas.ts:4`, `json-schema-to-zod`) are two generators over the same
-cache, exported at `.` and `./schemas` `(ts)`, and nothing makes them agree. See §3.1 axis A.
+**TS:** holds, at the type level and at run time. `core.generated.ts:14500` narrows
+`warnings[].code` to two members and `schemas.generated.ts:17364` carries the same two as a
+Zod union; `tools.generated.ts:10998` narrows to one and `schemas.generated.ts:9427` carries
+that one. Both narrowings survive into the runtime artifact.
+
+The reason is worth stating precisely, because it is not the one this document first gave.
+The Zod artifact is **derived from the emitted TypeScript**, not generated independently from
+the schemas: `package.json`'s `generate-zod-schemas` runs `scripts/generate-zod-from-ts.ts`,
+which uses `ts-to-zod` over `core.generated.ts` and `tools.generated.ts`. The older
+`scripts/generate-zod-schemas.ts` (`json-schema-to-zod`) is still in the repository and no
+npm script references it. So the two artifacts agree because one is computed from the other,
+through a 278 KB post-processing script. `docs/ZOD-SCHEMAS.md:3` still describes them as
+generated from the protocol schemas, which is stale.
+
+That derivation is what Python does not need, and §3.1 axis A states the advantage in those
+terms.
 
 ### P4 — Identity is graded by shape, not by name
 
@@ -233,9 +244,24 @@ it down and keeps it.
 
 ### P6 — A name that shadows a host-language builtin never claims the bare public slot
 
-**TS applies it:** `Error as TaskErrorDetail`. **Python plausibly does:**
-`"Warning" in adcp.types.__all__` is `False` (verified). Intent is not established, and that
-is the problem. This should be a rule the build knows, not an absence someone has to guess at.
+**TS applies it:** `Error as TaskErrorDetail` (`src/lib/index.ts:1296`).
+
+**Python does not, and P6 is therefore a new rule rather than one already observed.**
+`Warning`'s absence from `adcp.types.__all__` is an omission, not a policy, and the evidence
+is a count: of 3013 generated names **exactly one** collides with `dir(builtins)`, so there is
+no population in which a policy could show itself. What does show itself is curation. The
+commit that first generated `Warning` (`dece72ebd`, #1034) added 669 names to the generated
+`__all__` and 18 to `adcp.types.__all__` — exactly the nine new tool request and response
+pairs. `Warning`, `WarningCode`, and `WarningAffectedResource` are three of the 651 omitted,
+beside `Blocker`, `Suggestion`, and `Fee`. The two siblings shadow nothing and are equally
+absent, which is what rules shadowing out as the motive. `Error` is present only because the
+curated `adcp.types.protocol` module (#963) predates the `Warning` schema and was never
+revisited.
+
+So adopt P6 deliberately, and say in the commit that it is new. The nearest in-repository
+precedent, the semantic aliases at `b4028b714` and `6c058f03f`, resolves collisions between
+two SDK types rather than with a builtin. **The reason to adopt it is that today one absence
+is indistinguishable from a bug**, which is exactly how this one survived.
 
 ### P7 — Determinism is a precondition of grading, not a fix
 
@@ -382,7 +408,7 @@ one the language cannot state at runtime, which is the point of §3.1.
 | DX9 | A caller imports a type by domain, `adcp.types.domains.<domain>.<Class>`, and reaches a schema module only for a name the domain declares more than once | **PARTIAL** the domain root binds once-declared names at the pin; 335 names (145 after P2) need the schema module; nothing refuses a deeper import | **PASS** 1 level, flat root export, and exceeds Python; see P8 |
 | DX10 | Nothing in the SDK names a spec version as a literal | **FAIL** symlink alias | not examined |
 | DX11 | A caller validates a document against a root with branches and gets the branch's class back, on every path (`Root(**d)`, `model_validate`, nested, `TypeAdapter`) | **PARTIAL** 19 roots dispatch; the response roots are plain unions with hand guards | **n/a** types are erased; a discriminated union is compile-time and the guard is hand-written |
-| DX12 | A refusal names the JSON-Schema keyword that failed, so it can be projected onto `core/error.json`'s `issues[].keyword` without a mapping table | **PARTIAL** `anyOf`/`oneOf` named on the 19 dispatch roots; `missing`, `string_too_short`, … are pydantic's names | **n/a** Zod issues carry Zod codes |
+| DX12 | A refusal names the JSON-Schema keyword that failed, so it can be projected onto `core/error.json`'s `issues[].keyword` without a mapping table | **PARTIAL** 55 of 104 error types mapped; 4 reachable types unmapped, 2 mis-mapped on dicts | **n/a** Zod issues carry Zod codes |
 
 Python satisfies two of twelve outright and three partially; TypeScript satisfies seven, fails
 one, leaves two unexamined, and cannot state two. The findings behind each row:
@@ -437,13 +463,24 @@ artifact there and the same object here. This document tests six candidate axes 
 wheel. Four hold and are design intent; two do not survive and are recorded so that nobody
 re-proposes them.
 
-**A. One object is the type and the validator (DX3, made a property).** TypeScript ships
-`generate-types` and `generate-zod-schemas` as two generators over the same cache, exported at
-`.` and `./schemas` `(ts)`; nothing makes their accepted sets agree, and nothing can short of a
-third generator comparing them. A pydantic class is one artifact, so "the model accepts
-exactly what the schema accepts" can be a property OF THE CLASS rather than a hoped-for
-agreement between files. It is not held at the pin (§4.3 is the counterexample), and nothing
-grades it: the 19 pin tests that import `jsonschema` are conformance tests of other things.
+**A. One object is the type and the validator (DX3, made a property).** TypeScript needs two
+artifacts and a derivation to keep them in step: `generate-zod-schemas` runs
+`scripts/generate-zod-from-ts.ts`, which uses `ts-to-zod` over the emitted
+`core.generated.ts` and `tools.generated.ts` to produce `schemas.generated.ts`, through a
+278 KB post-processing script. That derivation works — both `allOf` narrowings survive into
+the Zod artifact — so the advantage is not that TypeScript's artifacts disagree. It is that
+TypeScript must *compute* the agreement, and the computation is a script that can drift from
+its own inputs, while a pydantic class needs no agreement at all because the type and the
+validator are the same object.
+
+So "the model accepts exactly what the schema accepts" can be a property OF THE CLASS. It is
+not held at the pin, and the counterexamples are now counted rather than asserted: an
+accepted-set check over 112 example-bearing roots agrees on 331 of 331 positives and
+disagrees on **113 of 1818 negatives, every one of them model-wider and none schema-wider**.
+The largest cause is a required `const` property emitted with a default, which makes the
+model accept a document that omits it — 61 of the 113, against 1083 required-plus-const
+properties bundle-wide (§4.6). Nothing grades this today: the 19 pin tests that import
+`jsonschema` are conformance tests of other things.
 *What the SDK changes:* the P3 instrument in §5 becomes a per-class property test,
 `model_validate(x)` succeeds iff `jsonschema.validate(x, node)` succeeds, over the bundle's 113
 root `examples` and a generated negative per node (one required field removed, one enum value
@@ -483,7 +520,15 @@ combinators).** `core/error.json` requires `issues[].keyword` to be a JSON-Schem
 pydantic error carries `type` (`missing`, `string_too_short`, `literal_error`, `enum`), `loc`,
 and `ctx`; the mapping from those to `required`, `minLength`, `const`, `enum` is finite and
 mechanical, and `_conditions.name_the_combinator` and `error_narrowing.narrow_union_errors`
-(pin) do the two hardest cases. Zod issue codes (`invalid_type`, `too_small`) are Zod's
+(pin) do the two hardest cases. The mapping is further along than this document first said:
+`missing` already projects to `required` (`validation/pydantic_errors.py:49`), measured
+through `issues_from_validation_error` on a plain root and on two split roots. Of
+`pydantic_core`'s 104 error types, 55 are mapped and 49 fall through, but only **4 are
+reachable** from a generated model — `timezone_aware`, `date_from_datetime_inexact`, and
+`value_error` from two sources — plus 2 mis-mapped (`too_short` and `too_long` on a dict
+project to `minItems`/`maxItems` where the native keywords are `minProperties` and
+`maxProperties`) and 1 approximation (`literal_error` projects to `enum` over 1486 `const`
+nodes). Zod issue codes (`invalid_type`, `too_small`) are Zod's
 vocabulary, not the schema's, and the TypeScript server maps them by hand. *What the SDK
 changes:* one function on `AdCPBaseModel`, `issues_from(exc: ValidationError) -> list[Issue]`,
 finishing the projection for every pydantic error type the generated classes can raise,
@@ -611,6 +656,58 @@ They are compat synonyms, mislabeled at birth rather than drifted from a wider s
 means they leave through the deprecation staging in §5, not silently.
 
 ---
+
+### 4.6 A required `const` property is emitted with a default — the largest divergence
+
+A property a schema marks `required` and constrains with `const` is emitted as
+`Literal[...] = <value>`. The default makes the field optional, so the model accepts a
+document that omits a property the protocol requires, and then fills it in, which hides the
+omission.
+
+By count this is the largest accepted-set divergence in the bundle. Of 113 disagreements
+found over 1818 negative cases, **61 are this one**: 60 from a required `const` and one from
+a single-member `enum`. The affected properties include `notification_type` on every
+`*-webhook.json`, `asset_type` on `pixel-tracker` and `zip-asset`, `type` on
+`webhook-challenge`, `status` on 11 response envelopes (37 rows), and `scope` and `reason` on
+`error-details/agent-permission-denied.json`. **Bundle-wide exposure is 1083
+required-plus-const properties**; the 61 are only those an example-bearing root exercises.
+
+Defaulting a const is harmless when constructing a document and wrong when parsing one. It
+bites hardest on a discriminated union, where the discriminator becomes optional. Emit
+`Literal[...]` with no default where the schema requires the property.
+
+A second cause sits at the same sites: 38 of the 113 are `format: date-time` fields accepting
+an integer, because `AwareDatetime` lax-parses an epoch int while `jsonschema` rejects it.
+437 date-time properties carry that exposure, and it contradicts the generator's own
+`--strict-types bool int float` rationale, which says JSON carries those as strings.
+
+A related generator behaviour, reproduced on a minimal schema: a property redeclared in an
+`allOf` branch **loses the parent's `required`**. `Warning.code` is `Code | None = None`
+while `core/warning.json` requires `code`, and a census finds **41 subclass fields optional
+where their base requires them** — 13 with `Literal` const defaults, 7 `Enum | None`, and 21
+nested or `str`.
+
+### 4.7 An `items` `allOf` loses its overlay's narrowing
+
+`allOf: [{$ref}, {properties overlay}]` under `items` drops the overlay's narrowing, where a
+bare `properties` overlay keeps it. Probed both ways on
+`core/assets/display-tag-asset.json`'s `tag_url` arm: a document with
+`macro_declarations[0].location.field = "content"` is rejected by `jsonschema` and accepted
+by the generated class, while the control `field = "url"` is accepted by both and the same
+probe against the daast `url` arm is rejected by both.
+
+The generated `Location` carries all five values and `Location17` and `Location18` are empty
+subclasses of it. Daast and vast narrow the same field through a bare `properties` overlay
+and keep it, which is the diagnostic.
+
+A minimal `oneOf` reproduction emits distinct literals, so this one comes from the SDK's own
+post-processing rather than from the generator. The candidate site is
+`post_generate_fixes.py:2198` `fix_allof_merge_field_override_conflicts`, **named but not
+verified.**
+
+**This defect constrains §5.** Two of the duplicate class groups are identical only because
+this narrowing vanished, so collapsing duplicates before fixing it would make the wider
+accepted set permanent and destroy the evidence.
 
 ## 5. Implementation: one structural change, and the constraint that forces it
 
@@ -837,27 +934,29 @@ renamed domain-path class and nowhere else.
 
 ## 8. Not established
 
-What the design rests on that is not yet measured, and what would measure it:
+Everything else in this document is measured. Seven items remain open, all small, each with
+the step that would settle it.
 
-- **The success-arm rule in item 1** ("requires neither `errors` nor `task_id`") was checked on
-  the three response roots named in this document, not on every response root in the bundle.
-  Verifier: run it over every `*-response.json` with branches and assert exactly one arm
-  matches, or the emitter fails closed.
-- **How many enum members the narrowing fix (item 7) removes across the bundle.** Three at
-  the one known site. The P3 instrument's sweep is the measurement; until it runs, item 7's
-  public-name footprint is one site.
-- **Whether any caller constructs a model with a value the unioned vocabulary accepts and the
-  intersected one refuses.** This repo does not touch the commitment response's warnings (grep
-  empty); other adopters not examined.
-- Whether the 98 `TypeAlias` annotations were deliberate. No rule or comment found.
-- The scope of P3 divergences beyond §4.3, now that `extra=` is known not to be one.
-- Whether `Warning`'s absence from `adcp.types.__all__` is builtin-shadowing policy or an
-  omission (P6 wants it to be policy either way).
-- Whether each of this repo's positional use sites needs a base class or only a type position
-  (15 positional names imported; `_base.py:107-112` is a base-class use).
-- Whether the TS SDK's Zod layer preserves the `allOf` narrowing that its types preserve. Two
-  generators make disagreement possible; whether it occurs was not examined.
-- Whether the mapping in §3.1 axis C from pydantic error types to JSON-Schema keywords is total
-  over the error types the generated classes can raise. Enumerate them from the core schemas
-  and check; not done.
-- Go and Java SDKs.
+- **Whether any adopter outside this repository relies on the looser enum acceptance** that
+  the intersection removes. This repository does not touch the commitment response's
+  warnings. Other adopters were not examined.
+- **`Results9` against `Results15`.** Two instruments disagree: a transitive-shape key calls
+  them distinct, and a leaf-recursing comparison through `Proposal` against `Proposal4` calls
+  them identical. The disagreement comes from where each cuts a reference cycle. Settle it by
+  fixing the cycle rule in one instrument, not by preferring an answer.
+- **`Subject2`'s source schema node.** `Subject3` resolves by title at
+  `core/attestation-subject.json#/oneOf/0..2`; `Subject2`'s node was not located.
+- **Whether the spec declares one `Indicator` enum node or two.** The generated difference is
+  only `_1`-suffixed duplicate members, so the separation looks spurious, but the schema side
+  was not pinned.
+- **The attribution of §4.7.** A minimal reproduction rules the generator out, which leaves
+  the SDK's post-processing. `post_generate_fixes.py:2198` is the candidate and it is
+  unverified.
+- **Why `account` is optional on `compliance/comply-test-controller-request.json`**, whose
+  root mixes `allOf`, `properties`, and `required`. Eleven of the 113 accepted-set
+  disagreements are this one file, and the mechanism is unknown.
+- **Whether `hypothesis-jsonschema` would close the positive-side gap** in the accepted-set
+  check. It is not installed, so its value is unmeasured; 944 of 1057 roots carry no
+  `examples`, which is the size of the gap.
+
+Out of scope by decision rather than unmeasured: the Go and Java SDKs.
