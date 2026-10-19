@@ -568,6 +568,27 @@ reference after a renaming pass moved its target. Having the renaming pass repoi
 references absorbs both. Before calling a defect immovable, check whether it is an artifact
 of pass order rather than of the schema or the generator.
 
+**A dormant pass is unverifiable by construction, so it becomes a guard.** A pass kept
+against a shape the bundle does not currently contain cannot be demonstrated to work: the
+only demonstration is an instance of the shape it repairs, and the premise of keeping it is
+that no instance exists. Keeping it is the appearance of safety. One such pass in this file
+prints its success message while editing nothing, and would still do so if the shape
+returned, because its text anchor died independently.
+
+State the obligation as an **assertion of absence** instead — "no class declares a
+`Literal['reuse']` discriminator member" — and the properties invert. It is testable by
+introducing the shape deliberately and watching it fail, it fires on the first bundle that
+reintroduces the defect, it costs nothing while the defect is absent, and it cannot report
+success while doing nothing. An absence assertion is also shorter than the pass it replaces.
+
+The distinction that decides a dormant pass's fate is **what suppresses it**:
+
+- *the generator no longer emits the shape* — delete; it cannot return at this pin
+- *a configuration in this repo excludes the target* — delete, and record the dependency at
+  the deletion site, because its return requires an edit a reviewer sees
+- *the bundle happens to contain no instance* — convert to a guard; the defect is live
+  upstream and a schema bump reintroduces it with nothing watching
+
 **A pass that is not graded can go inert without failing the build.** The effect manifest
 (`post_generation_manifest.json`, graded by tree digest) records whether each pass changes
 anything, so a pass whose anchor has died shows up as a no-op and fails the gate. A pass
