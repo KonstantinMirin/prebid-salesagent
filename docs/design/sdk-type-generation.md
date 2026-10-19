@@ -638,6 +638,62 @@ and a class needs a name, so deriving names is irreducible here. P11 governs whe
 derivation is applied, not whether it is needed. The reduction available is P8's and section 6's:
 make a conflict unrepresentable rather than adjudicated, so there is no fix to place.
 
+### P12 — An optional property is absent or valid, never null
+
+`required` governs presence. `type` governs value. A property declared
+`{"type": "string"}` rejects an explicit `null` whether or not it appears in `required`, so
+"optional" means the key may be absent and never that the key may be null. The schema states
+two independent facts and a model that collapses them into one accepts documents the schema
+refuses.
+
+Render an optional property with a **non-nullable annotation and a default**. The field then
+accepts absence, refuses `null`, and keeps `model_fields_set` distinguishing an omitted key
+from a supplied one:
+
+```python
+a: str = Field(default=None)     # absent -> ok, null -> refused
+a: str | None = None             # absent -> ok, null -> ACCEPTED: a P3 violation
+```
+
+`X | None` is reserved for a property whose schema declares `null` among its types. The
+sibling TypeScript SDK models the two facts separately, with `.optional()` for absence and
+`.nullable()` for null, and reserves the second for the places the schema says so.
+
+**This is one rule in the emitter, not a population of fields to repair.** The count of
+widened fields is a consequence of how an optional property renders; change the rendering and
+the count follows. A change that edits fields one at a time has misread the rule as a backlog.
+
+### P13 — A test that fails while correct behavior is unchanged is grading a spelling
+
+A test earns its place by failing when behavior is wrong. A test that fails when behavior is
+right, and only its spelling moved, grades the spelling — and the correct response is to delete
+it, not to re-ground it against the new spelling.
+
+**The number of tests a change breaks is evidence about the tests.** Read it that way. A change
+that leaves the accepted set, the wire shape and the public bindings intact, and still reddens
+fifteen tests, has found fifteen tests coupled to something that was never a contract. Those
+tests encode the shape the system had, which is the shape this work exists to change, so they
+cannot adjudicate it.
+
+Three readings, and the first is the one that is almost always reached for:
+
+- **The change is wrong.** Possible, and establish it from the schema, the wire shape or the
+  accepted set — never from the count.
+- **The tests assert the defect.** Then delete them. A test naming the defect as intended
+  behavior is the strongest evidence the defect was deliberate and the weakest argument for
+  keeping it.
+- **The tests assert a true thing through an incidental spelling** — a fixture carrying a value
+  the emitter supplied, an import of a name the generator chose. Then the fixture moves and the
+  assertion does not.
+
+Classify each failure into one of the three and say which, per file. An unclassified fixup is
+how a change becomes conformance work: every edit is individually defensible, every test
+passes, and the system is no closer to the design.
+
+**A broad fixup is a signal to re-read the design, not to keep editing.** When the fixup grows
+past the change, the change is landing at the wrong layer, or it is an interface break being
+absorbed as test churn rather than stated as a decision. Stop and state it.
+
 ---
 
 ## 3. The developer-experience requirements
