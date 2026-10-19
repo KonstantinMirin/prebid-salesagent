@@ -551,6 +551,23 @@ and the output follows. A pass whose home is layer 3 does not delete — it is r
 as an emitter extension, and the extension can be larger than the patch (upstream spent
 roughly 230 lines of helper to cover one keyword). Count only layer 1 as reduction.
 
+**Rank the work by what decays, not by what is large.** Anchor quality here runs opposite
+to size: the two biggest layer-1 passes are the two durable ones, and the passes that pay
+twice — reachable at an earlier layer *and* anchored on something the pipeline invalidates
+— are small. So the largest line count in the reducible column is the worst ticket in it.
+
+Moving a pure-AST pass to an earlier layer buys line count and avoids no decay, and it
+trades working graded code for a fresh accepted-set argument of the kind that refuted the
+`const` → `enum: [v]` rewrite. A pass that is already built the way this section asks is
+left alone. **The ordering is: re-anchor what cannot be removed, move what is both
+reachable and fragile, delete what is already dead, and leave correct code in place.**
+
+**"Stuck" can mean stuck given the composition.** Two passes reach nothing only because
+they repair the output of an earlier pass in this repo's own ordering — each repoints a
+reference after a renaming pass moved its target. Having the renaming pass repoint its own
+references absorbs both. Before calling a defect immovable, check whether it is an artifact
+of pass order rather than of the schema or the generator.
+
 **A pass that is not graded can go inert without failing the build.** The effect manifest
 (`post_generation_manifest.json`, graded by tree digest) records whether each pass changes
 anything, so a pass whose anchor has died shows up as a no-op and fails the gate. A pass
