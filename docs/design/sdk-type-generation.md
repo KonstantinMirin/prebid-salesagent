@@ -659,6 +659,23 @@ a: str | None = None             # absent -> ok, null -> ACCEPTED: a P3 violatio
 sibling TypeScript SDK models the two facts separately, with `.optional()` for absence and
 `.nullable()` for null, and reserves the second for the places the schema says so.
 
+**The validation type and the read type are different, and both must be stated.** A
+non-nullable annotation with a default is correct about what the model ACCEPTS and wrong about
+what a reader FINDS: the attribute is `None` when the key was absent, so `x.field is None` is
+live code that a non-nullable annotation declares unreachable. Measured on a tree where only
+the validation side was stated: mypy on `src/` went 3 errors to 153 — 91 `comparison-overlap`,
+22 `unreachable`, 27 `assignment` — every one of them a correct guard.
+
+So the rendering is a pair. The **field annotation** stays non-nullable, because it governs
+validation and the schema refuses `null`. The **read type** is `X | None`, because absence is
+representable and a reader must handle it. Express the second through the type checker rather
+than by widening the annotation: `src/adcp/types/mypy_plugin.py` is the one place that owes
+this, and stating it there is a single-file change rather than a guard-by-guard fixup across
+the hand-written tree.
+
+A change that states only the validation half is incomplete, and the tell is a large number of
+newly unreachable `is None` branches. Those branches are right.
+
 **This is one rule in the emitter, not a population of fields to repair.** The count of
 widened fields is a consequence of how an optional property renders; change the rendering and
 the count follows. A change that edits fields one at a time has misread the rule as a backlog.
