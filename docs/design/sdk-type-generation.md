@@ -524,26 +524,18 @@ the rename, and renaming is this pipeline's purpose.
 
 **The anchor census, measured.** Of the 38 `fix_*` passes in
 `scripts/post_generate_fixes.py`, **35 write through raw text** — 32 locate and edit by
-text or regex, and 3 more locate by AST and then edit by text. Only **3 are pure AST**
+text or regex, 3 locate by AST and then edit by text. Only **3 are pure AST**
 (`fix_allof_merge_field_override_conflicts`, `fix_optional_boolean_literal_defaults`,
-`fix_postal_country_system_pairing`).
+`fix_postal_country_system_pairing`). The write side is what the rule turns on: a text
+write target dies to the formatter exactly as a text locate does, so a hybrid is a pass
+that finds the right place and then edits a spelling.
 
-The write side is what the rule turns on. A text *write* target is invalidated by the
-formatter exactly as a text *locate* is, so a hybrid that locates safely and then edits
-unsafely is not safer — it is a pass that finds the right place and then edits a spelling.
-By the rule above, 35 of 38 do not reach their defects durably: they are scheduled to
-break, and renaming is what breaks them.
-
-**The irreducible passes are the most fragile ones.** Of the 10 passes no layer reaches,
-**9 are text/regex-only and the tenth locates by AST and still writes by text. Not one is
-pure AST.** So the code that must stay is the code least able to survive a rename. That
-is the opposite of the distribution anyone would choose, and it means an anchor migration
-is not optional cleanup for those ten — it is the only thing that keeps them working.
-
-It also sets the order of work. Moving names onto a layer where 35 of 38 passes write
-through text that the act of moving names invalidates is the mechanism by which a surface
-gets rewritten twice; the constraint that there must not be a third rewrite is therefore a
-constraint on anchor kind, not on effort.
+**The passes that must stay are the ones least able to survive a rename.** Of the 10 that
+no layer reaches, 9 are text-only and the tenth writes by text; none is pure AST. So an
+anchor migration is not optional cleanup for those ten — it is what keeps them working.
+And since renaming is this pipeline's purpose, moving names onto a layer whose anchors the
+move invalidates is the mechanism by which a surface gets rewritten twice: the constraint
+that there must not be a third rewrite is a constraint on anchor kind, not on effort.
 
 **Reachable is not deletable, and a plan that conflates them grows the codebase.** A pass
 whose defect has a home at layer 1 deletes when it moves there, because the input changes
