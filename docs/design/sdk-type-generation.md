@@ -523,16 +523,33 @@ is worse than a later layer: a text anchor dies to the formatter, a class-name a
 the rename, and renaming is this pipeline's purpose.
 
 **The anchor census, measured.** Of the 38 `fix_*` passes in
-`scripts/post_generate_fixes.py`, **7 anchor on the AST and 31 anchor on `str.replace`,
-a regex, or raw text.** By the rule above those 31 do not reach their defects durably —
-they are scheduled to break, and renaming is what breaks them. This is the measurement
-behind every rule in this section, and it is why a fix is taken at the earliest layer
-rather than the most convenient one.
+`scripts/post_generate_fixes.py`, **35 write through raw text** — 32 locate and edit by
+text or regex, and 3 more locate by AST and then edit by text. Only **3 are pure AST**
+(`fix_allof_merge_field_override_conflicts`, `fix_optional_boolean_literal_defaults`,
+`fix_postal_country_system_pairing`).
 
-It also sets the order of work. Moving names onto a layer where 31 of 38 anchors are
-invalidated by the act of moving names is the mechanism by which a surface gets rewritten
-twice; the constraint that there must not be a third rewrite is therefore a constraint on
-anchor kind, not on effort.
+The write side is what the rule turns on. A text *write* target is invalidated by the
+formatter exactly as a text *locate* is, so a hybrid that locates safely and then edits
+unsafely is not safer — it is a pass that finds the right place and then edits a spelling.
+By the rule above, 35 of 38 do not reach their defects durably: they are scheduled to
+break, and renaming is what breaks them.
+
+**The irreducible passes are the most fragile ones.** Of the 10 passes no layer reaches,
+**9 are text/regex-only and the tenth locates by AST and still writes by text. Not one is
+pure AST.** So the code that must stay is the code least able to survive a rename. That
+is the opposite of the distribution anyone would choose, and it means an anchor migration
+is not optional cleanup for those ten — it is the only thing that keeps them working.
+
+It also sets the order of work. Moving names onto a layer where 35 of 38 passes write
+through text that the act of moving names invalidates is the mechanism by which a surface
+gets rewritten twice; the constraint that there must not be a third rewrite is therefore a
+constraint on anchor kind, not on effort.
+
+**Reachable is not deletable, and a plan that conflates them grows the codebase.** A pass
+whose defect has a home at layer 1 deletes when it moves there, because the input changes
+and the output follows. A pass whose home is layer 3 does not delete — it is re-implemented
+as an emitter extension, and the extension can be larger than the patch (upstream spent
+roughly 230 lines of helper to cover one keyword). Count only layer 1 as reduction.
 
 **A pass that is not graded can go inert without failing the build.** The effect manifest
 (`post_generation_manifest.json`, graded by tree digest) records whether each pass changes
