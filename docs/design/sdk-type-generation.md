@@ -194,6 +194,50 @@ generated from the protocol schemas, which is stale.
 That derivation is what Python does not need, and §3.1 axis A states the advantage in those
 terms.
 
+**The mechanisms that make the model wider, each measured.** P3 is one principle, and an
+earlier version of this document left its instances to be discovered one lane at a time, which
+is how two of them ended up filed beside the plan as if they were new problems. They are not:
+each is this principle failing, and the plan names them.
+
+| # | mechanism | effect | measured |
+|---|---|---|---|
+| 1 | an `items` `allOf` overlay adds a `required` name and declares no property for it | the generator emits no subclass; the name is absent from the model | 13 bundle sites; `CollectionSelector` accepted a document `jsonschema` rejects for a missing `collection_ids` |
+| 2 | an overlay restates a property the referenced schema requires | dmcg takes the field's requiredness from the overlay's own `required` alone, so it becomes optional | 42 overlays / 46 names; 29 model fields optional under a requiring base |
+| 3 | a required property carries a `const` | **this repo's own** `inject_literal_discriminator_defaults` appends a default to every single-value `Literal`, reading `required` nowhere, so the field becomes optional and a document omitting it is accepted and filled in | 1083 required-const properties; 613 sites optional on every class that pins them; 961 `Literal` fields carrying a default; 24 of case 2's 46 names are also this |
+| 4 | a conditional's `if`/`then` pins a `const` | dmcg folds that member into the property's enum class, widening it past the node's own narrowing | 11 aliases / 5 enums; `Indicator.type` accepts `pacing_risk`, which the schema forbids |
+
+**Case 3 is ours, and that was worth measuring rather than assuming.** An earlier reading of this
+document attributed the default to datamodel-code-generator. Probed on minimal schemas, dmcg emits
+a required `const` with NO default, and a discriminator, a root `allOf` and a `oneOf` of titled
+arms each leave that unchanged. The default came from `post_generate_fixes.py`. Case 4 is genuinely
+dmcg's, established the same way — by running it alone on the prepared tree, where
+`UnavailableBehavior` already carries 8 members before any post-generation step. So two mechanisms
+that present identically have opposite owners, and the only thing that separates them is running
+the code generator by itself.
+
+The harm is not hypothetical. `src/adcp/reporting/submissions/models.py::_restore_confirmation`
+rebuilt a response without its required `status` and relied on the model to supply it; every
+submission restore raised `SUBMISSION_HISTORY_CORRUPT`. A model wider than its schema lets a
+caller depend on the widening, and the bug is invisible until the model is corrected.
+
+All four are the same failure wearing different hats, and the discriminator between 1 and 2 is
+whether the overlay declares the property — which is why fixing them with one gate is wrong:
+the declared case is rendered CORRECTLY when the parent did not already require the name
+(`core/signal-coverage-forecast.json#/properties/points/items` yields
+`Point.required == [dimensions, metrics]`), so a single gate would rewrite a site that needs no
+rewriting.
+
+Two consequences for how P3 is worked, both learned the hard way:
+
+- **Count the accepted set, not the symptom.** Case 4's alias count understated its own effect by
+  an order of magnitude: 31 `_N` aliases, but 511 enum members reduced to 273 once the
+  intersection was applied, 248 of which the schema forbids. An alias is a tell; the forbidden
+  member is the defect.
+- **A naive `_\d+$` selector is wrong by 3.6x.** It matches 113 enum members, and most are
+  correct sanitizations of values that are not Python identifiers (`integer_16` for `16`,
+  `field_4_2_0` for `4:2:0`). The discriminator is whether the unsuffixed name is also a member
+  of the same enum.
+
 ### P4 — Identity is graded by shape, not by name
 
 P4 forbids a snapshot keyed only on name (`module:QualName`) **as the sole gate**.
@@ -313,8 +357,7 @@ The surface this replaces, and why it was not kept:
   and the generated class keeps the wire-faithful shape underneath it. A hand-written module
   merges into its domain rather than sitting beside it, and
   `test_lazy_types.py::test_partial_modules_never_import_generated_layer` -- the guard that
-  encodes the separation -- goes with it. That guard is listed as KEEP in the table below on the
-  strength of the rejection this section withdraws; it is a DELETE.
+  encodes the separation -- goes with it, as a DELETE.
 - **Names collide inside a domain, and most of the collisions are this document's own defect.**
   Measured on the current branch, which already carries the naming and narrowing passes:
   4430 class definitions under 3801 distinct `(domain, name)` pairs. 297 of those definitions
@@ -352,15 +395,12 @@ The surface this replaces, and why it was not kept:
   commit 32bfbeb88, 2026-04-20), old path removed in v10 as the `types/__init__.py` docstring
   states. A second move inside the first move's deprecation window is the pattern §5 forbids.
 
-**The flattening lands, inside the one release.** An earlier version of this section rejected
-it, on two grounds that do not hold. The first was that hand-written modules already occupy
-`adcp.types.<domain>`; that is work to do, not a property of the problem, and restructuring the
-SDK is in scope. The second was that 145 same-named nested classes would lose their only import
-path; that counted the defect as a constraint. Both the redundant copies and the unqualified
-names are things P1 and P2 remove, so the surface that gets flattened is the one that exists
-after they run, not the one that exists now.
+**The flattening lands, inside the one release.** The surface that gets flattened is the one
+that exists after P1 and P2 run, not the one that exists now: both the redundant copies and the
+unqualified names are things those principles remove. Hand-written modules occupying
+`adcp.types.<domain>` is work to do, and restructuring the SDK is in scope.
 
-The order follows from that, and it is the order the epic already has: collapse the redundant
+The order follows from that: collapse the redundant
 copies, qualify the nested names, then flatten. Flattening first would mint 332 collisions and
 force a choice between them; flattening last is a move of names that are already unique.
 `adcp.types.<domain>.<Class>` is then the public path, the `domains` token goes, and because the
@@ -440,7 +480,118 @@ also what rules out a committed shape fixture; see §5.
 
 ---
 
+### P11 — A fix changes the input or the emitter, never the output
+
+`f(schemas, pinned generator)` has exactly two arguments. A fix belongs in one of them.
+
+This pipeline is a compiler: the schemas are its source, `datamodel-code-generator` is the
+compiler, and `domains/` is its object code. A fix therefore goes into one of four layers. Take
+the earliest that reaches the defect.
+
+1. **Source transformation.** Rewrite the schema before the compiler reads it, as the staging
+   pass does (`union_branch_names`, `schema_constraints`). The anchor is a schema node, which no
+   rename moves.
+2. **Compiler configuration.** `--type-overrides` replaces one field's rendering;
+   `--extra-template-data` passes a model schema-derived facts; `--custom-template-dir`
+   overrides the emitting template; `--base-class-map`, `--custom-decorators` and
+   `--additional-imports` are available.
+3. **Compiler extension.** Extend the compiler inside its own run. `ModelResolver` is the naming
+   authority; `run_datamodel_codegen._install_nested_naming_rule` is the pattern.
+
+   **An extension must not outlive the run, and must not assume its caller's `sys.path`.**
+   These are process-global patches: an in-process import inherits whatever a previous caller
+   installed, and production never notices because `generate_types.py` launches the generator as
+   a subprocess. The demonstrated failure is the import, not the leak — a bare
+   `from wire_temporal_types import install` resolves only while `scripts/` is on `sys.path`, so
+   a caller importing the module as `scripts.run_datamodel_codegen` and calling `main()` raises
+   `ModuleNotFoundError`. Use the dual `try`/`except ModuleNotFoundError` spelling the sibling
+   imports already use, and install under a context manager that restores, or only under
+   `__main__`.
+4. **Patching the object code.** Only when 1-3 cannot reach the defect. Anchor on a parsed AST
+   node, never on formatted text, and refuse on a miss.
+
+A schema-node anchor survives a rename; a text anchor does not survive the formatter. This
+pipeline's purpose is renaming, so a text anchor is scheduled to break, and a patch that
+silently does nothing — or that relocates itself — is the defect layer 4 creates.
+`post_generation_manifest.json` exists for that risk: the rule that a fix changing nothing fails
+the run catches a layer-4 patch going inert. A fix at layers 1-3 cannot go inert without the
+build failing on its own.
+
+**A layer reaches a defect only through an anchor the pipeline cannot invalidate.** An option
+that works mechanically but is keyed on something this pipeline renames does not reach it, and
+is worse than a later layer: a text anchor dies to the formatter, a class-name anchor dies to
+the rename, and renaming is this pipeline's purpose.
+
+At 0.64.0 that disqualifies most of layer 2's type options. `--type-mappings` resolves its
+target among the generator's own format names, so it can never name a Python type -- inert and
+silent. `--type-overrides` keyed on a built-in is also silently ignored, because it matches
+`data_type.reference.name` and a built-in has none. `--type-overrides` keyed on
+`ClassName.field` does work, and is still the wrong answer for anything broad: it needs one
+entry per field, naming the class names P1 exists to derive, and a key that misses falls through
+silently. `--base-class-map` applies only to a root with no `allOf` and drops any other entry
+without a word.
+
+So a type's RENDERING belongs at layer 3, hooked on `DataTypeManager.type_map_factory`, which is
+keyed on the schema's format keyword: no class name, no schema edit, no emitted text. A hook
+there must raise if the map it returns is unchanged, so an inert install fails the build.
+
+**Do not respell `const: v` as `enum: [v]`.** Measured on the pinned bundle at 0.64.0:
+`const` already emits `Literal[v] = v` for an unrequired property and `Literal[v]` for a
+required one, which is correct on both halves. `enum: [v]` emits `Literal[v] | None = None`
+where the property is unrequired, and `= v` and `| None = None` are not equivalent — the first
+accepts the property's absence, the second accepts absence AND an explicit null that
+`enum: [v]` does not permit. So the respelling is a P3 widening where it changes anything, and
+a no-op where it does not: restricted to required properties it respelled 272 staged nodes for
+zero bytes of generated diff.
+
+Two general forms worth carrying:
+
+* A default and a nullable type both make a field optional, and they accept different
+  documents. Reading one as the other widens an accepted set while looking like a respelling.
+* A hand-listed per-field fix is not always an emitter defect awaiting generalization.
+  §4.6's remaining fixes are deliberate semantic judgements that accept a null-widening as a
+  known price (a defaulted `canceled: true` cancels a media buy on any request omitting the
+  field; a defaulted capability advertises a promise the seller has not made). Being
+  hand-listed is what makes them auditable, and is the reason a bundle-wide rewrite of the
+  same shape is wrong.
+
+**What this does not say.** TypeScript has no analogue of this work because a `oneOf` becomes an
+anonymous union and a nested object an inline type; neither needs a name. Pydantic needs a class
+and a class needs a name, so deriving names is irreducible here. P11 governs where the
+derivation is applied, not whether it is needed. The reduction available is P8's and section 6's:
+make a conflict unrepresentable rather than adjudicated, so there is no fix to place.
+
+---
+
 ## 3. The developer-experience requirements
+
+### An adopter may change a field's requiredness by subclassing, and the two directions differ
+
+Both directions work and both must keep working. Measured on generated classes: redeclaring a
+field with no default makes it required, redeclaring it with one makes it optional, and pydantic
+re-collects the field from the subclass either way.
+
+They are not equally safe, and the SDK should say so rather than offer them symmetrically.
+
+**Tightening — optional to required — is always sound.** The subclass accepts a SUBSET of what
+the schema accepts, so every document it admits is still spec-valid. It has merely refused some
+the spec would have allowed. Nothing at another agent's boundary can be surprised by it.
+
+**Loosening — required to optional — leaves the spec**, and is the defect class P3 exists to
+remove: the subclass accepts a document the schema rejects, so an adopter constructs a message
+that passes their own validation and is refused by the receiver. The failure appears at someone
+else's boundary, which is why it must not look blessed.
+
+So: tighten freely; loosening is the adopter's to own. Do not build a mechanism that presents
+the two as equivalent, and do not let a loosened field become a supported route back to the
+divergences §4.6 and the date-time work closed. If loosening is ever offered as a FEATURE rather
+than as something pydantic merely permits, it needs its own guard, because a feature without one
+is how 613 required fields came to be optional in the first place.
+
+Not yet established: whether the wire-serialisation path and the required-const guard treat a
+loosened field the same way pydantic does. Verify before documenting this as supported.
+
+
 
 These twelve requirements are normative. A generator change satisfies them or it is not done.
 They are not a test artifact bolted on afterwards: each one states a question a caller asks
@@ -831,10 +982,33 @@ the result; (5) and (6) are independent of all of them.
    disagree on 115 root titles (`A2UIBoundValue` / `A2UiBoundValue`, `CSSAsset` / `CssAsset`):
    `union_branch_names.pascal_case` and `generated_names.generated_root_class_name`, the latter
    being what names the wheel's root classes. The resolution rules keep deriving the *branch*
-   name (titled branches: 0 of 302 disagree) and take the *parent prefix* from
+   name and take the *parent prefix* from
    `generated_root_class_name`, so a const- or required-set-named branch shares its base class's
    spelling; 5 roots change under that rule (`a2ui/bound-value`, `adagents`, `daast-asset`,
-   `vast-asset`, and one more), none of which has shipped. `_schema_title_to_class_name`, which
+   `vast-asset`, and `core/signal-id`), none of which has shipped.
+
+   **`pascal_case` keeps the branch name because it is correct where the two rules disagree.**
+   The disagreements are acronyms the schema author capitalized, and `pascal_case` preserves
+   them:
+
+   | schema `title` | branch name |
+   |---|---|
+   | `Distribution IDs Source` | `DistributionIDsSource` |
+   | `Tag URL` | `TagURL` |
+   | `AdCP audience sync` | `AdCPAudienceSync` |
+   | `TMP identity match` | `TMPIdentityMatch` |
+   | `HTML5 Format Declaration` | `HTML5FormatDeclaration` |
+   | `VAST Video Format Declaration` | `VASTVideoFormatDeclaration` |
+   | `VAST Audio Format Declaration` | `VASTAudioFormatDeclaration` |
+   | `DAAST Audio Format Declaration` | `DAASTAudioFormatDeclaration` |
+   | `Publisher Property IDs Source` | `PublisherPropertyIDsSource` |
+
+   The const-derived naming rule decides it independently of adopter cost: under
+   `generated_root_class_name`, `const: "True"` and `"False"` in
+   `compliance/comply-test-controller-response.json` become `True_1` / `False_1`, which puts the
+   generator's keyword-disambiguation counter into a public name.
+
+   `_schema_title_to_class_name`, which
    the pin deleted as wrong for 94 of 946 roots, stays deleted. Route the response-arm emitter
    through `emit_branch_classes` (`post_generate_fixes.py:8778`, pin) so that the response base
    carries `BranchDispatchMixin` like the 19 partitioning roots (§3.1 axis B).
@@ -950,7 +1124,7 @@ and stay; the code that pins the positional names is the emitter's own, and it g
 | 98 `TypeAlias` annotations | **DELETE** | §4.4. |
 | `test_asset_aliases_stable.py`, `test_collision_aliases.py` | **DELETE after the change** | Hand-listed expectations per alias, which are blessed values. Until the change they are the only thing holding the hand table honest; afterwards the alias *is* the derivation and they assert a tautology. |
 | `test_lazy_types.py::test_partial_modules_avoid_numbered_codegen_names` | **KEEP, widen** | A regex over `__all__`, no blessed value. Widen to the whole surface; it becomes P1's grade. |
-| `test_lazy_types.py::test_partial_modules_never_import_generated_layer` | **DELETE** with P8 | It encodes the separation between a curated partial and its generated domain. P8 merges them, so the property it asserts stops being true by design. Listed KEEP in an earlier version, on the strength of a flattening rejection this document withdraws. |
+| `test_lazy_types.py::test_partial_modules_never_import_generated_layer` | **DELETE** with P8 | It encodes the separation between a curated partial and its generated domain. P8 merges them, so the property it asserts stops being true by design. |
 | `BranchDispatchMixin`, `name_the_combinator` | **KEEP, extend** | The runtime dispatch and the keyword-named refusal (§3.1 B, C). Extend to the response roots through item 1; the hand-written `TypeGuard` functions in `guards.py` are then derived and go with the hand tables. |
 | `post_generation_manifest.json` | **REPLACE** | Keep the rule (a fix that changes nothing fails the run), drop the per-fix table. The seven fixes it records as no-ops at this pin are dead code; delete them. |
 | `test_union_branch_names.py` | **SPLIT** | Keep the partition identity (`named + classless + refused == total`) and the single-refusal assertion, both derived. Drop the five equality counts (557/169/82/27/1); they are a ledger. |
