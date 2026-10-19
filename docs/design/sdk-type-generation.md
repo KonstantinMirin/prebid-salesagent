@@ -573,6 +573,12 @@ introducing the shape deliberately and watching it fail, it fires on the first b
 reintroduces the defect, it costs nothing while the defect is absent, and it cannot report
 success while doing nothing. An absence assertion is also shorter than the pass it replaces.
 
+**The guard inherits the anchor rule.** A guard that greps generated text is a dormant
+text-anchored pass in a new spelling: it goes quietly green when the formatter or a rename
+changes the spelling it searches for, which is the failure it was written to remove. Assert
+over the AST or over the imported objects, and prove it by introducing the shape and
+watching it go red. A guard that has never been red grades nothing.
+
 The distinction that decides a dormant pass's fate is **what suppresses it**:
 
 - *the generator no longer emits the shape* — delete; it cannot return at this pin
