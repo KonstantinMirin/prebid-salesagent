@@ -678,15 +678,19 @@ happens — so it fires only on a supplied value, which is exactly the distincti
 draws between presence and value. Attach it through **one shared annotated alias**, not an
 inlined validator per field.
 
-**Why the annotation must keep `None`.** Dropping it is correct about what the model accepts and
-wrong about what a reader finds: the attribute *is* `None` when the key was absent, so
-`x.field is None` is live code a non-nullable annotation declares unreachable. Measured on a tree
-that dropped the arm: mypy on `src/` went 3 errors to 153 — 91 `comparison-overlap`, 22
-`unreachable`, 27 `assignment`, across 31 hand-written files, every one of them a correct guard.
+**The annotation keeps `None` because the attribute holds it.** JSON gives a property three
+states — absent, null, a value — and a Python attribute has two. The mapping collapses absent
+onto `None`, so `x.field is None` is live code and means "the key was not supplied". An
+annotation that denies it makes every correct guard unreachable.
 
 So the accepted set comes from the validator and the read type comes from the annotation, and
-neither needs a type-checker plugin or a guard-by-guard fixup. A rendering that needs a second
-mechanism to tell the reader what the first one hid is the signal to look for this one.
+neither needs a type-checker plugin. **A rendering that needs a second mechanism to tell the
+reader what the first one hid is the signal to look for this one.**
+
+Absence is not lost, it just does not live in the type: `model_fields_set` is empty for an
+omitted key and holds the name for a supplied one, so `exclude_unset` round-trips absence as
+absence rather than inventing a `null`. Presence is the schema's `required` axis and is
+preserved structurally; the type carries only the value axis.
 
 **This is one rule in the emitter, not a population of fields to repair.** The count of
 widened fields is a consequence of how an optional property renders; change the rendering and
