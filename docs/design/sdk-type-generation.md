@@ -659,22 +659,34 @@ a: str | None = None             # absent -> ok, null -> ACCEPTED: a P3 violatio
 sibling TypeScript SDK models the two facts separately, with `.optional()` for absence and
 `.nullable()` for null, and reserves the second for the places the schema says so.
 
-**The validation type and the read type are different, and both must be stated.** A
-non-nullable annotation with a default is correct about what the model ACCEPTS and wrong about
-what a reader FINDS: the attribute is `None` when the key was absent, so `x.field is None` is
-live code that a non-nullable annotation declares unreachable. Measured on a tree where only
-the validation side was stated: mypy on `src/` went 3 errors to 153 — 91 `comparison-overlap`,
-22 `unreachable`, 27 `assignment` — every one of them a correct guard.
+**The annotation keeps the `None` arm; a validator refuses an explicit one.** Two facts have to
+hold at once, and one rendering carries both:
 
-So the rendering is a pair. The **field annotation** stays non-nullable, because it governs
-validation and the schema refuses `null`. The **read type** is `X | None`, because absence is
-representable and a reader must handle it. Express the second through the type checker rather
-than by widening the annotation: `src/adcp/types/mypy_plugin.py` is the one place that owes
-this, and stating it there is a single-file change rather than a guard-by-guard fixup across
-the hand-written tree.
+```python
+a: Annotated[str | None, BeforeValidator(refuse_null)] = None
+```
 
-A change that states only the validation half is incomplete, and the tell is a large number of
-newly unreachable `is None` branches. Those branches are right.
+```
+omitted        -> accepted, a is None, absent from model_fields_set
+explicit null  -> REFUSED
+a string       -> accepted
+read type      -> str | None
+```
+
+A `BeforeValidator` does not run when the key is absent — the default applies and no validation
+happens — so it fires only on a supplied value, which is exactly the distinction the schema
+draws between presence and value. Attach it through **one shared annotated alias**, not an
+inlined validator per field.
+
+**Why the annotation must keep `None`.** Dropping it is correct about what the model accepts and
+wrong about what a reader finds: the attribute *is* `None` when the key was absent, so
+`x.field is None` is live code a non-nullable annotation declares unreachable. Measured on a tree
+that dropped the arm: mypy on `src/` went 3 errors to 153 — 91 `comparison-overlap`, 22
+`unreachable`, 27 `assignment`, across 31 hand-written files, every one of them a correct guard.
+
+So the accepted set comes from the validator and the read type comes from the annotation, and
+neither needs a type-checker plugin or a guard-by-guard fixup. A rendering that needs a second
+mechanism to tell the reader what the first one hid is the signal to look for this one.
 
 **This is one rule in the emitter, not a population of fields to repair.** The count of
 widened fields is a consequence of how an optional property renders; change the rendering and
