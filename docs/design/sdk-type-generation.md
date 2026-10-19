@@ -522,6 +522,24 @@ that works mechanically but is keyed on something this pipeline renames does not
 is worse than a later layer: a text anchor dies to the formatter, a class-name anchor dies to
 the rename, and renaming is this pipeline's purpose.
 
+**The anchor census, measured.** Of the 38 `fix_*` passes in
+`scripts/post_generate_fixes.py`, **7 anchor on the AST and 31 anchor on `str.replace`,
+a regex, or raw text.** By the rule above those 31 do not reach their defects durably —
+they are scheduled to break, and renaming is what breaks them. This is the measurement
+behind every rule in this section, and it is why a fix is taken at the earliest layer
+rather than the most convenient one.
+
+It also sets the order of work. Moving names onto a layer where 31 of 38 anchors are
+invalidated by the act of moving names is the mechanism by which a surface gets rewritten
+twice; the constraint that there must not be a third rewrite is therefore a constraint on
+anchor kind, not on effort.
+
+**A pass that is not graded can go inert without failing the build.** The effect manifest
+(`post_generation_manifest.json`, graded by tree digest) records whether each pass changes
+anything, so a pass whose anchor has died shows up as a no-op and fails the gate. A pass
+absent from the manifest has no such protection: it can stop doing its work silently.
+Every pass belongs in the manifest for that reason alone.
+
 At 0.64.0 that disqualifies most of layer 2's type options. `--type-mappings` resolves its
 target among the generator's own format names, so it can never name a Python type -- inert and
 silent. `--type-overrides` keyed on a built-in is also silently ignored, because it matches
