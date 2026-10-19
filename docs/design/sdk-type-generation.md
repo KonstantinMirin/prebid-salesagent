@@ -575,9 +575,15 @@ success while doing nothing. An absence assertion is also shorter than the pass 
 
 **The guard inherits the anchor rule.** A guard that greps generated text is a dormant
 text-anchored pass in a new spelling: it goes quietly green when the formatter or a rename
-changes the spelling it searches for, which is the failure it was written to remove. Assert
-over the AST or over the imported objects, and prove it by introducing the shape and
-watching it go red. A guard that has never been red grades nothing.
+changes the spelling it searches for, which is the failure it was written to remove. A green
+guard reports the defect as absent, so this is the same failure as a pass printing success
+while editing nothing. Assert over the parsed AST or over the imported objects.
+
+**A red-proof is dated, so it is repeated after the event that can invalidate it.** Proving
+a guard red at the moment it is written establishes only that it was not vacuous then. A
+text-anchored guard proven red today goes vacuous the day a rename lands, and nothing
+re-checks it. So the proof is repeated after any pass that moves names — which is the one
+event capable of invalidating it — and a guard that has never been red grades nothing.
 
 The distinction that decides a dormant pass's fate is **what suppresses it**:
 
