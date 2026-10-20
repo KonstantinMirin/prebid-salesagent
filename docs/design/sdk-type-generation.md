@@ -663,7 +663,7 @@ sibling TypeScript SDK models the two facts separately, with `.optional()` for a
 hold at once, and one rendering carries both:
 
 ```python
-a: Annotated[str | None, BeforeValidator(refuse_null)] = None
+a: Annotated[str | None, AfterValidator(refuse_null)] = None
 ```
 
 ```
@@ -673,10 +673,17 @@ a string       -> accepted
 read type      -> str | None
 ```
 
-A `BeforeValidator` does not run when the key is absent — the default applies and no validation
-happens — so it fires only on a supplied value, which is exactly the distinction the schema
-draws between presence and value. Attach it through **one shared annotated alias**, not an
-inlined validator per field.
+Neither validator runs when the key is absent — the default applies and no validation happens —
+so either fires only on a supplied value, which is the distinction the schema draws between
+presence and value. **It must be an `AfterValidator`, and the field declares
+`validate_default=False`.** A validator placed *before* the declared type forces pydantic-core to
+materialize parsed JSON as Python objects so it can call into Python, and that happens for
+everything nested under any optional property: `dict_type` becomes `model_attributes_type`, union
+member order changes, and **a repeated JSON key collapses** — `{"k": "first", "k": "last"}`
+nested reports two refusals where unnested reports three, so a diagnostic the buyer should see is
+lost on the wire. An `AfterValidator` runs on the already-parsed value in JSON mode and carries
+none of that. Attach it through **one shared annotated alias**, not an inlined validator per
+field.
 
 **The annotation keeps `None` because the attribute holds it.** JSON gives a property three
 states — absent, null, a value — and a Python attribute has two. The mapping collapses absent
