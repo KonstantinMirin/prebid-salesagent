@@ -522,20 +522,6 @@ that works mechanically but is keyed on something this pipeline renames does not
 is worse than a later layer: a text anchor dies to the formatter, a class-name anchor dies to
 the rename, and renaming is this pipeline's purpose.
 
-**Decide the layer before the work is scoped, not while it is reviewed.** Two ticket shapes read
-as obeying this section and invert it:
-
-- *"Re-anchor the pass so it survives a rename."* That makes an output patch durable, and never
-  asks whether the patch should exist. It is the right answer only for a defect no earlier layer
-  reaches — and three quarters of those lines are deliberate protocol judgements, which want a
-  declaration the emitter consults rather than a better regular expression over emitted text.
-- *"The pass went inert, so repair its anchor."* An inert pass is evidence the anchor was never
-  the mechanism. Count the previous breaks first; one broken five times across three shapes of
-  the thing it matches is not asking for a sixth anchor.
-
-A pass may still be entered when a regeneration genuinely refuses without it. That is the last
-layer earning its keep, and it belongs in its own commit so it can be reverted alone.
-
 **The anchor census, measured.** Of the 38 `fix_*` passes in
 `scripts/post_generate_fixes.py`, **35 write through raw text** — 32 locate and edit by
 text or regex, 3 locate by AST and then edit by text. Only **3 are pure AST**
