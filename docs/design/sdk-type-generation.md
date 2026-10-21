@@ -646,9 +646,17 @@ make a conflict unrepresentable rather than adjudicated, so there is no fix to p
 two independent facts and a model that collapses them into one accepts documents the schema
 refuses.
 
-Render an optional property with a **non-nullable annotation and a default**. The field then
-accepts absence, refuses `null`, and keeps `model_fields_set` distinguishing an omitted key
-from a supplied one:
+> **AMENDED — the obligation is the principle; the rendering below is one way to discharge
+> it.** Where the entry point validates against the document's own schema before constructing
+> (`AdCPBaseModel.strict_validate`), the schema already refuses `null` on
+> `{"type": "string"}`, so render an optional plain — `T | None = None` — and grade the entry
+> point rather than `model_validate`. A per-field validator re-implements the schema and costs
+> the serialization fast path on ~6,879 of roughly 7,000 annotations.
+
+The remainder of this section is the **model-is-the-only-gate** rendering. Render an optional
+property with a **non-nullable annotation and a default**. The field then accepts absence,
+refuses `null`, and keeps `model_fields_set` distinguishing an omitted key from a supplied
+one:
 
 ```python
 a: str = Field(default=None)     # absent -> ok, null -> refused
