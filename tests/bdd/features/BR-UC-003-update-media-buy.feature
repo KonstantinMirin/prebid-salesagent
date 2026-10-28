@@ -2487,68 +2487,21 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F1: System state unchanged (no billing redirected); POST-F3: omit override or supply an authorized recipient
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
-  @T-UC-003-billing-not-supported @invariant @BR-RULE-214 @billing @error @schema-v3.1 @post-f2 @post-f3
-  Scenario Outline: Billing party not supported is rejected with scope - <partition>
-    Given the Buyer is authenticated
-    And the resolved billing party is "<billing_party>"
-    And the seller's supported_billing is <supported>
-    And the seller's account billing relationship is "<acct_relationship>"
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
-    | paused       | true        |
-    When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy error spec
-    And the operation should fail
-    And the error code should be "BILLING_NOT_SUPPORTED"
-    And the error "details" object should include "scope" with value "<scope>"
-    And the error should include "suggestion" field
-    # BR-RULE-214 INV-2/INV-3 (billing_eligibility.yaml)
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
-
-    Examples:
-      | partition            | billing_party | supported              | acct_relationship | scope      |
-      | capability_unsupported | advertiser  | ["operator","agent"]   | present           | capability |
-      | account_unsupported    | operator    | ["operator"]           | absent            | account    |
-
-  @T-UC-003-billing-not-permitted-agent @invariant @BR-RULE-214 @billing @error @schema-v3.1 @post-f2 @post-f3
-  Scenario: Billing party not permitted for the calling agent (INV-4/6/7)
-    Given the Buyer is authenticated with an established agent identity
-    And the resolved billing party "agent" is in the seller's supported_billing
-    And the calling agent's commercial relationship is "passthrough_only"
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
-    | paused       | true        |
-    When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy error spec
-    And the operation should fail
-    And the error code should be "BILLING_NOT_PERMITTED_FOR_AGENT"
-    And the error "details" object should include "rejected_billing"
-    And the error "details" object should NOT include "rate_cards" or "payment_terms" or "credit_limit"
-    And the error should include "suggestion" field
-    # BR-RULE-214 INV-4: per-agent rejection; details carry rejected_billing and MAY carry one suggested_billing only
-    # INV-6/INV-7: present suggested_billing -> autonomous retry; absent -> terminal-pending-onboarding (surface to human)
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
-
-  @T-UC-003-billing-unauth-identity @invariant @BR-RULE-214 @billing @error @schema-v3.1 @post-f2
-  Scenario: Unestablished agent identity falls back to BILLING_NOT_SUPPORTED with no scope (INV-5)
-    Given the caller has no established agent identity
-    And the underlying reason is a per-agent billing restriction
-    And a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
-    | paused       | true        |
-    When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy error spec
-    And the operation should fail
-    And the error code should be "BILLING_NOT_SUPPORTED"
-    And the error "details" object should NOT include "scope"
-    And the error code should NOT be "BILLING_NOT_PERMITTED_FOR_AGENT"
-    And the error should include "suggestion" field
-    # BR-RULE-214 INV-5: per-agent gate MUST NOT fire without established identity; return BILLING_NOT_SUPPORTED (scope omitted)
-    # ---------- BR-RULE-217: Mid-Flight Package Addition ----------
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+  # REMOVED at the pin: @T-UC-003-billing-not-supported, @T-UC-003-billing-not-permitted-agent
+  # and @T-UC-003-billing-unauth-identity graded BILLING_NOT_SUPPORTED /
+  # BILLING_NOT_PERMITTED_FOR_AGENT as outcomes of update_media_buy. The pinned
+  # update-media-buy-request.json declares no `billing` property, so an update requests no
+  # billing value, and the pinned enums/error-code.json defines both codes against "the
+  # requested `billing` value" ("The seller declines the requested `billing` value ...").
+  # The pinned conformance catalog places the two-gate dispatch on sync_accounts
+  # ("billing_gate_dispatch: Two-gate dispatch on `sync_accounts.billing` rejection"), and
+  # docs/accounts/tasks/sync_accounts.mdx lists both codes for that task. That behaviour is
+  # graded in BR-UC-011-manage-accounts.feature. The invoice_recipient authorization in
+  # BR-RULE-214 IS an update_media_buy obligation and stays in @T-UC-003-ext-t.
+  # ---------- BR-RULE-217: Mid-Flight Package Addition ----------
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+  # @source repo=adcp ref=v3.2.7 path=docs/building/verification/conformance.mdx
+  # @source repo=adcp ref=v3.2.7 path=docs/accounts/tasks/sync_accounts.mdx
 
   @T-UC-003-ext-u @extension @ext-u @error @schema-v3.1 @post-f1 @post-f2 @post-f3
   Scenario: New packages on a seller that does not support mid-flight additions (ext-u)
@@ -2727,53 +2680,22 @@ Feature: BR-UC-003 Update Media Buy
       | pricing_option_id_present       | pricing_option_id                        | error "INVALID_REQUEST" with suggestion |
       | multiple_immutable_keys_present | product_id and pricing_option_id         | error "INVALID_REQUEST" with suggestion |
 
-  @T-UC-003-committed-metrics-append @invariant @BR-RULE-219 @schema-v3.1 @post-s1
-  Scenario: Appending a new committed metric is accepted and the set grows monotonically (INV-1/4)
-    Given the tenant is configured for auto-approval
-    And the media buy "mb_existing" has a committed metric "impressions" with committed_at "2026-04-29T10:53:00Z"
-    And a valid update_media_buy request that appends a new committed metric "viewable_rate"
-    When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy success spec
-    And the response status should be "completed"
-    And the committed metric "impressions" should remain present with committed_at "2026-04-29T10:53:00Z"
-    And the committed metric "viewable_rate" should be present with its own committed_at
-    # BR-RULE-219 INV-1: append new (scope, metric_id, qualifier) accepted; INV-4: prior entries preserved (monotonic)
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
-
-  @T-UC-003-committed-metrics-immutable @invariant @BR-RULE-219 @error @schema-v3.1 @post-f1 @post-f2
-  Scenario Outline: Modifying or removing a committed metric is rejected - <partition>
-    Given the media buy "mb_existing" has a committed metric "impressions" with committed_at "2026-04-29T10:53:00Z"
-    And a valid update_media_buy request that <mutation>
-    When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy error spec
-    And the operation should fail
-    And the error code should be "VALIDATION_ERROR"
-    And the error should include "suggestion" field
-    # BR-RULE-219 INV-2/INV-3: existing committed entries cannot be modified or removed (suggested code IMMUTABLE_FIELD)
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
-
-    Examples:
-      | partition                | mutation                                                  |
-      | modify_existing_committed_at | rewrites the committed_at of the existing impressions entry |
-      | remove_existing_entry    | drops the existing impressions entry                       |
-      | shrink_contract          | submits a strict subset that retracts a committed entry    |
-
-  @T-UC-003-committed-metrics-noop @invariant @BR-RULE-219 @schema-v3.1 @post-s5
-  Scenario Outline: Byte-identical resubmit and omission are non-mutating no-ops (INV-5/6) - <partition>
-    Given the tenant is configured for auto-approval
-    And the media buy "mb_existing" has a committed metric "impressions" with committed_at "2026-04-29T10:53:00Z"
-    And a valid update_media_buy request that <case>
-    When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy success spec
-    And the response status should be "completed"
-    And the committed metric "impressions" should remain unchanged
-    # ---------- BR-RULE-209 INV-10: Sandbox on update non-success shapes ----------
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
-
-    Examples:
-      | partition                 | case                                                       |
-      | resubmit_existing_unchanged | re-submits the existing committed_metrics byte-for-byte unchanged |
-      | omit_field_entirely       | omits committed_metrics entirely                            |
+  # REMOVED at the pin: @T-UC-003-committed-metrics-append, -immutable and -noop each sent
+  # "an update_media_buy request that" appends, rewrites, drops or re-submits the package's
+  # committed_metrics. The pinned update request has no such member:
+  # update-media-buy-request.json carries packages[] of package-update.json, and neither
+  # schema declares committed_metrics (it is declared on core/package.json, the seller's
+  # package, and on package-request.json for a NEW package). Under this seller's accepted
+  # shape (root CLAUDE.md pattern 7) an undeclared member is refused in dev and dropped in
+  # production, so no row of these outlines can reach the append-only rule it names. The
+  # obligation is also capability-gated: core/media-buy-features.json says a seller
+  # declaring committed_metrics_supported "MUST honor append-only mid-flight metric
+  # additions via update_media_buy", and this seller declares committed_metrics_supported
+  # false (src/services/seller_capabilities.py). Restore these once the pin defines the
+  # update-side carrier and the seller declares the capability.
+  # ---------- BR-RULE-209 INV-10: Sandbox on update non-success shapes ----------
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/media-buy-features.json pointer=/properties/committed_metrics_supported
 
   @T-UC-003-sandbox-update-nonsuccess @invariant @BR-RULE-209 @sandbox @schema-v3.1 @post-f2
   Scenario Outline: sandbox is forbidden on update non-success response shapes (INV-10) - <shape>
@@ -2851,17 +2773,18 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: the five "billing resolved = ..." rows are removed, for the reason
+    # recorded where @T-UC-003-billing-not-supported stood: the pinned update request carries
+    # no `billing`, and the billing gates are sync_accounts behaviour (BR-UC-011). The
+    # invoice_recipient row is an update_media_buy obligation ("The seller MUST validate the
+    # invoice recipient is authorized for this account") and stays; its outcome now names
+    # the code @T-UC-003-ext-t grades for the same refusal, so the two cannot disagree.
     # ---------- targeting_overlay collection_list boundaries (targeting_overlay.yaml, BR-RULE-014) ----------
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/invoice_recipient
 
     Examples: billing eligibility (BR-UC-002/003)
       | boundary                                                                                                            | outcome                                       |
-      | billing resolved = operator; operator in supported_billing; agent permitted                                         | accepted                                      |
-      | billing resolved = advertiser; seller's supported_billing = [operator, agent]                                       | error "BILLING_NOT_SUPPORTED" — rejected      |
-      | billing resolved = operator; seller supports operator generally; no operator billing relationship on this account   | error "BILLING_NOT_SUPPORTED" — rejected      |
-      | billing resolved = agent; agent in supported_billing; calling agent is passthrough-only                             | error "BILLING_NOT_PERMITTED_FOR_AGENT" — rejected |
-      | billing resolved = agent; caller unauthenticated                                                                    | error "BILLING_NOT_SUPPORTED" — rejected (identity-fallback) |
-      | invoice_recipient supplied = business entity not authorized for this account                                        | rejected (invoice_recipient unauthorized)     |
+      | invoice_recipient supplied = business entity not authorized for this account                                        | error "VALIDATION_ERROR" — rejected (invoice_recipient unauthorized) |
 
   @T-UC-003-bva-targeting-overlay-collection-list @boundary @targeting_overlay @schema-v3.1 @post-f2
   Scenario Outline: targeting_overlay collection_list boundary - <boundary>
@@ -2915,27 +2838,11 @@ Feature: BR-UC-003 Update Media Buy
       | update includes pricing_option_id     | error "INVALID_REQUEST" with suggestion |
       | update includes all three immutable fields | error "INVALID_REQUEST" with suggestion |
 
-  @T-UC-003-bva-committed-metrics @boundary @committed_metrics @schema-v3.1 @post-f2
-  Scenario Outline: committed_metrics append-only boundary - <boundary>
-    Given a media buy "mb_existing" whose committed_metrics already contains a committed contract
-    And an update_media_buy request that <boundary>
-    When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy spec
-    And the result should be <outcome>
-    # v3.1 core/package.json committed_metrics: sellers MUST reject modify/remove of existing
-    # entries with validation_error, suggested code IMMUTABLE_FIELD (BR-RULE-219 INV-2/INV-3).
-    # ---------- idempotency_key boundaries (idempotency_key.yaml, BR-RULE-081) ----------
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
-
-    Examples: committed_metrics append-only (BR-UC-003)
-      | boundary                                          | outcome                                       |
-      | add a new vendor-scoped entry                     | accepted                                      |
-      | re-submit existing entries unchanged (idempotent) | accepted                                      |
-      | omit field entirely (partial-update, no change)   | accepted                                      |
-      | modify committed_at of an existing entry          | error "VALIDATION_ERROR" (suggested_code IMMUTABLE_FIELD) — rejected |
-      | modify qualifier of an existing entry             | error "VALIDATION_ERROR" (suggested_code IMMUTABLE_FIELD) — rejected |
-      | remove an existing entry                          | error "VALIDATION_ERROR" (suggested_code IMMUTABLE_FIELD) — rejected |
-      | shrink contract to a strict subset                | error "VALIDATION_ERROR" (suggested_code IMMUTABLE_FIELD) — rejected |
+  # REMOVED at the pin: @T-UC-003-bva-committed-metrics, for the reason recorded where
+  # @T-UC-003-committed-metrics-append stood -- the pinned update request declares no
+  # committed_metrics member, so none of its rows can be sent.
+  # ---------- idempotency_key boundaries (idempotency_key.yaml, BR-RULE-081) ----------
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
   @T-UC-003-bva-idempotency-key @boundary @idempotency_key @schema-v3.1 @post-f2
   Scenario Outline: idempotency_key boundary - <boundary>
