@@ -101,15 +101,30 @@ _pull_from_ghcr() {
     docker tag "$ref" "$IMAGE"
 }
 
+# adcp's Dockerfile ends with a size check for adcp's own Fly deployment (an 8 GiB root
+# filesystem): one RUN that fails the build when /app exceeds its limit. The v3.2.7 release
+# ships every historical schema version and fails it (8067 MiB against 7424 MiB); upstream
+# prunes that history on main (adcp #7496), but no 3.2.x release tag carries the prune. This
+# copy of the Dockerfile drops that one RUN and nothing else. The image is then about the
+# size the v3.1.25 agent was, and nothing here deploys to Fly. Remove this once a release
+# that carries the prune is pinned.
+_dockerfile_without_fly_size_check() {
+    local out="${SRC}/Dockerfile.salesagent"
+    awk '/^RUN app_mib=\$\(du -sm \/app/ { skip = 1 }
+         skip { if ($0 !~ /\\$/) skip = 0; next }
+         { print }' "${SRC}/Dockerfile" > "$out"
+    echo "$out"
+}
+
 _build_image_local() {
     echo "[creative-agent] docker build $IMAGE (adcp@${ADCP_PIN})"
-    docker build -t "$IMAGE" "$SRC"
+    docker build -f "$(_dockerfile_without_fly_size_check)" -t "$IMAGE" "$SRC"
 }
 
 _build_for_ghcr() {
     local ref="$(_ghcr_ref)"
     echo "[creative-agent] docker build ${ref} (adcp@${ADCP_PIN})"
-    docker build -t "$ref" -t "$IMAGE" "$SRC"
+    docker build -f "$(_dockerfile_without_fly_size_check)" -t "$ref" -t "$IMAGE" "$SRC"
 }
 
 _push_to_ghcr() {
