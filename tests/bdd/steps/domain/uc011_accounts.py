@@ -1659,26 +1659,26 @@ def then_per_account_error_details_scope(ctx: dict, scope: str) -> None:
     assert actual == scope, f"Expected per-account error details.scope '{scope}', got {actual!r}"
 
 
-@then("the per-account error details supported_billing echoes the seller's supported billing values")
+@then("the per-account error details supported_billing, if sent, echoes the seller's supported billing values")
 def then_per_account_error_details_supported_billing(ctx: dict) -> None:
-    """Assert details.supported_billing echoes the seller's configured supported set.
+    """Assert a sent details.supported_billing is the seller's configured supported set.
 
-    Spec: error-details/billing-not-supported.json#/properties/supported_billing
-    (array, minItems: 1, "Sellers MAY omit this field" when the resolved supported
-    set is empty) -- compares order-insensitively against the policy the Given step
-    configured via ``_set_billing_policy``, stashed at ``ctx["configured_billing_policy"]``.
+    Spec: error-details/billing-not-supported.json#/properties/supported_billing is an
+    "Echoed copy of the seller's supported_billing capability" and "Sellers MAY omit this
+    field", and billing-gate-dispatch.yaml says it "is intentionally not required". So
+    absence is conformant; a sent value that differs from the capability is not. Compared
+    order-insensitively against the policy the Given configured via
+    ``_set_billing_policy``, stashed at ``ctx["configured_billing_policy"]``.
     """
     configured = ctx.get("configured_billing_policy")
     assert configured is not None, "No configured billing policy captured — a prior Given must set the seller's policy"
-    errors = _last_account_errors(ctx)
-    err = next((e for e in errors if e.code == "BILLING_NOT_SUPPORTED"), None)
-    assert err is not None, f"No BILLING_NOT_SUPPORTED error present, got codes {[e.code for e in errors]}"
-    details = getattr(err, "details", None) or {}
-    actual = details.get("supported_billing")
-    assert actual is not None, f"Expected details.supported_billing to be present, got details={details!r}"
-    assert set(actual) == set(configured), (
-        f"Expected details.supported_billing to echo the seller's supported billing values "
-        f"{configured!r} (order-insensitive), got {actual!r}"
+    errors = _sole_account_errors(ctx)
+    entry = next((e for e in errors if e.get("code") == "BILLING_NOT_SUPPORTED"), None)
+    assert entry is not None, f"No BILLING_NOT_SUPPORTED error on the wire, got codes {[e.get('code') for e in errors]}"
+    sent = entry.get("details", {}).get("supported_billing")
+    assert sent is None or sorted(sent) == sorted(configured), (
+        f"details.supported_billing, when sent, must echo the seller's supported billing values "
+        f"{configured!r} (order-insensitive), got {sent!r}"
     )
 
 
