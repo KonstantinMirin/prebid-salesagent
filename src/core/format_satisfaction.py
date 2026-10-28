@@ -26,7 +26,7 @@ and ``core/product-format-declaration.json``'s ``seller_preference``, which make
 PER-PRODUCT set, not a global vocabulary, so a kind in the pinned enum but absent from
 this product's declarations is still refused.
 
-Graded by ``protocols/media-buy/scenarios/canonical_formats.yaml`` (3.2.3), whose
+Graded by ``protocols/media-buy/scenarios/canonical_formats.yaml`` (at the pin), whose
 ``canonical_create_satisfaction`` phase is this module's conformance contract. Its
 ``reject_bare_image_selector_for_fixed_mrec`` step is the fifth rule made concrete: a
 selector naming ``format_kind: image`` and no dimensions does not satisfy a product that
@@ -462,29 +462,48 @@ def _range_unsatisfied(claim: Any, low: float, high: float) -> bool:
     return _is_number(claim) and not (low <= claim <= high)
 
 
+#: The constraints a claim MUST STATE to satisfy, and the pin names them rather than
+#: leaving them to be derived. ``docs/creative/canonical-formats.mdx`` § Format matching vs
+#: product satisfaction: "When the product declares a fixed ``width``, ``height``,
+#: ``duration_ms_exact``, or ``duration_ms_range``, the requested creative or package
+#: selector MUST declare and match that constraint." Every OTHER constraint a claim is
+#: silent about is inherited, not failed -- the same document's "Narrows" definition:
+#: "when v2.params omits a parameter that v1 specified, v2 inherits v1's value (no
+#: narrowing constraint added)". The pin's own canonical_formats storyboard depends on it:
+#: ``create_media_buy_with_equivalent_direct_legacy_emission`` sends a direct route of
+#: ``{width, height}`` against a declaration that also fixes ``max_file_size_kb`` and
+#: ``image_formats``, and grades it ACCEPTED with every route evaluated independently.
+_MUST_BE_STATED: frozenset[str] = frozenset({"width", "height", "duration_ms_exact", "duration_ms_range"})
+
+
 def _constraint_unsatisfied(key: str, bound: Any, claim: Any) -> bool:
     """Whether *claim* fails the single declaration constraint ``key: bound``.
 
-    WHICH RULE APPLIES IS DERIVED FROM THE CONSTRAINT, never from a list of field names.
-    A name list is the defect that dropped ``pixel_ratio`` from the identity parameters,
-    and a params vocabulary is sixteen per-kind schemas wide and grows with the spec:
+    SILENCE is decided first and by name, because the pin decides it by name: a claim
+    silent about a constraint in :data:`_MUST_BE_STATED` fails it -- the whole of
+    ``reject_bare_image_selector_for_fixed_mrec``, where a bare ``image`` selector states
+    no width against a product fixing ``width: 300`` -- and a claim silent about any other
+    constraint inherits it. A ``None`` bound is no constraint at all: the validated
+    declaration carries every param its kind declares, set or not.
 
-    * ``max_*`` / ``min_*`` are BOUNDS. A claim satisfies one by being inside it, and a
-      claim that is silent satisfies it -- a cap is permission, not an obligation.
+    A STATED claim is graded by the shape of the constraint, never by a list of field
+    names, because a params vocabulary is sixteen per-kind schemas wide and grows with the
+    spec:
+
+    * ``max_*`` / ``min_*`` are BOUNDS, and a claim satisfies one by being inside it.
     * ``*_range`` over two numbers is a RANGE, graded by :func:`_range_unsatisfied`.
-    * any other NUMBER is an exact dimension or duration, and ``formats.mdx`` says those
-      MUST MATCH. Silence does NOT satisfy, which is the whole of
-      ``reject_bare_image_selector_for_fixed_mrec``: a bare ``image`` selector states no
-      width, and a product fixing ``width: 300`` is not satisfied by a claim that declines
-      to say.
-    * any LIST is an allowed SET, and a claim's values must be a subset. Silence satisfies.
-    * anything else (a string, a bool) must be EQUAL when the claim states it, and silence
-      satisfies -- a seller's ``composition_model: "deterministic"`` describes how the
-      seller composes the ad, and a buyer is not obliged to restate it.
+    * any other NUMBER must be EQUAL -- ``formats.mdx``: "Exact dimensions and durations
+      must match".
+    * any LIST is an allowed SET, and a claim's values must be a subset.
+    * anything else (a string, a bool) must be EQUAL.
 
     ``slots`` is not graded here: it is the one constraint whose failure names WHICH slot,
     so it has its own reader (:func:`_slot_shortfall`) and its own caller.
     """
+    if bound is None:
+        return False
+    if claim is None:
+        return key in _MUST_BE_STATED
     if _is_number(bound) and key.startswith("max_"):
         return _is_number(claim) and claim > bound
     if _is_number(bound) and key.startswith("min_"):
@@ -494,9 +513,9 @@ def _constraint_unsatisfied(key: str, bound: Any, claim: Any) -> bool:
     if _is_number(bound):
         return not _is_number(claim) or claim != bound
     if isinstance(bound, (list, tuple, set)):
-        values = claim if isinstance(claim, (list, tuple, set)) else () if claim is None else (claim,)
+        values = claim if isinstance(claim, (list, tuple, set)) else (claim,)
         return any(value not in bound for value in values)
-    return claim is not None and claim != bound
+    return claim != bound
 
 
 def _unsatisfied_params(claimed: Mapping[str, Any], accepted: Mapping[str, Any]) -> list[str]:
@@ -513,12 +532,20 @@ def _unsatisfied_params(claimed: Mapping[str, Any], accepted: Mapping[str, Any])
     exact value as its constraint, and grading the range alongside it would let a claim
     inside the range but unequal to the exact value fail twice, or -- worse, once the
     exact value is the constraint -- report the range as the thing to fix.
+
+    AND ONE CROSS-KEY RULE: a declared ``duration_ms_range`` is met by a claimed
+    ``duration_ms_exact`` that falls inside it -- ``canonical-formats.mdx``: "An exact
+    value, such as ``duration_ms_exact``, satisfies a range when that exact value falls
+    inside the accepted interval." Without it a claim stating an exact duration would be
+    read as silent about the range it states a value inside.
     """
     if "duration_ms_exact" in accepted and accepted.get("duration_ms_exact") is not None:
         accepted = {k: v for k, v in accepted.items() if k != "duration_ms_range"}
     failures: list[str] = []
     for key, bound in accepted.items():
         claim = claimed.get(key)
+        if key == "duration_ms_range" and claim is None:
+            claim = claimed.get("duration_ms_exact")
         if key == "slots":
             failures.extend(f"slots.{group}" for group in _slot_shortfall(claim, bound))
         elif _constraint_unsatisfied(key, bound, claim):

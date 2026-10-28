@@ -65,13 +65,27 @@ _PUBLISHER_DOMAIN = "shorts.streamhaus.example"
 #: ``core/product-format-declaration.json`` document.
 _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
     # The conformance fixture's own shape: an image kind fixed at 300x250, publishing a
-    # product-local option id and asserting the legacy id it projects to.
+    # product-local option id and asserting the legacy id it projects to. The size cap and
+    # the file-format set are the pinned canonical_formats_mrec_display declaration's own,
+    # and they are what make ``exact_300x250`` -- which states neither -- grade the pin's
+    # inheritance rule rather than a declaration with nothing else to omit.
     "fixed_300x250": [
         {
             "format_kind": "image",
             "format_option_id": _PRODUCT_OPTION_ID,
             "v1_format_ref": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250"}],
-            "params": {"width": 300, "height": 250, "max_file_size_kb": 200},
+            "params": {"width": 300, "height": 250, "max_file_size_kb": 200, "image_formats": ["jpg", "png"]},
+        }
+    ],
+    # The same fixed size with a NUMERIC limit whose name is no bound prefix. A claim silent
+    # about it inherits it exactly as it inherits ``max_file_size_kb``: what decides
+    # silence is the pin's list of constraints a claim must state, not the constraint's
+    # shape.
+    "text_limited_300x250": [
+        {
+            "format_kind": "image",
+            "format_option_id": _PRODUCT_OPTION_ID,
+            "params": {"width": 300, "height": 250, "headline_max_chars": 40},
         }
     ],
     # A RANGE constraint, which formats.mdx grades by containment rather than overlap.
@@ -125,7 +139,7 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
         {
             "format_kind": "image",
             "format_option_id": _PRODUCT_OPTION_ID,
-            "params": {"width": 300, "height": 250, "max_file_size_kb": 200},
+            "params": {"width": 300, "height": 250, "max_file_size_kb": 200, "image_formats": ["jpg", "png"]},
         }
     ],
 }
@@ -134,7 +148,14 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
 #: ``media-buy/package-request.json``'s three format selectors.
 _SELECTORS: dict[str, dict[str, Any]] = {
     # --- selectors that satisfy ---
+    # States the fixed size and nothing else, so every other constraint is inherited.
     "exact_300x250": {"format_kind": "image", "params": {"width": 300, "height": 250}},
+    # The pin's create_media_buy_with_direct_canonical_selector: every param the product
+    # constrains, restated.
+    "complete_300x250": {
+        "format_kind": "image",
+        "params": {"width": 300, "height": 250, "max_file_size_kb": 200, "image_formats": ["jpg", "png"]},
+    },
     "product_option_ref": {"format_option_refs": [{"scope": "product", "format_option_id": _PRODUCT_OPTION_ID}]},
     # The legacy arm ALONE, which is what the storyboard's step 10
     # (create_media_buy_with_legacy_mrec_format) sends: format_ids and no format_kind, no
@@ -154,6 +175,10 @@ _SELECTORS: dict[str, dict[str, Any]] = {
         "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250", "width": 728, "height": 90}]
     },
     "contained_range": {"format_kind": "video_hosted", "params": {"duration_ms_range": [10000, 30000]}},
+    # An EXACT duration inside the declared range: "An exact value, such as
+    # duration_ms_exact, satisfies a range when that exact value falls inside the accepted
+    # interval" (canonical-formats.mdx).
+    "exact_duration_in_range": {"format_kind": "video_hosted", "params": {"duration_ms_exact": 30000}},
     "covering_slots": {
         "format_kind": "video_hosted",
         "params": {"slots": [{"asset_group_id": "video_main", "asset_type": "video"}]},
@@ -185,6 +210,25 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     "unpublished_video_kind": {"format_kind": "video_hosted", "params": {"width": 300, "height": 250}},
     "unpublished_option_ref": {"format_option_refs": [{"scope": "product", "format_option_id": "no_such_option"}]},
     "overlapping_range": {"format_kind": "video_hosted", "params": {"duration_ms_range": [1000, 30000]}},
+    # The exact-duration row's refusal half: the same key, a value outside the range.
+    "exact_duration_outside_range": {"format_kind": "video_hosted", "params": {"duration_ms_exact": 90000}},
+    # A duration range is one of the four constraints a selector MUST state, so silence
+    # about it is under-specification, not inheritance.
+    "duration_omitted": {"format_kind": "video_hosted"},
+    # Inherited constraints still bind a claim that STATES them: a cap above the
+    # product's and a file format outside its set each fail.
+    "oversized_file_300x250": {
+        "format_kind": "image",
+        "params": {"width": 300, "height": 250, "max_file_size_kb": 500},
+    },
+    "unaccepted_image_format_300x250": {
+        "format_kind": "image",
+        "params": {"width": 300, "height": 250, "image_formats": ["gif"]},
+    },
+    "headline_over_limit_300x250": {
+        "format_kind": "image",
+        "params": {"width": 300, "height": 250, "headline_max_chars": 90},
+    },
     "slot_missing": {
         "format_kind": "video_hosted",
         "params": {"slots": [{"asset_group_id": "caption", "asset_type": "text"}]},
