@@ -648,11 +648,13 @@ Feature: BR-UC-011 Manage Accounts
     And the error should include "suggestion" field with remediation guidance
     And the per-account error recovery is "correctable"
     And the per-account error details scope is "capability"
-    And the per-account error details supported_billing echoes the seller's supported billing values
+    And the per-account error details supported_billing, if sent, echoes the seller's supported billing values
     # @bva billing: billing = unsupported value for seller
     # BR-RULE-059 INV-2: Request includes billing model the seller does not support -> action=failed, status=rejected, BILLING_NOT_SUPPORTED
     # POST-F2: Buyer knows what failed and the specific error code
-    # @source repo=adcp ref=v3.2.3 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/capability_gate/steps/sync_accounts_unsupported_billing
+    # details.supported_billing is optional: "Sellers MAY omit this field"; the storyboard
+    # leaves it "intentionally not required". When sent it is an echoed copy of the capability.
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/universal/billing-gate-dispatch.yaml phase=capability_gate_operator step=sync_accounts_unsupported_operator_billing
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/error-details/billing-not-supported.json
 
   @T-UC-011-billing-gate-recover @sync @ext-c @billing @recovery @partition
