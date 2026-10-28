@@ -239,30 +239,42 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # "Resolution failure is reported before selector equivalence and must not be
     # mislabeled CONFLICTING_SELECTORS."
 
-  @T-UC-FORMAT-SATISFACTION-narrows-legacy @format_satisfaction @requires_db
-  Scenario: a legacy route the selected option narrows agrees with it, and the option wins
-    Given the seller declares a canonical format option "two_mrec_options"
-    And the buyer's package selects "second_mrec_option_plus_legacy"
+  @T-UC-FORMAT-SATISFACTION-conflicting-option-sets @format_satisfaction @requires_db
+  Scenario Outline: co-present routes whose selected option sets differ are refused - <declaration> / <selector>
+    Given the seller declares a canonical format option "<declaration>"
+    And the buyer's package selects "<selector>"
     When the Buyer Agent sends the create_media_buy request
-    Then the buyer receives the media buy
-    And the package snapshots the "satisfaction_image_mrec_gif" declaration fixed at 300x250
+    Then the buyer is refused CONFLICTING_SELECTORS naming the package
 
-    # media-buy/package-request.json step (2): "legacy-to-canonical parameter compatibility
-    # uses the asymmetric v2 narrows v1 relation, not raw object equality". The product
-    # publishes two 300x250 image options that differ only in image_formats, and the legacy
-    # display_300x250 projects to image 300x250 with no file-format constraint, so BOTH
-    # options narrow it (canonical-formats.mdx § "Narrows" -- formal definition: a
-    # parameter v1 leaves unstated is open). Paired with the SECOND option's ref, the routes
-    # therefore agree. Comparing the legacy route's own selection -- the first matching
-    # option -- by equality answered CONFLICTING_SELECTORS here, while the same legacy id
-    # beside the FIRST option's ref was accepted: the verdict depended on declaration order.
+    Examples:
+      | declaration      | selector                                |
+      | two_mrec_options | option_plus_projectable_legacy          |
+      | two_mrec_options | second_mrec_option_plus_legacy          |
+      | fixed_15s_video  | option_plus_conflicting_duration_legacy |
+
+    # media-buy/package-request.json step (2): "derive the product format_options[] entries
+    # selected by each route using directional product satisfaction, and require the
+    # selected option sets to match"; step (3) rejects "different ... selected option sets"
+    # with CONFLICTING_SELECTORS; format_option_refs: "require each route to select the same
+    # product option set". The legacy route's set is derived under the "v2 narrows v1"
+    # relation the same step names (canonical-formats.mdx § "Narrows" -- formal definition).
     #
-    # The snapshot Then grades step (4) as well: with the routes agreeing, precedence gives
-    # the package the option ref's declaration, not the one the legacy route picked alone.
-    # The refusal half of the same relation is option_plus_conflicting_legacy above, whose
-    # display_728x90 projects a width the 300x250 option contradicts.
+    # THE TWO two_mrec_options ROWS. The product publishes two 300x250 image options that
+    # differ only in image_formats. display_300x250 projects to image 300x250 and states no
+    # file format, so both options narrow it and the legacy route selects BOTH; an option
+    # ref selects one. The sets differ whichever option the ref names, so both rows are
+    # refused -- the verdict does not depend on declaration order. option_plus_projectable_legacy
+    # is accepted against fixed_300x250 above, where the product publishes one option: the
+    # rows differ in the product and in nothing else.
+    #
+    # THE DURATION ROW. A legacy reference states duration as duration_ms
+    # (core/format-id.json); the declaration states duration_ms_exact. The legacy route's
+    # 30000 ms is graded against the option's 15000 ms, selects nothing, and the option ref
+    # selects the option, so the sets differ. With the key left untranslated the duration
+    # was never compared and the pair was accepted.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json
     # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json
 
   @T-UC-FORMAT-SATISFACTION-legacy-only-accepted @format_satisfaction @requires_db
   Scenario: a legacy selector against a product publishing only deprecated format_ids is accepted

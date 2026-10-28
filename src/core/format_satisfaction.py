@@ -145,13 +145,16 @@ class FormatSatisfaction:
     outcomes without raising (the lenient assignment mode). It is never buyer-facing: the
     buyer-facing sentence is a function of the code through ``CODE_TABLE``.
 
-    ``declaration`` is WHAT THE ROUTE RESOLVED TO, and it is why this is a resolution and
-    not a boolean. The storyboard's steps 11 and 12 require two co-present selector routes
-    to be resolved INDEPENDENTLY and then COMPARED, so a caller has to be able to hold two
-    resolutions side by side and ask whether they named the same declaration -- which a
-    yes/no cannot express. ``compare=False``: the declaration is this route's OUTPUT, not
-    part of the verdict's identity, and keeping it out of ``__eq__``/``__hash__`` means a
-    frozen dataclass carrying an unhashable pydantic model stays hashable.
+    ``selection`` is WHAT THE ROUTE SELECTED, and it is why this is a resolution and not a
+    boolean. ``media-buy/package-request.json`` step (2) derives "the product
+    ``format_options[]`` entries selected by each route" and requires "the selected option
+    sets to match", so a caller has to be able to hold two resolutions side by side and
+    compare the SETS they selected -- which a yes/no cannot express, and neither can one
+    declaration per route: a broad legacy id selects every entry it is compatible with.
+    The entries are kept in the product's declaration order, so two equal sets are two
+    equal tuples. ``compare=False``: the selection is this route's OUTPUT, not part of the
+    verdict's identity, and keeping it out of ``__eq__``/``__hash__`` means a frozen
+    dataclass carrying unhashable pydantic models stays hashable.
     """
 
     satisfied: bool
@@ -161,7 +164,7 @@ class FormatSatisfaction:
     summary: str = ""
     # ``dataclass_field``, aliased at the import, because this class declares a member
     # literally named ``field`` below -- the plain ``field`` name would be shadowed by it.
-    declaration: LibraryFormatDeclaration | None = dataclass_field(default=None, compare=False)
+    selection: tuple[LibraryFormatDeclaration, ...] = dataclass_field(default=(), compare=False)
     #: WHICH request field the refused route came from, when the caller supplied one on the
     #: route. ``core/error.json`` defines ``field`` as the pointer naming the rejected
     #: request field, and with several routes in play the right pointer is the ARM that
@@ -170,6 +173,11 @@ class FormatSatisfaction:
     #: from ``refusal`` at the call site: the route knows its own provenance, and a mapping
     #: would be a second place that has to agree about which refusal came from which arm.
     field: str | None = None
+
+    @property
+    def declaration(self) -> LibraryFormatDeclaration | None:
+        """The first entry the route selected: the one a package records once it is accepted."""
+        return self.selection[0] if self.selection else None
 
     def __bool__(self) -> bool:
         return self.satisfied
@@ -553,6 +561,47 @@ def _unsatisfied_params(claimed: Mapping[str, Any], accepted: Mapping[str, Any])
     return failures
 
 
+def _stated_constraints(accepted: Mapping[str, Any], claimed: Mapping[str, Any]) -> dict[str, Any]:
+    """The constraints in *accepted* that *claimed* speaks to. The claim inherits the rest.
+
+    For a claim that already NAMES its declaration -- an option ref, or a legacy reference
+    whose projection is compared under "v2 narrows v1" -- only what the claim states is
+    graded. ``canonical-formats.mdx`` § "Narrows" -- formal definition (normative): "when
+    v1 says nothing about a parameter but v2 specifies one ... v2 is ``narrowing``", so a
+    constraint the claim leaves unstated is no conflict, unlike a bare kind, which proves
+    nothing and owes every constraint (:func:`_graded`).
+
+    A stated ``duration_ms_exact`` also speaks to a declared ``duration_ms_range``: the
+    cross-key rule in :func:`_unsatisfied_params`, "an exact value ... satisfies a range
+    when that exact value falls inside the accepted interval". Without it the range would
+    be dropped as unstated and never graded.
+    """
+    stated = set(claimed)
+    if "duration_ms_exact" in claimed:
+        stated.add("duration_ms_range")
+    return {key: bound for key, bound in accepted.items() if key in stated}
+
+
+def _selecting(
+    candidates: Sequence[LibraryFormatDeclaration],
+    params: Mapping[str, Any] | None,
+    *,
+    exact: bool,
+) -> FormatSatisfaction:
+    """Grade every candidate; the verdict selects EACH one the claim satisfies.
+
+    ``media-buy/package-request.json`` step (2) derives "the product ``format_options[]``
+    entries selected by each route", plural, and compares the sets. So a route over
+    several candidates selects all of those it satisfies, in declaration order, and the
+    first of them is the one a package records. When none satisfies, the FIRST candidate's
+    refusal is reported: it names the params that failed, which is the buyer's lever, and a
+    union across candidates would be a sentence this module does not author.
+    """
+    graded = [_graded(candidate, params, exact=exact) for candidate in candidates]
+    selection = tuple(declaration for verdict in graded for declaration in verdict.selection)
+    return FormatSatisfaction(satisfied=True, selection=selection) if selection else graded[0]
+
+
 def _legacy_route(
     identity: FormatSelector,
     declarations: Sequence[LibraryFormatDeclaration],
@@ -576,11 +625,21 @@ def _legacy_route(
     2. The registry's parameterized upgrade. ``display_300x250_image`` upgrades to
        ``display_image`` + ``width=300`` + ``height=250``, which is what makes the
        storyboard's ``create_media_buy_with_legacy_mrec_format`` step a satisfaction
-       question rather than a string comparison: the upgraded dimensions are graded against
-       the declaration's params by the same rules a direct canonical selector is. This is
-       the step ``core/product-format-declaration.json`` requires -- "Legacy named formats
-       MUST be normalized to canonical declarations before comparison; do not exact-match
-       raw ``(agent_url, id)`` pairs once a ``format_id`` has been projected".
+       question rather than a string comparison. This is the step
+       ``core/product-format-declaration.json`` requires -- "Legacy named formats MUST be
+       normalized to canonical declarations before comparison; do not exact-match raw
+       ``(agent_url, id)`` pairs once a ``format_id`` has been projected".
+
+    EVERY DECLARATION EITHER STEP MATCHES IS SELECTED, not the first one met.
+    ``media-buy/package-request.json`` step (2) compares the SETS of entries each route
+    selects, and adds that "legacy-to-canonical parameter compatibility uses the asymmetric
+    v2 narrows v1 relation, not raw object equality". So step 2 selects every same-kind
+    declaration that narrows the projection: each parameter the projection STATES is
+    graded by :func:`_unsatisfied_params` against the declaration, and one it leaves
+    unstated is open (:func:`_stated_constraints`). A broad ``display_image`` beside two
+    image options therefore selects both, and beside an option ref naming one of them the
+    selected sets differ -- CONFLICTING_SELECTORS, as step (3) says of "different ...
+    selected option sets".
 
     THE THREE OUTCOMES, which is what this function answers rather than "the declaration
     or None". ``media-buy/package-request.json`` separates resolution from selection and
@@ -627,10 +686,13 @@ def _legacy_route(
     assertion = identity.assertion
     assert assertion is not None, "the legacy route is reached only for a claim asserting a reference"
     asserted = identity.legacy
-    for declaration in declarations:
-        refs = declaration.v1_format_ref or []
-        if any(format_identity_or_none(ref) == asserted for ref in refs):
-            return _graded(declaration, params, exact=True)
+    asserting = [
+        declaration
+        for declaration in declarations
+        if any(format_identity_or_none(ref) == asserted for ref in declaration.v1_format_ref or [])
+    ]
+    if asserting:
+        return _selecting(asserting, params, exact=True)
 
     projected = _legacy_projection(assertion)
     kind = identity.kind
@@ -645,17 +707,14 @@ def _legacy_route(
             )
         return _kind_route(kind, declarations, params)
 
-    selected = next(
-        (
-            declaration
-            for declaration in declarations
-            if (kind is None or str(declaration.format_kind) == kind)
-            and not _unsatisfied_params(projected, _declared_params(declaration))
-        ),
-        None,
-    )
-    if selected is not None:
-        return _graded(selected, params, exact=True)
+    narrowing = [
+        declaration
+        for declaration in declarations
+        if (kind is None or str(declaration.format_kind) == kind)
+        and not _unsatisfied_params(projected, _stated_constraints(_declared_params(declaration), projected))
+    ]
+    if narrowing:
+        return _selecting(narrowing, params, exact=True)
     return FormatSatisfaction(
         satisfied=False,
         refusal=FormatRefusal.LEGACY_NOT_SELECTED,
@@ -669,9 +728,16 @@ def _legacy_projection(assertion: LibraryFormatId) -> dict[str, Any]:
     """The canonical params a legacy reference states once the registry upgrades it.
 
     ``display_300x250_image`` upgrades to ``display_image`` + ``width=300`` + ``height=250``;
-    a broad ``display_image`` upgrades to no params at all. That second case is real: it is
-    the v1 baseline that states nothing, which every same-kind canonical declaration
-    narrows (see :func:`_narrows_legacy`).
+    a broad ``display_image`` upgrades to no params at all, the v1 baseline that states
+    nothing and is narrowed by every same-kind declaration.
+
+    IN THE DECLARATION'S VOCABULARY. A legacy reference carries ``duration_ms``
+    (``core/format-id.json``), one fixed duration; a canonical declaration states duration
+    only as ``duration_ms_exact`` or ``duration_ms_range`` (``canonical-formats.mdx``,
+    "``duration_ms_exact`` for a fixed required duration"). Left as ``duration_ms`` the key
+    matched no declared constraint, so a 30-second legacy reference was never compared with
+    a 15-second declaration at all. As ``duration_ms_exact`` it is graded by
+    :func:`_unsatisfied_params`, which also applies the exact-inside-range rule.
     """
     upgraded = upgrade_legacy_format_id(assertion)
     return {
@@ -679,39 +745,10 @@ def _legacy_projection(assertion: LibraryFormatId) -> dict[str, Any]:
         for name, value in (
             ("width", upgraded.width),
             ("height", upgraded.height),
-            ("duration_ms", upgraded.duration_ms),
+            ("duration_ms_exact", upgraded.duration_ms),
         )
         if value is not None
     }
-
-
-def _narrows_legacy(declaration: LibraryFormatDeclaration, claim: FormatSelector) -> bool:
-    """Whether *declaration* narrows the v1 projection of the legacy reference *claim* asserts.
-
-    ``media-buy/package-request.json`` step (2): "legacy-to-canonical parameter
-    compatibility uses the asymmetric v2 narrows v1 relation, not raw object equality".
-    ``docs/creative/canonical-formats.mdx`` § "Narrows" -- formal definition (normative)
-    gives the relation: every parameter the v1 projection states must be met by the v2
-    declaration, and "when v2.params omits a parameter that v1 specified, v2 inherits v1's
-    value", so a declaration silent about one is no conflict. A parameter the v1 projection
-    does not state is open, which is why a broad ``display_image`` is narrowed by every
-    image declaration -- the 300x250 option and the 728x90 one alike -- and a dual emission
-    pairing it with either option ref names the same format.
-
-    One-directional by the same definition ("The reverse (v1 narrows v2) is NOT how the
-    dual-emission contract is checked"), so the declaration is the narrower side here and
-    never the claim. The kind is compared first: a projection is a format SHAPE plus
-    parameters, and an image declaration does not narrow a video reference.
-    """
-    assertion = claim.assertion
-    assert assertion is not None, "only a legacy route has a v1 projection to narrow"
-    if claim.kind is not None and str(declaration.format_kind) != claim.kind:
-        return False
-    declared = _declared_params(declaration)
-    return not any(
-        declared.get(key) is not None and _constraint_unsatisfied(key, bound, declared[key])
-        for key, bound in _legacy_projection(assertion).items()
-    )
 
 
 def _graded(
@@ -741,11 +778,11 @@ def _graded(
     The satisfied verdict CARRIES ``selected``, so a caller holding two route resolutions
     can ask whether they named the same declaration. That is steps 11 and 12.
     """
-    resolved = FormatSatisfaction(satisfied=True, declaration=selected)
+    resolved = FormatSatisfaction(satisfied=True, selection=(selected,))
     if params is None:
         return resolved
     declared = _declared_params(selected)
-    constraints = {k: v for k, v in declared.items() if k in params} if exact else declared
+    constraints = _stated_constraints(declared, params) if exact else declared
     if not (failed := _unsatisfied_params(params, constraints)):
         return resolved
     return FormatSatisfaction(
@@ -782,7 +819,6 @@ def _option_route(
             rejected_value=option.format_option_id,
             accepted_values=tuple(sorted(_declaration_label(d) for d in declarations)),
             summary=f"format option {option.format_option_id!r} is not published by this product",
-            declaration=None,
         )
     return _graded(selected, params, exact=True)
 
@@ -828,10 +864,9 @@ def _kind_route(
     publishing image 300x250 AND image 728x90, telling the buyer the product cannot do
     what it published (salesagent-ky23p).
 
-    When none satisfies, the FIRST candidate's refusal is reported. It names the params
-    that failed, which is the buyer's lever; with several candidates the named params are
-    one declaration's rather than a union, and a union would be a sentence this module
-    does not author.
+    Every candidate the claim satisfies is SELECTED, and step (2) compares those sets
+    across routes; see :func:`_selecting`, which also says which refusal is reported when
+    none satisfies.
     """
     accepted = [str(declaration.format_kind) for declaration in declarations]
     if kind not in accepted:
@@ -843,12 +878,7 @@ def _kind_route(
             accepted_values=tuple(sorted(set(refused.accepted_kinds))),
             summary=str(refused),
         )
-    candidates = [
-        _graded(declaration, params, exact=False)
-        for declaration in declarations
-        if str(declaration.format_kind) == kind
-    ]
-    return next((candidate for candidate in candidates if candidate), candidates[0])
+    return _selecting([d for d in declarations if str(d.format_kind) == kind], params, exact=False)
 
 
 def _canonical_lane(
@@ -1112,12 +1142,15 @@ class SelectorResolution:
     def conflicting(self) -> bool:
         """Steps (2) and (3): every route resolved, and the selected option sets disagree.
 
-        The comparison is on the SELECTED DECLARATION, which is what step (2) asks for --
-        "the product ``format_options[]`` entries selected by each route" -- and not on the
-        routes' own shapes. Two routes spelled differently that select the same entry agree;
-        that is the storyboard's ``create_media_buy_with_equivalent_dual_emission``, where a
-        product-local option ref and ``display_300x250_image`` "normalize to the same
-        declaration".
+        The comparison is on the SELECTED SETS, which is what step (2) asks for -- "derive
+        the product ``format_options[]`` entries selected by each route ... and require the
+        selected option sets to match" -- and not on the routes' own shapes. Two routes
+        spelled differently that select the same entries agree; that is the storyboard's
+        ``create_media_buy_with_equivalent_dual_emission``, where a product-local option ref
+        and ``display_300x250_image`` "normalize to the same declaration". Two routes whose
+        sets merely OVERLAP do not: a legacy id two options both narrow selects both, and
+        an option ref beside it selects one, which ``format_option_refs`` answers directly
+        -- "require each route to select the same product option set".
 
         A ROUTE THAT SELECTED NOTHING COUNTS AS A DIFFERING SET, and that is the pin's
         reading rather than a choice. ``reject_conflicting_canonical_routes`` sends a
@@ -1127,27 +1160,15 @@ class SelectorResolution:
         none to select, so there is no other mechanism by which that step produces that
         code on that fixture.
 
-        Compared with ``==`` on the pinned declaration models, which compares their field
-        VALUES: two routes landing on the same entry hold the same object here, and a
-        hypothetical pair of byte-identical entries would agree, which is what "the same
-        product format contract" means. ``None`` equals only ``None``.
-
-        A LEGACY ROUTE ALSO AGREES WHEN THE WINNER NARROWS IT. The same step says
-        "legacy-to-canonical parameter compatibility uses the asymmetric v2 narrows v1
-        relation, not raw object equality" -- so ``display_image`` beside an option ref
-        naming the 728x90 image agrees, although the legacy route on its own picks the
-        first image declaration it meets. Equality alone answered that pair
-        CONFLICTING_SELECTORS and the same pair with the 300x250 option ref success, which
-        made the verdict depend on declaration order. See :func:`_narrows_legacy`.
+        Compared with ``==`` on tuples of the pinned declaration models, which compares
+        their field VALUES. Every selection lists its entries in the product's declaration
+        order, so equal sets are equal tuples, and the empty selection equals only another
+        empty one.
         """
         if self.unresolved is not None or len(self.routes) < 2:
             return False
-        winner = self.routes[0][1].declaration
-        return any(
-            verdict.declaration != winner
-            and not (winner is not None and route.claim.assertion is not None and _narrows_legacy(winner, route.claim))
-            for route, verdict in self.routes[1:]
-        )
+        winner = self.routes[0][1].selection
+        return any(verdict.selection != winner for _, verdict in self.routes[1:])
 
     @property
     def unsatisfied(self) -> FormatSatisfaction | None:
@@ -1157,15 +1178,8 @@ class SelectorResolution:
         With one route that is the pin's "a single resolved route that does not satisfy the
         product"; with several it is every route agreeing on the empty set, which no
         comparison can fault and which still satisfies no product declaration.
-
-        A winner that selected a declaration ends it: every other route agreed with that
-        selection (or :attr:`conflicting` would have answered), including a legacy route
-        that agrees only because the winner narrows it, whose own verdict may still be a
-        refusal.
         """
         if self.unresolved is not None or self.conflicting:
-            return None
-        if self.routes and self.routes[0][1].declaration is not None:
             return None
         return next((verdict for _, verdict in self.routes if not verdict), None)
 
@@ -1296,7 +1310,9 @@ def satisfies(
     # ``is not None``, never ``or``: a refusing verdict is FALSY, so the ``or`` spelling
     # would discard every refusal and answer satisfied. See :attr:`SelectorResolution.refused`.
     refused = resolution.refused
-    return refused if refused is not None else FormatSatisfaction(satisfied=True, declaration=resolution.selected)
+    if refused is not None:
+        return refused
+    return FormatSatisfaction(satisfied=True, selection=resolution.routes[0][1].selection if resolution.routes else ())
 
 
 def canonical_refusal(

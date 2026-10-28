@@ -133,9 +133,8 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
     ],
     # TWO 300x250 image declarations that differ only in the file formats they take. Both
     # NARROW the v1 projection of ``display_300x250`` (canonical-formats.mdx § "Narrows"),
-    # so that legacy id agrees with an option ref naming EITHER of them -- while on its own
-    # the legacy route picks the first one it meets. That gap between selection and
-    # narrowing is what the narrows scenario grades.
+    # so that legacy id selects BOTH, and an option ref naming either one selects a
+    # different set (media-buy/package-request.json step (2)).
     "two_mrec_options": [
         {
             "format_kind": "image",
@@ -147,6 +146,15 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "format_option_id": "satisfaction_image_mrec_gif",
             "params": {"width": 300, "height": 250, "image_formats": ["gif"]},
         },
+    ],
+    # A video option fixed at 15 seconds. ``duration_ms_exact`` is the declaration's
+    # spelling of one fixed duration; a legacy reference spells it ``duration_ms``.
+    "fixed_15s_video": [
+        {
+            "format_kind": "video_hosted",
+            "format_option_id": "satisfaction_video_15s",
+            "params": {"duration_ms_exact": 15000},
+        }
     ],
     # ``fixed_300x250`` with the ``v1_format_ref`` assertion REMOVED, and nothing else
     # changed. That one difference decides whether the accepted package's deprecated
@@ -218,14 +226,21 @@ _SELECTORS: dict[str, dict[str, Any]] = {
         "params": {"width": 300, "height": 250},
         "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250"}],
     },
+    # --- selectors that do not ---
     # The SECOND of ``two_mrec_options``' declarations by option ref, beside a legacy id that
-    # both declarations narrow. The legacy route alone selects the first; the pair agrees
-    # under "v2 narrows v1", and precedence then gives the option ref the package.
+    # both declarations narrow: the option ref selects one entry, the legacy id both.
     "second_mrec_option_plus_legacy": {
         "format_option_refs": [{"scope": "product", "format_option_id": "satisfaction_image_mrec_gif"}],
         "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250"}],
     },
-    # --- selectors that do not ---
+    # ``fixed_15s_video``'s option by ref, beside a legacy video id parameterized at 30
+    # seconds. ``video_640x480`` projects to ``video_hosted`` on the pinned registry and the
+    # upgrade carries ``duration_ms`` through, so the legacy route states a duration the
+    # option contradicts.
+    "option_plus_conflicting_duration_legacy": {
+        "format_option_refs": [{"scope": "product", "format_option_id": "satisfaction_video_15s"}],
+        "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "video_640x480", "duration_ms": 30000}],
+    },
     # The storyboard's reject_bare_image_selector_for_fixed_mrec: the right kind, no params.
     "bare_image_kind": {"format_kind": "image"},
     # formats.mdx's fifth rule as an input: the same kind, different dimensions.
