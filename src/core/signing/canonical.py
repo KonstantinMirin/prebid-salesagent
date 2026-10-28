@@ -60,18 +60,13 @@ verifier's ``except SignatureVerificationError`` 401 path, and schema-land URL h
 that treat a bad URL as a ``ValueError``. One public type, pinned by the
 facade tests.
 
-**It is NOT the same code as the wire-header rejection.** Request vector
-``negative/026`` (non-ASCII ``Host`` on a signed request) legitimately expects
-``request_signature_header_malformed`` — a verifier-checklist step-1 rejection. The two
-are kept apart on purpose. What they SHARE is the predicate, not the code:
-:func:`malformed_authority_reason` is the single source of the rule, called from here
-with the canonicalization code and from
-:func:`~src.core.signing.verifier._strict_header_precheck` with the checklist code.
-One rule, two graded artifacts.
-
-Note also that the vector README's worked example is STALE on this point — it shows the
-reject cases expecting ``request_signature_header_malformed``. The shipped DATA wins;
-do not "correct" the code from the prose.
+**It is the same code on the wire.** A signed request's authority is the as-received
+``Host`` header (:func:`~src.core.signing.capture._target_uri` builds the URL from it),
+and the verifier judges it through :func:`reject_malformed_target` — so request vectors
+``negative/026`` (raw U-label host) and ``negative/031`` (unbracketed IPv6 ``Host``) are
+refused with ``request_target_uri_malformed``, the code security.mdx's error table files
+both shapes under. :func:`malformed_authority_reason` is the one rule, and this module is
+its one caller on the comparer side.
 """
 
 from __future__ import annotations
