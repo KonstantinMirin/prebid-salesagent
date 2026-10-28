@@ -220,6 +220,17 @@ rm -f test-results/storyboard_summary_*.json
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
 
 cleanup() {
+    local rc=$?
+    # A failed run keeps every container's log beside its reports. The stack is removed
+    # below, and with it the only record of why the live server answered as it did: a
+    # report shows the wire answer (e.g. a per-creative SERVICE_UNAVAILABLE) but not the
+    # exception the server logged when it chose that answer.
+    if [ "$rc" -ne 0 ]; then
+        mkdir -p "$RESULTS_DIR/containers"
+        docker ps -a --filter "name=${COMPOSE_PROJECT_NAME}-" --format '{{.Names}}' | while read -r _name; do
+            docker logs "$_name" >"$RESULTS_DIR/containers/${_name}.log" 2>&1 || true
+        done
+    fi
     # Per-worker e2e servers AND their TLS sidecars are `docker compose run`
     # containers (not `up`), so `dc down` won't remove them — do it explicitly.
     # The sidecars MUST be matched too: a leaked `-tls-gwN.adcp.test` container
