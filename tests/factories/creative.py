@@ -32,6 +32,39 @@ from .principal import PrincipalFactory
 #: THIS url and lets production decide the transport; it never names the one it can reach.
 DEFAULT_CREATIVE_AGENT_URL = PUBLIC_DEFAULT_AGENT_URL
 
+#: One ``format_option_ref`` document per arm of core/format-option-ref.json, written as the
+#: buyer sends it and keyed by the ``scope`` discriminator. The product arm declares
+#: ``publisher_domain: false``, so it carries no such member, not even null; the publisher
+#: arm's domain satisfies that arm's ``pattern``. The two share a ``format_option_id`` on
+#: purpose: they are still DIFFERENT options, which is what makes the scope worth keeping.
+_FORMAT_OPTION_REFS_BY_SCOPE: dict[str, dict[str, str]] = {
+    "product": {"scope": "product", "format_option_id": "opt_hero_image"},
+    "publisher": {
+        "scope": "publisher",
+        "publisher_domain": "example.com",
+        "format_option_id": "opt_hero_image",
+    },
+}
+
+
+def format_option_ref_for_scope(scope: str) -> dict[str, str]:
+    """A fresh ``format_option_ref`` on the named arm, checked against the pinned file first.
+
+    Both checks keep a scenario that names a scope non-vacuous. An unknown scope would
+    otherwise seed nothing and grade the absent case under a sentence promising a
+    reference; and a fixture that were already invalid against core/format-option-ref.json
+    would make a readback comparison compare one malformed document to another.
+    """
+    from tests.helpers.pinned_schema import validator_for
+
+    assert scope in _FORMAT_OPTION_REFS_BY_SCOPE, (
+        f"scope {scope!r} names no arm of core/format-option-ref.json; "
+        f"the pinned arms are {sorted(_FORMAT_OPTION_REFS_BY_SCOPE)}"
+    )
+    reference = dict(_FORMAT_OPTION_REFS_BY_SCOPE[scope])
+    validator_for("core/format-option-ref.json").validate(reference)
+    return reference
+
 
 def served_format_spec(agent_url: str, format_id: str) -> Format | None:
     """The catalog declaration for ``(agent_url, format_id)``, or None if nothing serves it.

@@ -103,7 +103,7 @@ from src.core.schemas import CreativeFormatIdentity, FormatId, canonical_agent_u
 from tests.bdd.steps._outcome_helpers import error_envelope_or_none, require_payload, wire_dict, wire_field
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
-from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
+from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL, format_option_ref_for_scope
 from tests.helpers.envelope_assertions import assert_envelope_shape
 from tests.helpers.pinned_schema import validator_for
 
@@ -1752,19 +1752,6 @@ def then_parameterized_format_id_roundtrips(ctx: dict) -> None:
     )
 
 
-#: One reference per arm of ``core/format-option-ref.json``'s oneOf, written as the buyer
-#: sends them. Keyed by the ``scope`` each arm's discriminator takes, which is also the
-#: outline's parameter, so the scenario cannot name a scope this mapping has no arm for.
-#: The publisher arm's domain satisfies that arm's ``pattern`` (lower-case labels only).
-_FORMAT_OPTION_REFS: dict[str, dict[str, Any]] = {
-    "product": {"scope": "product", "format_option_id": "opt_hero_image"},
-    "publisher": {
-        "scope": "publisher",
-        "publisher_domain": "example.com",
-        "format_option_id": "opt_hero_image",
-    },
-}
-
 #: The pinned reference document, validated through the same file the response schema
 #: $refs. Built once: the resolver walks the pinned tree per call.
 _FORMAT_OPTION_REF_VALIDATOR = validator_for("core/format-option-ref.json")
@@ -1781,19 +1768,12 @@ def given_creative_on_canonical_format_option(ctx: dict, format_kind: str, scope
     The reference the buyer sent is recorded in ``ctx`` rather than recomputed in the Then,
     so the two sides cannot drift into agreeing about a value neither of them sent.
 
-    Both guards below are what keep the row non-vacuous. The first refuses a scope the
-    oneOf has no arm for, which would otherwise seed ``None`` and grade the absent case
-    under a sentence promising a reference. The second asserts the fixture itself is valid
-    against the pinned file BEFORE anything is stored: if the seeded document were already
-    malformed, the readback assertion would be comparing one invalid document to another
-    and could not distinguish a seller that lost the reference from one that kept it.
+    ``format_option_ref_for_scope`` refuses a scope the oneOf has no arm for and checks the
+    document against the pinned file BEFORE anything is stored, which is what keeps the row
+    non-vacuous: a malformed fixture would make the readback compare one invalid document
+    to another.
     """
-    assert scope in _FORMAT_OPTION_REFS, (
-        f"the scenario names scope {scope!r}, which core/format-option-ref.json has no arm "
-        f"for; the pinned arms are {sorted(_FORMAT_OPTION_REFS)}"
-    )
-    reference = _FORMAT_OPTION_REFS[scope]
-    _FORMAT_OPTION_REF_VALIDATOR.validate(reference)
+    reference = format_option_ref_for_scope(scope)
 
     env = ctx["env"]
     tenant, principal = _get_or_create_tenant_and_principal(env)
