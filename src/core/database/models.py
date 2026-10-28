@@ -2114,10 +2114,18 @@ class InventoryProfile(Base, JSONValidatorMixin):
     # }
     inventory_config: Mapped[dict] = mapped_column(JSONType, nullable=False)
 
-    # Creative formats (FormatId objects)
-    # Structure: [{"agent_url": "...", "id": "display_300x250_image"}]
-    # Validated at database level via CHECK constraint (see migration: rename_formats_to_format_ids)
-    format_ids: Mapped[list] = mapped_column(JSONType, nullable=False)
+    # Creative formats: the same two arms a product carries, and a linked product takes its
+    # format contract from here (``Product.format_contract``).
+    #
+    # The canonical arm: core/product-format-declaration.json documents, stored as
+    # ``products.format_options`` stores them. A profile authored today carries this one.
+    format_options: Mapped[list[dict] | None] = mapped_column(JSONType, nullable=True)
+    # The deprecated arm (FormatId objects): [{"agent_url": "...", "id": "display_300x250_image"}].
+    # Nullable since migration a34a2ff137da, so a canonically-authored profile carries none;
+    # a profile authored before then keeps the one it has, and its linked products are served
+    # it as their legacy arm. Validated at database level via CHECK constraint (see migration:
+    # rename_formats_to_format_ids), which tolerates NULL.
+    format_ids: Mapped[list | None] = mapped_column(JSONType, nullable=True)
 
     # Publisher properties (AdCP spec-compliant)
     # Structure: [
