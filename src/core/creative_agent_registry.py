@@ -961,12 +961,12 @@ class CreativeAgentRegistry:
         Args:
             agent_url: URL of the creative agent
             format_id: Format ID for the creative
-            creative_manifest: Complete creative manifest with all required assets.
+            creative_manifest: Complete creative manifest with all required assets, without
+                its ``format_id`` (this method writes the ``{agent_url, id}`` object there).
                 Assets MUST be a dictionary keyed by asset_id from format's asset_requirements.
                 Example: {
                     "creative_id": "c123",
                     "name": "Banner Ad",
-                    "format_id": "display_300x250",
                     "assets": {
                         "main_image": {"asset_type": "image", "url": "https://..."},
                         "logo": {"asset_type": "image", "url": "https://..."}
@@ -997,20 +997,23 @@ class CreativeAgentRegistry:
         # this seller has a ``TOOLS`` row for the name: that answers "does this seller
         # SERVE it", which is False for every tool we only ever CALL, ``get_signals``
         # included.
+        # The pinned reference agent's schema takes format_id as the federation-identity
+        # OBJECT {agent_url, id} -- the live public host tolerated a bare string, which masked
+        # this mismatch until connections were pinned in-network. The identity keeps the
+        # CANONICAL agent_url, not the connection alias. AnyUrl serialization yields the
+        # trailing-slash form for path-less URLs -- verified tolerated by the pinned reference
+        # agent (probe 2026-07-13).
+        #
+        # The MANIFEST names the same object. core/creative-manifest.json (v3.2.7) puts
+        # ``format_id`` on its named arm as a core/format-id.json object, so the bare id string
+        # callers used to write into the manifest satisfied neither arm.
+        format_ref = FormatId(agent_url=agent_url, id=format_id).model_dump(mode="json")
         return await call_operator_mcp_tool(
             _connection_agent_url(agent_url),
             "preview_creative",
             {
-                # The pinned reference agent's schema takes format_id as the
-                # federation-identity OBJECT {agent_url, id} — the live public
-                # host tolerated a bare string, which masked this mismatch
-                # until connections were pinned in-network.
-                # The identity keeps the CANONICAL agent_url, not the
-                # connection alias. AnyUrl serialization yields the
-                # trailing-slash form for path-less URLs — verified tolerated
-                # by the pinned reference agent (probe 2026-07-13).
-                "format_id": FormatId(agent_url=agent_url, id=format_id).model_dump(mode="json"),
-                "creative_manifest": creative_manifest,
+                "format_id": format_ref,
+                "creative_manifest": {**creative_manifest, "format_id": format_ref},
             },
             label="the creative agent",
             sign=request_signer_for_tenant(tenant_id=tenant_id),
