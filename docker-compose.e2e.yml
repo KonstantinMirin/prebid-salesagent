@@ -178,8 +178,10 @@ services:
       # alias has nothing to route to and the server calls the LIVE public host,
       # which rate-limits under CI load. The runner service
       # already sets the same value for the direct integration tests.
-      # https, via the shared tls-proxy front below.
-      CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent
+      # https, via the shared tls-proxy front below. The MCP endpoint itself, not its parent:
+      # from v3.2.x the agent exempts only paths under /api/creative-agent/ from CSRF, so a
+      # tools/call posted to /api/creative-agent is refused 403 (preview_creative in sync).
+      CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent/mcp
       CREATE_DEMO_TENANT: "true"
       # The LIVE server needs the same signing KEK the dev stack has (#1291 D1).
       # A scenario's Given mints a tenant signing key through production, which
@@ -707,7 +709,7 @@ services:
       # origin the SERVER does, and a `*.adcp.test` value that is not
       # https://...:8443 is a guard failure
       # (tests/unit/test_architecture_e2e_compose_tls_origins.py).
-      CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent
+      CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent/mcp
       # PLAYWRIGHT_BROWSERS_PATH used to sit here, overriding Dockerfile.test's
       # baked /ms-playwright; it was DELETED (not moved) when the `user:` pin
       # went away -- see the HOME/UV_CACHE_DIR note at the top of this block.

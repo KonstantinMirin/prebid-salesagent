@@ -48,7 +48,7 @@ HEALTH="http://localhost:9999/api/creative-agent/health"
 TLS_PROXY="creative-agent-tls"
 TLS_PORT="9443"
 HEALTH_TLS="https://agent.localhost:${TLS_PORT}/api/creative-agent/health"
-CREATIVE_AGENT_URL="https://agent.localhost:${TLS_PORT}/api/creative-agent"
+CREATIVE_AGENT_URL="https://agent.localhost:${TLS_PORT}/api/creative-agent/mcp"
 
 _healthy() { curl -sf -m 3 "$HEALTH" >/dev/null 2>&1; }
 _tls_healthy() { curl -sf -m 3 --cacert .test-tls/ca.pem "$HEALTH_TLS" >/dev/null 2>&1; }
