@@ -637,14 +637,14 @@ _XFAIL_TAGS: dict[str, str] = {
     # scenario graded the harness's own exception. Dispatching the raw parameter bag lets
     # the payload reach the server, which answers INVALID_REQUEST with a suggestion, which
     # is what the scenario asked for all along (prkv.33).
-    # FIXME: the error CODE is fixed (currency-not-supported now
-    # raises AdCPCapabilityNotSupportedError -> UNSUPPORTED_FEATURE, verified by
-    # tests/integration/test_currency_not_supported_error_code.py). But this scenario
-    # selects a non-default-currency pricing_option_id, and create_media_buy derives
-    # request_currency from the product's FIRST pricing option — it never validates the
-    # SELECTED option's currency — so the create SUCCEEDS instead of failing. Graduates
-    # once selected-option currency validation lands (#1417).
-    "T-UC-002-ext-d": "selected pricing-option currency not validated against CurrencyLimit; create succeeds instead of UNSUPPORTED_FEATURE — spec-production gap",
+    # Graduated (#1417): T-UC-002-ext-d. create_media_buy now reads the currency from the
+    # pricing option the package SELECTS, not the product's first (3b1339f63), so an
+    # option in a currency outside the tenant's CurrencyLimit rows is refused
+    # UNSUPPORTED_FEATURE / correctable, the closest code the pinned enum defines ("a
+    # requested feature or field is not supported by this seller"). The Given seeds the
+    # option through PricingOptionFactory; the code and recovery Thens read the wire only.
+    # Strict XPASS on a2a, mcp, rest and e2e_rest in box run innet_281026_1713; not in
+    # e2e_rest_known_failures.txt.
     # Graduated (#1417/gh8p.10): duplicate product_id now raises AdCPValidationError
     # with a buyer-facing suggestion ("Each package must reference a distinct
     # product_id ..."), surfaced on the wire. T-UC-002-ext-e passes.
