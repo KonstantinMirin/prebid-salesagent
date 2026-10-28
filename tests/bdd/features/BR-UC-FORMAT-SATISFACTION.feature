@@ -7,8 +7,8 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   I want a package whose format selector under-specifies the product's declaration refused
   So that I am told before the buy exists, rather than sold inventory no creative can fill
 
-  # THE AUTHORITY is docs/creative/formats.mdx § Matching and satisfaction (3.2.3, the
-  # pinned version), which states the relation as five rules:
+  # THE AUTHORITY is docs/creative/formats.mdx § Matching and satisfaction (at the pin),
+  # which states the relation as five rules:
   #
   #   - Exact dimensions and durations must match.
   #   - A requested range must be contained within the accepted range; overlap is
@@ -16,6 +16,21 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   #   - Required slots must be present with compatible asset types.
   #   - An exact publisher claim must match both publisher_domain and format_option_id.
   #   - Equal format_kind values alone do not prove compatibility.
+  #
+  # WHICH CONSTRAINTS A SELECTOR MUST STATE is named, not left to the shape of the
+  # constraint. docs/creative/canonical-formats.mdx § Format matching vs product
+  # satisfaction: "When the product declares a fixed width, height, duration_ms_exact, or
+  # duration_ms_range, the requested creative or package selector MUST declare and match
+  # that constraint." Any other constraint a selector is silent about is INHERITED -- the
+  # same document's normative "Narrows" definition: "when v2.params omits a parameter that
+  # v1 specified, v2 inherits v1's value (no narrowing constraint added)" -- and a
+  # constraint it does state must still be met. The pin's storyboard grades exactly that
+  # split: create_media_buy_with_equivalent_direct_legacy_emission sends a direct route of
+  # {width, height} against a declaration that also fixes max_file_size_kb and
+  # image_formats, and expects it ACCEPTED with every route graded independently. The
+  # direct-selector step that restates those two (create_media_buy_with_direct_canonical_
+  # selector) restates them because an earlier runner refused their omission; the changesets
+  # that added them say so, and the runner has since been corrected to inherit.
   #
   # and core/product-format-declaration.json's seller_preference, which is normative that
   # format_options[] "IS the closed set of accepted formats; anything outside the list is
@@ -47,7 +62,8 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   #
   # @source repo=adcp ref=v3.2.7 path=docs/creative/formats.mdx
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-format-declaration.json
-  # @source repo=adcp ref=v3.2.3 path=dist/compliance/3.2.3/protocols/media-buy/scenarios/canonical_formats.yaml
+  # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/canonical_formats.yaml
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx
 
   Background:
     Given a tenant is configured for media buy creation
@@ -60,18 +76,30 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Then the buyer receives the media buy
 
     Examples:
-      | declaration       | selector                        |
-      | fixed_300x250     | exact_300x250                   |
-      | fixed_300x250     | product_option_ref              |
-      | fixed_300x250     | legacy_display_300x250          |
-      | duration_range    | contained_range                 |
-      | required_slots    | covering_slots                  |
-      | publisher_300     | matching_publisher_claim        |
-      | fixed_300x250     | option_plus_projectable_legacy  |
-      | fixed_300x250     | direct_plus_legacy              |
-      | two_image_options | exact_300x250                   |
-      | two_image_options | mismatched_728x90               |
+      | declaration          | selector                       |
+      | fixed_300x250        | exact_300x250                  |
+      | fixed_300x250        | complete_300x250               |
+      | text_limited_300x250 | exact_300x250                  |
+      | duration_range       | exact_duration_in_range        |
+      | fixed_300x250        | product_option_ref             |
+      | fixed_300x250        | legacy_display_300x250         |
+      | duration_range       | contained_range                |
+      | required_slots       | covering_slots                 |
+      | publisher_300        | matching_publisher_claim       |
+      | fixed_300x250        | option_plus_projectable_legacy |
+      | fixed_300x250        | direct_plus_legacy             |
+      | two_image_options    | exact_300x250                  |
+      | two_image_options    | mismatched_728x90              |
 
+    # `exact_300x250` against `fixed_300x250` states the fixed size and omits the size cap
+    # and the file-format set the declaration also fixes; `complete_300x250` restates them.
+    # Both are accepted, and their refusal mirrors below (`oversized_file_300x250`,
+    # `unaccepted_image_format_300x250`) state one of those constraints and break it -- so a
+    # seller that refused every omission reddens here and one that ignored every
+    # non-dimension constraint reddens there. `text_limited_300x250` is the same pair over a
+    # numeric limit whose name carries no bound prefix, which is the case that separates a
+    # rule keyed on the pin's list from one keyed on the constraint's shape.
+    #
     # THE LAST TWO ROWS ARE WORK ITEM M2, and they are the same two selectors that appear
     # in the refusal outline below against `fixed_300x250` — which is what makes them
     # informative. A product publishing TWO image declarations, 300x250 and 728x90, accepts
@@ -105,17 +133,22 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Then the buyer is refused UNSUPPORTED_FEATURE naming the "<arm>" selector
 
     Examples:
-      | declaration       | selector                          | arm                |
-      | fixed_300x250     | bare_image_kind                   | format_kind        |
-      | fixed_300x250     | mismatched_728x90                 | format_kind        |
-      | fixed_300x250     | unpublished_video_kind            | format_kind        |
-      | fixed_300x250     | unpublished_option_ref            | format_option_refs |
-      | duration_range    | overlapping_range                 | format_kind        |
-      | required_slots    | slot_missing                      | format_kind        |
-      | publisher_300     | wrong_publisher_domain            | format_option_refs |
-      | fixed_300x250     | option_plus_unprojectable_legacy  | format_ids         |
-      | fixed_300x250     | legacy_display_728x90             | format_ids         |
-      | two_image_options | mismatched_160x600                | format_kind        |
+      | declaration          | selector                         | arm                |
+      | fixed_300x250        | bare_image_kind                  | format_kind        |
+      | fixed_300x250        | mismatched_728x90                | format_kind        |
+      | fixed_300x250        | unpublished_video_kind           | format_kind        |
+      | fixed_300x250        | unpublished_option_ref           | format_option_refs |
+      | duration_range       | overlapping_range                | format_kind        |
+      | required_slots       | slot_missing                     | format_kind        |
+      | publisher_300        | wrong_publisher_domain           | format_option_refs |
+      | fixed_300x250        | option_plus_unprojectable_legacy | format_ids         |
+      | fixed_300x250        | legacy_display_728x90            | format_ids         |
+      | two_image_options    | mismatched_160x600               | format_kind        |
+      | fixed_300x250        | oversized_file_300x250           | format_kind        |
+      | fixed_300x250        | unaccepted_image_format_300x250  | format_kind        |
+      | text_limited_300x250 | headline_over_limit_300x250      | format_kind        |
+      | duration_range       | duration_omitted                 | format_kind        |
+      | duration_range       | exact_duration_outside_range     | format_kind        |
 
     # bare_image_kind IS the storyboard's reject_bare_image_selector_for_fixed_mrec, and
     # mismatched_728x90 is formats.mdx's fifth rule stated as an input: the two selectors
@@ -140,6 +173,12 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # asserting it: before this change this row was ACCEPTED, because an unmatched legacy
     # route fell through to the bare-kind route whose params grading a legacy route skips
     # (salesagent-t0uoo).
+    #
+    # duration_omitted is the duration half of the named list: a range is one of the four
+    # constraints a selector MUST state, so a bare video_hosted is under-specified for a
+    # product that bounds its duration -- canonical-formats.mdx's own example row,
+    # "video_hosted with no duration ... Reject for this product". exact_duration_outside_range
+    # pairs with exact_duration_in_range above: the same key, inside and outside the range.
     #
     # mismatched_160x600 is M2's refusal half: a selector that satisfies NEITHER of the two
     # image declarations the product publishes. Without it, the two M2 accept rows above are

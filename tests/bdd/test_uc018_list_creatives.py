@@ -14,10 +14,10 @@ Three scenarios have their own notes below because they were the first wired, an
 spec citations are the ones the rest were checked against:
 
 - ``T-UC-018-storyboard-list-all-creatives-after-sync`` (#1405): after the buyer
-  syncs creatives across formats, ``list_creatives`` with no filters returns the
+  syncs creatives by canonical kind, ``list_creatives`` with no filters returns the
   account's library — schema-valid against ``list-creatives-response.json``, each
-  entry exposing ``creative_id``, ``name``, ``format_id``, ``status``. Source
-  obligation: adcp ``protocols/creative/index.yaml`` · ``list_all``.
+  entry exposing ``creative_id``, ``name``, ``format_kind``, ``status`` and no
+  ``format_id``. Source obligation: adcp ``protocols/creative/index.yaml`` · ``list_all``.
 - ``T-UC-018-storyboard-filter-by-concept-id`` (#1407): ``filters.concept_ids``
   scopes results to a concept; each returned creative exposes ``concept_id`` and
   ``concept_name``. Source: adcp ``creative/list-creatives-request.json`` +
@@ -118,7 +118,7 @@ from tests.helpers.pinned_schema import validator_for
 # ``audio_15s`` alone. ``audio_30s`` projects to no canonical kind and the write gate
 # refuses it, so seeding the row raised. What this precondition needs is three DIFFERENT
 # kinds (image / video_hosted / audio_hosted), which the duration does not change.
-_SYNCED_FORMATS = ("display_300x250", "video_640x480", "audio_15s")
+_SYNCED_KINDS = ("image", "video_hosted", "audio_hosted")
 
 # Bind the UC-018 feature. Whole-feature binding via scenarios() is the repo convention
 # the CI shard-splitter requires (scripts/ci/shard_split.py).
@@ -245,16 +245,18 @@ def _get_or_create_tenant_and_principal(env: Any) -> tuple[Any, Any]:
 # extra has_auth flag is read only by a UC-003 step, so nothing here changes.
 
 
-@given("the buyer recently synced three creatives in three different formats via sync_creatives")
+@given("the buyer recently synced three creatives identified by canonical format kinds via sync_creatives")
 def given_recently_synced_three_creatives(ctx: dict) -> None:
-    """Seed three approved creatives (one per format) owned by the authenticated buyer.
+    """Seed three approved creatives (one per canonical kind) owned by the authenticated buyer.
 
-    Seeded via CreativeFactory rather than a live sync_creatives call — see the
-    module docstring. Records the synced creative_ids for the Then steps.
+    Each is identified the way the storyboard's list_all creative was synced: by
+    ``format_kind``, asserting no legacy reference. Seeded via CreativeFactory rather than
+    a live sync_creatives call — see the module docstring. Records the synced creative_ids
+    for the Then steps.
     """
     env = ctx["env"]
     tenant, principal = _get_or_create_tenant_and_principal(env)
-    synced_ids = [_seed_creative(tenant, principal, fmt).creative_id for fmt in _SYNCED_FORMATS]
+    synced_ids = [_seed_creative(tenant, principal, canonical_kind=kind).creative_id for kind in _SYNCED_KINDS]
     ctx["tenant"] = tenant
     ctx["principal"] = principal
     ctx["synced_creative_ids"] = synced_ids
@@ -280,29 +282,11 @@ def when_list_creatives_no_filters(ctx: dict) -> None:
 # ── Then ─────────────────────────────────────────────────────────────
 
 
-def _serialized_response(ctx: dict) -> dict[str, Any]:
-    """Serialize the typed response through the production serializer (JSON mode).
-
-    list_creatives returns the same typed payload on every transport, so each
-    transport's Then steps assert on the same serialized document. ``mode="json"``
-    drives ``NestedModelSerializerMixin`` — the same serializer that produces the
-    on-the-wire bytes (format_id -> {agent_url, id}, datetimes -> ISO strings).
-    ``exclude_none`` omits unset optional fields (format_summary, status_summary,
-    sandbox, errors, ext, context), matching the buyer-visible REST wire and the
-    AdCP contract, which type those fields only when present (a literal ``null``
-    is not a valid array/object/boolean).
-
-    The 4-transport parametrization still exercises each dispatch path end to end:
-    a broken transport surfaces as a missing/errored dispatch payload here.
-    """
-    return require_payload(ctx).model_dump(mode="json", exclude_none=True)
-
-
 @then("the creatives array should include each of the synced creatives")
 def then_creatives_include_synced(ctx: dict) -> None:
     """Assert every creative_id seeded by the Given is present in the library."""
     expected = set(ctx["synced_creative_ids"])
-    returned = {entry["creative_id"] for entry in _serialized_response(ctx)["creatives"]}
+    returned = {entry["creative_id"] for entry in _wire_creatives(ctx)}
     missing = expected - returned
     assert not missing, (
         f"synced creatives missing from the list_creatives library: {sorted(missing)}; "
@@ -310,20 +294,28 @@ def then_creatives_include_synced(ctx: dict) -> None:
     )
 
 
-@then("each creative entry should expose creative_id, name, format_id, and status")
+@then("each creative entry should expose creative_id, name, format_kind, and status, and no format_id")
 def then_each_creative_exposes_core_fields(ctx: dict) -> None:
-    """Assert every entry carries the four core fields, format_id as a {agent_url, id} object."""
-    creatives = _serialized_response(ctx)["creatives"]
-    assert creatives, "list_creatives returned an empty creatives array"
-    for entry in creatives:
-        for field in ("creative_id", "name", "format_id", "status"):
-            assert field in entry, f"creative entry missing {field!r}: {entry}"
-            assert entry[field] not in (None, "", {}), f"creative entry has empty {field!r}: {entry}"
-        # v3.1 federation contract: format_id is an object carrying agent_url + id.
-        fid = entry["format_id"]
-        assert isinstance(fid, dict) and fid.get("agent_url") and fid.get("id"), (
-            f"format_id must be an object with agent_url and id, got: {fid!r}"
+    """Assert every synced entry carries list_all's four fields, and the kind it was synced by.
+
+    list_all: "Each creative includes: creative_id, name, format_kind, status". The kind is
+    asserted to be the SEEDED one, not merely present, and ``format_id`` absent: the item
+    schema's oneOf makes the two exclusive, and the deprecated arm is for creatives synced
+    on the legacy path, which these were not.
+    """
+    synced = dict(zip(ctx["synced_creative_ids"], _SYNCED_KINDS, strict=True))
+    entries = {entry["creative_id"]: entry for entry in _wire_creatives(ctx) if entry.get("creative_id") in synced}
+    assert entries.keys() == synced.keys(), (
+        f"synced creatives missing from the listing: {sorted(synced.keys() - entries.keys())}"
+    )
+    for creative_id, kind in synced.items():
+        entry = entries[creative_id]
+        for field in ("name", "status"):
+            assert entry.get(field) not in (None, ""), f"creative entry has no {field!r}: {entry}"
+        assert entry.get("format_kind") == kind, (
+            f"expected format_kind {kind!r}, got {entry.get('format_kind')!r}: {entry}"
         )
+        assert "format_id" not in entry, f"a creative synced by format_kind is listed with a format_id: {entry}"
 
 
 # ── @concept-id storyboard scenario (#1407) ─────────────────────────────

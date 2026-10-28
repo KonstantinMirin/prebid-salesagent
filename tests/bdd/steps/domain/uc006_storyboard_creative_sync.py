@@ -28,8 +28,7 @@ Reuses the private helpers already established in uc006_sync_creatives.py
 (``_ensure_tenant_principal``, ``_build_creative_payload``,
 ``_setup_product_with_creative_policy``, ``_action_str``,
 ``when_sync_creative``) rather than re-deriving creative-payload/dispatch
-logic — the same cross-file private-import precedent
-``uc005_format_id_roundtrip.py`` uses against ``uc005_format_id_shape.py``.
+logic.
 """
 
 from __future__ import annotations
@@ -254,10 +253,8 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
 def given_captured_format_id_from_get_products_for_sync(ctx: dict) -> None:
     """Call get_products in-process to capture a real format_id, then send it to sync_creatives.
 
-    Mirrors ``uc005_format_id_roundtrip.given_captured_format_id_from_get_products``
-    (same capture mechanism), but seeds a Product on CreativeSyncEnv's tenant
-    instead of CreativeFormatsEnv's — the two envs are unrelated harnesses so
-    the capture must run against whichever DB/session this scenario's env owns.
+    Seeds the Product on CreativeSyncEnv's tenant, so the capture runs against the
+    DB/session this scenario's env owns.
 
     On e2e_rest, sync_creatives runs against the real Docker creative-agent
     container (no format-registry mock), so the captured format_id must be one
@@ -436,27 +433,19 @@ def then_per_creative_result_reports_action(ctx: dict, action: str) -> None:
     )
 
 
-@then('the per-creative result should report action "created" or "updated"')
+@then('the per-creative result\'s action should be "created" or "updated"')
 def then_per_creative_result_created_or_updated(ctx: dict) -> None:
     """Assert the first per-creative result's action is created or updated.
 
-    A well-formed, spec-compliant resubmission is expected to be accepted.
-    If production instead rejects it, that is a genuine gap worth
-    surfacing rather than masking: xfail with the observed errors instead
-    of a bare assertion failure.
+    The pin's provenance_enforcement accept_with_disclosure step grades exactly this set
+    (``allowed_values: ["created", "updated"]``): a resubmission of a creative_id the
+    seller already recorded is conformantly answered either way.
     """
     first = _first_creative_result(ctx, 'a per-creative result with action="created" or "updated"')
     actual = _action_str(first.action)
-    if actual not in ("created", "updated"):
-        raise AssertionError(
-            f"SPEC-PRODUCTION GAP: expected per-creative action 'created' or 'updated' for a "
-            f"well-formed corrected resubmission, production returned {actual!r} "
-            f"(errors={first.errors!r}) — production's internal Creative.provenance model "
-            "(src/core/schemas/creative.py) is structurally incompatible with the wire-level "
-            "adcp.types Provenance shape it is converted from (disclosure: str vs. a Disclosure "
-            "object, human_oversight: bool vs. an enum, verification: dict vs. a list), so a "
-            "spec-compliant provenance object is unconditionally rejected on internal re-validation."
-        )
+    assert actual in ("created", "updated"), (
+        f"expected per-creative action 'created' or 'updated', production returned {actual!r} (errors={first.errors!r})"
+    )
 
 
 @then('the per-creative result should NOT report action "failed"')
@@ -522,6 +511,25 @@ def then_every_result_exposes_status(ctx: dict) -> None:
     assert resp.creatives, "Expected at least one per-creative result"
     missing = [r.creative_id for r in resp.creatives if r.status is None]
     assert not missing, f"per-creative results {missing!r} carry no status"
+
+
+@then("every per-creative result should carry a status exactly when its action is neither failed nor deleted")
+def then_status_present_exactly_when_not_failed_or_deleted(ctx: dict) -> None:
+    """Assert the pin's two-sided status rule on every per-creative result.
+
+    sync-creatives-response.json: status "MUST be omitted when action is failed or
+    deleted". This seller has a review lifecycle, so every other entry carries one. Both
+    directions are checked, so a seller stamping a status on a failed entry fails as surely
+    as one dropping it from a created entry.
+    """
+    resp = _require_response(ctx, "a status on exactly the entries that are neither failed nor deleted")
+    assert resp.creatives, "Expected at least one per-creative result"
+    wrong = [
+        (r.creative_id, _action_str(r.action), r.status)
+        for r in resp.creatives
+        if (r.status is None) != (_action_str(r.action) in ("failed", "deleted"))
+    ]
+    assert not wrong, f"(creative_id, action, status) entries violating the status rule: {wrong!r}"
 
 
 @then(parsers.parse('every action value should be "{a1}", "{a2}", or "{a3}"'))

@@ -677,6 +677,18 @@ That third rule is the satisfaction relation, and it is the one the four creativ
 gates should collapse into. `format_is_supported` already implements the asymmetric version of
 it in the SDK and is "intentionally stricter than `formats_are_equivalent`".
 
+Which constraints a claim has to STATE is named by the pin rather than left to the shape of the
+constraint. `docs/creative/canonical-formats.mdx` § Format matching vs product satisfaction:
+"When the product declares a fixed `width`, `height`, `duration_ms_exact`, or
+`duration_ms_range`, the requested creative or package selector MUST declare and match that
+constraint." Every other constraint a claim omits is inherited — the same document's normative
+"Narrows" definition: "when v2.params omits a parameter that v1 specified, v2 inherits v1's
+value (no narrowing constraint added)" — and a constraint the claim does state must still be
+met. The `canonical_formats` storyboard depends on the split: its dual-emission positive sends a
+direct route of `{width, height}` against a declaration that also fixes `max_file_size_kb` and
+`image_formats`, and grades it accepted. `src/core/format_satisfaction.py` keys silence on that
+named set (`_MUST_BE_STATED`), and `BR-UC-FORMAT-SATISFACTION.feature` grades both halves.
+
 Locale policy follows the same intersection, under RFC 4647 Basic Filtering: with no product
 policy a placement may introduce any concrete policy as a narrowing, and with both present
 "every placement range must be contained by a product range".

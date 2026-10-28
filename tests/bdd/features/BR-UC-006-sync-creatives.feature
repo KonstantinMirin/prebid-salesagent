@@ -1591,7 +1591,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # provenance_enforcement Phase 2: cheapest buyer mistake -- no provenance attached.
     # Seller accepts envelope but per-creative action=failed with PROVENANCE_REQUIRED.
     # provenance_enforcement: provenance entirely absent under provenance_required policy
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_no_provenance step=sync_creatives_no_provenance
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_no_provenance step=sync_creatives_no_provenance
 
   @T-UC-006-storyboard-provenance-digital-source-type-missing @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @provenance @rejection
   Scenario: PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING -- provenance present but digital_source_type omitted
@@ -1605,7 +1605,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # under a policy with require_digital_source_type=true. Distinct from
     # PROVENANCE_REQUIRED because provenance IS present.
     # provenance_enforcement: digital_source_type missing under require_digital_source_type policy
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_missing_digital_source_type step=sync_creatives_no_digital_source_type
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_missing_digital_source_type step=sync_creatives_no_digital_source_type
 
   @T-UC-006-storyboard-provenance-disclosure-missing @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @provenance @rejection
   Scenario: PROVENANCE_DISCLOSURE_MISSING -- provenance present but disclosure block omitted under require_disclosure_metadata
@@ -1619,7 +1619,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # submitted manifest against creative_policy.provenance_requirements.require_disclosure_metadata
     # without calling any verifier. error.field points at the missing disclosure path.
     # provenance_enforcement: disclosure block missing under require_disclosure_metadata policy
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_missing_disclosure step=sync_creatives_missing_disclosure
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=reject_missing_disclosure step=sync_creatives_missing_disclosure
 
   @T-UC-006-storyboard-provenance-corrected-acceptance @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @provenance @acceptance
   Scenario: Corrected resubmission with disclosure block and on-list verifier is accepted
@@ -1627,14 +1627,17 @@ Feature: BR-UC-006 Sync Creative Assets
     And the Buyer Agent resubmits with a complete disclosure block and an on-list verify_agent from the seller's accepted_verifiers
     When the Buyer Agent sends sync_creatives with the corrected manifest
     Then the response is compliant with the sync_creatives success spec
-    And the per-creative result should report action "created"
+    And the per-creative result's action should be "created" or "updated"
     # provenance_enforcement Phase 6: the structural-rejection contract terminates in a
     # corrected acceptance. Buyer reads the rejection error codes from prior phases,
     # attaches a complete disclosure block, and represents an on-list verify_agent
     # drawn from creative_policy.accepted_verifiers. Per-creative action transitions
     # to created/updated (not failed); the creative enters the seller's review lifecycle.
+    # BOTH values are conformant: the step's validation is `allowed_values: ["created",
+    # "updated"]`, and phases 5 and 6 submit the same creative_id, so a seller that kept
+    # the failed phase-5 entry answers "updated" for the resubmission.
     # provenance_enforcement: corrected resubmission terminates the rejection cascade
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=accept_with_disclosure step=sync_creatives_with_disclosure
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_enforcement.yaml phase=accept_with_disclosure step=sync_creatives_with_disclosure
 
   @T-UC-006-storyboard-provenance-claim-contradicted @uc006-storyboard-routing @schema-v3.1 @v3-1 @provenance @rejection @truth-of-claim
   Scenario: PROVENANCE_CLAIM_CONTRADICTED -- on-list verifier refutes buyer's digital_source_type claim
@@ -1654,7 +1657,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # claimed_value, observed_value, confidence) -- no detail_url, no verifier extension
     # fields. This is the cross-tenant trust boundary.
     # provenance_truth_of_claim: verifier contradicts buyer claim; details bounded to audit-safe allowlist
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/compliance/source/protocols/creative/index.yaml
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_truth_of_claim.yaml phase=reject_contradicted_claim step=sync_creatives_contradicted
 
   # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
     # Gated upstream by the `creative` PROTOCOL, which AdCP 3.2 split creatives into and which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
@@ -1672,14 +1675,17 @@ Feature: BR-UC-006 Sync Creative Assets
     And the creatives array should carry one result per submitted creative
     And every per-creative result should expose an action field
     And every action value should be "created", "updated", or "failed"
-    # creative/index.yaml sync_multiple: a single sync_creatives call carries three
-    # creatives (display 300x250, video 30s, native_content). The seller validates each
-    # against its format spec independently and returns per-creative action plus status.
+    # sync-creatives-response.json: creatives[] is "Results for each creative processed",
+    # one entry per submitted creative, each carrying an action from creative-action.json
+    # (created, updated, unchanged, failed, deleted). The asserted set leaves out deleted,
+    # which only delete_missing produces, and unchanged, which only a byte-identical
+    # resubmission produces; this call carries neither. The storyboard's
+    # creative/index.yaml sync_multiple step syncs ONE 300x250 image creative; the bulk
+    # shape is the schema's, not that step's.
     # This half grades the ACTION obligations; the per-creative STATUS obligations are
     # graded by the sibling scenario below, split out because their known production gap
     # aborted this scenario and left these assertions dead (#1858).
-    # sync_multiple: bulk multi-format validation returns per-creative action+status
-    # @source repo=adcp ref=v3.2.3 path=static/compliance/source/protocols/creative/index.yaml phase=sync_multiple step=sync_creatives
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json pointer=/oneOf/0/properties/creatives
 
   # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
     # Gated upstream by the `creative` PROTOCOL, which AdCP 3.2 split creatives into and which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
@@ -1694,12 +1700,15 @@ Feature: BR-UC-006 Sync Creative Assets
     Given the Buyer Agent submits three creatives in three different formats in a single sync_creatives call
     When the Buyer Agent sends sync_creatives
     Then the response is compliant with the sync_creatives success spec
-    And every per-creative result should expose a status field
+    And every per-creative result should carry a status exactly when its action is neither failed nor deleted
     And every status value should be drawn from the creative-status enum
-    # The STATUS half of the same storyboard step as the sibling scenario above.
-    # Per-creative status is from creative-status (approved, pending_review, rejected).
-    # sync_multiple: bulk multi-format validation returns per-creative action+status
-    # @source repo=adcp ref=v3.2.3 path=static/compliance/source/protocols/creative/index.yaml phase=sync_multiple step=sync_creatives
+    # The STATUS half of the sibling scenario above. sync-creatives-response.json, on the
+    # per-creative status: "Values come from CreativeStatus only (processing,
+    # pending_review, approved, suspended, rejected, archived)", and it "MUST be omitted
+    # when action is failed or deleted ... Omit entirely when the seller has no review
+    # lifecycle at all." This seller has a review lifecycle, so every entry that was not
+    # failed or deleted carries one, and an entry that was carries none.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json pointer=/oneOf/0/properties/creatives/items/properties/status
 
   # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
     # Gated upstream by the `creative` PROTOCOL, which AdCP 3.2 split creatives into and which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
@@ -1716,13 +1725,16 @@ Feature: BR-UC-006 Sync Creative Assets
     Then the response is compliant with the sync_creatives success spec
     And the per-creative result should NOT report action "failed" due to format_id rejection
     And the seller's own format_id object should roundtrip through sync_creatives without modification
-    # media-buy/index.yaml creative_sync (format_id roundtrip): the buyer submits a
-    # creative whose format_id is the EXACT object returned by get_products
-    # (products[0].format_ids[0]). If the seller's validation rejects a format_id
-    # that it returned in products, its catalog does not roundtrip and a buy
-    # would silently fail at sync_creatives after commit.
-    # format_id roundtrip: seller MUST accept its own format_ids on sync_creatives
-    # @source repo=adcp ref=v3.2.3 path=static/compliance/source/protocols/creative/index.yaml phase=sync_multiple step=sync_creatives
+    # universal/schema-validation.yaml, phase format_option_reconciliation: "Identifiers
+    # returned by get_products must be accepted back by the same agent in subsequent
+    # calls." The buyer submits a creative whose format_id is the EXACT object returned by
+    # get_products (products[0].format_ids[0]). The pin's own worked example of the
+    # principle is the canonical one -- the selected format_kind and option reference
+    # echoed into sync_creatives -- and format_id is the deprecated 3.x branch
+    # (creative-asset.json: "DEPRECATED in 3.2"); a product that still emits a format_id
+    # is still handing the buyer an identifier, so the principle covers it. The phase's
+    # pointer to a media_buy_seller creative_sync phase names nothing at the pin.
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/universal/schema-validation.yaml phase=format_option_reconciliation
 
   @T-UC-006-storyboard-creative-reception-stateful-render @uc006-storyboard-routing @schema-v3.1 @v3-1 @stateful-push @creative-reception
   Scenario: Stateful sales agent accepts pushed creatives and exposes them via per-creative status transitions
