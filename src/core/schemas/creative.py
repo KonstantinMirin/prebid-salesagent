@@ -8,7 +8,7 @@ assignments, and admin approval workflows.
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 from adcp.types import CreativeStatus
 from adcp.types import PaginationResponse as LibraryResponsePagination
@@ -27,6 +27,7 @@ from adcp.types import (
 # STRIPS ``format_id``. Repointing it is part of the creative migration (salesagent-3xcdk),
 # not of the SDK bump.
 from adcp.types.domains.core.creative_asset import CreativeAsset as LibraryCreativeAsset
+from adcp.types.domains.core.creative_filters import CreativeFilters as LibraryCreativeFilters
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from adcp.types.domains.core.provenance import Provenance as LibraryProvenance
 from adcp.types.domains.creative.list_creatives_response import (
@@ -71,11 +72,13 @@ from src.core.schemas._base import (
     BuyerRequest,
     Format,
     FormatId,
+    FormatIdSlot,
     NestedModelSerializerMixin,
     SalesAgentAdcpResponse,
     SalesAgentBaseModel,
     Targeting,
 )
+from src.core.schemas._dependencies import as_local, narrowed_from
 from src.core.schemas.notification import PushNotificationConfig
 
 #: IPTC Digital Source Type, for AI provenance under EU AI Act Article 50.
@@ -183,16 +186,14 @@ class CreativeAssetRequest(LibraryCreativeAsset):
     # round-trip through a dict to get past it.
     model_config = ConfigDict(extra=get_pydantic_extra_mode(), from_attributes=True)
 
-    # ``format_id`` is INHERITED. This redeclaration existed to WEAKEN the parent from
-    # required to optional, back when the generated parent was one branch of the oneOf and
-    # required the field. The regenerated pin already declares it
-    # ``FormatReferenceStructuredObject | None`` with ``default=None`` on the single
-    # flattened ``CreativeAsset``, so the weakening has nothing left to weaken -- measured
-    # field for field, the only axes the local line still changed were the parent's
-    # description and its ``deprecated=True`` marker, both of which it dropped. Inheriting
-    # restores them: ``format_id`` is DEPRECATED in 3.2, the published schema now says so,
-    # and reading the attribute emits the SDK's DeprecationWarning, which is the correct
-    # signal while format_kind is the canonical identifier.
+    # ``format_id`` is BUILT as the local :class:`FormatId`, which carries
+    # core/format-id.json's ``dependencies``, and otherwise is the parent's declaration
+    # (``narrowed_from``). An earlier redeclaration here, written to weaken the field to
+    # optional, dropped the parent's description and its ``deprecated=True`` marker; keeping
+    # the parent's declaration keeps both: ``format_id`` is DEPRECATED in 3.2, the published
+    # schema says so, and reading the attribute emits the SDK's DeprecationWarning, which is
+    # the correct signal while format_kind is the canonical identifier.
+    format_id: FormatIdSlot | None = narrowed_from(LibraryCreativeAsset, "format_id")
 
     @model_validator(mode="before")
     @classmethod
@@ -700,6 +701,11 @@ class ListCreativeFormatsRequest(BuyerRequest, LibraryListCreativeFormatsRequest
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
+    # Narrowed to the local class, which carries core/format-id.json's ``dependencies``.
+    format_ids: list[FormatIdSlot] | None = narrowed_from(LibraryListCreativeFormatsRequest, "format_ids")
+    input_format_ids: list[FormatIdSlot] | None = narrowed_from(LibraryListCreativeFormatsRequest, "input_format_ids")
+    output_format_ids: list[FormatIdSlot] | None = narrowed_from(LibraryListCreativeFormatsRequest, "output_format_ids")
+
     @field_validator("disclosure_positions", "disclosure_persistence", mode="before")
     @classmethod
     def _refuse_duplicate_disclosure_members(cls, v: Any) -> Any:
@@ -763,6 +769,13 @@ class ListCreativeFormatsResponse(
         return v
 
 
+class CreativeFilters(LibraryCreativeFilters):
+    """``core/creative-filters.json``, with ``format_ids`` narrowed to the local
+    :class:`FormatId`, which carries core/format-id.json's ``dependencies``."""
+
+    format_ids: list[FormatIdSlot] | None = narrowed_from(LibraryCreativeFilters, "format_ids")
+
+
 class ListCreativesRequest(BuyerRequest, LibraryListCreativesRequest):
     """Extends library ListCreativesRequest from AdCP spec.
 
@@ -789,6 +802,10 @@ class ListCreativesRequest(BuyerRequest, LibraryListCreativesRequest):
     )
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    filters: Annotated[LibraryCreativeFilters, as_local(CreativeFilters)] | None = narrowed_from(
+        LibraryListCreativesRequest, "filters"
+    )
 
     @model_validator(mode="after")
     def _account_required_when_pricing_requested(self) -> "ListCreativesRequest":

@@ -7,7 +7,7 @@
 import copy
 import re
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
@@ -190,6 +190,7 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     _details_to_wire,
 )
+from src.core.schemas._dependencies import SchemaDependencies, as_local, narrowed_from
 from src.core.schemas.notification import PushNotificationConfig
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage
@@ -220,6 +221,7 @@ from adcp.types import TargetingOverlay, TargetingOverlayInput
 from adcp.types.domains.core.collection_list_ref import (
     CollectionListReference,  # noqa: F401 — re-exported via src.core.schemas; used by callers and TargetingOverlay.collection_list type
 )
+from adcp.types.domains.core.media_buy_frequency_cap import MediaBuyFrequencyCap as LibraryMediaBuyFrequencyCap
 from annotated_types import MaxLen, MinLen
 from pydantic import (
     BaseModel,
@@ -2274,14 +2276,35 @@ def convert_format_ids_to_formats(format_ids: list[str], tenant_id: str | None =
 # and what adapters and the discovery readers hand over -- fill a slot typed with this
 # subclass, by reading the five declared fields off it. Without that, pydantic refuses a
 # parent instance in a subclass slot by identity.
-class FrequencyCap(LibraryFrequencyCap):
+class FrequencyCap(SchemaDependencies, LibraryFrequencyCap):
     """The pinned ``core/frequency-cap.json``, declaring no field of its own.
 
     See the note above for why this is a subclass rather than an alias, and why its one
-    ``model_config`` is the reason it exists.
+    ``model_config`` is the reason it exists. It also carries the schema's ``dependencies``,
+    which the generated parent does not compile: ``max_impressions`` needs ``per`` and
+    ``window``, and each of those needs ``max_impressions``.
     """
 
     model_config = ConfigDict(extra="ignore", from_attributes=True)
+
+    _SCHEMA_DEPENDENCIES = {
+        "max_impressions": ("per", "window"),
+        "per": ("max_impressions",),
+        "window": ("max_impressions",),
+    }
+
+
+class MediaBuyFrequencyCap(LibraryMediaBuyFrequencyCap, FrequencyCap):
+    """The pinned ``core/media-buy-frequency-cap.json``: ``allOf`` frequency-cap.json plus a
+    required ``max_impressions``. The SDK generates that ``allOf`` as inheritance from its
+    ``FrequencyCap``; inheriting the local one as well is what brings frequency-cap.json's
+    ``dependencies`` to the MediaBuy-level cap."""
+
+
+#: The element of a slot the pin types with a frequency cap, built as the local class (see
+#: ``src/core/schemas/_dependencies.py`` on narrowing a slot).
+FrequencyCapSlot = Annotated[LibraryFrequencyCap, as_local(FrequencyCap)]
+MediaBuyFrequencyCapSlot = Annotated[LibraryMediaBuyFrequencyCap, as_local(MediaBuyFrequencyCap)]
 
 
 # ``TargetingCapability`` is DELETED. Its only constructor anywhere was the
@@ -2402,7 +2425,21 @@ class _InternalTargetingDimensions(SalesAgentBaseModel):
         return sorted(form_factors) or None
 
 
-class Targeting(TargetingOverlay, _InternalTargetingDimensions):
+class PinnedTargeting(TargetingOverlay):
+    """``core/targeting.json`` exactly, with its ``frequency_cap`` slot narrowed.
+
+    Building the cap as the local :class:`FrequencyCap` is the whole class: it applies that
+    class's ``extra="ignore"`` (a stored overlay persisted before ``scope`` was deleted carries
+    one, and the generated parent's ``extra="allow"`` would keep it and emit it on the readback
+    wire) and the schema's ``dependencies``. ``get_products`` builds its ``targeting_overlay``
+    as this class, because the pin gives that request core/targeting.json and nothing more;
+    :class:`Targeting` adds this seller's internal dimensions for packages.
+    """
+
+    frequency_cap: FrequencyCapSlot | None = narrowed_from(TargetingOverlay, "frequency_cap")
+
+
+class Targeting(PinnedTargeting, _InternalTargetingDimensions):
     """``core/targeting.json`` plus this seller's internal dimensions.
 
     The READBACK side. Inherits the pinned overlay's v3 structured geo fields
@@ -2415,17 +2452,21 @@ class Targeting(TargetingOverlay, _InternalTargetingDimensions):
     Base order puts the library type FIRST so its field definitions win, and the mixin
     LAST so its ``extra`` policy does (pydantic merges base configs in ``__bases__``
     order, last one wins) -- the same ordering rule the pricing members follow.
+
+    ``frequency_cap`` is narrowed on :class:`PinnedTargeting`, for the reasons it records.
     """
 
-    # Narrowed to the local :class:`FrequencyCap`, which declares no field -- only
-    # ``extra="ignore"``. The narrowing is what APPLIES that config: the generated parent
-    # types this slot with its own ``extra="allow"`` class, so without this line a stale
-    # ``scope`` key in a stored overlay (every one persisted before it was deleted has one)
-    # would be retained on read and emitted on the readback wire.
-    frequency_cap: FrequencyCap | None = None
+
+class PinnedTargetingInput(TargetingOverlayInput):
+    """``core/targeting_input.json`` exactly, with its ``frequency_cap`` built as the local class,
+    for the reasons :class:`PinnedTargeting` records. :class:`TargetingInput` adds this seller's
+    internal dimensions; a package added by an update (:class:`PinnedPackageRequest`) takes this
+    one, which advertises and accepts the pinned overlay and nothing more."""
+
+    frequency_cap: FrequencyCapSlot | None = narrowed_from(TargetingOverlayInput, "frequency_cap")
 
 
-class TargetingInput(TargetingOverlayInput, _InternalTargetingDimensions):
+class TargetingInput(PinnedTargetingInput, _InternalTargetingDimensions):
     """``core/targeting_input.json`` plus this seller's internal dimensions.
 
     The REQUEST side. ``PackageRequest.targeting_overlay`` and
@@ -2433,10 +2474,9 @@ class TargetingInput(TargetingOverlayInput, _InternalTargetingDimensions):
     and its nested element types are its own, so :class:`Targeting` is not a substitute
     even though the runtime union still accepts one through a ``SkipJsonSchema`` arm.
     Declaring both is what keeps the request DTOs statically honest about what they take.
-    """
 
-    # Narrowed for the same reason :class:`Targeting` records: the config, not a field.
-    frequency_cap: FrequencyCap | None = None
+    ``frequency_cap`` is narrowed on :class:`PinnedTargetingInput`.
+    """
 
 
 #: Either local targeting overlay, for the business rules that read the PINNED dimensions.
@@ -2632,8 +2672,11 @@ class ProductPerformance(SalesAgentBaseModel):
 # --- Discovery ---
 
 
-class FormatId(LibraryFormatId):
+class FormatId(SchemaDependencies, LibraryFormatId):
     """AdCP format identifier - extends library FormatId with convenience methods.
+
+    Carries ``core/format-id.json``'s ``dependencies``, which the generated parent does not
+    compile: ``width`` and ``height`` come together, and ``pixel_ratio`` needs both.
 
     Note: the inherited ``agent_url`` is the WIRE STRING. the pinned SDK (#1396, "keep the
     format-reference agent_url as the wire string") types it ``StrictStr`` behind an
@@ -2644,6 +2687,8 @@ class FormatId(LibraryFormatId):
 
     The spec supports parameterized format IDs with width/height/duration_ms fields.
     """
+
+    _SCHEMA_DEPENDENCIES = {"width": ("height",), "height": ("width",), "pixel_ratio": ("width", "height")}
 
     def __str__(self) -> str:
         """Return human-readable format identifier for display in UIs."""
@@ -2690,6 +2735,11 @@ class FormatId(LibraryFormatId):
         return self.duration_ms
 
 
+#: The element of a slot the pin types with a format-id, built as the local :class:`FormatId`
+#: (see ``src/core/schemas/_dependencies.py`` on narrowing a slot).
+FormatIdSlot = Annotated[LibraryFormatId, as_local(FormatId)]
+
+
 # --- Brand Manifest Models (AdCP v1.8.0) ---
 
 
@@ -2734,7 +2784,32 @@ class BrandAsset(SalesAgentBaseModel):
 # --- Package Schemas (Extend adcp library for proper request/response separation) ---
 
 
-class PackageRequest(LibraryPackageRequest):
+class PinnedPackageRequest(SchemaDependencies, LibraryPackageRequest):
+    """``media-buy/package-request.json`` exactly, with its ``dependencies`` and with each nested
+    model that carries ``dependencies`` built as the local class.
+
+    What ``UpdateMediaBuyRequest.new_packages`` builds. It declares no field the pin lacks, so
+    that slot accepts and advertises the pinned package and nothing more;
+    :class:`PackageRequest` adds this seller's internal fields for create_media_buy.
+    """
+
+    # The generated parent already refuses ``params`` without ``format_kind`` in a hand-written
+    # validator, which runs first; the map is stated so every request-reachable class carries
+    # its schema's map, which tests/unit/test_schema_dependencies_match_pin.py checks.
+    _SCHEMA_DEPENDENCIES = {"params": ("format_kind",)}
+
+    format_ids: list[FormatIdSlot] | None = narrowed_from(LibraryPackageRequest, "format_ids")
+    targeting_overlay: Annotated[TargetingOverlayInput, as_local(PinnedTargetingInput)] | None = narrowed_from(
+        LibraryPackageRequest, "targeting_overlay"
+    )
+    # Quoted: CreativeAssetRequest is defined in creative.py, which imports this module, so the
+    # annotation resolves at the model_rebuild in src/core/schemas/__init__.py.
+    creatives: "Sequence[Annotated[LibraryCreativeAsset, as_local(CreativeAssetRequest)]] | None" = narrowed_from(
+        LibraryPackageRequest, "creatives"
+    )
+
+
+class PackageRequest(PinnedPackageRequest):
     """Package request schema (for CreateMediaBuyRequest).
 
     Extends adcp library PackageRequest with internal fields.
@@ -2916,7 +2991,7 @@ class Package(LibraryPackage):
 
 
 # --- Media Buy Lifecycle ---
-class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
+class CreateMediaBuyRequest(SchemaDependencies, BuyerRequest, LibraryCreateMediaBuyRequest):
     """Extends library CreateMediaBuyRequest from AdCP spec.
 
     Per AdCP spec, the required fields are:
@@ -2999,6 +3074,12 @@ class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
     # element type is the local PackageRequest, not the parent's — deleting the
     # declaration would change the element type as well as the bound.
     packages: list[PackageRequest] | None = Field(None, min_length=1)
+
+    frequency_cap: MediaBuyFrequencyCapSlot | None = narrowed_from(LibraryCreateMediaBuyRequest, "frequency_cap")
+
+    # media-buy/create-media-buy-request.json's own ``dependencies``. The accepted-shape check
+    # below already refuses a proposal_id without total_budget, as matching no branch.
+    _SCHEMA_DEPENDENCIES = {"proposal_id": ("total_budget",)}
 
     @model_validator(mode="after")
     def _check_idempotency_key(self):
@@ -3292,6 +3373,13 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
     # are coerced to typed CollectionListReference at the boundary, not dicts.
     # The INPUT twin, for the reason PackageRequest.targeting_overlay gives.
     targeting_overlay: TargetingInput | None = None
+    # The item type PackageRequest.creatives names, which carries core/format-id.json's
+    # ``dependencies`` on its format_id.
+    # Quoted: CreativeAssetRequest is defined in creative.py, which imports this module, so
+    # the annotation resolves at the model_rebuild in src/core/schemas/__init__.py.
+    creatives: "list[Annotated[LibraryCreativeAsset, as_local(CreativeAssetRequest)]] | None" = narrowed_from(
+        LibraryPackageUpdate, "creatives"
+    )
 
     # Fields that are immutable once a package is created (BR-RULE-198). They are
     # not valid update fields, so the AdCP package-update schema rejects them via a
@@ -3465,6 +3553,13 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
     # AdCPPackageUpdate, so the declaration must stay and the parent's MinLen(1) has to be
     # restored on it rather than inherited.
     packages: list[AdCPPackageUpdate] | None = Field(None, min_length=1)
+    # Built as the local classes, which carry their schemas' ``dependencies``. new_packages
+    # builds the PINNED package, not PackageRequest: the slot must not take this seller's
+    # internal package fields.
+    new_packages: list[Annotated[LibraryPackageRequest, as_local(PinnedPackageRequest)]] | None = narrowed_from(
+        LibraryUpdateMediaBuyRequest, "new_packages"
+    )
+    frequency_cap: MediaBuyFrequencyCapSlot | None = narrowed_from(LibraryUpdateMediaBuyRequest, "frequency_cap")
     # Campaign-level budget (not in library spec — convenience field)
     # Bare float is accepted so transport wrappers can preserve existing DB currency
     # when the caller updates only the amount.

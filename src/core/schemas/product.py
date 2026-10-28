@@ -8,6 +8,7 @@ from typing import Annotated, Any, ClassVar
 
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
+from adcp.types import TargetingOverlay
 
 # The legacy arm is imported from ``adcp.types.legacy``, the module that contains ONLY it.
 # See the note in ``_base.py`` on why the module and not the ``adcp.types`` facade. All five
@@ -15,6 +16,9 @@ from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
 # seller extends a property of the ``Legacy`` prefix: three of the twins (Product, Placement,
 # ProductFilters) DROP ``format_ids`` outright, and the request/response pair keeps its own
 # fields while repointing the nested item types (filters, products) at the canonical models.
+from adcp.types.domains.core.media_buy_support_requirements import (
+    ProductMediaBuySupportRequirements as LibraryProductMediaBuySupportRequirements,
+)
 from adcp.types.legacy import LegacyGetProductsRequest as LibraryGetProductsRequest
 from adcp.types.legacy import LegacyGetProductsResponse as LibraryGetProductsResponse
 from adcp.types.legacy import LegacyPlacement as LibraryPlacement
@@ -26,10 +30,14 @@ from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
     BuyerRequest,
     FormatId,
+    FormatIdSlot,
+    MediaBuyFrequencyCapSlot,
     NestedModelSerializerMixin,
+    PinnedTargeting,
     SalesAgentAdcpResponse,
     SalesAgentBaseModel,
 )
+from src.core.schemas._dependencies import SchemaDependencies, as_local, narrowed_from
 
 # Private alias: product.py is star-imported by the package __init__, and a bare
 # `PricingOption` import here would re-export the pricing wrapper over the legacy
@@ -200,8 +208,18 @@ class ProductFilters(LibraryFilters):
     filter could ever run.
     """
 
+    # Built as the local class, which carries core/format-id.json's ``dependencies``.
+    format_ids: list[FormatIdSlot] | None = narrowed_from(LibraryFilters, "format_ids")
 
-class GetProductsRequest(BuyerRequest, LibraryGetProductsRequest):
+
+class ProductMediaBuySupportRequirements(SchemaDependencies, LibraryProductMediaBuySupportRequirements):
+    """``core/media-buy-support-requirements.json``, with its ``dependencies``:
+    ``frequency_cap_constraints`` needs ``frequency_cap``."""
+
+    _SCHEMA_DEPENDENCIES = {"frequency_cap_constraints": ("frequency_cap",)}
+
+
+class GetProductsRequest(SchemaDependencies, BuyerRequest, LibraryGetProductsRequest):
     """Extends library GetProductsWholesaleRequest (the pinned SDK: GetProductsRequest is a union alias).
 
     Base class: GetProductsWholesaleRequest (brief optional, buying_mode='wholesale').
@@ -244,6 +262,24 @@ class GetProductsRequest(BuyerRequest, LibraryGetProductsRequest):
         None,
         description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
     )
+
+    # media-buy/get-products-request.json's own ``dependencies``.
+    _SCHEMA_DEPENDENCIES = {"catalog": ("brand",), "if_pricing_version": ("if_wholesale_feed_version",)}
+
+    # Narrowed to the local classes, each of which carries its schema's ``dependencies`` or
+    # holds one that does.
+    filters: Annotated[LibraryFilters, as_local(ProductFilters)] | None = narrowed_from(
+        LibraryGetProductsRequest, "filters"
+    )
+    targeting_overlay: Annotated[TargetingOverlay, as_local(PinnedTargeting)] | None = narrowed_from(
+        LibraryGetProductsRequest, "targeting_overlay"
+    )
+    media_buy_frequency_cap: MediaBuyFrequencyCapSlot | None = narrowed_from(
+        LibraryGetProductsRequest, "media_buy_frequency_cap"
+    )
+    required_media_buy_support: (
+        Annotated[LibraryProductMediaBuySupportRequirements, as_local(ProductMediaBuySupportRequirements)] | None
+    ) = narrowed_from(LibraryGetProductsRequest, "required_media_buy_support")
 
 
 class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse, SalesAgentAdcpResponse):

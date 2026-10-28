@@ -470,6 +470,9 @@ def _partition_format_id_list(ctx: dict, partition: str, direction: str) -> None
         _call_raw(ctx, **{field: [{"id": "some-id"}]})
     elif partition == "invalid_format_id_missing_id":
         _call_raw(ctx, **{field: [{"agent_url": DEFAULT_AGENT_URL}]})
+    elif partition == "invalid_format_id_width_only":
+        # core/format-id.json: "dependencies": {"width": ["height"], ...}
+        _call_raw(ctx, **{field: [{"agent_url": DEFAULT_AGENT_URL, "id": "display_static", "width": 300}]})
     else:
         _call_raw(ctx, **{field: [{"agent_url": DEFAULT_AGENT_URL, "id": partition}]})
 

@@ -870,6 +870,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | empty_array                         | INVALID_REQUEST  |
       | invalid_format_id_missing_agent_url | INVALID_REQUEST  |
       | invalid_format_id_missing_id        | INVALID_REQUEST  |
+      | invalid_format_id_width_only        | INVALID_REQUEST  |
 
   @T-UC-005-partition-input-fmtids @UC-005-MAIN-MCP-20 @partition @input_format_ids
   Scenario Outline: Input format IDs filter partition - <partition>
@@ -891,6 +892,10 @@ Feature: BR-UC-005 Discover Creative Formats
       | empty_array                         | INVALID_REQUEST  |
       | invalid_format_id_missing_agent_url | INVALID_REQUEST  |
       | invalid_format_id_missing_id        | INVALID_REQUEST  |
+      | invalid_format_id_width_only        | INVALID_REQUEST  |
+  # invalid_format_id_width_only, both outlines: a format-id with width and no height. The
+  # schema's dependencies make width require height, so the request is schema-invalid.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json pointer=/dependencies/width
 
   # DELETED: @T-UC-005-boundary-type-filter ("Format type filter boundary"), for the
   # same reason as the partition outline above -- five valid rows dispatched unfiltered

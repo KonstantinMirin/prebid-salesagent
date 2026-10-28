@@ -1134,9 +1134,10 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             # left behind). The gap was "frequency_cap field-combo validation": the
             # seller accepted {"max_impressions": 3} with no per/window.
             # core/frequency-cap.json has always declared
-            # dependencies.max_impressions -> [per, window]; the adcp 9.0.0b3 pin
-            # compiles that root constraint onto the exported class, so the DTO now
-            # refuses the document at _boundary.py:240 and the buyer gets
+            # dependencies.max_impressions -> [per, window]. The SDK's generated class
+            # does not compile `dependencies`, so the local FrequencyCap carries the map
+            # (SchemaDependencies, src/core/schemas/_dependencies.py), the DTO refuses
+            # the document in validated_request (_boundary.py) and the buyer gets
             # INVALID_REQUEST with a suggestion — which is what the scenario demands.
             # Not a vacuous pass: the Then reaches
             # TransportResult.assert_wire_error(code, require_suggestion=True) via

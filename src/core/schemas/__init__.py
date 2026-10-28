@@ -15,7 +15,9 @@ from src.core.schemas._base import *  # noqa: F401, F403
 from src.core.schemas.notification import *  # noqa: F401, F403
 from src.core.schemas.pricing import *  # noqa: F401, F403
 from src.core.schemas._base import GetMediaBuysPackage as _GetMediaBuysPackage
+from src.core.schemas._base import AdCPPackageUpdate as _AdCPPackageUpdate
 from src.core.schemas._base import PackageRequest as _PackageRequest
+from src.core.schemas._base import PinnedPackageRequest as _PinnedPackageRequest
 from src.core.schemas.product import *  # noqa: F401,F403
 from src.core.schemas.delivery import *  # noqa: F401,F403
 from src.core.schemas.creative import *  # noqa: F401, F403
@@ -24,7 +26,9 @@ from src.core.schemas.creative import CreativeApproval as _CreativeApproval
 from src.core.schemas.creative import CreativeAssetRequest as _CreativeAssetRequest
 # isort: on
 
+_PinnedPackageRequest.model_rebuild(_types_namespace={"CreativeAssetRequest": _CreativeAssetRequest})
 _PackageRequest.model_rebuild(_types_namespace={"CreativeAssetRequest": _CreativeAssetRequest})
+_AdCPPackageUpdate.model_rebuild(_types_namespace={"CreativeAssetRequest": _CreativeAssetRequest})
 _GetMediaBuysPackage.model_rebuild(_types_namespace={"CreativeApproval": _CreativeApproval})
 
 # the pinned SDK ships its model tree with deferred pydantic-core builds (forward refs unresolved
