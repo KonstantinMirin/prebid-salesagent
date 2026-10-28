@@ -59,7 +59,7 @@ enforcement. It is not one now, on both halves:
 Spec grounding: via ``adcp==6.6.0``;
 ``<pin>:docs/building/by-layer/L1/security.mdx`` (there is no ``dist/docs/<pin>/`` at that
 tag — ``dist/docs/`` stops at 3.1.0) and
-``<pin>:dist/compliance/<pin>/universal/signed-requests.yaml`` (12 positive / 28 negative
+``<pin>:dist/compliance/<pin>/universal/signed-requests.yaml`` (its positive and negative
 vectors, graded on 2xx / 401 + the ``WWW-Authenticate`` code byte-for-byte).
 """
 
@@ -104,7 +104,7 @@ from src.core.metrics import record_request_unsigned, record_signature_failed, r
 from src.core.schemas import Principal
 from src.core.signing.agent_cache import AGENT_RESOLUTION_CACHE
 from src.core.signing.algorithms import request_signing_profile
-from src.core.signing.canonical import malformed_authority_reason, origin_of, reject_malformed_target
+from src.core.signing.canonical import origin_of, reject_malformed_target
 from src.core.signing.capture import HttpExchange, SignatureSubject
 from src.core.signing.posture import PostureBucket, RequestSigningPosture, posture_for_tenant
 from src.core.signing.replay_store import PostgresReplayStore
@@ -866,20 +866,22 @@ def _duplicate_digest_algorithm(value: str) -> str | None:
     return None
 
 
-#: ``header -> what makes ONE of its values malformed``. A table rather than five
+#: ``header -> what makes ONE of its values malformed``. A table rather than four
 #: near-identical blocks: each rule is the same shape (read a value, name a reason or pass),
-#: and five copies is five chances for one of them to stop rejecting.
+#: and four copies is four chances for one of them to stop rejecting.
 #:
-#: ``host`` shares :func:`~src.core.signing.canonical.malformed_authority_reason` with the
-#: canonicalization seam so the authority rule has exactly ONE definition. Only the CODE
-#: differs by caller — checklist step 1 here, ``request_target_uri_malformed`` there — and
-#: that difference is deliberate (``negative/026`` grades the former).
+#: ``host`` is deliberately NOT a row. A malformed authority is not a malformed signature
+#: header: security.mdx's error table files "raw non-ASCII host" and "bare IPv6" under
+#: ``request_target_uri_malformed``, and checklist step 10 is where ``@authority`` is derived
+#: from the as-received ``Host``. :func:`~src.core.signing.capture._target_uri` builds the URL
+#: FROM that header, so :func:`~src.core.signing.canonical.reject_malformed_target` judges the
+#: header's value with the one authority rule and the one code (``negative/026``,
+#: ``negative/031``).
 _MALFORMED_VALUE_RULES: tuple[tuple[bytes, Callable[[str], str | None]], ...] = (
     (b"signature", _duplicate_signature_label),
     (b"signature-input", _duplicate_signature_input_label),
     (b"content-type", _multi_valued_content_type),
     (b"content-digest", _duplicate_digest_algorithm),
-    (b"host", malformed_authority_reason),
 )
 
 #: Headers that MUST arrive on exactly one line when a signature covers the request. Not a
@@ -889,10 +891,12 @@ _MALFORMED_VALUE_RULES: tuple[tuple[bytes, Callable[[str], str | None]], ...] = 
 #: last on MCP. The join makes the repeat visible; this list is what refuses it, on the fields
 #: where a silently-chosen line changes what was verified.
 #:
-#: DERIVED from the table above, so a field gains both rules at once. ``signature`` was the
-#: field that had neither: the header carrying the credential itself was the one repeat
-#: nothing checked.
-_SINGLE_LINE_SIGNED_HEADERS: tuple[bytes, ...] = tuple(name for name, _rule in _MALFORMED_VALUE_RULES)
+#: The table's fields, so a field gains both rules at once, plus ``host``: its VALUE is the
+#: target gate's to judge, but a second ``Host`` line joins into an authority no value rule
+#: refuses, so the repeat itself is refused here — the same field set the SDK's own step-1
+#: precheck holds singular. ``signature`` was the field that had neither: the header carrying
+#: the credential itself was the one repeat nothing checked.
+_SINGLE_LINE_SIGNED_HEADERS: tuple[bytes, ...] = (*(name for name, _rule in _MALFORMED_VALUE_RULES), b"host")
 
 
 def _strict_header_precheck(raw_headers: tuple[tuple[bytes, bytes], ...]) -> None:
@@ -904,19 +908,19 @@ def _strict_header_precheck(raw_headers: tuple[tuple[bytes, bytes], ...]) -> Non
     four of them while missing the threat their ``$comment``s actually describe: a SECOND
     header LINE, which last-wins before any check runs.
 
-    Why OURS and not the SDK's: measured against ``adcp==6.6.0``, the SDK answers these four
-    vectors with the wrong graded artifact — ``request_signature_components_incomplete`` for
-    ``negative/021`` (its RFC 8941 parser last-wins on the duplicate dictionary key) and
-    ``request_signature_invalid`` for ``022``/``023``/``026`` (no single-value check on a
-    covered non-list field, no RFC 9530 duplicate-algorithm check, no A-label enforcement
-    anywhere on the authority path). Filed upstream as SDK divergence #6.
+    Why it runs HERE as well as inside the SDK: the pinned SDK's ``verify_request_signature``
+    carries an equivalent step-1 check, but it runs after :func:`_resolution_for` has already
+    walked the counterparty's discovery chain. Refusing first spares an unresolved counterparty
+    a three-hop outbound walk on a request that cannot be accepted. It was written when the SDK
+    answered ``021``/``022``/``023`` with the wrong code (SDK divergence #6).
+
+    It judges no AUTHORITY. ``Host``'s value is the target gate's (see
+    :data:`_MALFORMED_VALUE_RULES`); only a repeated ``Host`` line is refused here.
 
     Spec grounding, stated honestly rather than implied:
 
-    * the non-ASCII authority and the malformed-authority family are well grounded —
-      ``url-canonicalization.mdx`` steps 2-3, MUST-reject, shared with
-      :mod:`src.core.signing.canonical` so the rule has ONE definition;
-    * ``negative/023`` rests on RFC 9530 §2's Dictionary semantics;
+    * ``negative/023``, ``029`` and ``030`` rest on the Dictionary semantics of RFC 9530 §2 and
+      RFC 9421 §4.2, whose keys RFC 8941 §3.2 makes unique and §3.1.2 lowercase;
     * ``negative/021`` and ``negative/022`` are grounded ONLY in the vectors' own ``$comment``
       plus checklist step 1's bare "Reject if malformed" — no prose enumerates them. Do not
       cite prose support that is not there.
