@@ -4057,6 +4057,7 @@ async def _create_media_buy_impl(
                     campaign_objective=getattr(req, "campaign_objective", "") or "",
                     kpi_goal=getattr(req, "kpi_goal", "") or "",
                     account_id=identity.account.account_id,
+                    creative_deadline=response.creative_deadline,
                 )
                 # Read the two columns the REPOSITORY owns, inside the UoW while the
                 # row is still attached. The response reports what was persisted; it

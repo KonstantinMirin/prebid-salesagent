@@ -103,6 +103,8 @@ class _MediaBuyData:
     # the response is built from persisted values rather than defaults.
     confirmed_at: datetime | None
     revision: int
+    # Optional on media_buys[]; NULL when the adapter reported no deadline on create.
+    creative_deadline: datetime | None
 
 
 @dataclass
@@ -341,6 +343,9 @@ def _get_media_buys_impl(
                     start_time=_blob("start_time"),
                     end_time=_blob("end_time"),
                     paused=_blob("paused"),
+                    # Absent means the buy-level creative_deadline applies
+                    # (get-media-buys-response.json, packages[].creative_deadline).
+                    creative_deadline=_blob("creative_deadline"),
                     targeting_overlay=targeting_overlay,
                     creative_approvals=approvals if approvals else None,
                     snapshot=snapshot,
@@ -383,6 +388,7 @@ def _get_media_buys_impl(
                 # decided.
                 confirmed_at=buy.confirmed_at,
                 revision=buy.revision,
+                creative_deadline=buy.creative_deadline,
             )
         )
 
@@ -574,6 +580,7 @@ def _fetch_target_media_buys(
                 wire_status=wire_status,
                 confirmed_at=buy.confirmed_at,
                 revision=revision,
+                creative_deadline=buy.creative_deadline,
             )
         )
     return renderable

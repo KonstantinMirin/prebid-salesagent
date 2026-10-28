@@ -1155,13 +1155,27 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And <expected_outcome>
     # POST-S2 / INT-002: package-level creative_deadline; when absent, the buy-level creative_deadline applies
-    # THE INVALID ROWS NAME CONFIGURATION_ERROR, by the ruling recorded under
-    # T-UC-019-boundary-revision: a value in the SELLER's store that the pinned response
-    # schema refuses is never published, and the refusal is the pin's code for a seller-side
-    # defect the buyer cannot fix -- CONFIGURATION_ERROR, recovery terminal. They used to
-    # name SCHEMA_VIOLATION, which is not in enums/error-code.json at the pin.
+    # get_media_buys.mdx lists media_buys[].creative_deadline as "Creative upload deadline
+    # (ISO 8601)" and packages[].creative_deadline as "Per-package creative deadline (ISO
+    # 8601). When absent, the media buy's creative_deadline applies." Neither is in its
+    # item's `required`, so every Valid row is a schema-legal document.
+    #
+    # THE INVALID ROWS MOVED. They asked for the whole request to be refused with
+    # CONFIGURATION_ERROR when the stored package creative_deadline is not a date-time,
+    # citing the ruling under T-UC-019-boundary-revision. That ruling covers a REQUIRED
+    # field (revision), which has no legal absent rendering. packages[].creative_deadline
+    # is OPTIONAL, so the policy for it is the blob rule: the package renders without the
+    # field and errors[] carries one CONFIGURATION_ERROR / terminal advisory naming it.
+    # The "next Friday" row is now the creative_deadline row of
+    # @T-UC-019-blob-degraded-package-field, which grades exactly that.
+    #
+    # The integer row (1747094400) is gone. The blob rule resolves a stored value through
+    # the pinned field type, and an integer epoch resolves to a valid instant, which the
+    # response then carries as an ISO 8601 string. The wire document is schema-valid, so
+    # the pin gives no defect to report for it.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json pointer=/properties/media_buys/items/properties/packages/items/properties/creative_deadline
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json pointer=/properties/media_buys/items/properties/creative_deadline
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/get_media_buys.mdx
 
     Examples: Valid partitions
       | partition                                  | buy_state                                            | package_state                                            | expected_outcome                                                                                                                                                |
@@ -1169,11 +1183,6 @@ Feature: BR-UC-019 Query Media Buys
       | package_level_absent_inherits_from_buy     | buy creative_deadline "2026-04-15T00:00:00Z"        | no package creative_deadline                              | the package "pkg-001" creative_deadline should be omitted and the effective deadline should be the buy-level "2026-04-15T00:00:00Z"                              |
       | both_levels_absent_is_legal                | no buy creative_deadline                              | no package creative_deadline                              | the media buy "mb-001" should omit creative_deadline and the package "pkg-001" should omit creative_deadline (no error)                                          |
       | package_level_set_buy_level_absent         | no buy creative_deadline                              | package creative_deadline "2026-04-10T00:00:00Z"        | the package "pkg-001" creative_deadline should equal "2026-04-10T00:00:00Z" and the buy-level field should be omitted                                            |
-
-    Examples: Invalid partitions
-      | partition                             | buy_state                                    | package_state                                             | expected_outcome                                                                 |
-      | package_creative_deadline_not_iso8601 | buy creative_deadline "2026-04-15T00:00:00Z" | package creative_deadline "next Friday"                   | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
-      | package_creative_deadline_wrong_type  | no buy creative_deadline                     | package creative_deadline 1747094400 (integer not string) | the request should be refused for "mb-001" with error code "CONFIGURATION_ERROR" |
 
   @T-UC-019-inv-package-creative-deadline-inheritance @invariant @creative_deadline @schema-v3.1
   Scenario: package creative_deadline overrides buy-level when set, otherwise inherits
@@ -1465,6 +1474,11 @@ Feature: BR-UC-019 Query Media Buys
     # enums/error-code.json gives CONFIGURATION_ERROR recovery "terminal", and
     # core/error.json makes the wire `recovery` authoritative with enumMetadata only its
     # documentary mirror — so the grader reads `recovery` off the wire.
+    #
+    # `creative_deadline` is a sixth blob-sourced package value, and the rule above
+    # applies to it unchanged. It is optional in packages.items, and "next Friday" is not
+    # a date-time. Its row came here from @T-UC-019-partition-package-creative-deadline,
+    # which now grades only the values that render.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
     Examples:
@@ -1474,6 +1488,7 @@ Feature: BR-UC-019 Query Media Buys
       | end_time          | "2026-01-31T00:00:00" |
       | paused            | "maybe"               |
       | targeting_overlay | "not a dict"          |
+      | creative_deadline | "next Friday"         |
 
   @T-UC-019-blob-rule-raw-request @invariant @BR-RULE-150 @schema-v3.1
   Scenario: a legacy-invalid buyer_campaign_ref in raw_request degrades that field alone

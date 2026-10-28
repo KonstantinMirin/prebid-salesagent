@@ -343,6 +343,7 @@ class MediaBuyRepository:
         by_alias: bool = False,
         created_at: datetime.datetime | None = None,
         account_id: str | None = None,
+        creative_deadline: datetime.datetime | None = None,
     ) -> MediaBuy:
         """Create a MediaBuy from a request model, serializing raw_request at the DB boundary.
 
@@ -367,6 +368,7 @@ class MediaBuyRepository:
             by_alias: Whether to serialize with field aliases (e.g., content_uri).
             created_at: Optional explicit created_at timestamp.
             account_id: Resolved account scope (AdCP idempotency scope is agent+account+key).
+            creative_deadline: The buy-level creative deadline the adapter reported, or None.
 
         Returns:
             The created MediaBuy ORM object (added to session, not committed).
@@ -404,6 +406,7 @@ class MediaBuyRepository:
             # arrangement started; a repository is not an ``_impl``, so it may canonicalize
             # the request it was handed.
             "payload_hash": canonical_request_hash(req) if getattr(req, "idempotency_key", None) else None,
+            "creative_deadline": creative_deadline,
         }
         if campaign_objective is not None:
             kwargs["campaign_objective"] = campaign_objective
