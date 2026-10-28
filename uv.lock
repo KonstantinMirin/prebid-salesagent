@@ -74,8 +74,8 @@ wheels = [
 
 [[package]]
 name = "adcp"
-version = "9.0.0b3+sa.8qela.f33d4fc71"
-source = { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-f33d4fc71/adcp-9.0.0b3%2Bsa.8qela.f33d4fc71-py3-none-any.whl" }
+version = "9.3.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "a2a-sdk" },
     { name = "cryptography" },
@@ -95,59 +95,10 @@ dependencies = [
     { name = "tldextract" },
     { name = "typing-extensions" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/15/24/c2e26825a0912ea48ccaf302163afce518e6e2c5cf10eed9ed59a31b7bc1/adcp-9.3.0.tar.gz", hash = "sha256:39d4d16e55b39227531c8271857782de4ea2531cf5873b620226a82c7e34c03c", size = 48251502, upload-time = "2026-10-27T11:18:02.224Z" }
 wheels = [
-    { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-f33d4fc71/adcp-9.0.0b3%2Bsa.8qela.f33d4fc71-py3-none-any.whl", hash = "sha256:0abf7a57735696fc573c42adbf5d74221b8f7d8a3df85d22210bc8bc055af310" },
+    { url = "https://files.pythonhosted.org/packages/01/56/634922b06bdaa3ccaa6dfa7441f0ec278d3e4436a1267c8bb4b35fecebe0/adcp-9.3.0-py3-none-any.whl", hash = "sha256:6b3d73b5c3c8755eb831cb0882aee2ca4c60a9e3ee3da88fc1a0e8ce020db4ff", size = 51322409, upload-time = "2026-10-27T11:17:56.419Z" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "a2a-sdk", specifier = ">=1.0.1,<1.0.2" },
-    { name = "alembic", marker = "extra == 'dev'", specifier = ">=1.13.0" },
-    { name = "asgi-lifespan", marker = "extra == 'dev'", specifier = ">=2.1.0" },
-    { name = "azure-storage-blob", marker = "extra == 'dev'", specifier = ">=12.20" },
-    { name = "azure-storage-blob", marker = "extra == 'reporting-azure'", specifier = ">=12.20" },
-    { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
-    { name = "boto3", marker = "extra == 'dev'", specifier = ">=1.35" },
-    { name = "boto3", marker = "extra == 'reporting-s3'", specifier = ">=1.35" },
-    { name = "build", marker = "extra == 'dev'", specifier = ">=1.2.1" },
-    { name = "cryptography", specifier = ">=41.0.0" },
-    { name = "datamodel-code-generator", extras = ["http"], marker = "extra == 'dev'", specifier = "==0.64.0" },
-    { name = "email-validator", specifier = ">=2.0.0" },
-    { name = "freezegun", marker = "extra == 'dev'", specifier = "==1.5.5" },
-    { name = "google-cloud-storage", marker = "extra == 'dev'", specifier = ">=2.18" },
-    { name = "google-cloud-storage", marker = "extra == 'reporting-gcs'", specifier = ">=2.18" },
-    { name = "httpcore", specifier = ">=1.0.9,<2.0" },
-    { name = "httpcore2", specifier = ">=2.5,<3.0" },
-    { name = "httpx", specifier = ">=0.28.1,<1.0" },
-    { name = "httpx2", specifier = ">=2.5.0,<3.0" },
-    { name = "idna", specifier = ">=3.18,<4" },
-    { name = "jsonschema", specifier = ">=4.20.0" },
-    { name = "mcp", specifier = ">=2.0.0,<3.0" },
-    { name = "moto", extras = ["s3"], marker = "extra == 'dev'", specifier = ">=5.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = "==1.20.2" },
-    { name = "opentelemetry-api", marker = "extra == 'observability'", specifier = ">=1.25,<2" },
-    { name = "opentelemetry-sdk", marker = "extra == 'dev'", specifier = ">=1.25,<2" },
-    { name = "pdoc3", marker = "extra == 'docs'", specifier = ">=0.10.0" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.4.0" },
-    { name = "protobuf", specifier = ">=6.31.0,<8" },
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'pg'", specifier = ">=3.1.0" },
-    { name = "psycopg-pool", marker = "extra == 'pg'", specifier = ">=3.2.0" },
-    { name = "pydantic", specifier = ">=2.13.0,<2.14" },
-    { name = "pyright", marker = "extra == 'dev'", specifier = "==1.1.414" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
-    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.8,<4" },
-    { name = "respx", marker = "extra == 'dev'", specifier = ">=0.20.0" },
-    { name = "rfc3986-validator", specifier = ">=0.1.1,<0.2" },
-    { name = "rfc8785", specifier = ">=0.1.4" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "sse-starlette", specifier = ">=3.0.0" },
-    { name = "tldextract", specifier = ">=5.1.0" },
-    { name = "types-protobuf", marker = "extra == 'dev'", specifier = ">=7.34.1.20260408" },
-    { name = "typing-extensions", specifier = ">=4.14.1" },
-]
-provides-extras = ["dev", "docs", "pg", "reporting-gcs", "reporting-s3", "reporting-azure", "observability"]
 
 [[package]]
 name = "adcp-sales-agent"
@@ -250,7 +201,7 @@ requires-dist = [
     { name = "a2a-cli", specifier = ">=0.2.0" },
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=1.0.1" },
     { name = "a2wsgi", specifier = ">=1.10.0" },
-    { name = "adcp", url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b3-8qela-f33d4fc71/adcp-9.0.0b3%2Bsa.8qela.f33d4fc71-py3-none-any.whl" },
+    { name = "adcp", specifier = "==9.3.0" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "allure-pytest", marker = "extra == 'ui-tests'", specifier = "==2.16.0" },
     { name = "authlib", specifier = ">=1.6.12" },

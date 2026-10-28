@@ -5,8 +5,8 @@ AdCP version it implements. Those are the only two facts, and the second is read
 here rather than copied.
 
 Nothing is asserted about the value. There is no second declaration for it to
-agree with, which is the point: a pin bump is a one-line change to
-``[tool.uv.sources]`` and everything downstream follows.
+agree with, which is the point: a pin bump is a one-line change to the
+``adcp==`` line in ``pyproject.toml`` and everything downstream follows.
 """
 
 from __future__ import annotations

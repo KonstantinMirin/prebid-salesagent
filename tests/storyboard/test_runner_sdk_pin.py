@@ -41,19 +41,11 @@ from scripts.audit import storyboard_spec  # noqa: E402
 #:     adcp_version``), which is what this guard asserts;
 #:   * be on a line carrying the A2A request-signing dispatch (adcp-client#2967). Without it
 #:     every ``signed_requests`` vector on the A2A card is ungradable, so the newest release
-#:     is not automatically the right one -- 15.9.0 is npm ``latest`` and declares 3.2.4.
-#:
-#: ``15.8.1`` satisfies both, and the second half was MEASURED rather than assumed when the
-#: pin moved to 3.2.3. The belief that only the 14 line carried the dispatch was false: the
-#: ``.d.ts`` barrel exports 41 names at 14.4.0 and 51 at 15.8.1, and the set
-#: present-in-14.4.0-but-absent-from-15.8.1 is EMPTY, so 15.8.1 is a strict superset. It adds
-#: ``resolveA2aHttpJsonEndpoint``, ``loadA2aOperationResolutionVectors`` and a whole
-#: ``a2a-operation-resolution.*`` module beside the ``a2a-dispatch.*`` both lines carry. The
-#: signing module's sha256 differs across three generations (3243 / 3596 / 4341 bytes), so the
-#: instrument distinguishes releases rather than reading a constant.
-#:
-#: ``adcp_version`` by release: 14.0.0 / 14.3.0 / 14.4.0 and 15.0.0 / 15.2.0 declare 3.2.1;
-#: 15.2.1 through 15.8.1 declare 3.2.3; 15.9.0 declares 3.2.4.
+#:     is not automatically the right one. Check it by comparing the candidate's
+#:     ``dist/lib/testing/storyboard/request-signing/index.d.ts`` exports against the current
+#:     runner's: none may disappear, and ``a2a-dispatch.*`` and ``a2a-operation-resolution.*``
+#:     must both be present. Also check that every CLI flag ``test_storyboard_conformance``
+#:     passes still exists in the candidate's CLI.
 #:
 #: There is deliberately no escape hatch for a runner that satisfies only the first: a
 #: tolerated mismatch here is indistinguishable from a measured result, which is the failure

@@ -29,9 +29,9 @@ WHAT IS RECORDED, and why each field rather than a general "provenance" blob:
     between two known trees. The field says so rather than implying otherwise.
 ``adcp``
     The pin AS INSTALLED, which is NOT what ``pyproject.toml`` declares.
-    ``pyproject.toml`` says ``adcp==9.0.0b3``; the wheel that grades a run is
-    ``9.0.0b3+sa.8qela.<sha>``, and the local version segment is the only thing
-    that distinguishes two builds of the same release. The runner's own history
+    ``pyproject.toml`` declares the release; a locally built SDK wheel carries a
+    ``+<local>`` version segment, and that segment is the only thing that
+    distinguishes two builds of the same release. The runner's own history
     contains the case that needs it: three consecutive runs published a stale
     ``storyboard.json`` and the numbers were read as current until an SDK
     version inside the report contradicted the SDK that was actually installed
@@ -234,8 +234,8 @@ def adcp_pin() -> dict:
 
     Both halves are needed and neither substitutes for the other: the spec
     version is what the seller is graded against, and the distribution version's
-    local segment (``+sa.8qela.<sha>``) is the only thing separating two builds
-    of the same release. ``pyproject.toml`` declares the release and cannot tell
+    local segment (``+<local>``, on a locally built wheel) is the only thing
+    separating two builds of the same release. ``pyproject.toml`` declares the release and cannot tell
     them apart.
     """
     import importlib.metadata

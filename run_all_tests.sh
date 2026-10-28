@@ -251,9 +251,9 @@ dc build postgres adcp-server adcp-server-storyboard proxy tests
 # and nothing can reconstruct it afterwards, because the working tree moves.
 #
 # HERE and not later for that reason. The one fact that cannot come from the host
-# is the adcp pin AS INSTALLED -- `pyproject.toml` declares `adcp==9.0.0b3` while
-# the wheel that grades the run is `9.0.0b3+sa.<lane>.<sha>`, and only the local
-# segment separates two builds of the same release. So it is read from the
+# is the adcp pin AS INSTALLED -- `pyproject.toml` declares the release, while a
+# locally built SDK wheel carries a `+<local>` segment, and only that segment
+# separates two builds of the same release. So it is read from the
 # interpreter that runs the suites, which is why this sits immediately after the
 # `tests` image is built and before anything uses it. A failure to read it records
 # null rather than aborting the run: an unknown pin is worth less than no run.

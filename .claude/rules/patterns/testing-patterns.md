@@ -122,8 +122,8 @@ same data.
 
 **Every cross-run claim names its two trees, or it is refused.** `run_all_tests.sh` writes
 `test-results/<run>/meta.json` before the first suite — commit, branch, clean-or-dirty, host,
-and the adcp pin AS INSTALLED (`pyproject.toml` declares `adcp==9.0.0b3`; the wheel that
-grades the run is `9.0.0b3+sa.<lane>.<sha>`, and only the local segment separates two builds).
+and the adcp pin AS INSTALLED (`pyproject.toml` declares the release; a locally built SDK
+wheel carries a `+<local>` segment, which is the only thing separating two builds of it).
 Both tools refuse a pair that cannot be attributed, naming which side lacked what:
 
 | Shape | Verdict |

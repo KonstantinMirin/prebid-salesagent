@@ -1,6 +1,6 @@
 {
-  "adcp_spec_version": "3.2.3",
-  "source": "adcontextprotocol/adcp dist/compliance/3.2.3",
+  "adcp_spec_version": "3.2.7",
+  "source": "adcontextprotocol/adcp dist/compliance/3.2.7",
   "storyboard_count": 214,
   "storyboards": {
     "protocols/brand/index.yaml": {
@@ -229,11 +229,7 @@
       "protocol": "creative",
       "required_tools": [
         "build_creative"
-      ],
-      "requires_capability": {
-        "equals": "true",
-        "path": "creative.supports_evaluator"
-      }
+      ]
     },
     "protocols/creative/scenarios/list_creatives_filter_behavior.yaml": {
       "phases": [
@@ -392,12 +388,14 @@
         "create_media_buy_buyer_selected_timezone",
         "delivery_monitoring",
         "discover_buyer_selected_timezone",
+        "format_ids_removed_in_4_0",
         "get_capabilities",
         "get_delivery",
         "get_delivery_buyer_selected_timezone",
         "get_products_brief",
         "get_products_brief_buyer_selected_timezone",
         "product_discovery",
+        "request_signing_required_in_4_0",
         "sync_accounts",
         "sync_accounts_buyer_selected_timezone"
       ],
@@ -935,7 +933,11 @@
         "comply_test_controller",
         "control_media_buy",
         "get_media_buys"
-      ]
+      ],
+      "requires_capability": {
+        "contains": "control_media_buy",
+        "path": "media_buy.lifecycle_tools"
+      }
     },
     "protocols/media-buy/scenarios/clicks_buy_flow.yaml": {
       "phases": [
@@ -1505,6 +1507,7 @@
         "discover_mutable_support",
         "enforce_update_boundaries",
         "get_mixed_buy_actions",
+        "inspect_update_actions",
         "read_back_independent_caps",
         "reject_create_only_out_of_range_update",
         "reject_create_only_update",
@@ -1556,6 +1559,7 @@
     },
     "protocols/media-buy/scenarios/geo_place_targeting.yaml": {
       "phases": [
+        "confirm_place_catalog_membership",
         "create_and_echo_place",
         "create_deferred_inclusion_buy",
         "create_exclusion_only_buy",
@@ -1896,19 +1900,31 @@
     },
     "protocols/media-buy/scenarios/inline_creatives_without_sync.yaml": {
       "phases": [
-        "canonical_format_inline_path",
+        "assert_inline_creative_path",
+        "canonical_format_discovery",
+        "canonical_product_scoped_inline_path",
+        "canonical_publisher_scoped_inline_path",
+        "canonical_unnamed_option_inline_path",
         "capability_discovery",
-        "create_buy_with_canonical_inline_creative",
         "create_buy_with_legacy_inline_creative",
-        "get_canonical_media_buy_after_inline_replacement",
+        "create_buy_with_product_scoped_inline_creative",
+        "create_buy_with_publisher_scoped_inline_creative",
+        "create_buy_with_unnamed_option_inline_creative",
         "get_capabilities",
         "get_legacy_media_buy_after_inline_replacement",
+        "get_product_scoped_media_buy_after_inline_replacement",
         "get_products_canonical_format",
         "get_products_legacy_format",
+        "get_publisher_scoped_media_buy_after_inline_replacement",
+        "get_unnamed_option_media_buy_after_inline_replacement",
+        "inline_creative_path_coverage",
+        "legacy_format_discovery",
         "legacy_format_inline_path",
-        "update_buy_with_replacement_canonical_inline_creative",
         "update_buy_with_replacement_legacy_inline_creative",
-        "verify_replacement"
+        "update_buy_with_replacement_product_scoped_inline_creative",
+        "update_buy_with_replacement_publisher_scoped_inline_creative",
+        "update_buy_with_replacement_unnamed_option_inline_creative",
+        "verify_format_coverage"
       ],
       "protocol": "media-buy",
       "required_by": [
@@ -2758,7 +2774,11 @@
         "report_usage",
         "sync_accounts",
         "sync_event_sources"
-      ]
+      ],
+      "requires_capability": {
+        "path": "media_buy.conversion_tracking",
+        "present": "true"
+      }
     },
     "protocols/media-buy/scenarios/seller_optimized_budget.yaml": {
       "phases": [
@@ -2910,6 +2930,7 @@
     "protocols/media-buy/scenarios/total_budget_redistribution.yaml": {
       "phases": [
         "create_fixed_buy",
+        "read_committed_currency",
         "read_redistributed_budget",
         "redistribute",
         "reject_ambiguous_update",
@@ -2944,10 +2965,10 @@
         "finalize_idempotent_replay",
         "finalize_proposal",
         "get_capabilities",
-        "get_products_brief",
         "multi_source_batch",
         "product_changes",
         "replay_finalize",
+        "request_seed_proposals",
         "revise_amendment",
         "revise_cancellation",
         "revise_multi_source",
@@ -2968,12 +2989,9 @@
       ],
       "required_tools": [
         "accept_proposal",
-        "refine_proposals"
-      ],
-      "requires_capability": {
-        "contains": "alternatives",
-        "path": "media_buy.proposal_refinement.supported_dimensions"
-      }
+        "refine_proposals",
+        "request_proposals"
+      ]
     },
     "protocols/media-buy/scenarios/vendor_metric_accountability.yaml": {
       "phases": [
@@ -2981,6 +2999,7 @@
         "discover_with_required_vendor_metrics",
         "get_delivery_with_vendor_metrics",
         "get_products_required_vendor_metrics",
+        "read_back_commitment_timestamps",
         "simulate_and_validate_vendor_metrics",
         "simulate_delivery_with_vendor_metrics",
         "sync_accounts"
@@ -3773,9 +3792,11 @@
         "get_capabilities",
         "get_delivery",
         "get_dooh_products",
+        "get_dooh_products_brief",
         "identity_absence",
         "product_discovery",
         "reject_frequency_capped_buy",
+        "require_dooh_discovery",
         "simulate_delivery",
         "sync_creatives",
         "validate_input"
@@ -3783,6 +3804,7 @@
       "required_tools": [
         "create_media_buy",
         "get_media_buy_delivery",
+        "get_products",
         "list_products",
         "sync_creatives"
       ],
@@ -4186,6 +4208,7 @@
       "phases": [
         "get_capabilities",
         "get_capabilities_filtered",
+        "legacy_hmac_fallback_removed_in_4_0",
         "protocol_discovery"
       ],
       "universal": true
@@ -4864,8 +4887,10 @@
     },
     "universal/version-negotiation.yaml": {
       "phases": [
+        "adcp_version_echo_required_in_4_0",
         "capabilities_advertise_and_echo",
-        "get_capabilities_with_version"
+        "get_capabilities_with_version",
+        "major_versions_removed_in_4_0"
       ],
       "universal": true
     },
