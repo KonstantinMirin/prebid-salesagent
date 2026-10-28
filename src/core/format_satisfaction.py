@@ -1013,7 +1013,16 @@ def selector_routes(
             logger.debug(
                 "No canonical projection for package selector %r; the reference is its only identity", legacy_ref
             )
-        routes.append(FormatRoute(FormatSelector.of_legacy(legacy_ref, kind=kind), field="format_ids"))
+        # ``params={}`` and not ``None``: a package's legacy reference STATES its params, and
+        # they are exactly the ones it carries or its normalization projects. ``None`` is a
+        # stored creative's "params unknown" and skips the grading -- which, for a reference
+        # that normalizes to a kind and nothing else (a template such as ``display_image``
+        # with no size, or an id the registry maps by glob but the SDK does not upgrade),
+        # accepted it against a product fixing 300x250. core/product-format-declaration.json:
+        # "A broad request with no dimensions or duration does not satisfy a fixed-size or
+        # fixed-duration product". A raw-key gate after satisfaction used to refuse that by
+        # accident; it is gone (salesagent-ol033.20.26), so the rule is applied here instead.
+        routes.append(FormatRoute(FormatSelector.of_legacy(legacy_ref, kind=kind), params={}, field="format_ids"))
     return tuple(routes)
 
 
