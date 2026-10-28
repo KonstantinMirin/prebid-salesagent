@@ -21,9 +21,6 @@ from adcp.types.domains.enums.available_metric import AvailableMetric
 from adcp.types.domains.enums.reporting_frequency import ReportingFrequency
 from adcp.types.domains.pricing_options.time_option import Parameters as TimeParameters
 
-from src.core.errors.details import FormatDeclarationDivergenceDetails
-from src.core.format_resolver import announced_legacy_format_arm
-
 # Import our extended Product (includes implementation_config) and the local
 # pricing member subclasses (our extra policy + internal adapter annotations)
 # — not the raw SDK types (Pattern #1 / local-schema-imports guard).
@@ -384,8 +381,6 @@ def default_reporting_capabilities() -> LibraryReportingCapabilities:
 def convert_product_model_to_schema(
     product_model,
     adapter_type: str | None = None,
-    *,
-    divergences: dict[str, FormatDeclarationDivergenceDetails] | None = None,
 ) -> Product:
     """Convert database Product model to Product schema.
 
@@ -394,18 +389,6 @@ def convert_product_model_to_schema(
         adapter_type: Adapter type for the tenant (e.g., "google_ad_manager", "mock").
             Used to determine the default delivery_measurement when the product
             does not have one configured. If None, falls back to generic "publisher".
-        divergences: an accumulator the CALLER owns, keyed by product_id, for products
-            whose two format arms disagree. Populated only when the caller passes one --
-            every caller that builds a buyer-facing response wants the advisory, and the
-            ones converting for an internal read do not.
-
-            An out-parameter rather than a second return value because the decision is made
-            HERE, once: this function already asks ``announced_legacy_format_arm`` which arm
-            to announce, and the divergence is the other half of that one answer. A caller
-            asking separately would read ``product_model`` a second time -- which is how the
-            first attempt broke every ``ProductEnv`` test, by reaching for
-            ``effective_format_ids`` on a caller that holds schema objects and patches this
-            function out.
 
     Returns:
         Product schema object
@@ -423,70 +406,22 @@ def convert_product_model_to_schema(
     product_data["description"] = product_model.description
     product_data["delivery_type"] = product_model.delivery_type
 
-    # format_ids: the LEGACY half of core/product.json's root anyOf.
+    # The two format arms of core/product.json's root anyOf, from the ONE contract the
+    # product carries (`Product.format_contract`). A canonical product's `format_ids` is the
+    # projection its declarations assert through `v1_format_ref`, derived there and never
+    # read from a stored column -- canonical-formats.mdx, Producer rules: "Compatibility
+    # format_ids MUST be derived from them rather than maintained as a second authored
+    # catalog." A legacy-only product serves the arm it authored.
     #
-    # Which of the three outcomes a product gets -- the authored arm, no arm at all because
-    # the two arms disagree, or no arm because it never authored one -- is decided in ONE
-    # place, `announced_legacy_format_arm`, which carries the producer rules and the
-    # citations for them. Nothing is decided here; this carries the answer.
-    #
-    # THREE INPUTS ABOUT ONE ARM, and the distinctions are the whole of salesagent-ym571.
-    # `effective_format_ids` is what the product SERVES, so a linked inventory profile still
-    # supplies the arm for the legacy products that depend on it. `format_ids` is the
-    # product's OWN column, which says whether the served arm is the product's to answer
-    # for. `inventory_profile_id` names the row it came from when it is not.
-    #
-    # The defect that made this three values instead of one: the comparison was fed the
-    # resolved arm alone, so a canonically-authored product (own column NULL) was reported
-    # divergent against a shared profile's catalogue, and the advisory named the PRODUCT for
-    # a mismatch no operator can fix there.
-    #
-    # Omitted rather than emitted empty, deliberately. The field is "Deprecated in AdCP;
-    # removed in AdCP 4.0" and is absent from the schema's root `required` list, so a
-    # canonically-authored product satisfies the "Canonical-format product" branch without
-    # it. An empty array would be worse than absence: the deprecated branch requires only
-    # the KEY, so `format_ids: []` satisfies that branch by presence while declaring no
-    # format at all.
-    legacy_arm = announced_legacy_format_arm(
-        format_ids=product_model.effective_format_ids,
-        authored_format_ids=product_model.format_ids,
-        format_options=product_model.format_options,
-        product_id=product_model.product_id,
-        # The profile's BUSINESS key, not its integer primary key: this reaches an advisory
-        # an operator reads, and `profile_id` is what the admin surface shows them.
-        # Read through the relationship rather than off `inventory_profile_id`, so the value
-        # and the arm it attributes come from the same row `effective_format_ids` resolved.
-        #
-        # THE FK COLUMN IS TESTED FIRST, and that order is the whole fix for a
-        # DetachedInstanceError this caused. `inventory_profile` is a RELATIONSHIP, so
-        # touching it on a detached row triggers a lazy load and raises; the FK is an
-        # ordinary column that is always loaded, so a product with no profile -- the
-        # overwhelming majority, and what a repository test hands back after its session
-        # closes -- never reaches the relationship at all. This is the idiom
-        # `effective_format_ids` and its three siblings already use (models.py:561, :583,
-        # :650, :669); writing the traversal without it was the defect.
-        inventory_profile_id=(
-            product_model.inventory_profile.profile_id
-            if product_model.inventory_profile_id and product_model.inventory_profile
-            else None
-        ),
-    )
-    if legacy_arm.format_ids:
-        product_data["format_ids"] = list(legacy_arm.format_ids)
-    if divergences is not None and legacy_arm.divergence is not None:
-        divergences[product_model.product_id] = legacy_arm.divergence
-
-    # format_options: the CANONICAL half of the same MUST. core/product.json's root anyOf
-    # accepts format_ids, format_options, or both, so this is carried when the product
-    # declares it and omitted when it does not -- it is not derived from format_ids, and
-    # could not be: the projection runs v1 -> v2 only, and inventing a declaration from a
-    # named format would be the synthesis the registry forbids.
-    #
-    # Handed through as the stored document. The DTO declares this field by inheritance as
-    # the pin's sixteen-branch discriminated union over format_kind, so the model validates
-    # the document into the right branch and nothing here reshapes it.
-    if product_model.format_options:
-        product_data["format_options"] = product_model.format_options
+    # Each key is omitted rather than emitted empty. An empty `format_ids` would be worse
+    # than absence: the deprecated branch requires only the KEY, so `format_ids: []`
+    # satisfies it by presence while declaring no format at all. `format_options` is handed
+    # through as the stored documents; the DTO validates each into its `format_kind` arm.
+    contract = product_model.format_contract
+    if contract.format_ids:
+        product_data["format_ids"] = list(contract.format_ids)
+    if contract.format_options:
+        product_data["format_options"] = list(contract.format_options)
 
     # The anyOf itself, refused once rather than per-arm. "Products MUST carry `format_ids`,
     # `format_options`, or both during the 3.x migration window" -- so the error case is
@@ -498,8 +433,7 @@ def convert_product_model_to_schema(
         raise ValueError(
             f"Product {product_model.product_id} declares no creative format. "
             f"core/product.json requires format_ids, format_options, or both; configure "
-            f"canonical format_options on the product, or format_ids on it or its "
-            f"inventory profile."
+            f"canonical format_options on the product or its inventory profile."
         )
 
     # publisher_properties: Use effective_properties which returns discriminated union format

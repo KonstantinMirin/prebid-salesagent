@@ -259,8 +259,11 @@ def _process_assignments(
                             # alone, which sees only the DEPRECATED arm, so a product
                             # declaring ``format_options[]`` imposed no restriction here.
                             stored_identity = CreativeFormatIdentity.from_row(db_creative_result)
+                            contract = product.format_contract
                             verdict = satisfies(
-                                stored_identity.as_selector(), product.format_options, legacy_catalog=product.format_ids
+                                stored_identity.as_selector(),
+                                contract.format_options,
+                                legacy_catalog=contract.format_ids,
                             )
 
                             if not verdict:

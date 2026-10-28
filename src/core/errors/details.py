@@ -64,8 +64,6 @@ __all__ = [
     "EntityRefDetails",
     "ErrorDetails",
     "ErrorProblem",
-    "FormatDeclarationDivergenceDetails",
-    "FormatOptionDivergenceSummary",
     "OutboundDeliveryDetails",
     "ProblemsDetails",
     "ProductRefDetails",
@@ -238,34 +236,19 @@ class ProblemsDetails(ErrorDetails):
     problems: list[ErrorProblem] | None = None
 
 
-class FormatOptionDivergenceSummary(BaseModel):
-    """One canonical declaration, as the divergence advisory summarizes it.
-
-    ``v1_format_ref`` holds RENDERED format identities (``format_display``'s
-    ``<canonical agent_url>/<id>``), not the stored reference objects. A reference
-    carries four more parameters the pin says are no part of which format it names, so
-    echoing the object back would invite a buyer to compare on them; the identity is the
-    only part of a reference the divergence is about.
-    """
-
-    model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-    format_kind: str
-    v1_format_ref: list[str]
-
-
 class PlatformExtensionCollisionDetails(ErrorDetails):
     """``FORMAT_DECLARATION_DIVERGENT``'s OTHER details shape: a per-field extension overlap.
 
-    One code, two details shapes, and the pin asks for both. ``formats/canonical/_base.json``'s
-    ``platform_extensions`` says a dual-emission overlap takes
-    :class:`FormatDeclarationDivergenceDetails`, and that "a producer-self-emitted overlap on a
-    single declaration SHOULD use the same code with ``error.details: { collision_kind:
-    "platform_extension_field", target, overlapping_fields, winning_extension_uri }``" -- these
-    four keys, which is the whole of this class.
+    ``formats/canonical/_base.json``'s ``platform_extensions`` says "a producer-self-emitted
+    overlap on a single declaration SHOULD use the same code with ``error.details: {
+    collision_kind: "platform_extension_field", target, overlapping_fields,
+    winning_extension_uri }``" -- these four keys, which is the whole of this class. The
+    code's other details shape, for two dual-emitted arms that disagree, has no producer
+    here: a canonical product's ``format_ids`` is derived from its declarations
+    (``format_resolver.CanonicalFormats``), so the two arms cannot disagree on the reference.
 
     ``collision_kind`` is a one-member ``Literal`` rather than a free string because it is the
-    DISCRIMINATOR between the two shapes: a recipient reads it to know which set of keys it has.
+    DISCRIMINATOR between the details shapes: a recipient reads it to know which set of keys it has.
     A second member is added when the pin names a second kind, and mypy then fails every
     construction site that has not chosen.
 
@@ -286,49 +269,6 @@ class PlatformExtensionCollisionDetails(ErrorDetails):
     target: str
     overlapping_fields: list[str]
     winning_extension_uri: str
-
-
-class FormatDeclarationDivergenceDetails(ErrorDetails):
-    """``FORMAT_DECLARATION_DIVERGENT``'s details, with the keys the pin names plus the one
-    that says WHOSE legacy arm disagreed.
-
-    ``enums/error-code.json`` says ``error.details`` SHOULD carry
-    ``{product_id, format_ids, format_options_summary, divergence_reason}``. ``format_ids``
-    is the legacy arm the buyer received — the arm the advisory says disagrees — rendered as
-    identities for the same reason the summary is.
-
-    ``inventory_profile_id`` is the fifth, and it exists because the four above cannot say
-    something a recipient must know to act: this seller resolves a product's legacy arm
-    through a linked inventory profile when it has one, and that profile's ``format_ids``
-    is a NOT NULL column on a row OTHER PRODUCTS SHARE
-    (``InventoryProfile``, no canonical arm at all — salesagent-8qela.154). An advisory
-    naming only the product sends the operator to edit a field the product does not own,
-    and editing the profile to satisfy one product changes every product linked to it. So
-    when the disagreeing arm came from a profile this names it; when the product authored
-    its own arm it is ``None``. That is the whole of salesagent-ym571's second requirement:
-    an advisory the recipient cannot act on at the named object is a defect even when the
-    mismatch is real.
-
-    ``error.field`` still points at the PRODUCT, because the pin makes that a MUST and
-    because the product is where the buyer found the problem. Attribution of the CAUSE is a
-    details concern; location of the SYMPTOM is the field's.
-
-    ``divergence_reason`` is a ``Literal``, so each axis this seller can detect is a named
-    member and adding one is a type change mypy fails at the construction site rather than a
-    string nobody notices is now ambiguous. The two members differ by WHICH arm was judged,
-    not by what the comparison did. The pin's other axis — v2 ``params`` failing to narrow
-    the referenced v1 format's ``requirements`` — needs that format FETCHED from a catalog,
-    so it is not detectable on this path and is not a member.
-    """
-
-    product_id: str
-    format_ids: list[str]
-    format_options_summary: list[FormatOptionDivergenceSummary]
-    divergence_reason: Literal[
-        "v1_format_ref_absent_from_format_ids",
-        "v1_format_ref_absent_from_inventory_profile_format_ids",
-    ]
-    inventory_profile_id: str | None = None
 
 
 class SelectorRouteSummary(BaseModel):

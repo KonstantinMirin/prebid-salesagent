@@ -125,10 +125,10 @@ class TestSchemaFieldMapping:
             f"delivery_type {converted.delivery_type!r} does not match the row's {product.delivery_type!r}"
         )
         assert [reference.id for reference in converted.format_ids] == [
-            entry["id"] for entry in product.effective_format_ids
+            entry["id"] for entry in list(product.format_contract.format_ids)
         ], (
             f"format_ids {converted.format_ids!r} does not carry the row's effective format ids "
-            f"{product.effective_format_ids!r}"
+            f"{list(product.format_contract.format_ids)!r}"
         )
 
         db_columns = {column.name for column in ProductModel.__table__.columns}

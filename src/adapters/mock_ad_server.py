@@ -1589,26 +1589,14 @@ class MockAdServer(AdServerAdapter):
                             },
                         }
 
-                        # Handle format selection
-                        formats = request.form.getlist("formats")
-                        if formats:
-                            product_obj.format_ids = formats
-
                         # Validate the configuration
                         validation_errors = self.validate_product_config(new_config)
                         if validation_errors:
-                            # Get formats for re-rendering
-                            from src.admin.blueprints.products import get_creative_formats
-
-                            available_formats = get_creative_formats(tenant_id=tenant_id)
-
                             return render_template(
                                 "adapters/mock_product_config.html",
                                 tenant_id=tenant_id,
                                 product=product,
                                 config=config,
-                                formats=available_formats,
-                                selected_formats=product_obj.format_ids or [],
                                 error=validation_errors[0],
                             )
 
@@ -1616,33 +1604,21 @@ class MockAdServer(AdServerAdapter):
                         product_obj.implementation_config = new_config
                         session.commit()
 
-                        # Get formats for success page
-                        from src.admin.blueprints.products import get_creative_formats
-
-                        available_formats = get_creative_formats(tenant_id=tenant_id)
-
                         return render_template(
                             "adapters/mock_product_config.html",
                             tenant_id=tenant_id,
                             product=product,
                             config=new_config,
-                            formats=available_formats,
-                            selected_formats=product_obj.format_ids or [],
                             success=True,
                         )
 
-                    # GET request - fetch available formats from creative agents
-                    from src.admin.blueprints.products import get_creative_formats
-
-                    available_formats = get_creative_formats(tenant_id=tenant_id)
-
+                    # Formats are not authored here: the product form authors the canonical
+                    # format_options, and format_ids is derived from them.
                     return render_template(
                         "adapters/mock_product_config.html",
                         tenant_id=tenant_id,
                         product=product,
                         config=config,
-                        formats=available_formats,
-                        selected_formats=product_obj.format_ids or [],
                     )
 
             return wrapped_view()

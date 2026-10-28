@@ -9,7 +9,7 @@ from decimal import Decimal
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
 from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import joinedload
 from werkzeug.exceptions import HTTPException
@@ -180,42 +180,50 @@ def _refuse_a_product_with_no_format_arm(format_ids: list | None, format_options
 
 
 def _legacy_format_facts(product) -> dict[str, object]:
-    """The THREE separate legacy-format facts the edit form shows read-only.
+    """What the edit form shows, read-only, about the product's legacy named formats.
 
-    Three, never one, and that is the point. A profile-linked product serves an arm that
-    lives on a SHARED row, so a surface showing a single ``format_ids`` value leaves the
-    operator unable to tell whether they can change it -- the same complaint as an advisory
-    naming an object the operator cannot fix, one layer up in the UI (salesagent-ym571).
+    Read off ``Product.format_contract``, the same contract ``get_products`` announces, so
+    the form and the wire cannot disagree:
 
-    * ``derived_legacy_refs`` -- what this product's own DECLARATIONS assert, read through
-      the one implementation of that question (``_asserted_legacy_identities``, via
-      ``format_display``) so the UI and the divergence advisory cannot disagree about it.
-      Derived, never stored, and labelled as such.
-    * ``own_legacy_refs`` -- the product's OWN column, which may be empty. This is the arm
-      this surface no longer authors and keeps as recorded.
-    * ``inventory_profile_legacy_refs`` -- what a linked profile supplies on the product's
-      behalf, or ``None`` when there is no profile. ``None`` and ``[]`` are different
-      answers here ("no profile" versus "a profile supplying nothing"), which is the same
-      distinction ``effective_format_ids``' own docstring makes and the one whose loss
-      produced ym571.
+    * ``announced_legacy_refs`` -- the ``format_ids`` a legacy buyer receives.
+    * ``legacy_refs_derived`` -- True when they are DERIVED from canonical declarations
+      (their ``v1_format_ref``), False when they are an authored legacy-only arm.
+    * ``inventory_profile_name`` -- the linked profile, when there is one, because a
+      profile supplies the contract on the product's behalf and is SHARED: changing it
+      changes every product linked to it (salesagent-ym571).
     """
-    from src.core.format_resolver import _asserted_legacy_identities, format_display, format_identity_or_none
+    from src.core.format_resolver import CanonicalFormats, format_display, format_identity_or_none
 
-    def rendered(entries) -> list[str]:
-        identities = (format_identity_or_none(entry) for entry in entries or [])
-        return sorted(format_display(identity) for identity in identities if identity is not None)
-
-    profile = product.inventory_profile
-    declared: list[str] = []
-    for declaration in product.format_options or []:
-        declared.extend(format_display(identity) for identity in _asserted_legacy_identities(declaration))
-
+    contract = product.format_contract
+    identities = (format_identity_or_none(entry) for entry in contract.format_ids)
+    profile = product.inventory_profile if product.inventory_profile_id else None
     return {
-        "derived_legacy_refs": sorted(set(declared)),
-        "own_legacy_refs": rendered(product.format_ids),
-        "inventory_profile_legacy_refs": rendered(profile.format_ids) if profile else None,
+        "announced_legacy_refs": [format_display(identity) for identity in identities if identity is not None],
+        "legacy_refs_derived": isinstance(contract, CanonicalFormats),
         "inventory_profile_name": profile.name if profile else None,
     }
+
+
+def _format_labels(contract) -> list[str]:
+    """One display label per format a contract declares, for the admin lists.
+
+    A canonical declaration shows its ``display_name`` when the seller gave one, else its
+    ``format_option_id``, else its ``format_kind``; it is not shown as a named format,
+    because the projection runs v1 -> v2 only. A legacy-only contract shows its ids.
+    """
+    from src.core.format_resolver import format_ref_id
+
+    if contract.format_options:
+        return [
+            str(
+                declaration.get("display_name")
+                or declaration.get("format_option_id")
+                or declaration.get("format_kind")
+                or "unknown"
+            )
+            for declaration in contract.format_options
+        ]
+    return [format_ref_id(ref) or "unknown" for ref in contract.format_ids]
 
 
 def _format_id_to_display_name(format_id: str) -> str:
@@ -616,54 +624,11 @@ def list_products(tenant_id):
                 # Use helper function to get pricing options (handles legacy fallback)
                 pricing_options_list = get_product_pricing_options(product)
 
-                # Parse formats and resolve names from creative agents
-                formats_data = (
-                    product.format_ids
-                    if isinstance(product.format_ids, list)
-                    else json.loads(product.format_ids)
-                    if product.format_ids
-                    else []
-                )
-
-                # Debug: Log raw formats data
-                logger.info(
-                    f"[DEBUG] Product {product.product_id} raw product.format_ids from DB: {product.format_ids}"
-                )
-                logger.info(f"[DEBUG] Product {product.product_id} formats_data after parsing: {formats_data}")
-                logger.info(
-                    f"[DEBUG] Product {product.product_id} formats_data type: {type(formats_data)}, len: {len(formats_data)}"
-                )
-
-                # Display format IDs (like inventory profiles does)
-                # Don't resolve names during page rendering to avoid async issues
-                resolved_formats = []
-
-                for fmt in formats_data:
-                    format_id = None
-
-                    if isinstance(fmt, dict):
-                        # Database JSONB: uses "id" per AdCP spec
-                        format_id = fmt.get("id") or fmt.get("format_id")  # "id" is AdCP spec, "format_id" is legacy
-                    elif isinstance(fmt, BaseModel):
-                        # Pydantic object: uses "format_id" attribute (serializes to "id" in JSON)
-                        format_id = getattr(fmt, "format_id", None) or getattr(fmt, "id", None)
-                    elif isinstance(fmt, str):
-                        # Legacy: plain string format ID
-                        format_id = fmt
-                    else:
-                        logger.warning(f"Product {product.product_id} has unexpected format type {type(fmt)}: {fmt}")
-                        continue
-
-                    # Validate format_id
-                    if format_id:
-                        resolved_formats.append({"format_id": format_id, "name": format_id})
-
-                logger.info(f"[DEBUG] Product {product.product_id} resolved {len(resolved_formats)} formats")
-                if formats_data and not resolved_formats:
-                    logger.error(
-                        f"[DEBUG] Product {product.product_id} ERROR: Had {len(formats_data)} formats but resolved 0! "
-                        f"This means format resolution failed."
-                    )
+                # What the product is announced with: its canonical declarations, or the
+                # legacy arm of a product that has none (salesagent-gi2du).
+                resolved_formats = [
+                    {"format_id": label, "name": label} for label in _format_labels(product.format_contract)
+                ]
 
                 # Get inventory profile info if product uses one
                 inventory_profile_dict = None
@@ -1521,15 +1486,18 @@ def edit_product(tenant_id, product_id):
                     # No profile selected - clear inventory profile association
                     product.inventory_profile_id = None
 
-                # format_ids IS LEFT EXACTLY AS STORED. This surface no longer authors it
-                # (see `_refuse_a_product_with_no_format_arm`), and an edit must not be the
-                # thing that silently drops an existing legacy product's only format
-                # declaration -- which is what writing an empty picker's value back would
-                # have done.
-
-                # Apply the canonical arm (validated above, outside the session)
+                # Apply the canonical arm (validated above, outside the session).
+                #
+                # format_ids is not authored here. A legacy-only product keeps it as stored, so
+                # an edit cannot drop its only format declaration; once the product authors
+                # canonical declarations the stored column is retired, because its legacy arm
+                # is then derived from them (`Product.format_contract`) and a column kept
+                # beside them would be the "second authored catalog" canonical-formats.mdx's
+                # producer rules forbid.
                 if format_options_submitted:
                     product.format_options = authored_format_options
+                    if authored_format_options:
+                        product.format_ids = None
                     from sqlalchemy.orm import attributes
 
                     attributes.flag_modified(product, "format_options")

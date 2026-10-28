@@ -23,6 +23,13 @@ pytestmark = [pytest.mark.admin, pytest.mark.requires_db]
 
 _TENANT_ID = "inv_prof_test_tenant"
 
+#: A canonical declaration asserting its v1 projection, as an operator authors one.
+IMAGE_DECLARATION = {
+    "format_kind": "image",
+    "params": {"width": 300, "height": 250},
+    "v1_format_ref": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}],
+}
+
 
 @pytest.fixture
 def client():
@@ -150,7 +157,7 @@ class TestInventoryProfileCreate:
                 "description": "Created via test",
                 "targeted_ad_unit_ids": "[]",
                 "targeted_placement_ids": "[]",
-                "formats": json.dumps([{"agent_url": "https://formats.example.com", "id": "display_300x250_image"}]),
+                "format_options": json.dumps([IMAGE_DECLARATION]),
                 "property_mode": "tags",
                 "property_tags": "all_inventory",
             },
@@ -168,6 +175,8 @@ class TestInventoryProfileCreate:
             ).first()
         assert profile is not None
         assert profile.name == "New Tag Profile"
+        assert profile.format_options == [IMAGE_DECLARATION]
+        assert profile.format_ids is None, f"the form authored a legacy arm: {profile.format_ids!r}"
 
     def test_create_profile_missing_name_redirects_without_creation(self, client, test_tenant):
         """POST without a name redirects back without creating a profile."""
@@ -175,7 +184,7 @@ class TestInventoryProfileCreate:
         response = client.post(
             f"/tenant/{test_tenant}/inventory-profiles/add",
             data={
-                "formats": json.dumps([{"id": "display_300x250_image"}]),
+                "format_options": json.dumps([IMAGE_DECLARATION]),
                 "property_mode": "tags",
                 "property_tags": "all_inventory",
             },
@@ -189,16 +198,29 @@ class TestInventoryProfileCreate:
             )
         assert count == 0
 
-    def test_create_profile_missing_formats_redirects_without_creation(self, client, test_tenant):
-        """POST without formats redirects back without creating a profile."""
+    @pytest.mark.parametrize(
+        "format_fields",
+        [
+            {"format_options": ""},
+            # The legacy picker's payload alone: a profile is not authored from format_ids.
+            {
+                "formats": json.dumps(
+                    [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]
+                )
+            },
+        ],
+        ids=["no-declarations", "legacy-formats-only"],
+    )
+    def test_create_profile_without_declarations_redirects_without_creation(self, client, test_tenant, format_fields):
+        """POST without canonical declarations redirects back without creating a profile."""
         _auth_session(client, test_tenant)
         response = client.post(
             f"/tenant/{test_tenant}/inventory-profiles/add",
             data={
                 "name": "No Formats Profile",
-                "formats": "[]",
                 "property_mode": "tags",
                 "property_tags": "all_inventory",
+                **format_fields,
             },
             follow_redirects=False,
         )
@@ -212,6 +234,38 @@ class TestInventoryProfileCreate:
                 )
             ).first()
         assert prop is None
+
+
+class TestInventoryProfileEditFormats:
+    """Authoring declarations on an existing legacy-only profile."""
+
+    def test_authoring_declarations_retires_the_legacy_arm(self, client, test_tenant):
+        """The profile carries the declarations and no stored format_ids afterwards."""
+        profile_pk = _create_sample_profile(test_tenant)
+        _auth_session(client, test_tenant)
+        response = client.post(
+            f"/tenant/{test_tenant}/inventory-profiles/{profile_pk}/edit",
+            data={
+                "name": "Sample Profile",
+                "targeted_ad_unit_ids": "[]",
+                "targeted_placement_ids": "[]",
+                "format_options": json.dumps([IMAGE_DECLARATION]),
+                "property_mode": "tags",
+                "property_tags": "all_inventory",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code in (302, 303)
+
+        with get_db_session() as session:
+            profile = session.get(InventoryProfile, profile_pk)
+            assert profile.format_options == [IMAGE_DECLARATION]
+            assert profile.format_ids is None, f"the stored legacy arm survived: {profile.format_ids!r}"
+
+        # The edit form reads the declarations back into the canonical editor.
+        page = client.get(f"/tenant/{test_tenant}/inventory-profiles/{profile_pk}/edit")
+        assert page.status_code == 200
+        assert b'"format_kind": "image"' in page.data, "the edit form does not show the stored declaration"
 
 
 class TestInventoryProfileDelete:
@@ -259,7 +313,7 @@ class TestAddInventoryProfileDuplicateId:
             "profile_id": self.PROFILE_ID,
             "targeted_ad_unit_ids": "[]",
             "targeted_placement_ids": "[]",
-            "formats": json.dumps([{"agent_url": "https://formats.example.com", "id": "display_300x250_image"}]),
+            "format_options": json.dumps([IMAGE_DECLARATION]),
             "property_mode": "tags",
             "property_tags": "all_inventory",
         }

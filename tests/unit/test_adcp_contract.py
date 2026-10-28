@@ -711,13 +711,13 @@ class TestAdCPContract:
         is neither arm, and demanding the legacy arm specifically made the very shape 3.2
         tells new products to author unservable.
 
-        Note the mock: ``format_options`` must be set to None EXPLICITLY. A bare MagicMock
-        returns a truthy child for any attribute, so a product fixture that simply omits
-        it is asserting that the canonical arm is PRESENT -- which is why this test began
-        passing for the wrong reason once the conversion started reading that arm.
+        Note the mock: ``format_contract`` must be set EXPLICITLY. A bare MagicMock returns a
+        truthy child for any attribute, so a fixture that omits it asserts arms that are
+        not there.
         """
         from unittest.mock import MagicMock
 
+        from src.core.format_resolver import NamedFormats
         from src.core.product_conversion import convert_product_model_to_schema
 
         # Create a mock product with no format_ids
@@ -726,8 +726,7 @@ class TestAdCPContract:
         product_model.name = "Product Without Formats"
         product_model.description = "This product has no format_ids configured"
         product_model.delivery_type = "guaranteed"
-        product_model.effective_format_ids = []  # Empty - no legacy arm
-        product_model.format_options = None  # and no canonical arm either: the anyOf is unsatisfied
+        product_model.format_contract = NamedFormats(format_ids=())  # neither arm: the anyOf is unsatisfied
         product_model.effective_properties = [{"publisher_domain": "example.com", "property_tags": ["test"]}]
         product_model.pricing_options = [
             MagicMock(
@@ -742,11 +741,6 @@ class TestAdCPContract:
         ]
 
         # Conversion should fail naming the declaration, not one arm of it
-        with pytest.raises(ValueError, match="declares no creative format"):
-            convert_product_model_to_schema(product_model)
-
-        # Also test with None (another way the legacy arm might be missing)
-        product_model.effective_format_ids = None
         with pytest.raises(ValueError, match="declares no creative format"):
             convert_product_model_to_schema(product_model)
 
