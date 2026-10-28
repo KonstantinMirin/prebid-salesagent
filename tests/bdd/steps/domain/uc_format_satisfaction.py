@@ -96,6 +96,15 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "params": {"duration_ms_range": [5000, 60000]},
         }
     ],
+    # An EXACT duration, the other half of "Exact dimensions and durations must match"
+    # (formats.mdx). ``duration_ms_exact`` is one of the four constraints a claim must state.
+    "exact_duration": [
+        {
+            "format_kind": "video_hosted",
+            "format_option_id": "satisfaction_video_exact",
+            "params": {"duration_ms_exact": 30000},
+        }
+    ],
     # A REQUIRED SLOT, which formats.mdx grades on both the group and the asset type.
     "required_slots": [
         {
@@ -210,6 +219,11 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     "unpublished_video_kind": {"format_kind": "video_hosted", "params": {"width": 300, "height": 250}},
     "unpublished_option_ref": {"format_option_refs": [{"scope": "product", "format_option_id": "no_such_option"}]},
     "overlapping_range": {"format_kind": "video_hosted", "params": {"duration_ms_range": [1000, 30000]}},
+    # The UPPER-bound mirror of ``overlapping_range``: the low end is inside the accepted
+    # window and the high end is past it, so a seller testing one endpoint passes one row.
+    "range_over_upper_bound": {"format_kind": "video_hosted", "params": {"duration_ms_range": [10000, 90000]}},
+    # An exact duration that is not the declared exact duration.
+    "exact_duration_mismatched": {"format_kind": "video_hosted", "params": {"duration_ms_exact": 15000}},
     # The exact-duration row's refusal half: the same key, a value outside the range.
     "exact_duration_outside_range": {"format_kind": "video_hosted", "params": {"duration_ms_exact": 90000}},
     # A duration range is one of the four constraints a selector MUST state, so silence
@@ -233,11 +247,23 @@ _SELECTORS: dict[str, dict[str, Any]] = {
         "format_kind": "video_hosted",
         "params": {"slots": [{"asset_group_id": "caption", "asset_type": "text"}]},
     },
+    # The required group, offered as the WRONG asset type. ``slot_missing`` differs in both
+    # halves, so only this row grades "with compatible asset types" on its own.
+    "slot_wrong_asset_type": {
+        "format_kind": "video_hosted",
+        "params": {"slots": [{"asset_group_id": "video_main", "asset_type": "image"}]},
+    },
     # The same option id under a DIFFERENT publisher domain: the second half of the
     # exact-publisher-claim rule.
     "wrong_publisher_domain": {
         "format_option_refs": [
             {"scope": "publisher", "publisher_domain": "other.example", "format_option_id": _PRODUCT_OPTION_ID}
+        ]
+    },
+    # The other half: the RIGHT publisher domain with an option id it does not publish.
+    "wrong_publisher_option_id": {
+        "format_option_refs": [
+            {"scope": "publisher", "publisher_domain": _PUBLISHER_DOMAIN, "format_option_id": "no_such_option"}
         ]
     },
     # Step 15, the ORDERING obligation: the option ref RESOLVES and the legacy id does not.

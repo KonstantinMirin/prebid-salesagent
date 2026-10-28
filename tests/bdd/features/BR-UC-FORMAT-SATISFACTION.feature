@@ -81,6 +81,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | fixed_300x250        | complete_300x250               |
       | text_limited_300x250 | exact_300x250                  |
       | duration_range       | exact_duration_in_range        |
+      | exact_duration       | exact_duration_in_range        |
       | fixed_300x250        | product_option_ref             |
       | fixed_300x250        | legacy_display_300x250         |
       | duration_range       | contained_range                |
@@ -149,6 +150,11 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | text_limited_300x250 | headline_over_limit_300x250      | format_kind        |
       | duration_range       | duration_omitted                 | format_kind        |
       | duration_range       | exact_duration_outside_range     | format_kind        |
+      | duration_range       | range_over_upper_bound           | format_kind        |
+      | exact_duration       | exact_duration_mismatched        | format_kind        |
+      | exact_duration       | contained_range                  | format_kind        |
+      | required_slots       | slot_wrong_asset_type            | format_kind        |
+      | publisher_300        | wrong_publisher_option_id        | format_option_refs |
 
     # bare_image_kind IS the storyboard's reject_bare_image_selector_for_fixed_mrec, and
     # mismatched_728x90 is formats.mdx's fifth rule stated as an input: the two selectors
@@ -179,6 +185,24 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # product that bounds its duration -- canonical-formats.mdx's own example row,
     # "video_hosted with no duration ... Reject for this product". exact_duration_outside_range
     # pairs with exact_duration_in_range above: the same key, inside and outside the range.
+    #
+    # THE FIVE ROWS AFTER exact_duration_outside_range each grade one half of a rule that a
+    # sibling row grades only together with another half, so a seller checking one half
+    # passes the sibling and reddens here:
+    #   - range_over_upper_bound mirrors overlapping_range on the HIGH endpoint ([10000,
+    #     90000] against [5000, 60000]); containment tests both ends.
+    #   - exact_duration_mismatched is "Exact ... durations must match" against a
+    #     duration_ms_exact declaration, paired with exact_duration | exact_duration_in_range
+    #     in the accept outline (30000 against 30000 accepted, 15000 refused).
+    #   - exact_duration | contained_range: a RANGE claim does not satisfy an exact duration,
+    #     because a 10s creative meets the claim and not the product. duration_ms_exact is
+    #     one of the four constraints a selector MUST state (canonical-formats.mdx).
+    #   - slot_wrong_asset_type offers the required group video_main as an image. slot_missing
+    #     differs in the group AND the type, so only this row grades "with compatible asset
+    #     types" by itself.
+    #   - wrong_publisher_option_id names the RIGHT publisher_domain and an option id it does
+    #     not publish; wrong_publisher_domain is the other half of "must match both
+    #     publisher_domain and format_option_id".
     #
     # mismatched_160x600 is M2's refusal half: a selector that satisfies NEITHER of the two
     # image declarations the product publishes. Without it, the two M2 accept rows above are
