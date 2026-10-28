@@ -13,7 +13,7 @@ SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
   mutates. The read request declares none; see ListAccountsRequest.
 """
 
-from typing import ClassVar
+from typing import Annotated, ClassVar
 
 from adcp.types import Account as LibraryAccountDomain
 from adcp.types import ListAccountsRequest as LibraryListAccountsRequest
@@ -29,6 +29,25 @@ from adcp.types.domains.account.sync_accounts_request import (
 from adcp.types.domains.account.sync_accounts_response import (
     Account as LibraryAccount,
 )  # TODO: no stable alias in adcp.types
+from adcp.types.domains.core.reporting_dataset_share_destination import Recipient as LibraryRecipient
+from adcp.types.domains.core.reporting_dataset_share_destination import (
+    ReportingDatasetShareDestination1 as LibraryReportingDatasetShareDestination1,
+)
+from adcp.types.domains.core.reporting_dataset_share_destination import (
+    ReportingDatasetShareDestination2 as LibraryReportingDatasetShareDestination2,
+)
+from adcp.types.domains.core.reporting_delivery_config import (
+    ReportingDeliveryConfiguration as LibraryReportingDeliveryConfiguration,
+)
+from adcp.types.domains.core.reporting_delivery_method import (
+    ReportingDeliveryMethod1 as LibraryReportingDeliveryMethod1,
+)
+from adcp.types.domains.core.reporting_delivery_method import (
+    ReportingDeliveryMethod2 as LibraryReportingDeliveryMethod2,
+)
+from adcp.types.domains.core.reporting_delivery_method import (
+    ReportingDeliveryMethod3 as LibraryReportingDeliveryMethod3,
+)
 from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
@@ -38,6 +57,7 @@ from src.core.schemas._base import (
     SalesAgentAdcpResponse,
     validate_idempotency_key_shape,
 )
+from src.core.schemas._dependencies import SchemaDependencies, as_local, narrowed_from
 from src.core.schemas.notification import NotificationConfig, PushNotificationConfig
 
 # ---------------------------------------------------------------------------
@@ -103,7 +123,54 @@ class ListAccountsRequest(BuyerRequest, LibraryListAccountsRequest):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
-class SyncAccountInput(LibrarySyncAccountInput):
+# The reporting-delivery chain down to the one ``dependencies`` site in it: a provisioned
+# dataset share's recipient (core/reporting-dataset-share-destination.json
+# /oneOf/1/properties/recipient). Each class builds one slot as the next local class, so the
+# request reaches :class:`ReportingShareRecipient`; the other union members are the generated ones.
+class ReportingShareRecipient(SchemaDependencies, LibraryRecipient):
+    """A provisioned share's recipient, with its schema's ``dependencies``: ``cloud`` and
+    ``region`` come together."""
+
+    _SCHEMA_DEPENDENCIES = {"cloud": ("region",), "region": ("cloud",)}
+
+
+class ReportingDatasetShareProvision(LibraryReportingDatasetShareDestination2):
+    recipient: Annotated[LibraryRecipient, as_local(ReportingShareRecipient)] = narrowed_from(
+        LibraryReportingDatasetShareDestination2, "recipient"
+    )
+
+
+class ReportingDatasetShareMethod(LibraryReportingDeliveryMethod2):
+    destination: (
+        LibraryReportingDatasetShareDestination1
+        | Annotated[LibraryReportingDatasetShareDestination2, as_local(ReportingDatasetShareProvision)]
+    ) = narrowed_from(LibraryReportingDeliveryMethod2, "destination")
+
+
+class ReportingDeliveryConfig(LibraryReportingDeliveryConfiguration):
+    method: (
+        LibraryReportingDeliveryMethod1
+        | Annotated[LibraryReportingDeliveryMethod2, as_local(ReportingDatasetShareMethod)]
+        | LibraryReportingDeliveryMethod3
+        | None
+    ) = narrowed_from(LibraryReportingDeliveryConfiguration, "method")
+
+
+#: The element of the slot both entry shapes declare, built as the local class.
+ReportingDeliveryConfigSlot = Annotated[LibraryReportingDeliveryConfiguration, as_local(ReportingDeliveryConfig)]
+
+
+class _SyncAccountEntry(SchemaDependencies):
+    """The ``dependencies`` of account/sync-accounts-request.json's ``accounts`` items, which
+    both generated entry shapes (one per ``oneOf`` branch of the item) carry."""
+
+    _SCHEMA_DEPENDENCIES = {
+        "operator_identity": ("revision",),
+        "destination_billing_entity": ("operator_identity", "revision"),
+    }
+
+
+class SyncAccountInput(_SyncAccountEntry, LibrarySyncAccountInput):
     """The provisioning entry of ``sync_accounts`` (brand / operator / billing), per the pin.
 
     Redeclares only ``notification_configs``, narrowed to the local ``NotificationConfig``
@@ -118,9 +185,12 @@ class SyncAccountInput(LibrarySyncAccountInput):
         max_length=16,
         description=LibrarySyncAccountInput.model_fields["notification_configs"].description,
     )
+    reporting_delivery_configs: list[ReportingDeliveryConfigSlot] | None = narrowed_from(
+        LibrarySyncAccountInput, "reporting_delivery_configs"
+    )
 
 
-class SettingsUpdateAccountInput(LibrarySettingsUpdateAccountInput):
+class SettingsUpdateAccountInput(_SyncAccountEntry, LibrarySettingsUpdateAccountInput):
     """The account-reference (settings-update) entry of ``sync_accounts``, per the pin.
 
     Same single redeclaration as :class:`SyncAccountInput`, for the same reason.
@@ -131,6 +201,9 @@ class SettingsUpdateAccountInput(LibrarySettingsUpdateAccountInput):
         default=None,
         max_length=16,
         description=LibrarySettingsUpdateAccountInput.model_fields["notification_configs"].description,
+    )
+    reporting_delivery_configs: list[ReportingDeliveryConfigSlot] | None = narrowed_from(
+        LibrarySettingsUpdateAccountInput, "reporting_delivery_configs"
     )
 
 
