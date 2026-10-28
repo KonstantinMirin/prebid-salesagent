@@ -216,7 +216,11 @@ jobs:
     # tests) on top of agent pull + compose build + migrations + TLS. That
     # exceeds 15m on its own. A ceiling is not a wait — the four host-path groups
     # still finish in minutes and are unaffected by the higher bound.
-    timeout-minutes: 35
+    # When the pin-keyed ghcr image cannot be pulled (a pin no main run has published
+    # yet, or a pull request whose token cannot read the package), the agent is built
+    # from source first: 11m on a hosted runner for adcp@8d1d3244b2ef. 35m then ran out
+    # mid-suite, so the ceiling covers the source build as well.
+    timeout-minutes: 55
     strategy:
       fail-fast: false
       matrix:
@@ -438,6 +442,15 @@ jobs:
           # No host uvx in this job (no _setup-env); the dedicated Security
           # Audit check owns the uv-secure scan.
           RUN_ALL_SKIP_AUDIT: 1
+      # On a failed run, run_all_tests.sh saves every container's log under
+      # test-results/innet_*/containers/ before removing the stack; the reports beside them
+      # show the wire answer, the server logs say why it was given.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: bdd-in-network-results
+          path: test-results/innet_*/
+          if-no-files-found: warn
       - name: Cleanup Docker services
         if: always()
         run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true

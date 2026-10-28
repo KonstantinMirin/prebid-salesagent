@@ -606,111 +606,49 @@ def assert_adapter_executed(ctx: dict) -> object:
 
 
 def assert_audit_logged(ctx: dict, *, operation_substring: str = "create_media_buy") -> None:
-    """Verify audit logging occurred — transport-aware.
+    """Assert the PERSISTED audit trail carries an entry for the operation.
 
-    In-process: asserts on mock audit logger calls (fast, precise).
-    E2E: queries audit_logs through the harness.
+    Read from the audit_logs table through the harness on every transport -- "the
+    database is the audit authority" (src/core/audit_logger.py). A call on an audit
+    logger mock graded the call, not the record, and existed only in process.
     """
-    if is_e2e(ctx):
-        env = ctx["env"]
-        logs = env.get_audit_logs(operation_substring)
-        assert logs, f"Expected audit_logs entry containing '{operation_substring}' for tenant {env._tenant_id}"
-    else:
-        _assert_audit_logged_mock(ctx, operation_substring)
-
-
-def _assert_audit_logged_mock(ctx: dict, operation_substring: str) -> None:
-    """Assert audit logger mock was called with the operation (in-process mode)."""
     env = ctx["env"]
-    mock_audit = env.mock["audit"].return_value
-    assert mock_audit.log_operation.called, (
-        f"Expected audit_logger.log_operation to be called with '{operation_substring}', but it was never called"
-    )
-    operations = [
-        call.kwargs.get("operation") or (call.args[0] if call.args else None)
-        for call in mock_audit.log_operation.call_args_list
-    ]
-    matching = [op for op in operations if op and operation_substring in op]
-    assert matching, (
-        f"Expected at least one log_operation call containing '{operation_substring}', got operations: {operations}"
-    )
+    logs = env.get_audit_logs(operation_substring)
+    assert logs, f"Expected audit_logs entry containing '{operation_substring}' for tenant {env._tenant_id}"
 
 
 def assert_audit_approval_logged(ctx: dict) -> None:
-    """Verify approval decision was logged — transport-aware."""
-    if is_e2e(ctx):
-        env = ctx["env"]
-        logs = env.get_audit_logs()
-        found = any("pending_approval" in (log.operation or "") for log in logs) or any(
-            "create_media_buy" in (log.operation or "") and log.success is True for log in logs
-        )
-        assert found, (
-            f"Expected audit entry for approval decision, found: {[(log.operation, log.success) for log in logs]}"
-        )
-    else:
-        _assert_audit_approval_mock(ctx)
+    """Assert the persisted audit trail records the approval decision.
 
-
-def _assert_audit_approval_mock(ctx: dict) -> None:
-    """Assert approval-specific audit log call exists (in-process mode)."""
+    Either the pending-approval entry, or the successful create entry carrying the
+    created media buy's id -- the auto-approved decision.
+    """
     env = ctx["env"]
-    mock_audit = env.mock["audit"].return_value
-    assert mock_audit.log_operation.called, (
-        "Expected audit_logger.log_operation to be called for approval decision logging"
+    logs = env.get_audit_logs()
+    found = any("pending_approval" in (log.operation or "") for log in logs) or any(
+        (log.operation or "").endswith(".create_media_buy")
+        and log.success is True
+        and "media_buy_id" in (log.details or {})
+        for log in logs
     )
-    for call in mock_audit.log_operation.call_args_list:
-        op = call.kwargs.get("operation") or (call.args[0] if call.args else None)
-        if op == "create_media_buy_pending_approval":
-            return
-        if op == "create_media_buy":
-            success = call.kwargs.get("success")
-            details = call.kwargs.get("details") or {}
-            if success is True and "media_buy_id" in details:
-                return
-    raise AssertionError(
-        f"Expected audit log entry with approval-specific content, "
-        f"got calls: {[c.kwargs for c in mock_audit.log_operation.call_args_list]}"
-    )
+    assert found, f"Expected audit entry for approval decision, found: {[(log.operation, log.success) for log in logs]}"
 
 
 def assert_audit_adapter_logged(ctx: dict) -> None:
-    """Verify adapter execution was logged — transport-aware.
+    """Assert the persisted audit trail records the adapter execution.
 
-    If the media buy went to pending_approval, the adapter was not called —
-    that's correct behavior (no adapter audit log expected).
+    If the media buy went to pending_approval, the adapter was not called — that's
+    correct behavior, and the pending entry is what the trail carries instead.
     """
-    if is_e2e(ctx):
-        env = ctx["env"]
-        logs = env.get_audit_logs()
-        for log in logs:
-            op = log.operation or ""
-            if "create_media_buy" in op and log.success is True and log.details is not None:
-                return
-            if "pending_approval" in op:
-                return
-        raise AssertionError(
-            f"Expected audit entry for adapter execution or pending_approval, "
-            f"found: {[(log.operation, log.success) for log in logs]}"
-        )
-    else:
-        _assert_audit_adapter_mock(ctx)
-
-
-def _assert_audit_adapter_mock(ctx: dict) -> None:
-    """Assert adapter execution audit log call exists (in-process mode)."""
     env = ctx["env"]
-    mock_audit = env.mock["audit"].return_value
-    assert mock_audit.log_operation.called, (
-        "Expected audit_logger.log_operation to be called for adapter execution logging"
-    )
-    for call in mock_audit.log_operation.call_args_list:
-        op = call.kwargs.get("operation") or (call.args[0] if call.args else None)
-        success = call.kwargs.get("success")
-        details = call.kwargs.get("details")
-        if op == "create_media_buy" and success is True and details is not None:
+    logs = env.get_audit_logs()
+    for log in logs:
+        op = log.operation or ""
+        if op.endswith(".create_media_buy") and log.success is True and log.details:
+            return
+        if "pending_approval" in op:
             return
     raise AssertionError(
-        f"Expected audit log entry for adapter execution "
-        f"(operation='create_media_buy', success=True, with details), "
-        f"got: {[c.kwargs for c in mock_audit.log_operation.call_args_list]}"
+        f"Expected audit entry for adapter execution or pending_approval, "
+        f"found: {[(log.operation, log.success) for log in logs]}"
     )

@@ -105,10 +105,34 @@ def given_registry_multi_categories(ctx: dict) -> None:
     ``video_hosted`` 3, ``video_vast`` 2, every ``html5`` and ``audio_hosted`` format being
     a pixel_tracker carrier. Three genuinely different kinds is what the sentence needs.
     """
-    ctx["registry_formats"] = [
+    ctx["registry_formats"] = _reference_formats_across_kinds()
+    _sync_registry(ctx)
+
+
+def _reference_formats_across_kinds() -> list:
+    """Three reference-catalog formats of three different canonical kinds.
+
+    See :func:`given_registry_multi_categories` for why these three kinds and why the
+    catalog rather than minted formats: the live e2e stack can serve them.
+    """
+    return [
         pick_reference_format(canonical_kind, without_asset_type="pixel_tracker")
         for canonical_kind in ("image", "video_hosted", "video_vast")
     ]
+
+
+@given("the creative agent registry has formats without vendor pricing options")
+def given_registry_formats_without_pricing(ctx: dict) -> None:
+    """Reference-catalog formats, none of which declares ``pricing_options``.
+
+    Drawn from the catalog so the live e2e stack serves the same state; the capture
+    declares ``pricing_options`` on none of its formats, which this checks rather than
+    assumes, so the sentence is true of what was registered.
+    """
+    formats = _reference_formats_across_kinds()
+    priced = [f.name for f in formats if f.pricing_options]
+    assert not priced, f"Given claims formats without vendor pricing, but these declare pricing_options: {priced}"
+    ctx["registry_formats"] = formats
     _sync_registry(ctx)
 
 

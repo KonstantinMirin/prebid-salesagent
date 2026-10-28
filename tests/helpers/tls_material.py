@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 Guard = Callable[[str, Callable[[], None]], None]
 
-# tests/helpers/test_tls_material.py -> tests/ -> repo root.
+# tests/helpers/tls_material.py -> tests/ -> repo root.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 

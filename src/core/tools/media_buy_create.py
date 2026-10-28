@@ -49,11 +49,12 @@ from src.core.exceptions import (
     AdCPFormatNotFoundError,
     AdCPGoneError,
     AdCPIdempotencyExpiredError,
+    AdCPIdempotencyInFlightError,
+    AdCPInvalidPricingOptionError,
     AdCPInvalidRequestError,
     AdCPPersistedStateError,
     AdCPProductNotFoundError,
     AdCPSalesAgentError,
-    AdCPServiceUnavailableError,
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
@@ -1954,11 +1955,14 @@ def _validate_pricing_model_selection(
     package: Package | PackageRequest | AdcpPackageRequest,
     product: Any,  # ProductModel from database
     campaign_currency: str | None,
+    *,
+    package_index: int,
 ) -> dict[str, Any]:
     """Validate pricing model selection for a package against product's pricing options.
 
     Args:
         package: Package naming a pricing_option_id, with an optional bid_price
+        package_index: the package's position in the request, for the refusal's ``field``
         product: Product database model with pricing_options relationship
         campaign_currency: Optional campaign-level currency
 
@@ -2026,10 +2030,14 @@ def _validate_pricing_model_selection(
         # The four accumulated branches used to build a sentence; each branch's VALUE is
         # what the buyer needs, so they travel as structured detail instead. The sibling
         # below (bid_price/floor_price) already relocates the same way.
-        raise AdCPValidationError(
+        #
+        # INVALID_PRICING_OPTION, the code enums/error-code.json reserves for "create_media_buy
+        # when the submitted pricing option cannot be resolved", with `error.field` at the
+        # offending record path (`packages[0].pricing_option_id`).
+        raise AdCPInvalidPricingOptionError(
             # Reached only with a pricing_option_id in hand: an absent one returned the
             # product's first option above, so the pointer names that field unconditionally.
-            field="pricing_option_id",
+            field=package_field_path("pricing_option_id", package_index),
             # The three conditional spreads named one fact three ways -- which
             # requested value was not found. `rejected_value` is that fact, and
             # to_wire() drops it when unset, so the conditionals are unnecessary.
@@ -2074,22 +2082,24 @@ def _validate_pricing_model_selection(
     if selected_option.is_fixed and not selected_option.rate:
         raise AdCPConfigurationError(details=ConfigurationDetails(product_id=product.product_id))
 
-    # Validate minimum spend per package
-    if selected_option.min_spend_per_package:
-        package_budget = None
-        if package.budget is not None:
-            # Package.budget is now always float | None (per AdCP spec)
-            package_budget = Decimal(str(package.budget))
-
-        if package_budget and package_budget < Decimal(str(selected_option.min_spend_per_package)):
-            raise AdCPValidationError(
-                details=PricingValidationDetails(
-                    package_budget=str(package_budget),
-                    currency=selected_option.currency,
-                    min_spend_per_package=str(selected_option.min_spend_per_package),
-                    pricing_model=str(selected_option.pricing_model),
-                ),
-            )
+    # Validate minimum spend per package. BUDGET_TOO_LOW -- "Budget is below the seller's
+    # minimum" (enums/error-code.json) -- the same code the tenant-level minimum below
+    # answers with; the option's minimum is the seller's minimum for this package.
+    if selected_option.min_spend_per_package and package.budget is not None:
+        package_budget = Decimal(str(package.budget))
+        min_spend = Decimal(str(selected_option.min_spend_per_package))
+        raise_if_validation_failed(
+            validate_min_package_budget(
+                package_budget=package_budget,
+                min_package_budget=min_spend,
+                currency=selected_option.currency,
+                trailer="for this pricing option",
+            ),
+            exc_type=AdCPBudgetTooLowError,
+            requested_budget=package_budget,
+            budget_limit=min_spend,
+            field=package_field_path("budget", package_index),
+        )
 
     # Return validated pricing information
     return pricing_info_for(selected_option, bid_price=float(package.bid_price) if package.bid_price else None)
@@ -2299,9 +2309,9 @@ def _raise_degraded_replay_outcome(
       (rule 5). The boundary answers this for every request inside the replay window; the
       buy's ``payload_hash`` column is the DURABLE signal that outlives the cache row, so
       the answer survives eviction. Legacy rows without a stored hash carry no signal.
-    - otherwise: transient ``SERVICE_UNAVAILABLE`` with a short ``retry_after`` -- the
-      winner's cache write is in flight; the buyer's retry replays the verbatim envelope at
-      the boundary once it lands.
+    - otherwise: transient ``IDEMPOTENCY_IN_FLIGHT`` with a short ``retry_after`` -- the
+      winner's cache write is in flight (rule 9, reject-and-redirect); the buyer's retry with
+      the SAME key replays the verbatim envelope at the boundary once it lands.
     """
     # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
     from src.core.database.repositories import MediaBuyUoW
@@ -2313,7 +2323,7 @@ def _raise_degraded_replay_outcome(
         if existing is None:
             # Impossible-state guard: the race resolved, yet no buy carries the key.
             # TERMINAL is load-bearing here and the docstring above depends on it —
-            # the very next outcome is a TRANSIENT SERVICE_UNAVAILABLE for "the
+            # the very next outcome is a TRANSIENT IDEMPOTENCY_IN_FLIGHT for "the
             # winner's cache write is in flight, retry". Grading this one transient
             # too would collapse the two into one wire answer and invite a retry of
             # a state that cannot resolve itself. CONFIGURATION_ERROR is the pinned
@@ -2345,7 +2355,7 @@ def _raise_degraded_replay_outcome(
         if req is not None:
             raise_on_payload_conflict(existing.payload_hash, canonical_request_hash(req))
 
-    raise AdCPServiceUnavailableError(
+    raise AdCPIdempotencyInFlightError(
         retry_after=1,
     )
 
@@ -2672,7 +2682,10 @@ async def _create_media_buy_impl(
 
             duplicate_products = [pid for pid, count in product_id_counts.items() if count > 1]
             if duplicate_products:
+                # No single package is at fault -- the collection is -- so the pointer names
+                # the array (salesagent-rfxfu).
                 raise AdCPValidationError(
+                    field=PACKAGES_FIELD,
                     details=ValidationDetails(duplicate_product_ids=sorted(duplicate_products)),
                 )
 
@@ -2820,14 +2833,21 @@ async def _create_media_buy_impl(
                     product = product_map[package_product_ids[0]]
                     pricing_options = product.pricing_options or []
 
-                    # The product's first pricing option supplies the currency. The branch
-                    # that used to precede this one looked the option up by the package's
-                    # legacy pricing_model, a field the pin does not declare and nothing
-                    # produced; it went with the field.
+                    # The SELECTED pricing option supplies the currency: "Every selected
+                    # pricing option MUST declare that currency" (create_media_buy.mdx,
+                    # Pricing & Currency). Reading the product's first option instead let a
+                    # package selecting a EUR option on a USD-first product pass the tenant
+                    # and ad-server currency gates as USD. An id matching no option falls
+                    # back to the first; the pricing check below refuses that id anyway.
                     if pricing_options:
                         # A PricingOption ORM row; ``currency`` is a column, and a row has
                         # no ``root`` for the deleted unwrap helper to have found.
-                        request_currency = pricing_options[0].currency
+                        requested_id = (first_package.pricing_option_id or "").lower()
+                        selected = next(
+                            (po for po in pricing_options if po.pricing_option_id.lower() == requested_id),
+                            pricing_options[0],
+                        )
+                        request_currency = selected.currency
 
             # Fallback to deprecated/legacy sources
             # Note: currency and budget fields no longer exist on CreateMediaBuyRequest per AdCP spec
@@ -2897,6 +2917,7 @@ async def _create_media_buy_impl(
                                     package=package,
                                     product=product_map[product_id],
                                     campaign_currency=request_currency,
+                                    package_index=idx,
                                 )
                                 # Store by index (package IDs aren't generated yet)
                                 package_pricing_info_by_index[idx] = pricing_info
@@ -2930,7 +2951,7 @@ async def _create_media_buy_impl(
 
                     # For packages with budgets, validate each package's budget
                     if req.packages and not is_legacy_mode:
-                        for package in req.packages:
+                        for pkg_index, package in enumerate(req.packages):
                             # Skip packages without budgets (shouldn't happen in v2.4 format)
                             if not package.budget:
                                 continue
@@ -2983,6 +3004,7 @@ async def _create_media_buy_impl(
                                         exc_type=AdCPBudgetTooLowError,
                                         requested_budget=package_budget,
                                         budget_limit=package_min_spend,
+                                        field=package_field_path("budget", pkg_index),
                                     )
                     else:
                         # Legacy mode: single total_budget for all products
@@ -4515,6 +4537,10 @@ async def _create_media_buy_impl(
             valid_actions=valid_actions_for_status(media_buy_status),
             creative_deadline=response.creative_deadline,
             errors=property_list_unsupported_advisories(req.packages, adapter),
+            # sandbox.mdx: sellers "SHOULD include `sandbox: true` in success responses
+            # when processing a sandbox account request". Omitted, never false, for a
+            # production account: the field only ever confirms sandbox mode.
+            sandbox=True if identity.account.sandbox else None,
         )
 
         # Log activity

@@ -144,7 +144,9 @@ class TestListTasksTool:
 
         assert result.tasks is not None
         mock_workflow_repo.count_by_tenant.assert_called_once_with(
-            status="requires_approval",
+            statuses=["requires_approval"],
+            tool_names=None,
+            step_ids=None,
             object_type=None,
             object_id=None,
             # list_tasks scopes to the caller now (#1808); it listed the

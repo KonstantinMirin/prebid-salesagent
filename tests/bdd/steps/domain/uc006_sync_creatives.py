@@ -3442,7 +3442,6 @@ def given_generative_creative_served_by_agent(ctx: dict) -> None:
     )
     ctx["creative_format_id"] = fmt["id"]
     ctx["creative_agent_url"] = fmt["agent_url"]
-    ctx["expected_creative_ids"] = [creative_id]
 
 
 def _persisted_creative_fingerprints(ctx: dict) -> dict[str, tuple]:
@@ -3501,7 +3500,6 @@ def given_creative_reaching_the_agent(ctx: dict, creative_state: str, format_kin
     )
     ctx["creative_format_id"] = fmt["id"]
     ctx["creative_agent_url"] = fmt["agent_url"]
-    ctx["expected_creative_ids"] = [creative_id]
 
     if creative_state == "existing":
         # The update branch is unreachable for a creative that is not already on

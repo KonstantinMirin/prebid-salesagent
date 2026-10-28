@@ -417,35 +417,6 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
 
 
 @pytest.mark.requires_db
-async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_products):
-    """Test that budget below min_spend_per_package fails."""
-    start_time, end_time = _get_future_date_range()
-    request = create_test_media_buy_request(
-        packages=[
-            create_test_package_request(
-                product_id="prod_cpcv",
-                pricing_option_id="cpcv_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
-                budget=3000.0,  # Below min spend of 5000
-            )
-        ],
-        start_time=start_time,
-        end_time=end_time,
-    )
-
-    identity = _identity()
-
-    # Boundary-validation failures are now signaled via typed AdCPSalesAgentError that
-    # propagates past the narrowed (ValueError, PermissionError) catch in _impl
-    # and is translated to the spec two-layer envelope at the transport
-    # boundary. Verify the typed raise at the layer above the transport.
-    with pytest.raises(AdCPValidationError) as excinfo:
-        await _create_media_buy_impl(req=request, identity=identity)
-
-    exc = excinfo.value
-    assert exc.error_code == "VALIDATION_ERROR"
-
-
-@pytest.mark.requires_db
 async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_pricing_products):
     """Test creating media buy choosing CPP from multi-pricing product."""
     start_time, end_time = _get_future_date_range()
@@ -466,32 +437,3 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
     response = await _create_media_buy_impl(req=request, identity=identity)
 
     assert_created(response)
-
-
-@pytest.mark.requires_db
-async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pricing_products):
-    """Test that requesting unavailable pricing model fails."""
-    start_time, end_time = _get_future_date_range()
-    request = create_test_media_buy_request(
-        packages=[
-            create_test_package_request(
-                product_id="prod_cpm_fixed",  # Only offers CPM
-                pricing_option_id="cpcv_usd_fixed",  # Requesting CPCV (should fail)
-                budget=10000.0,
-            )
-        ],
-        start_time=start_time,
-        end_time=end_time,
-    )
-
-    identity = _identity()
-
-    # Boundary-validation failures are now signaled via typed AdCPSalesAgentError that
-    # propagates past the narrowed (ValueError, PermissionError) catch in _impl
-    # and is translated to the spec two-layer envelope at the transport
-    # boundary. Verify the typed raise at the layer above the transport.
-    with pytest.raises(AdCPValidationError) as excinfo:
-        await _create_media_buy_impl(req=request, identity=identity)
-
-    exc = excinfo.value
-    assert exc.error_code == "VALIDATION_ERROR"

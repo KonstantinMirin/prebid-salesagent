@@ -70,6 +70,10 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc002_nfr",
+    "tests.bdd.steps.domain.uc002_task_query",
+    "tests.bdd.steps.domain.uc002_v31_request",
+    "tests.bdd.steps.domain.uc002_v31_proposal_targeting",
+    "tests.bdd.steps.domain.uc002_invariants",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc003_storyboard_generic_client",
@@ -82,6 +86,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc006_storyboard_creative_sync",
     "tests.bdd.steps.domain.uc006_dry_run_parity",
+    "tests.bdd.steps.domain.uc005_creative_formats",
     "tests.bdd.steps.domain.uc005_format_id_shape",
     "tests.bdd.steps.domain.uc005_format_id_third_party",
     "tests.bdd.steps.domain.uc005_peer_catalog",
@@ -529,10 +534,19 @@ _XFAIL_TAGS: dict[str, str] = {
     # 3.0/3.1/3.2 — and it still stands on the "(Creative Agent)" variant of the request.
     # Two lanes found this pair independently, which is why the entries are gone once here
     # rather than twice.
-    # Un-graduated: T-UC-005-sandbox-happy — sandbox=True not set on response (all transports)
-    "T-UC-005-sandbox-happy": "sandbox mode not implemented in list_creative_formats response — spec-production gap",
-    # Un-graduated: T-UC-005-sandbox-validation — sandbox validation not triggered (all transports)
-    "T-UC-005-sandbox-validation": "sandbox validation not triggered for invalid filters — spec-production gap",
+    # Graduated: T-UC-005-sandbox-happy. Two halves, both real. The When named no account,
+    # so the request was a production request whatever account the Given seeded --
+    # sandbox.mdx makes sandbox account-level ("Once a request references a sandbox
+    # account, the entire request is treated as sandbox"). And production answered
+    # sandbox=None unconditionally. The When now names the seeded account, and
+    # _list_creative_formats_impl reads the flag off the account the resolver loaded for it
+    # (a request naming an account carries a credential even on this public task), which
+    # is the SHOULD sandbox.mdx states: "include `sandbox: true` in success responses".
+    # Graduated: T-UC-005-sandbox-validation. "Sandbox validation not triggered" was the
+    # When, not the seller: it sent min_width=-1, and the pinned request declares min_width
+    # {"type": "integer"} with no minimum, so the seller rightly served it. The When now
+    # sends a non-integer, and the Thens assert the INVALID_REQUEST a schema violation
+    # earns rather than VALIDATION_ERROR (see the scenario).
     # Graduated 2026-09-15: T-UC-005-main-referrals. Its reason had two halves and neither
     # was production. The first -- "in-process registry mock returns no agents" -- was the
     # MOCK: CreativeFormatsEnv left ``_get_tenant_agents`` as a MagicMock attribute, and
@@ -553,9 +567,12 @@ _XFAIL_TAGS: dict[str, str] = {
     # server answers with the WHOLE catalog, pixel_tracker assets included, and the
     # compliance Then fails on adcp#7338 exactly as its siblings do -- that one node is on
     # tests/bdd/e2e_rest_known_failures.txt under the #7338 block, not parked by tag.
-    # Partially graduated: dispatch fix landed; error code mismatch remains
-    # FIXME: production raises AUTH_REQUIRED, spec expects TENANT_REQUIRED
-    "T-UC-005-ext-a": "error code AUTH_REQUIRED instead of TENANT_REQUIRED — spec-production gap",
+    # Graduated: T-UC-005-ext-a ("No tenant context"). Its Givens never removed the tenant
+    # -- the token-less credential still addressed the env's seller, and this public task
+    # served it -- so no envelope was captured at all, and the AUTH_REQUIRED/TENANT_REQUIRED
+    # reason described neither the pin nor the run. The scenario now sends no headers and
+    # asserts TENANT_UNDEFINED/terminal, as the UC-010, UC-013 and UC-018 scenarios on the
+    # same Given do.
     # Graduated: creative agent partition/boundary tests
     # Steps now dispatch through harness — all 34 tests pass across 4 transports.
     # FIXME(#1660): suggestion field not in production error model
@@ -621,14 +638,14 @@ _XFAIL_TAGS: dict[str, str] = {
     # scenario graded the harness's own exception. Dispatching the raw parameter bag lets
     # the payload reach the server, which answers INVALID_REQUEST with a suggestion, which
     # is what the scenario asked for all along (prkv.33).
-    # FIXME: the error CODE is fixed (currency-not-supported now
-    # raises AdCPCapabilityNotSupportedError -> UNSUPPORTED_FEATURE, verified by
-    # tests/integration/test_currency_not_supported_error_code.py). But this scenario
-    # selects a non-default-currency pricing_option_id, and create_media_buy derives
-    # request_currency from the product's FIRST pricing option — it never validates the
-    # SELECTED option's currency — so the create SUCCEEDS instead of failing. Graduates
-    # once selected-option currency validation lands (#1417).
-    "T-UC-002-ext-d": "selected pricing-option currency not validated against CurrencyLimit; create succeeds instead of UNSUPPORTED_FEATURE — spec-production gap",
+    # Graduated (#1417): T-UC-002-ext-d. create_media_buy now reads the currency from the
+    # pricing option the package SELECTS, not the product's first (3b1339f63), so an
+    # option in a currency outside the tenant's CurrencyLimit rows is refused
+    # UNSUPPORTED_FEATURE / correctable, the closest code the pinned enum defines ("a
+    # requested feature or field is not supported by this seller"). The Given seeds the
+    # option through PricingOptionFactory; the code and recovery Thens read the wire only.
+    # Strict XPASS on a2a, mcp, rest and e2e_rest in box run innet_281026_1713; not in
+    # e2e_rest_known_failures.txt.
     # Graduated (#1417/gh8p.10): duplicate product_id now raises AdCPValidationError
     # with a buyer-facing suggestion ("Each package must reference a distinct
     # product_id ..."), surfaced on the wire. T-UC-002-ext-e passes.
@@ -714,9 +731,12 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-inv-006-3": "pricing XOR invariant (both set) not validated in create flow — spec-production gap",
     "T-UC-002-inv-006-4": "pricing XOR invariant (neither set) error lacks suggestion field — spec-production gap",
     # RESOLVED: budget positivity validation now works — removed stale xfail T-UC-002-inv-008-2
-    # FIXME: ASAP case sensitivity error code mismatch
-    # Production: Pydantic rejects "ASAP" → ValidationError, spec expects INVALID_REQUEST.
-    "T-UC-002-inv-013-5": "INVALID_REQUEST error code not implemented for wrong-case ASAP — spec-production gap",
+    # Graduated: T-UC-002-inv-013-5 (wrong-case "ASAP"). core/start-timing.json admits the
+    # const "asap" or a date-time, so "ASAP" violates the schema, and the boundary's DTO
+    # parse answers INVALID_REQUEST with field start_time (adcp_error_for's ValidationError
+    # branch). The Given sets start_time through _ensure_request_defaults on every transport;
+    # the Thens read the wire code and the wire suggestion. Measured XPASS(strict) on a2a,
+    # mcp, rest and e2e_rest in run measure_innet_281026_1501; no e2e_rest ledger line.
     # FIXME: sandbox mode not implemented in create_media_buy
     # CreateMediaBuyResult has no sandbox field; no sandbox suppression logic exists.
     # sandbox-production passes vacuously (sandbox absent from response by default).
@@ -7082,10 +7102,17 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
         seed=_seed_media_buy_chain_create_dispatch,
     ),
+    # The remainder of UC-002. It seeds what the uc002-ext row seeds, for the same reason:
+    # its Background claims "a tenant exists with completed setup checklist", and
+    # validate_setup_complete reads the rows setup_media_buy_data writes on every
+    # transport. Unseeded, a box run with the xfail lifted refused 452 of these nodeids
+    # CONFIGURATION_ERROR before reaching what they grade. The xfail stays until each
+    # scenario graduates (.claude/rules/workflows/xpass-graduation.md).
     EnvRoute(
         tag="uc002-not-wired",
         when=_uc("UC-002", lambda m: True),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
+        seed=_seed_media_buy_chain_create_dispatch,
         xfail_reason="UC-002 harness not yet wired for non-extension scenarios",
     ),
     # ── UC-003 ──────────────────────────────────────────────────────────────
@@ -7123,10 +7150,19 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_build_uc003_storyboard_generic_client_env,
         seed=_seed_uc003_storyboard_generic_client,
     ),
+    # The catch-all seeds what the feature's Background states for every UC-003 scenario
+    # -- an existing media buy the buyer owns, with a package, and the account the update
+    # names -- which is the uc003-ext seed. Without it, a measurement with the xfail off
+    # (measure_innet_281026_1501) failed every one of the 1524 nodes this row claims on the
+    # Background's ownership Given ("No existing_media_buy in ctx"), so the row's xfail hid
+    # a missing seed rather than the per-scenario gaps it names. While xfail_reason is set,
+    # _run_env_route xfails before the env is built and the seed does not run; it is here
+    # so that dropping the reason grades each scenario on its own steps.
     EnvRoute(
         tag="uc003-not-wired",
         when=_uc("UC-003", lambda m: True),
         env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
+        seed=_seed_update_with_existing_buy,
         xfail_reason=(
             "UC-003 harness not yet wired for non-extension scenarios (full graduation pending, PR #1567 follow-up)"
         ),

@@ -2590,24 +2590,6 @@ mappings:
       upstream_refs: ["BR-UC-003-ext-t"]
       business_rules: []
       status: new
-    - adcp_scenario_id: "T-UC-003-billing-not-supported"
-      adcp_feature: "BR-UC-003-update-media-buy.feature"
-      obligation_id: null
-      upstream_refs: ["BR-RULE-214"]
-      business_rules: ["BR-RULE-214"]
-      status: new
-    - adcp_scenario_id: "T-UC-003-billing-not-permitted-agent"
-      adcp_feature: "BR-UC-003-update-media-buy.feature"
-      obligation_id: null
-      upstream_refs: ["BR-RULE-214"]
-      business_rules: ["BR-RULE-214"]
-      status: new
-    - adcp_scenario_id: "T-UC-003-billing-unauth-identity"
-      adcp_feature: "BR-UC-003-update-media-buy.feature"
-      obligation_id: null
-      upstream_refs: ["BR-RULE-214"]
-      business_rules: ["BR-RULE-214"]
-      status: new
     - adcp_scenario_id: "T-UC-003-ext-u"
       adcp_feature: "BR-UC-003-update-media-buy.feature"
       obligation_id: null
@@ -2674,24 +2656,6 @@ mappings:
       upstream_refs: ["BR-RULE-198"]
       business_rules: []
       status: new
-    - adcp_scenario_id: "T-UC-003-committed-metrics-append"
-      adcp_feature: "BR-UC-003-update-media-buy.feature"
-      obligation_id: null
-      upstream_refs: ["BR-RULE-219"]
-      business_rules: ["BR-RULE-219"]
-      status: new
-    - adcp_scenario_id: "T-UC-003-committed-metrics-immutable"
-      adcp_feature: "BR-UC-003-update-media-buy.feature"
-      obligation_id: null
-      upstream_refs: ["BR-RULE-219"]
-      business_rules: ["BR-RULE-219"]
-      status: new
-    - adcp_scenario_id: "T-UC-003-committed-metrics-noop"
-      adcp_feature: "BR-UC-003-update-media-buy.feature"
-      obligation_id: null
-      upstream_refs: ["BR-RULE-219"]
-      business_rules: ["BR-RULE-219"]
-      status: new
     - adcp_scenario_id: "T-UC-003-sandbox-update-nonsuccess"
       adcp_feature: "BR-UC-003-update-media-buy.feature"
       obligation_id: null
@@ -2738,12 +2702,6 @@ mappings:
       adcp_feature: "BR-UC-003-update-media-buy.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-003", "BR-RULE-198"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-003-bva-committed-metrics"
-      adcp_feature: "BR-UC-003-update-media-buy.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-003", "BR-RULE-219"]
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-003-bva-idempotency-key"
