@@ -6,7 +6,9 @@ is neither a registered plugin nor imported by a test module contributes none. R
 it was measured and rejected -- it steals 127 already-bound step instances across 5 modules
 (salesagent-uokuq). Its remaining steps are candidates for PROMOTION into a registered
 module when a scenario needs them, one at a time, which is how the two UC-002 package Thens
-left here (see salesagent-9p7oe.4).
+left here (see salesagent-9p7oe.4). The ``"errors" array`` pair moved to ``then_error.py``
+and ``the package budget should be persisted as`` to ``uc003_update_media_buy.py`` the
+same way, when UC-003 scenarios needed them.
 
 Eleven patterns across seven functions have been removed rather than left: five functions
 whose six patterns were SHADOWED by a registered module (so they were dead twice over --
@@ -299,39 +301,6 @@ def then_no_package_records_persisted(ctx: dict) -> None:
         assert count == existing_count, f"Expected {existing_count} package record(s) in DB, found {count}"
 
 
-@then(parsers.parse("the package budget should be persisted as {budget:d}"))
-def then_package_budget_persisted(ctx: dict, budget: int) -> None:
-    """Assert the package budget was persisted in the database with the expected value.
-
-    Queries the real DB for the package referenced in the update request and
-    verifies its budget matches the expected value. This checks actual persistence,
-    not just the response payload.
-    """
-    from sqlalchemy import select
-
-    from src.core.database.models import MediaPackage
-
-    # Determine package_id from the update request or existing package
-    update_kwargs = ctx.get("update_kwargs", {})
-    packages = update_kwargs.get("packages", [])
-    if packages:
-        package_id = packages[0].get("package_id")
-    else:
-        pkg = ctx.get("existing_package")
-        assert pkg is not None, "No package in update request or ctx — cannot verify budget"
-        package_id = pkg.package_id
-
-    assert package_id, "No package_id found to verify budget persistence"
-
-    with _db_session(ctx) as session:
-        db_pkg = session.scalars(select(MediaPackage).filter_by(package_id=package_id)).first()
-        assert db_pkg is not None, f"Package {package_id} not found in DB"
-        assert db_pkg.budget == budget, (
-            f"Expected package budget {budget}, got {db_pkg.budget} — "
-            "BR-RULE-020 INV-1: adapter success should persist changes"
-        )
-
-
 @then("the creative assignment records should be persisted")
 def then_creative_assignment_records_persisted(ctx: dict) -> None:
     """Assert creative assignment records were persisted in the database.
@@ -544,18 +513,6 @@ def then_response_no_errors_field(ctx: dict) -> None:
     shape-guessing that wire_absent does not need.
     """
     wire_absent(ctx, "errors")
-
-
-@then('the response should have an "errors" array')
-@then('the response should contain an "errors" array')
-def then_response_has_errors_array(ctx: dict) -> None:
-    """Assert the wire rejection carries a non-empty, conformant errors array.
-
-    The helper asserts the array is non-empty and validates every entry against pinned
-    ``core/error.json``, which subsumes the per-entry code-and-message checks the two
-    hand-rolled versions of this step used to spell out.
-    """
-    ctx["result"].assert_wire_error_is_schema_conformant()
 
 
 @then("the response should NOT have success fields (media_buy_id, packages)")
