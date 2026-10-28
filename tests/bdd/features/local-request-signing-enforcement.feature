@@ -169,7 +169,7 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     And the seller places "sync_creatives" in the "supported" request-signature bucket
     And the Buyer Agent signs a different rendering of the request
     When the Buyer Agent syncs the creative
-    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch" and recovery "terminal"
+    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch" and recovery "correctable"
     # ONE variable apart from the scenario above: the same operation, the same key, the same
     # tampered bytes — the bucket. This is the control that makes that completion mean
     # something: without it, "the request completed" is equally explained by a verifier that
@@ -183,7 +183,7 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     And the Buyer Agent signs a different rendering of the request
     And the request registers a webhook whose authentication carries credentials
     When the Buyer Agent syncs the creative
-    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch" and recovery "terminal"
+    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch" and recovery "correctable"
     # ONE variable apart from "a signed-but-invalid request completes when the seller grades
     # no operation" above: the same operation, the same key, the same tampered bytes, the same
     # posture — the request now hands over webhook CREDENTIALS. That scenario COMPLETES and

@@ -1,11 +1,9 @@
 """What a code resolves to: :class:`Recovery` and :class:`CodeEntry`. A LEAF.
 
-Split out of :mod:`src.core.errors.codes` so that a module contributing entries to
-``CODE_TABLE`` can name the entry type without importing the table that will contain it.
-:mod:`src.core.errors.signature_codes` is the first such contributor, and the alternative
-was a mid-file import in ``codes.py`` (E402) or a builder taking its own entry class as a
-parameter. Both types are re-exported from ``codes`` so every existing import site is
-unchanged, and this module imports nothing of ours.
+Split out of :mod:`src.core.errors.codes` so that a module can name the entry type
+without importing the table that will contain it. Both types are re-exported from
+``codes`` so every existing import site is unchanged, and this module imports nothing of
+ours.
 """
 
 from __future__ import annotations
@@ -23,9 +21,10 @@ class CodeGroup(StrEnum):
     request-signing family to be echoed in ``WWW-Authenticate: Signature error="<code>"``
     on top of the response envelope every code already travels in — and gives the wire no
     way to mark which codes those are: ``core/error.json`` types ``error.code`` as an open
-    string, and ``enums/error-code.json`` does not publish the family at all
-    (adcontextprotocol/adcp#7642). So the fact has to be re-added on this side, and this is
-    where it goes.
+    string, and the family is published in its own document,
+    ``enums/request-signing-error-code.json``, rather than in ``enums/error-code.json``.
+    The loader in ``codes`` tags each code with the document it came from, and this is
+    where that fact goes.
 
     ON THE CODE, NOT ON ITS CONSUMER. The renderer that needs it
     (``AuthChallengeResponder``) reads a code off a FINISHED response body, by which point
@@ -38,9 +37,6 @@ class CodeGroup(StrEnum):
     would imply a choice that does not exist. A GROUP can gain a member without renaming,
     and grouping is the actual concept — these codes are processed differently because of
     the family they belong to.
-
-    If #7642 lands and the family is published like any other, this stays as it is: the
-    challenge requirement is independent of where the codes are declared.
     """
 
     GENERAL = "general"
