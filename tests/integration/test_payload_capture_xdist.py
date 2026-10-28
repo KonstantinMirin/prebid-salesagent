@@ -39,6 +39,10 @@ _MODULES = [
 
 
 @pytest.mark.requires_db
+# A nested pytest that collects three BDD modules under xdist: on the CI box it takes 120-160s,
+# past the integration job's 60s per-test default. Same budget as the liveness real-run tests,
+# which start the same kind of nested run.
+@pytest.mark.timeout(300)
 def test_dispatches_survive_the_worker_to_controller_trip(tmp_path: Path, integration_db: object) -> None:
     del integration_db
     artifact = tmp_path / "payloads.json"

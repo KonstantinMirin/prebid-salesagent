@@ -68,7 +68,6 @@ from scripts.setup.seed_storyboard_tenant import STORYBOARD_TOKEN  # noqa: E402
 from scripts.setup.seed_storyboard_tenant import (  # noqa: E402
     STORYBOARD_VIRTUAL_HOST as _SEEDED_STORYBOARD_VIRTUAL_HOST,
 )
-from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION  # noqa: E402
 
 #: The Host the conformance runner dials, and therefore the ``virtual_host`` the storyboard
 #: tenant must answer to. Re-exported from ``seed_storyboard_tenant``, which WRITES it.
@@ -162,25 +161,28 @@ GRADING_PER_KEYID_CAP = 100
 #: ``src/core/signing/replay_store.py`` carries the same derivation from the store's side.
 GRADING_REPLAY_TTL_SECONDS = 70
 
+
 #: Where the runner's keypairs are published. The VENDORED snapshot, not the downloaded
 #: bundle: this module is read by ``scripts/test-stack.sh`` at compose time, before
 #: anything has materialized a bundle, and the vendored tree is committed and sha256-pinned
 #: by ``MANIFEST.json`` — so it is both always present and not a second copy of the keys.
 #:
-#: The version segment is READ FROM THE PIN, never spelled here. ``adcp_pin`` carries that
-#: rule for exactly this reason: a site that spells its own version drifts the moment the
-#: pin moves, and this one did. The 3.2.1 re-vendor renamed the tree and left this path on
-#: ``3.1.1``, so every full run died in setup on a FileNotFoundError before a single suite
-#: reported — the vendored tree is "always present" only at the version the pin names.
-_KEYS_JSON = (
-    _PROJECT_ROOT
-    / "tests"
-    / "fixtures"
-    / "adcp_conformance_vectors"
-    / EXPECTED_SPEC_VERSION
-    / "request-signing"
-    / "keys.json"
-)
+#: The version segment is never spelled here, and it is not read from the SDK either: this
+#: module runs under a bare ``python3`` on the in-network job, which has no ``adcp`` installed.
+#: The vendored vector tree holds exactly ONE version directory, and
+#: ``tests/unit/test_adcp_conformance_vectors_pin.py`` keeps that directory equal to the SDK's
+#: pin, so the one directory present IS the pin. More or fewer than one is refused rather than
+#: guessed: a stale second tree is how the 3.2.1 re-vendor once left this path pointing at the
+#: wrong version.
+def _vendored_vectors_dir() -> Path:
+    root = _PROJECT_ROOT / "tests" / "fixtures" / "adcp_conformance_vectors"
+    versions = sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith(("_", ".")))
+    if len(versions) != 1:
+        raise RuntimeError(f"expected exactly one vendored conformance-vector version under {root}, found {versions}")
+    return versions[0]
+
+
+_KEYS_JSON = _vendored_vectors_dir() / "request-signing" / "keys.json"
 
 #: Members of a published JWK that are not part of the public key.
 _PRIVATE_MEMBERS = ("_private_d_for_test_only", "$comment")
