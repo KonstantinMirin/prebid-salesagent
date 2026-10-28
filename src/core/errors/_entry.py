@@ -83,7 +83,7 @@ class CodeEntry:
     message: str
     status: int
     #: Defaults to the family that needs no special transport, so the 92 published codes
-    #: and the 8 platform codes declare nothing. Only a code whose family changes how it
+    #: and the 9 platform codes declare nothing. Only a code whose family changes how it
     #: reaches the buyer says so.
     group: CodeGroup = CodeGroup.GENERAL
 

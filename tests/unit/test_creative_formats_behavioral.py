@@ -527,7 +527,7 @@ def _call_impl_raw(
 class TestPartialAgentFailureReturnsFormatsAndErrors:
     """UC-005-EXT-C-01: Partial agent failure returns formats from healthy agents plus errors.
 
-    Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-01)
+    Decision: docs/design/error-architecture.md, "Worked case: format discovery" (FD-ERR-01)
     """
 
     def test_partial_agent_failure_returns_formats_and_errors(self):

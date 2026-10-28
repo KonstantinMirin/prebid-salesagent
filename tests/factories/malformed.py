@@ -245,7 +245,7 @@ def malformed(kind: str, why: str, payload: dict[str, Any], *, obligation: Error
         raise ValueError(
             f"malformed() requires obligation=<an ErrorCodeT member>, got {obligation!r}. Import it from "
             "src.core.errors.codes — this repo's own table, whose ErrorCodeT is the 92 spec codes PLUS this "
-            "seller's 8 (AGENT_UNREACHABLE and friends); the SDK enum alone silently drops the second arm. "
+            "seller's 9 (AGENT_UNREACHABLE and friends); the SDK enum alone silently drops the second arm. "
             "The obligation states WHICH CODE the buyer must receive for these bytes, and the gate grades "
             "the part of that claim the pin can see. An undeclared key is not a malformation and has no "
             "member in either arm — see this module's docstring."

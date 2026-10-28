@@ -65,6 +65,7 @@ def _ensure_backward_compatible_format[FormatT: AdcpFormat](f: FormatT) -> Forma
 from adcp import ErrorCode
 
 from src.core.audit_logger import get_audit_logger
+from src.core.errors.codes import AppErrorCode
 from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import Error as AdCPResponseError
 
@@ -441,6 +442,10 @@ def _route_agent_failures(
     Correlation comes from ``failed_agent_urls``, which is parallel to
     ``errors`` and never reaches the wire; the advisory itself deliberately
     omits the agent_url because every wire field is client-facing.
+
+    Only an UNREACHABLE agent is rerouted. An AGENT_FORMATS_DISCARDED advisory names an
+    agent that answered: the format the buyer referenced may well be among the ones it
+    returned, so "the referenced creative agent is unavailable" would be false.
     """
     requested_agent_urls = {str(fid.agent_url) for fid in (req.format_ids or [])}
     if not requested_agent_urls or not fetch_result.failed_agent_urls:
@@ -449,7 +454,8 @@ def _route_agent_failures(
     routed: list[AdCPResponseError] = []
     for index, advisory in enumerate(fetch_result.errors):
         failed_url = fetch_result.failed_agent_urls[index] if index < len(fetch_result.failed_agent_urls) else None
-        if failed_url is not None and str(failed_url) in requested_agent_urls:
+        unreachable = advisory.code == AppErrorCode.AGENT_UNREACHABLE
+        if unreachable and failed_url is not None and str(failed_url) in requested_agent_urls:
             routed.append(AdCPResponseError.of(ErrorCode.REFERENCE_NOT_FOUND, field="format_ids"))
         else:
             routed.append(advisory)

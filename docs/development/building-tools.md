@@ -680,8 +680,8 @@ The constructor has no `message` parameter. A raise site supplies facts through 
 owns the four things a buyer needs with a code — the message, the recovery, the suggestion, and
 the HTTP status — and `message`, `recovery`, `suggestion`, and `status_code` are read-only
 properties resolving from it at every read, so no instance can carry a value that disagrees
-with the table by any route. The table holds 100 entries: the 92 published codes loaded from
-the pinned bundle's `enums/error-code.json` through `importlib.resources`, plus the 8 platform
+with the table by any route. The table holds 101 entries: the 92 published codes loaded from
+the pinned bundle's `enums/error-code.json` through `importlib.resources`, plus the 9 platform
 codes `AppErrorCode` declares. An error names its code by its class or explicitly, never both
 and never neither: `__init_subclass__` refuses a subclass whose code the table does not
 classify, and `__new__` refuses both a bare base construction and an `error_code` passed to a

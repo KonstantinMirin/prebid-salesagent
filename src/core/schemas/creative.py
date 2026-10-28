@@ -70,10 +70,10 @@ from pydantic_core import PydanticCustomError
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
     BuyerRequest,
-    Format,
     FormatId,
     FormatIdSlot,
     NestedModelSerializerMixin,
+    PeerFormat,
     SalesAgentAdcpResponse,
     SalesAgentBaseModel,
     Targeting,
@@ -763,9 +763,14 @@ class ListCreativeFormatsResponse(
         The field is not redeclared as ``list[Format]`` because list is invariant and mypy
         refuses the narrowing; a local Format is a library Format, so the inherited field
         keeps the instance and NestedModelSerializerMixin serializes it by instance.
+
+        A dict is read as :class:`PeerFormat`: this response carries a peer creative agent's
+        formats, and those may hold closed-enum members the pin does not model, which the
+        wire re-emits. Reading that wire back strictly would refuse a document this seller
+        itself produced.
         """
         if isinstance(v, list):
-            return [Format.model_validate(f) if isinstance(f, dict) else f for f in v]
+            return [PeerFormat.model_validate(f) if isinstance(f, dict) else f for f in v]
         return v
 
 

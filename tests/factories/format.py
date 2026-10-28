@@ -55,10 +55,10 @@ def _asset_classes_by_type(model: type[BaseModel], field: str = "assets") -> dic
     all, so there is nothing stable to hand-write them against.
 
     The walk is shape-insensitive on purpose: it recurses the whole annotation
-    instead of assuming a nesting depth. ``creative_agent_registry._known_asset_types``
-    is the cautionary case — it hand-unwraps ``list[Union[...]] | None``, the SDK
-    added a ``Discriminator`` layer around the union, and it has returned an EMPTY
-    frozenset ever since, silently. Hence the emptiness check below: a derivation
+    instead of assuming a nesting depth. The registry's deleted ``_known_asset_types``
+    was the cautionary case — it hand-unwrapped ``list[Union[...]] | None``, the SDK
+    added a ``Discriminator`` layer around the union, and it returned an EMPTY
+    frozenset from then on, silently. Hence the emptiness check below: a derivation
     that matches nothing is green.
     """
     found: dict[str, type[BaseModel]] = {}
