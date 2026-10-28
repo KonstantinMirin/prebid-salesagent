@@ -31,7 +31,11 @@ ADCP_PIN="8d1d3244b2ef"
 # docker-compose.e2e.yml and the standalone `up` path run; _ensure_image
 # repoints it at this pin before every run.
 IMAGE_ALIAS="adcp-creative-agent"
-IMAGE="${IMAGE_ALIAS}:${ADCP_PIN}"
+# The tag also names the local patch below, so an image built from the unpatched
+# source (a cached local build, or a ghcr image published before the patch) never
+# satisfies _ensure_image.
+IMAGE_TAG="${ADCP_PIN}-unthrottled"
+IMAGE="${IMAGE_ALIAS}:${IMAGE_TAG}"
 NET="creative-net"
 PG="adcp-postgres"
 AGENT="creative-agent"
@@ -87,7 +91,7 @@ _ensure_tarball() {
 }
 
 _ghcr_ref() {
-    echo "${CREATIVE_AGENT_GHCR_IMAGE}:${ADCP_PIN}"
+    echo "${CREATIVE_AGENT_GHCR_IMAGE}:${IMAGE_TAG}"
 }
 
 _ghcr_image_exists() {
@@ -116,13 +120,29 @@ _dockerfile_without_fly_size_check() {
     echo "$out"
 }
 
+# adcp's agent caps /api/creative-agent/mcp at 60 requests a minute per client IP. Every
+# server worker of the in-network stack reaches it from one address, and sync_creatives
+# calls preview_creative per creative, so the e2e suites exceed the cap and the seller
+# answers SERVICE_UNAVAILABLE. Lift that one limit in the source the image is built from;
+# fail the build rather than ship the cap if a pin bump moves the line.
+_patch_mcp_rate_limit() {
+    local src="${SRC}/server/src/creative-agent/index.ts"
+    sed -i '/const mcpRateLimiter = rateLimit({/,/});/ s/max: 60,/max: 100000,/' "$src"
+    if ! sed -n '/const mcpRateLimiter = rateLimit({/,/});/p' "$src" | grep -q 'max: 100000,'; then
+        echo "[creative-agent] mcpRateLimiter not found in ${src}; update _patch_mcp_rate_limit" >&2
+        return 1
+    fi
+}
+
 _build_image_local() {
+    _patch_mcp_rate_limit
     echo "[creative-agent] docker build $IMAGE (adcp@${ADCP_PIN})"
     docker build -f "$(_dockerfile_without_fly_size_check)" -t "$IMAGE" "$SRC"
 }
 
 _build_for_ghcr() {
     local ref="$(_ghcr_ref)"
+    _patch_mcp_rate_limit
     echo "[creative-agent] docker build ${ref} (adcp@${ADCP_PIN})"
     docker build -f "$(_dockerfile_without_fly_size_check)" -t "$ref" -t "$IMAGE" "$SRC"
 }
