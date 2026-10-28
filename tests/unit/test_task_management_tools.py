@@ -387,17 +387,14 @@ class TestGetTaskSpecFlags:
 
         result = await self._call(mock_uow, self._identity(), task_id="step_done", include_history=True)
 
-        assert [entry.model_dump(mode="json") for entry in result.history] == [
-            {
-                "timestamp": "2026-03-01T09:00:00Z",
-                "type": "request",
-                "data": {"packages": [{"product_id": "prod_1"}]},
-            },
-            {
-                "timestamp": "2026-03-01T09:05:00Z",
-                "type": "response",
-                "data": {"media_buy_id": "mb_1", "packages": []},
-            },
+        # The instant is compared, not its spelling: "Z" and "+00:00" are the same RFC 3339
+        # date-time, and the SDK's serializer chooses between them.
+        entries = [entry.model_dump(mode="json") for entry in result.history]
+        stamps = [datetime.fromisoformat(entry.pop("timestamp")) for entry in entries]
+        assert stamps == [datetime(2026, 3, 1, 9, 0, tzinfo=UTC), datetime(2026, 3, 1, 9, 5, tzinfo=UTC)]
+        assert entries == [
+            {"type": "request", "data": {"packages": [{"product_id": "prod_1"}]}},
+            {"type": "response", "data": {"media_buy_id": "mb_1", "packages": []}},
         ]
 
     async def test_history_omits_an_exchange_that_has_not_happened(self, mock_uow, mock_workflow_repo, completed_step):

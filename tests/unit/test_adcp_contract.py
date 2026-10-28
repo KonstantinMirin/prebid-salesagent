@@ -1658,8 +1658,14 @@ class TestAdCPContract:
         # ``assignment_limit`` and ``assignment_projection``. The set is the parent's fields
         # plus the two ``BuyerRequest`` contributes, which is exactly what "the DTO is the
         # pinned model plus a declared mixin" means.
+        #
+        # Emitted is a SUBSET, not the whole set: an unset optional property whose schema has
+        # no null arm is left off the output even under ``exclude_none=False`` (the SDK's
+        # per-field ``exclude_if``), because ``null`` is not a valid value for it. Asserting
+        # every spec field present would assert an invalid ``null`` on the wire.
         spec_fields = set(LibraryListCreativesRequest.model_fields) | {"account", "context"}
-        assert set(adcp_response.keys()) == spec_fields, f"Fields should match spec: {set(adcp_response.keys())}"
+        assert set(adcp_response.keys()) <= spec_fields, f"Non-spec fields emitted: {set(adcp_response) - spec_fields}"
+        assert None not in adcp_response.values(), "An unset optional property must be omitted, not emitted as null"
 
     def test_list_creatives_response_adcp_compliance(self):
         """Test that ListCreativesResponse model complies with AdCP list-creatives response schema."""
