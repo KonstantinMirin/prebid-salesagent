@@ -82,6 +82,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc006_storyboard_creative_sync",
     "tests.bdd.steps.domain.uc006_dry_run_parity",
+    "tests.bdd.steps.domain.uc005_creative_formats",
     "tests.bdd.steps.domain.uc005_format_id_shape",
     "tests.bdd.steps.domain.uc005_format_id_third_party",
     "tests.bdd.steps.domain.signing_enforcement",
@@ -528,10 +529,19 @@ _XFAIL_TAGS: dict[str, str] = {
     # 3.0/3.1/3.2 — and it still stands on the "(Creative Agent)" variant of the request.
     # Two lanes found this pair independently, which is why the entries are gone once here
     # rather than twice.
-    # Un-graduated: T-UC-005-sandbox-happy — sandbox=True not set on response (all transports)
-    "T-UC-005-sandbox-happy": "sandbox mode not implemented in list_creative_formats response — spec-production gap",
-    # Un-graduated: T-UC-005-sandbox-validation — sandbox validation not triggered (all transports)
-    "T-UC-005-sandbox-validation": "sandbox validation not triggered for invalid filters — spec-production gap",
+    # Graduated: T-UC-005-sandbox-happy. Two halves, both real. The When named no account,
+    # so the request was a production request whatever account the Given seeded --
+    # sandbox.mdx makes sandbox account-level ("Once a request references a sandbox
+    # account, the entire request is treated as sandbox"). And production answered
+    # sandbox=None unconditionally. The When now names the seeded account, and
+    # _list_creative_formats_impl reads the flag off the account the resolver loaded for it
+    # (a request naming an account carries a credential even on this public task), which
+    # is the SHOULD sandbox.mdx states: "include `sandbox: true` in success responses".
+    # Graduated: T-UC-005-sandbox-validation. "Sandbox validation not triggered" was the
+    # When, not the seller: it sent min_width=-1, and the pinned request declares min_width
+    # {"type": "integer"} with no minimum, so the seller rightly served it. The When now
+    # sends a non-integer, and the Thens assert the INVALID_REQUEST a schema violation
+    # earns rather than VALIDATION_ERROR (see the scenario).
     # Graduated 2026-09-15: T-UC-005-main-referrals. Its reason had two halves and neither
     # was production. The first -- "in-process registry mock returns no agents" -- was the
     # MOCK: CreativeFormatsEnv left ``_get_tenant_agents`` as a MagicMock attribute, and
@@ -552,9 +562,12 @@ _XFAIL_TAGS: dict[str, str] = {
     # server answers with the WHOLE catalog, pixel_tracker assets included, and the
     # compliance Then fails on adcp#7338 exactly as its siblings do -- that one node is on
     # tests/bdd/e2e_rest_known_failures.txt under the #7338 block, not parked by tag.
-    # Partially graduated: dispatch fix landed; error code mismatch remains
-    # FIXME: production raises AUTH_REQUIRED, spec expects TENANT_REQUIRED
-    "T-UC-005-ext-a": "error code AUTH_REQUIRED instead of TENANT_REQUIRED — spec-production gap",
+    # Graduated: T-UC-005-ext-a ("No tenant context"). Its Givens never removed the tenant
+    # -- the token-less credential still addressed the env's seller, and this public task
+    # served it -- so no envelope was captured at all, and the AUTH_REQUIRED/TENANT_REQUIRED
+    # reason described neither the pin nor the run. The scenario now sends no headers and
+    # asserts TENANT_UNDEFINED/terminal, as the UC-010, UC-013 and UC-018 scenarios on the
+    # same Given do.
     # Graduated: creative agent partition/boundary tests
     # Steps now dispatch through harness — all 34 tests pass across 4 transports.
     # FIXME(#1660): suggestion field not in production error model

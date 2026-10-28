@@ -93,22 +93,17 @@ Feature: BR-UC-005 Discover Creative Formats
     # requires one (the only ordering guard is UC-004-scoped and self-declared disposable).
     # Restore the line only if a reason appears that the three bullets above do not cover.
 
-  @T-UC-005-main-pricing @main-flow @post-s5
-  Scenario: Per-format pricing options surfaced pass-through by the media-buy aggregator
-    Given the creative agent registry has formats with vendor pricing options
-    When the Buyer Agent requests the format catalog
-    Then the response is compliant with the list_creative_formats spec
-    And the response should include all registered formats
-    And each format offering vendor pricing should include its pricing_options
-    # POST-S5: per-format pricing surfaced pass-through. The media-buy request [S1] carries
-    # no `include_pricing` flag (that field exists only on the creative-variant request), and
-    # the reference impl applies no include_pricing gate — pricing_options pass through from
-    # the registry unconditionally.
-    # OPEN G-UC005-2: behaviour when a format has no pricing_options (omitted vs empty) unresolved
-    # OUT OF SCOPE: the v3.1 creative-variant request's `include_pricing` / `account` mechanism
-    # (and its "account required when include_pricing=true" constraint) is not part of the
-    # media-buy aggregator contract under analysis (see overview scope notes).
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json
+  # DELETED: @T-UC-005-main-pricing ("Per-format pricing options surfaced pass-through by
+  # the media-buy aggregator"). It asserted that a format offering vendor pricing carries
+  # its pricing_options in this response, and the pin gives that no basis. core/format.json
+  # on pricing_options: "DEPRECATED in 3.1. Removed at 4.0." ... "Legacy behavior, retained
+  # for 3.1-3.x backward compatibility: pricing options for this format ... present when
+  # the request included include_pricing=true and account." ... "New code SHOULD NOT emit
+  # this field." The media-buy request this seller serves declares no include_pricing, so
+  # the one condition under which the field is present can never hold here. The surviving
+  # half of POST-S5 -- no pricing_options when the registry supplies none -- is
+  # @T-UC-005-main-no-pricing below.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json pointer=/properties/pricing_options
 
   @T-UC-005-main-no-pricing @main-flow @post-s5
   Scenario: Formats without vendor pricing carry no pricing_options
@@ -116,9 +111,12 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests the format catalog
     Then the response is compliant with the list_creative_formats spec
     And no format should include pricing_options
-    # POST-S5: pricing_options presence reflects registry data, not a request flag. The
-    # media-buy request carries no `include_pricing` gate, so the aggregator never strips
-    # pricing_options — formats lack them only when the registry supplies none.
+    # POST-S5: the seller adds no pricing_options of its own. core/format.json makes the
+    # field legacy and conditional ("present when the request included include_pricing=true
+    # and account", "New code SHOULD NOT emit this field"), and the media-buy request
+    # carries no include_pricing, so a format the registry supplies without pricing reaches
+    # the buyer without it.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json pointer=/properties/pricing_options
 
   # BR-RULE-031 INV-1 is AND semantics across multiple filters. It was stated with
   # `type` + `asset_types`; `type` is not a parameter of this seller's request (removed
@@ -435,19 +433,34 @@ Feature: BR-UC-005 Discover Creative Formats
     Given the registry has format "flex-only" with disclosure_capabilities:
     | position | persistence |
     | footer   | flexible    |
+    And the registry has format "continuous-ad" with disclosure_capabilities:
+    | position  | persistence |
+    | prominent | continuous  |
     When the Buyer Agent requests formats with disclosure_persistence filter ["continuous"]
     Then the response is compliant with the list_creative_formats spec
     And "flex-only" should not be returned
+    And "continuous-ad" should be returned
     # BR-RULE-049 INV-11: no position supports "continuous" -> excluded
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # "continuous-ad" is a POSITIVE CONTROL, for the reason @T-UC-005-inv-049-8-violated
+    # carries one: an exclusion-only Then passes on any empty result, so the filter must
+    # drop the unsatisfying format AND keep the satisfying one.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json pointer=/properties/disclosure_persistence
 
   @T-UC-005-inv-049-11-nofield @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-11 edge - Format without disclosure_capabilities excluded
     Given the registry has format "legacy-banner" with no disclosure_capabilities field
+    And the registry has format "structured-banner" with disclosure_capabilities:
+    | position | persistence |
+    | footer   | initial     |
     When the Buyer Agent requests formats with disclosure_persistence filter ["initial"]
     Then the response is compliant with the list_creative_formats spec
     And "legacy-banner" should not be returned
+    And "structured-banner" should be returned
     # BR-RULE-049 INV-11: formats without disclosure_capabilities cannot declare persistence -> excluded
+    # "structured-banner" is the positive control: the request schema matches persistence
+    # "by at least one position in disclosure_capabilities", so a format declaring the mode
+    # there survives the same request that drops the undeclared one.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json pointer=/properties/disclosure_persistence
 
   @T-UC-005-empty-catalog @UC-005-MAIN-MCP-01 @edge-case
   Scenario: Empty catalog when no agents have formats
@@ -468,25 +481,32 @@ Feature: BR-UC-005 Discover Creative Formats
 
   @T-UC-005-ext-a @extension @ext-a @error @post-f1 @post-f2 @post-f3
   Scenario: No tenant context
-    Given the Buyer has no authentication credentials
-    And no hostname-based tenant resolution is possible
+    Given no tenant can be resolved from the request context
     When the Buyer Agent requests the format catalog
     Then the error is compliant with the AdCP error spec
     And the operation should fail
-    And the error code should be "AUTH_MISSING"
-    And the error recovery classification should be "correctable"
+    And the error code should be "TENANT_UNDEFINED"
+    And the error recovery should be "terminal"
     And the error should include a "suggestion" field
     # POST-F1: Buyer knows the operation failed
-    # POST-F2: The buyer is told WHICH condition failed by the CODE. TENANT_REQUIRED
-    #   was a minted code no raise site can emit; production's require_tenant
-    #   (auth.py:362) raises on the credential-presented axis, so "no credentials
-    #   at all" is AUTH_MISSING -- a published member with the same correctable
-    #   recovery. The old "message should indicate tenant context could not be
-    #   determined" assertion cannot hold once the sentence is derived from the
-    #   code, and it graded a copy of CODE_TABLE's own text anyway
-    #   (#1753).
-    # POST-F3: Suggestion advises providing auth -- AUTH_MISSING's table entry is
-    #   "provide credentials via the auth header and retry".
+    # POST-F2: The CODE says the seller could not be determined. This scenario used to
+    #   read "the Buyer has no authentication credentials / no hostname-based tenant
+    #   resolution is possible" and expect AUTH_MISSING. Neither Given removed the
+    #   tenant: the first presents no token but still addresses the env's seller, and the
+    #   second only checks that pairing. list_creative_formats is a public task, so that
+    #   request was served -- the scenario's own title was never realized. The Given now
+    #   sends no headers at all, so no seller is named, which is the state the title
+    #   describes.
+    #
+    #   AUTH_MISSING would be wrong for that state even on a protected task:
+    #   enums/error-code.json says "No credentials were presented", and a deployment
+    #   that cannot tell which seller was addressed applies no seller's credential policy.
+    #   The pin has no tenant concept, so what a deployment answers for a request naming
+    #   no seller is this seller's own contract; three sibling scenarios on the same Given
+    #   already grade it: BR-UC-010 @T-UC-010-ext-a, BR-UC-013 @T-UC-013-051 and BR-UC-018
+    #   @T-UC-018-ext-b, all TENANT_UNDEFINED with terminal recovery.
+    # POST-F3: Suggestion directs the buyer to check the agent URL it dialled.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/AUTH_MISSING
     # --- ext-b: Invalid Request Parameters ---
 
   @T-UC-005-ext-b @extension @ext-b @error @post-f1 @post-f2 @post-f3
@@ -1130,11 +1150,22 @@ Feature: BR-UC-005 Discover Creative Formats
     And the request targets a sandbox account
     When the Buyer Agent sends a list_creative_formats request with invalid dimension filters
     Then the error is compliant with the AdCP error spec
-    And the response should indicate a validation error
-    And the error should be a real validation error, not simulated
+    And the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error field should contain "min_width"
     And the error should include a suggestion for how to fix the issue
-    # BR-RULE-209 INV-7: sandbox validation errors are real
+    # BR-RULE-209 INV-7: sandbox validation errors are real. sandbox.mdx: the seller "MUST
+    # validate inputs the same way as production", and "Sandbox errors are real validation
+    # errors" -- so the refusal is the one a production request gets for the same filter.
+    # The invalid filter is a non-integer min_width: the request schema declares it
+    # {"type": "integer"} with no minimum, so a negative width (what this used to send) is
+    # a valid request. A type violation is a schema constraint, which error-code.json codes
+    # INVALID_REQUEST ("violates schema constraints"); VALIDATION_ERROR, which the two
+    # replaced Thens asserted, is for rules "BEYOND schema validation".
     # POST-F3: suggestion field present
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/sandbox.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json pointer=/properties/min_width
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_REQUEST
 
   @T-UC-005-boundary-sandbox @boundary @sandbox @br-rule-209
   Scenario Outline: Sandbox response flag boundary - <boundary_point>
@@ -1155,7 +1186,7 @@ Feature: BR-UC-005 Discover Creative Formats
   @T-UC-005-v31-asset-registry-discriminators @main-flow @v3-1 @asset-registry
   Scenario Outline: asset_types filter accepts registry discriminator values
     Given the seller catalog has at least one format containing an "<asset_type>" asset
-    When the Buyer Agent requests creative formats with asset_types filter ["<asset_type>"]
+    When the Buyer Agent requests formats with asset_types filter ["<asset_type>"]
     Then the response is compliant with the list_creative_formats spec
     And the response status should be "completed"
     And each returned format should contain at least one asset of type "<asset_type>"
@@ -1166,6 +1197,9 @@ Feature: BR-UC-005 Discover Creative Formats
     # a member the scenario does not grade.
     # vast_tracker / daast_tracker are manifest-payload discriminators in
     # asset-types/index.json — NOT valid filter inputs.
+    # STILL DORMANT: the reference catalog the live e2e stack serves carries a format for 8
+    # of these 16 members (no daast, markdown, css, webhook, brief, catalog, zip or
+    # published_post), so half the rows cannot be realized over e2e_rest.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json pointer=/properties/asset_types
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/asset-content-type.json
 
@@ -1194,10 +1228,18 @@ Feature: BR-UC-005 Discover Creative Formats
     And the request targets a production account
     When the Buyer Agent sends a list_creative_formats request with asset_types ["vast_url"]
     Then the error is compliant with the AdCP error spec
-    And the response should indicate a validation error
-    And the error should indicate "asset_types" must use outer registry discriminators only
+    And the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error field should contain "asset_types"
     # v3.1: registry forbids sibling entries like vast_url/vast_inline; use vast with inner delivery_type
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # asset_types items are enums/asset-content-type.json, which carries "vast" and no
+    # "vast_url", so the request violates a schema enum: INVALID_REQUEST ("violates schema
+    # constraints"), naming the parameter. The replaced Thens asserted VALIDATION_ERROR,
+    # which error-code.json reserves for rules "BEYOND schema validation", and a message
+    # about registry discriminators the code table words for itself.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json pointer=/properties/asset_types
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/asset-content-type.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_REQUEST
 
   @T-UC-005-v31-payload-vs-requirements-separation @main-flow @v3-1 @asset-registry
   Scenario: Format response carries constraints under requirements, not on the asset schema
@@ -1205,9 +1247,24 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests creative formats for that format
     Then the response is compliant with the list_creative_formats spec
     And the format's "assets" entry should expose "asset_type" with value "image"
-    And the same entry should expose constraints under "requirements" (e.g., max_file_size)
-    And the asset_type payload shape should NOT carry "max_file_size" or "required"
+    And the same entry should expose "required" as true
+    And the same entry should expose "max_file_size_kb" with value 2048 under "requirements"
+    And the same entry should not expose "max_file_size_kb" outside "requirements"
     # v3.1: registry mandates payload-vs-requirements separation
+    # STILL DORMANT, deliberately: no format in the reference catalog the live e2e stack
+    # serves declares an image cap the pin names, so this Given cannot be realized over
+    # e2e_rest, and a Given realized in process only is not wired. It unblocks with a way
+    # for the live server to serve a seeded format (see the UC-005 e2e catalog note in
+    # tests/bdd/conftest.py's _UC005_E2E_FIXTURE_INJECTION_TAGS).
+    # Corrected against the pin. The cap is max_file_size_kb, the member
+    # core/requirements/image-asset-requirements.json declares (there is no max_file_size,
+    # and no MB unit), so the 2 MB cap reads as the 2048 KB the buyer sees. And `required`
+    # belongs ON the asset entry: core/format.json's baseIndividualAsset declares it there
+    # ("Whether this asset is required (true) or optional (false)"), so the old Then that
+    # the entry must NOT carry "required" contradicted the pin; the separation the pin
+    # draws is constraints under `requirements`, never beside asset_type.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json pointer=/$defs/baseIndividualAsset/properties/required
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/requirements/image-asset-requirements.json pointer=/properties/max_file_size_kb
 
   @T-UC-005-storyboard-format-id-third-party-agent-out-of-scope @v3-1 @format-id-roundtrip @third-party-agent
   Scenario: A format_id filter naming a third-party creative agent's format is not answered with the seller's own same-id format

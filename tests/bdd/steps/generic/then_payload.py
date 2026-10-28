@@ -16,37 +16,11 @@ from typing import Any
 
 from pytest_bdd import parsers, then
 
-from tests.bdd.steps._outcome_helpers import is_e2e, payload_or_none, require_payload, wire_field
+from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload, wire_field
 from tests.bdd.steps.generic._table import rows as table_rows
+from tests.factories.format import asset_types_of
 
 # -- Helpers -------------------------------------------------------------------
-
-
-def _is_e2e(ctx: dict) -> bool:
-    """Assertion-time E2E check: an unset transport is a wiring bug, not "not e2e".
-
-    Every caller here (:func:`then_all_formats`, :func:`then_has_referrals`) uses
-    the result to CHOOSE WHICH ASSERTIONS RUN. The previous body returned ``False``
-    for an unset transport, so a Then reached without a preceding dispatch skipped
-    its entire e2e assertion block and passed having graded nothing — the vacuity
-    this guard exists to remove (salesagent-n78j0.1.5).
-
-    The predicate itself stays in :func:`~tests.bdd.steps._outcome_helpers.is_e2e`
-    (one definition of "what counts as e2e"); this wrapper only adds the
-    unset-transport contract that assertion sites need. Normal flow cannot reach
-    the raise: ``_dispatch.dispatch_request`` and ``when_request._call`` both raise
-    on an unset transport during the When, and UC-005 (the only feature using these
-    steps) has no @rest/@mcp/@a2a-tagged scenarios, so ``ctx['transport']`` is
-    always set by the parametrization.
-    """
-    if ctx.get("transport") is None:
-        raise AssertionError(
-            "then_payload: ctx['transport'] is unset at assertion time — the e2e branch "
-            "would silently evaluate False and skip its assertions. Dispatch through "
-            "dispatch_request (which raises on an unset transport) or set "
-            "ctx['transport'] explicitly."
-        )
-    return is_e2e(ctx)
 
 
 def _get_formats(ctx: dict) -> list[Any]:
@@ -76,25 +50,30 @@ def _fmt_name(f: Any) -> str | None:
 
 @then("the response should include all registered formats")
 def then_all_formats(ctx: dict) -> None:
-    """Assert response includes ALL registered formats -- identity check, not count."""
-    formats = _get_formats(ctx)
+    """Assert the response covers EVERY format the registry serves -- identity, not count.
 
-    if _is_e2e(ctx):
-        assert formats, "E2E response has no formats"
-        categories = {_fmt_type_str(f) for f in formats if _fmt_type_str(f)}
-        assert categories >= {"display", "video", "audio"}, (
-            f"E2E catalog needs at least display, video, audio categories, got: {categories}"
-        )
-        ctx["registry_formats"] = formats
-        return
+    "Registered" is what the env's registry serves on this transport
+    (``CreativeFormatsEnv.served_registry_formats``): the Given's formats in process, the
+    whole reference catalog over e2e, where the live stack serves it whichever subset the
+    Given named. ``pagination.total_count`` must equal that catalog's size, every returned
+    format must be one of it, and a response with no further page must hold all of it.
 
-    registered = ctx.get("registry_formats", [])
-    assert len(formats) == len(registered), f"Expected {len(registered)} formats, got {len(formats)}"
-    returned_names = {_fmt_name(f) for f in formats}
-    registered_names = {_fmt_name(r) if hasattr(r, "name") else str(r) for r in registered}
-    assert returned_names == registered_names, (
-        f"Format identity mismatch: returned={returned_names}, registered={registered_names}"
+    The e2e branch this replaces asserted ``display``/``video``/``audio`` categories read
+    off ``type``, which ``core/format.json`` has not declared since the 3.0 major, so it
+    raised AttributeError on every format instead of grading anything.
+    """
+    resp = require_payload(ctx)
+    registered_names = sorted(n for r in ctx["env"].served_registry_formats() if (n := _fmt_name(r)))
+    returned_names = sorted(n for f in resp.formats if (n := _fmt_name(f)))
+    assert resp.pagination.total_count == len(registered_names), (
+        f"total_count {resp.pagination.total_count} != {len(registered_names)} registered formats"
     )
+    unexpected = set(returned_names) - set(registered_names)
+    assert not unexpected, f"returned formats the registry does not serve: {sorted(unexpected)}"
+    if not resp.pagination.has_more:
+        assert returned_names == registered_names, (
+            f"Format identity mismatch: returned={returned_names}, registered={registered_names}"
+        )
 
 
 # Deleted: "the response should include only display formats" and "no video formats
@@ -326,6 +305,20 @@ def then_named_not_returned(ctx: dict, name: str) -> None:
     assert name not in names, f"Did not expect '{name}' in results, got {names}"
 
 
+@then("no format should include pricing_options")
+def then_no_format_pricing(ctx: dict) -> None:
+    """No format on the wire carries a ``pricing_options`` key.
+
+    Read as key absence on the serialized body: a ``null`` would be a field the seller
+    emitted, and ``core/format.json`` says of ``pricing_options`` "New code SHOULD NOT
+    emit this field".
+    """
+    formats = wire_field(ctx, "formats")
+    assert formats, "no formats on the wire -- the absence of pricing_options would hold vacuously"
+    priced = [f.get("name") for f in formats if "pricing_options" in f]
+    assert not priced, f"formats carrying pricing_options on the wire: {priced}"
+
+
 @then(parsers.parse('"{a}", "{b}", and "{c}" should all be returned'))
 def then_three_returned(ctx: dict, a: str, b: str, c: str) -> None:
     names = [_fmt_name(f) for f in _get_formats(ctx)]
@@ -480,23 +473,6 @@ def _assert_returned_formats_subset_of_registry(ctx: dict, field: str, label: st
 # -- Filter content helpers ----------------------------------------------------
 
 
-def _get_asset_types(f: Any) -> set[str]:
-    """Extract asset type strings from a Format object's assets."""
-    types: set[str] = set()
-    assets = getattr(f, "assets", None) or []
-    for a in assets:
-        at = getattr(a, "asset_type", None)
-        if at is not None:
-            types.add(at.value if isinstance(at, Enum) else str(at))
-        nested = getattr(a, "assets", None)
-        if nested:
-            for nested_a in nested:
-                nested_at = getattr(nested_a, "asset_type", None)
-                if nested_at is not None:
-                    types.add(nested_at.value if isinstance(nested_at, Enum) else str(nested_at))
-    return types
-
-
 def _get_format_id_str(f: Any) -> str | None:
     """Extract the format_id.id string from a Format object."""
     fid = getattr(f, "format_id", None)
@@ -582,7 +558,7 @@ def _assert_filter_content(ctx: dict, field: str, label: str) -> None:
     elif field == "asset_types":
         if was_narrowed:
             for f in formats:
-                types = _get_asset_types(f)
+                types = asset_types_of(f)
                 assert types, (
                     f"{label} 'asset_types': format '{_fmt_name(f)}' survived "
                     f"asset_types filtering but has no asset types -- "

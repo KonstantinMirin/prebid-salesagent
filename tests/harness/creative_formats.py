@@ -184,6 +184,21 @@ class CreativeFormatsEnv(IntegrationEnv):
             return_value=FormatFetchResult(formats=list(formats), errors=[])
         )
 
+    def served_registry_formats(self) -> list[Any]:
+        """The formats the creative agent registry serves this scenario, on this transport.
+
+        In process, what the registry mock was configured with -- by
+        :meth:`set_registry_formats`, or the reference catalog ``_configure_mocks`` seeds.
+        Over e2e, the whole reference catalog: the live stack serves it by construction
+        whichever subset a Given named (see :func:`_validate_registry_formats`), so that
+        catalog, not the Given's subset, is what a complete answer must cover there.
+        """
+        if self.is_e2e:
+            from src.core.format_cache import load_reference_formats
+
+            return list(load_reference_formats())
+        return list(self.mock["registry"].return_value.list_all_formats_with_errors.return_value.formats)
+
     def call_impl(self, **kwargs: Any) -> ListCreativeFormatsResponse:
         """Call _list_creative_formats_impl.
 

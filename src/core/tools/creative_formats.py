@@ -65,7 +65,7 @@ def _ensure_backward_compatible_format[FormatT: AdcpFormat](f: FormatT) -> Forma
 from adcp import ErrorCode
 
 from src.core.audit_logger import get_audit_logger
-from src.core.resolved_identity import PublicIdentity
+from src.core.resolved_identity import PublicIdentity, ResolvedIdentity
 from src.core.schemas import Error as AdCPResponseError
 
 if TYPE_CHECKING:
@@ -81,7 +81,8 @@ def _list_creative_formats_impl(
     Returns formats from all registered creative agents (default + tenant-specific).
     Uses CreativeAgentRegistry for dynamic format discovery with caching.
     Filters on what the request declares: format_ids, name_search, asset_types,
-    output_format_ids and input_format_ids, each narrowing the same list in turn so
+    the dimension and responsive filters, wcag_level, disclosure_positions,
+    disclosure_persistence, output_format_ids and input_format_ids, each narrowing the same list in turn so
     several filters AND together. `type` is not among them -- the media-buy
     list-creative-formats request has not declared it since the 3.0 major, and
     `standard_only` and `category` never existed on it.
@@ -210,6 +211,19 @@ def _list_creative_formats_impl(
             return {enum_value(c.position) for c in f.disclosure_capabilities if c.position is not None}
         return {enum_value(p) for p in (f.supported_disclosure_positions or [])}
 
+    def get_format_disclosure_persistence(f) -> set[str]:
+        """Every persistence mode any of the format's disclosure positions supports.
+
+        ``media-buy/list-creative-formats-request.json`` on ``disclosure_persistence``:
+        "Filter to formats where each requested persistence mode is supported by at least
+        one position in disclosure_capabilities. Different positions may satisfy different
+        modes." So the modes are pooled across positions, and only
+        ``disclosure_capabilities`` declares them -- the flat
+        ``supported_disclosure_positions`` carries no persistence at all, so a format
+        declaring only that yields the empty set and drops out of any persistence filter.
+        """
+        return {enum_value(mode) for c in (f.disclosure_capabilities or []) for mode in c.persistence}
+
     def get_format_asset_types(f) -> set[str]:
         """Get all asset types from format's assets.
 
@@ -274,17 +288,21 @@ def _list_creative_formats_impl(
             if f.accessibility is not None and _WCAG_ORDER.get(f.accessibility.wcag_level, 0) >= min_level
         ]
 
-    # Filter by disclosure_positions — AND semantics, unlike every filter around it.
-    # media-buy/list-creative-formats-request.json: "Filter to formats that support all
-    # of these disclosure positions" -- "all", not "any", so the
-    # requested set must be a SUBSET of what the format declares. asset_types and the
-    # two format-id filters intersect (OR); this one contains (AND), and getting that
-    # backwards would hand a buyer a format missing a position they asked for.
-    # get_format_disclosure_positions owns the disclosure_capabilities ->
-    # supported_disclosure_positions fallback the same schema prescribes.
-    if req.disclosure_positions:
-        requested_positions = {enum_value(p) for p in req.disclosure_positions}
-        formats = [f for f in formats if requested_positions <= get_format_disclosure_positions(f)]
+    # Filter by disclosure_positions and disclosure_persistence — AND semantics, unlike
+    # every filter around them. media-buy/list-creative-formats-request.json: "Filter to
+    # formats that support all of these disclosure positions", and for persistence "each
+    # requested persistence mode is supported" -- every requested member, not any, so the
+    # requested set must be a SUBSET of what the format declares. asset_types and the two
+    # format-id filters intersect (OR); these two contain (AND), and getting that
+    # backwards would hand a buyer a format missing a position or a mode they asked for.
+    # The two readers own where each declaration lives (see their docstrings).
+    for requested_members, declared_members in (
+        (req.disclosure_positions, get_format_disclosure_positions),
+        (req.disclosure_persistence, get_format_disclosure_persistence),
+    ):
+        if requested_members:
+            requested = {enum_value(m) for m in requested_members}
+            formats = [f for f in formats if requested <= declared_members(f)]
 
     # Filter by output_format_ids / input_format_ids (OR semantics each).
     # These $ref the same core/format-id.json schema as format_ids, so they carry
@@ -391,8 +409,15 @@ def _list_creative_formats_impl(
     )
 
     # Create response (no message/specification_version - not in adapter schema)
-    # Determine sandbox flag from identity (BR-RULE-209 INV-4)
-    sandbox_flag: bool | None = None
+    # The sandbox flag follows the account the request named (BR-RULE-209 INV-4/INV-5).
+    # media-buy/advanced-topics/sandbox.mdx: "Sandbox is account-level, not per-request.
+    # Once a request references a sandbox account, the entire request is treated as
+    # sandbox", and the seller "SHOULD include `sandbox: true` in success responses". A
+    # request naming an account needs a credential even on this public tool, so the
+    # resolver hands over a ResolvedIdentity with that account inside; a request naming
+    # none is a production request and carries no flag.
+    account = identity.account if isinstance(identity, ResolvedIdentity) else None
+    sandbox_flag: bool | None = True if account is not None and account.sandbox else None
 
     # Format list from registry is compatible with library Format type
     response = ListCreativeFormatsResponse(
