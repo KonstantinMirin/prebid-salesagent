@@ -770,31 +770,6 @@ def given_creative_status_simple(ctx: dict, creative_id: str, status: str) -> No
     ctx["env"]._commit_factory_data()
 
 
-@given(parsers.parse('no creative with id "{creative_id}" exists in the tenant'))
-def given_no_creative_exists(ctx: dict, creative_id: str) -> None:
-    """Assert the state BR-RULE-152 INV-4 asks for, and record that it is unreachable.
-
-    The scenario wants an assignment pointing at a creative row that does not exist.
-    ``creative_assignments`` carries a composite ForeignKeyConstraint
-    (creative_id, tenant_id, principal_id) -> creatives with no ondelete
-    (src/core/database/models.py), so that row cannot be inserted and the creative cannot
-    be deleted out from under it. The condition is unreachable in this schema, which means
-    production's silent-skip is defensive code nothing can exercise.
-
-    This step therefore establishes nothing and says so: it asserts the one thing that IS
-    true -- the creative the preceding Given seeded exists, and by the FK must -- and leaves
-    the scenario's own routing to report the gap, rather than carrying a per-step escape
-    hatch. The old inline ``pytest.xfail`` here was never reached anyway:
-    ``given_package_creative_assignment`` aborted first. Nothing is recorded on ctx for a
-    later step to read, because there is no established state to describe.
-    """
-    creative = _seeded_creative(ctx, creative_id)
-    assert creative.creative_id == creative_id, (
-        f"seeded creative is {creative.creative_id!r}, not {creative_id!r} — the assignment "
-        "Given and this one disagree about which creative the scenario is about"
-    )
-
-
 @given(parsers.parse('no snapshot data is available for package "{pkg_id}"'))
 def given_no_snapshot_for_package(ctx: dict, pkg_id: str) -> None:
     """Establish that no snapshot data exists for a package.
@@ -1978,32 +1953,6 @@ def then_rejection_reason_absent(ctx: dict) -> None:
         actual_reason = getattr(approval, "rejection_reason", None)
         assert actual_reason is None, f"Expected rejection_reason to be absent, got '{actual_reason}'"
     assert approvals, "No approval entries found in response — cannot verify rejection_reason absence"
-
-
-@then(parsers.parse('the creative approvals for package "{pkg_id}" should not include an entry for "{creative_id}"'))
-def then_no_approval_for_creative(ctx: dict, pkg_id: str, creative_id: str) -> None:
-    """Assert missing creative is not in approvals (INV-152-4).
-
-    The package MUST be found in the response — if it's missing, that's a hard
-    failure, not an xfail.
-    """
-    buys = _get_media_buys(ctx)
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            if getattr(pkg, "package_id", None) == pkg_id:
-                approvals = getattr(pkg, "creative_approvals", None) or []
-                approval_ids = [getattr(a, "creative_id", None) for a in approvals]
-                assert creative_id not in approval_ids, (
-                    f"Expected creative '{creative_id}' to NOT appear in approvals for package '{pkg_id}', but found it"
-                )
-                return
-    raise AssertionError(f"Package '{pkg_id}' not found in response — cannot verify creative '{creative_id}' omission")
-
-
-@then(parsers.parse("no error should be raised for the missing creative"))
-def then_no_error_for_missing_creative(ctx: dict) -> None:
-    """Assert no error raised for missing creative."""
-    assert "error" not in ctx or ctx.get("error") is None, f"Unexpected error for missing creative: {ctx.get('error')}"
 
 
 @then(parsers.parse('package "{pkg_id}" should not have a snapshot field'))

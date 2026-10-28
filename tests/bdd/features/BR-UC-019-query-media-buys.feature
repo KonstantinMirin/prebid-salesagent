@@ -357,16 +357,27 @@ Feature: BR-UC-019 Query Media Buys
     # scenario -- a row that asserts "rejection_reason should be absent" should say that its
     # creative has none, rather than leaving it to whatever the factory defaults to.
 
-  @T-UC-019-partition-approval-invalid @partition @approval_status
-  Scenario: Creative approval mapping - no_creative_found (silent skip)
-    Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
-    And package "pkg-001" has a creative assignment with creative_id "cr-999"
-    And no creative with id "cr-999" exists in the tenant
-    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the response is compliant with the get_media_buys spec
-    And the creative approvals for package "pkg-001" should not include an entry for "cr-999"
-    And no error should be raised for the missing creative
-    # BR-RULE-152 INV-4: Nonexistent creative silently omitted from approvals
+  # RETIRED SCENARIO: T-UC-019-partition-approval-invalid, "Creative approval mapping -
+  # no_creative_found (silent skip)" (BR-RULE-152 INV-4). It asked for a package whose
+  # creative assignment names a creative that does not exist, and for get_media_buys to
+  # leave that creative out of creative_approvals.
+  #
+  # The pin does not state that obligation. get-media-buys-response.json describes
+  # packages[].creative_approvals as "Approval status for each creative assigned to this
+  # package", and get_media_buys.mdx lists it as "Array of creative approval states". Both
+  # speak only about creatives that are assigned, so the pin has no rule for an assignment
+  # whose creative is missing.
+  #
+  # This seller cannot reach that state either. creative_assignments carries a composite
+  # ForeignKeyConstraint (creative_id, tenant_id, principal_id) -> creatives with no
+  # ondelete (src/core/database/models.py), so that row can't be inserted, and the creative
+  # can't be deleted while an assignment still points at it. The scenario's own Given had
+  # to seed cr-999 and then assert that it existed, which is the opposite of what the step
+  # text says. Its Then then found cr-999 in the approvals, which is correct for an
+  # assigned creative. The every-assigned-creative obligation the pin does state is graded
+  # by @T-UC-019-partition-approval and @T-UC-019-boundary-approval above.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json pointer=/properties/media_buys/items/properties/packages/items/properties/creative_approvals
+  # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/get_media_buys.mdx
 
   @T-UC-019-boundary-approval @boundary @approval_status
   Scenario Outline: Creative approval status boundary - <boundary_point>
@@ -397,9 +408,9 @@ Feature: BR-UC-019 Query Media Buys
     # It asked for an assignment referencing a creative row that does not exist, and
     # creative_assignments carries a composite ForeignKeyConstraint
     # (creative_id, tenant_id, principal_id) -> creatives with no ondelete, so that state
-    # can neither be created nor arise. No obligation is dropped: BR-RULE-152 INV-4 has its
-    # own scenario, @T-UC-019-partition-approval-invalid, routed with that unreachability as
-    # its stated reason. This row was the duplicate, not the claim.
+    # can neither be created nor arise. Its sibling scenario for BR-RULE-152 INV-4
+    # (T-UC-019-partition-approval-invalid) is retired too, for the same reason; the note
+    # where it stood, above, records that the pin states no rule for that state.
 
   @T-UC-019-inv-152-5 @invariant @BR-RULE-152
   Scenario: INV-5 holds - rejection_reason absent when not rejected
