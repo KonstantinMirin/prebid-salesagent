@@ -458,6 +458,44 @@ Feature: BR-UC-005 Discover Creative Formats
     And no error should be returned
     # Edge case: PRE-B1 boundary — no formats available
 
+  # A creative agent's catalog is a peer's document, parsed by this seller. One entry the
+  # pinned schema cannot validate costs that entry and is reported; it does not cost the
+  # buyer the agent's conforming formats, and it is never answered as an empty catalog.
+  # An enum member the pin does not model is not a defect: the pin makes enums additive
+  # and tells a reader to tolerate an unknown value, and the seller passes it on as the
+  # agent published it. accepts_parameters must survive verbatim, because an empty list
+  # reads as "a concrete format with fixed parameters".
+  # @source repo=adcp ref=v3.2.7 path=docs/reference/versioning.mdx
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json pointer=/properties/accepts_parameters
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-response.json pointer=/properties/errors
+  @T-UC-005-peer-catalog-partial-discard @UC-005-MAIN-MCP-01 @edge-case
+  Scenario: A creative agent's catalog entry that does not validate costs that entry, not the catalog
+    Given a creative agent whose catalog includes one entry the pinned schema cannot validate
+    When the Buyer Agent requests the format catalog
+    Then only the creative agent's format "acme_peer_banner" should be returned
+    And the creative agent's format should carry accepts_parameters "future_parameter"
+    And the creative agent's format should carry reported_metrics "impressions, future_metric"
+    And the discarded entries should be reported as "AGENT_FORMATS_DISCARDED" on "formats" with recovery "terminal"
+
+  # The two below share a When and differ in one Given, so "the agent genuinely has no
+  # formats" and "the seller discarded every format the agent published" cannot converge
+  # on the same answer again: the first carries no errors, the second reports the discard.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-response.json pointer=/properties/errors
+  @T-UC-005-peer-catalog-empty @UC-005-MAIN-MCP-01 @edge-case
+  Scenario: A creative agent with a genuinely empty catalog contributes no formats and no error
+    Given a creative agent whose catalog has no entries
+    When the Buyer Agent requests the format catalog
+    Then no formats from the creative agent should be returned
+    And the response should NOT have an "errors" field
+
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-response.json pointer=/properties/errors
+  @T-UC-005-peer-catalog-all-discarded @UC-005-MAIN-MCP-01 @edge-case
+  Scenario: A creative agent whose every catalog entry was discarded is reported, not answered as empty
+    Given a creative agent whose catalog has only entries the pinned schema cannot validate
+    When the Buyer Agent requests the format catalog
+    Then no formats from the creative agent should be returned
+    And the discarded entries should be reported as "AGENT_FORMATS_DISCARDED" on "formats" with recovery "terminal"
+
   @T-UC-005-dim-boundary @UC-005-MAIN-MCP-08 @boundary @BR-RULE-049
   Scenario: Dimension boundary - inclusive range at threshold
     Given the registry has format "exact-fit" with render width 728 and height 90

@@ -48,7 +48,7 @@ from tests.helpers.local_http_origin import (
     OriginResponse,
     responds,
 )
-from tests.helpers.tls_material import load_gen_test_tls, start_tls_origin
+from tests.helpers.tls_material import start_tls_origin, trust_test_ca
 
 
 def _e2e_capture_url(env: Any) -> str:
@@ -1103,10 +1103,7 @@ class LocalOriginMixin:
             return
 
         # The bundle's path, trusted before the origin starts; start_tls_origin writes it.
-        combined_cert = load_gen_test_tls().COMBINED_CERT
-        self._ssl_cert_file = patch.dict(os.environ, {"SSL_CERT_FILE": str(combined_cert)})
-        self._ssl_cert_file.start()
-        self._guard("ssl_cert_file", self._ssl_cert_file.stop)
+        trust_test_ca(self._guard)
 
         self._origin = start_tls_origin(self._guard, "local_origin")
 

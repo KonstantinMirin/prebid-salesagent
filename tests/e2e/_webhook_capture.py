@@ -63,7 +63,7 @@ from collections.abc import Iterator
 
 import httpx
 
-from tests.e2e.webhook_capture_service import decode_body, header_value, webhook_path
+from tests.e2e.webhook_capture_service import decode_body, header_value, peer_control_path, peer_path, webhook_path
 from tests.helpers.webhook_wire import CapturedWebhook
 
 #: Where the SERVER delivers under the outbound-origin namespace. Read back at
@@ -297,6 +297,25 @@ def program_rejections(key: str, *, status: int, count: int) -> None:
     how a caller spells "healthy again".
     """
     _readback_json(_readback_base_url(), "POST", f"/control/{key}", body={"status": status, "count": count})
+
+
+def peer_agent_url(key: str) -> str:
+    """The URL the SERVER dials for the peer creative agent served under *key*.
+
+    Through the shared TLS front, under the in-stack namespace, the same origin
+    :func:`delivery_url_for` delivers to: the server reaches it as it reaches any
+    configured creative agent, over https and MCP.
+    """
+    return f"{ALT_CAPTURE_DELIVERY_ORIGIN}{peer_path(key)}"
+
+
+def serve_peer_catalog(key: str, document: dict) -> None:
+    """Make :func:`peer_agent_url` answer ``list_creative_formats`` with *document*, verbatim.
+
+    Control plane, so it rides the plain-HTTP readback port like
+    :func:`program_rejections`.
+    """
+    _readback_json(_readback_base_url(), "POST", peer_control_path(key), body=document)
 
 
 def _assert_own_stack() -> None:
