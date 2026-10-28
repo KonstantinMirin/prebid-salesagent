@@ -371,7 +371,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
         "tests/integration/test_update_media_buy_creative_assignment.py",
         "test_update_media_buy_assigns_creatives_to_package",
     ),
-    ("tests/integration/test_update_media_buy_creative_assignment.py", "test_update_media_buy_replaces_creatives"),
     ("tests/integration/test_update_media_buy_creative_assignment.py", "test_creative_assignments_with_weights"),
     ("tests/integration/test_update_media_buy_creative_assignment.py", "test_creative_assignments_replaces_all"),
     # tests/integration/test_update_media_buy_persistence.py
@@ -763,20 +762,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_query"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_tenant_isolation"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_with_latest_review_tenant_isolation"),
-    ("tests/integration/test_creative_sync_data_preservation.py", "test_generative_output_preserves_user_assets"),
-    ("tests/integration/test_creative_sync_data_preservation.py", "test_generative_output_preserves_user_url"),
-    (
-        "tests/integration/test_creative_sync_data_preservation.py",
-        "test_sync_preserves_dimensions_when_preview_has_different_size",
-    ),
-    (
-        "tests/integration/test_creative_sync_data_preservation.py",
-        "test_sync_preserves_user_url_when_preview_available",
-    ),
-    (
-        "tests/integration/test_creative_sync_data_preservation.py",
-        "test_update_preserves_user_url_when_preview_changes",
-    ),
     ("tests/integration/test_creative_sync_processing.py", "test_create_ai_powered_submits_task"),
     ("tests/integration/test_creative_sync_processing.py", "test_create_auto_approve_status"),
     ("tests/integration/test_creative_sync_processing.py", "test_create_preview_dimensions_extracted"),
@@ -1222,7 +1207,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
         "tests/integration/test_update_media_buy_creative_assignment.py",
         "test_update_media_buy_assigns_creatives_to_package",
     ),
-    ("tests/integration/test_update_media_buy_creative_assignment.py", "test_update_media_buy_replaces_creatives"),
     ("tests/integration/test_update_media_buy_persistence.py", "test_tenant_setup"),
     ("tests/integration/test_update_media_buy_persistence.py", "test_update_media_buy_with_database_persisted_buy"),
     ("tests/integration/test_workflow_approval.py", "test_approve_workflow_step"),

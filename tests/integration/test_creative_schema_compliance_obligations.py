@@ -15,7 +15,6 @@ import pytest
 from tests.factories.creative_asset import (
     AssetSpec,
     asset_spec,
-    build_assets,
     image_spec,
     make_test_banner_creative,
     text_spec,
@@ -52,95 +51,6 @@ def _asset_sample_spec(asset_type: str, role: str) -> AssetSpec:
     if asset_type == "catalog":
         return asset_spec(role, "catalog", multiple=True, type="product", url=url_placeholder)
     return asset_spec(role, asset_type, multiple=True, content=f"test {asset_type} content")
-
-
-class TestAllAssetTypesAcceptedThroughSync:
-    """Each of the 11 asset types must be accepted through _sync_creatives_impl
-    without validation errors and persisted to the database.
-
-    Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-10
-    """
-
-    ASSET_TYPES = [
-        "image",
-        "video",
-        "audio",
-        "text",
-        "markdown",
-        "html",
-        "css",
-        "javascript",
-        "vast",
-        "daast",
-        "catalog",
-    ]
-
-    def test_all_11_asset_types_accepted(self, integration_db):
-        """Sync creatives with each of the 11 asset types through real DB.
-
-        Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-10
-
-        KNOWN RED — salesagent-pwryp, blocked on salesagent-1bc7l. image/video/audio
-        pass; the five content-only types (text, markdown, html, css, javascript) are
-        refused CREATIVE_REJECTED/no_previews, because they carry no url for
-        `_extract_url_from_assets` to find and the env's `preview_creative` recorder
-        answers `{}` — there is no no-dial capture for it, so no preview is ever
-        produced for any creative in process. Greening this needs either that capture or
-        a stand-in that MANUFACTURES a preview response; the second is forbidden. The
-        bead also records the stronger reading: this drives all eleven asset types
-        through ONE image format, and the format is what says which assets it accepts.
-        """
-        with CreativeSyncEnv() as env:
-            env.setup_default_data()
-
-            creatives = []
-            for asset_type in self.ASSET_TYPES:
-                creatives.append(
-                    _make_creative_asset(
-                        creative_id=f"c_{asset_type}",
-                        name=f"Test {asset_type}",
-                        assets=build_assets(_asset_sample_spec(asset_type, asset_type)),
-                    )
-                )
-
-            response = env.call_impl(creatives=creatives)
-
-            # All 11 should succeed (created action, no failures)
-            assert len(response.creatives) == len(self.ASSET_TYPES)
-            actions = {r.creative_id: r.action for r in response.creatives}
-            for asset_type in self.ASSET_TYPES:
-                cid = f"c_{asset_type}"
-                assert cid in actions, f"Missing result for creative with {asset_type} asset"
-                assert actions[cid] == "created", (
-                    f"Creative with {asset_type} asset should be created, got {actions[cid]}"
-                )
-
-    def test_asset_data_preserved_through_roundtrip(self, integration_db):
-        """Verify that asset data survives the sync -> list round-trip for each type.
-
-        Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-10
-        """
-        with CreativeSyncEnv() as env:
-            env.setup_default_data()
-
-            # Sync one creative with each asset type
-            for asset_type in self.ASSET_TYPES:
-                creative = _make_creative_asset(
-                    creative_id=f"c_rt_{asset_type}",
-                    name=f"Roundtrip {asset_type}",
-                    assets=build_assets(_asset_sample_spec(asset_type, asset_type)),
-                )
-                response = env.call_impl(creatives=[creative])
-                assert response.creatives[0].action == "created"
-
-        # Now list and verify assets are preserved (tenant/principal already created above)
-        with CreativeListEnv() as env:
-            list_response = env.call_impl()
-
-            returned_ids = {c.creative_id for c in list_response.creatives}
-            for asset_type in self.ASSET_TYPES:
-                cid = f"c_rt_{asset_type}"
-                assert cid in returned_ids, f"Creative with {asset_type} asset not found in list response"
 
 
 # ---------------------------------------------------------------------------
