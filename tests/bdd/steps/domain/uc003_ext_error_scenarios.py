@@ -14,6 +14,7 @@ from pytest_bdd import given, parsers, then
 from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps.domain.uc003_update_media_buy import _ensure_update_defaults, _resolve_media_buy_id
 from tests.bdd.steps.generic._auth import authenticate_env_as
+from tests.factories import StoredPlacementFactory
 
 
 def _inject_privilege_error(ctx: dict) -> None:
@@ -525,8 +526,8 @@ def given_placement_invalid_for_product(ctx: dict, placement_id: str) -> None:
     # column is `placements` (list of dicts with placement_id), not `placement_configs`.
     if not product.placements:
         product.placements = [
-            {"placement_id": "plc_a", "name": "Placement A"},
-            {"placement_id": "plc_b", "name": "Placement B"},
+            StoredPlacementFactory(placement_id="plc_a", name="Placement A"),
+            StoredPlacementFactory(placement_id="plc_b", name="Placement B"),
         ]
         ctx["env"]._commit_factory_data()
         product = _get_product(ctx)

@@ -38,7 +38,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_envelope_errors,
     wire_field,
 )
-from tests.factories import PricingOptionFactory, ProductFactory
+from tests.factories import PricingOptionFactory, ProductFactory, StoredPlacementFactory
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.mint import mint
 
@@ -242,12 +242,7 @@ def _placement(placement_id: str, mode: str, *accepted: dict[str, Any]) -> dict[
     core/product.json, "An omitted optional layer is unconstrained", so it inherits the
     product's set. An EMPTY list would be a present layer admitting nothing.
     """
-    placement: dict[str, Any] = {
-        "kind": "seller_inline",
-        "placement_id": placement_id,
-        "name": placement_id,
-        "mode": mode,
-    }
+    placement: dict[str, Any] = StoredPlacementFactory(placement_id=placement_id, mode=mode)
     if accepted:
         placement["format_options"] = list(accepted)
     return placement

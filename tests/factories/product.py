@@ -51,6 +51,21 @@ class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
     delivery_measurement = factory.LazyFunction(lambda: {"provider": "publisher"})
 
 
+class StoredPlacementFactory(factory.DictFactory):
+    """One ``products.placements`` document, stating every member the pin requires.
+
+    ``core/placement.json`` requires ``kind``, ``placement_id`` and ``mode``, and ``name`` of
+    a ``seller_inline`` placement; ``ck_products_placements_explicit`` refuses a stored
+    placement that omits one, and nothing fills it in when the row is read. Any other member
+    (``description``, ``format_ids``, ``format_options``) is passed through as given.
+    """
+
+    kind = "seller_inline"
+    placement_id = Sequence(lambda n: f"plc_{n:04d}")
+    name = LazyAttribute(lambda o: o.placement_id.title())
+    mode = "targetable"
+
+
 class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):
     """A ``PricingOption`` row. The ONLY way a test builds one.
 

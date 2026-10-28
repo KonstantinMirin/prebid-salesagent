@@ -41,7 +41,12 @@ from tests.factories.inventory_profile import InventoryProfileFactory
 from tests.factories.media_buy import GetMediaBuysMediaBuyFactory, MediaBuyFactory, MediaPackageFactory
 from tests.factories.metrics import FormatPerformanceMetricsFactory
 from tests.factories.principal import PrincipalFactory
-from tests.factories.product import PricingOptionFactory, PricingOptionRequestFactory, ProductFactory
+from tests.factories.product import (
+    PricingOptionFactory,
+    PricingOptionRequestFactory,
+    ProductFactory,
+    StoredPlacementFactory,
+)
 from tests.factories.request import (
     OMIT,
     CreateMediaBuyRequestFactory,
@@ -134,6 +139,7 @@ __all__ = [
     "PricingOptionRequestFactory",
     "PrincipalFactory",
     "ProductFactory",
+    "StoredPlacementFactory",
     "PropertyListReferenceFactory",
     "PropertyTagFactory",
     "PublisherPartnerFactory",

@@ -42,7 +42,7 @@ from src.core.credentials import hash_token, mint_token, token_prefix
 from src.core.database.json_type import JSONType
 from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError, AdCPPersistedStateError
-from src.core.json_validators import JSONValidatorMixin
+from src.core.json_validators import PLACEMENTS_ARE_EXPLICIT_CHECK, PLACEMENTS_ARE_EXPLICIT_SQL, JSONValidatorMixin
 
 # The ONE NotificationConfig, whose authentication block is the one Authentication class
 # (src/core/schemas/notification.py): a stored row reads back as the same type the request
@@ -483,7 +483,9 @@ class Product(Base, JSONValidatorMixin):
     product_card: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     # Type hint: detailed product card dict with format_id and manifest
     product_card_detailed: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
-    # Type hint: list of placement dicts (each with placement_id, name, description, format_ids)
+    # core/placement.json documents, served as stored. Each one states kind, placement_id and
+    # mode (plus name for seller_inline, publisher_domain for publisher_ref);
+    # ck_products_placements_explicit below refuses a row that omits one.
     placements: Mapped[list[dict] | None] = mapped_column(JSONType, nullable=True)
     # Type hint: reporting capabilities dict
     reporting_capabilities: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
@@ -689,6 +691,7 @@ class Product(Base, JSONValidatorMixin):
             "(properties IS NOT NULL AND property_tags IS NULL) OR (properties IS NULL AND property_tags IS NOT NULL)",
             name="ck_product_properties_xor",
         ),
+        CheckConstraint(PLACEMENTS_ARE_EXPLICIT_SQL, name=PLACEMENTS_ARE_EXPLICIT_CHECK),
     )
 
 

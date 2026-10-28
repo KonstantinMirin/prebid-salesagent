@@ -9,6 +9,8 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
+from adcp.types.domains.core.placement import Kind as LibraryPlacementKind
+from adcp.types.domains.core.placement import Mode as LibraryPlacementMode
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import validates
 
@@ -280,3 +282,35 @@ def validate_json_schema(value: Any, schema: type[BaseModel]) -> dict:
 
     validated = schema(**value)
     return validated.model_dump(mode="json")
+
+
+# The ``products.placements`` CHECK. ``core/placement.json`` requires ``kind``,
+# ``placement_id`` and ``mode``, and its allOf conditionals require ``name`` of a
+# ``seller_inline`` placement and ``publisher_domain`` of a ``publisher_ref`` one. A stored
+# placement states all of them itself: nothing fills a missing member when the row is read,
+# so a row that omits one is refused when it is written. Revision 89442a2be9e1 brought the
+# rows stored before this rule up to it.
+#
+# The enum values come from the pinned SDK, so the CHECK follows the pin. A kind missing from
+# ``_PLACEMENT_IDENTITY`` is refused: this seller has not been told what identifies it.
+# Every element counts. The path keeps only the elements that satisfy it (``strict`` mode,
+# so a missing member is an error, which a filter reads as unknown and drops), and the array
+# passes only when nothing was dropped. A non-array document is refused; SQL NULL passes.
+_PLACEMENT_IDENTITY = {
+    LibraryPlacementKind.seller_inline: "name",
+    LibraryPlacementKind.publisher_ref: "publisher_domain",
+}
+_PLACEMENT_KIND_PATH = " || ".join(
+    f'(@.kind == "{kind.value}" && @.{member}.type() == "string")' for kind, member in _PLACEMENT_IDENTITY.items()
+)
+_PLACEMENT_MODE_PATH = " || ".join(f'@.mode == "{mode.value}"' for mode in LibraryPlacementMode)
+_EXPLICIT_PLACEMENT_PATH = (
+    f'strict $[*] ? (@.placement_id.type() == "string" && ({_PLACEMENT_KIND_PATH}) && ({_PLACEMENT_MODE_PATH}))'
+)
+PLACEMENTS_ARE_EXPLICIT_SQL = (
+    "CASE WHEN jsonb_typeof(placements) = 'array' THEN "
+    "jsonb_array_length(placements) = "
+    f"jsonb_array_length(jsonb_path_query_array(placements, '{_EXPLICIT_PLACEMENT_PATH}')) "
+    "ELSE placements IS NULL END"
+)
+PLACEMENTS_ARE_EXPLICIT_CHECK = "ck_products_placements_explicit"
