@@ -31,7 +31,7 @@ from tests.helpers.creative_test_helpers import (
 
 #: The committed capture's own reference -- the only ``(agent_url, id)`` pair that
 #: resolves through production's two routes (``find_format``'s pair match and
-#: ``_is_operator_agent``'s no-dial branch). It replaces a local
+#: ``is_operator_agent``'s no-dial branch). It replaces a local
 #: ``"https://creative.test.example.com"`` / ``"display_300x250"`` pair, which named a
 #: format no agent serves at an agent no capture carries and only ever worked because
 #: the registry was a stand-in (salesagent-6xtxb).

@@ -132,7 +132,7 @@ class TestReDialOfBuyerProvenanceUrlIsNotOperatorMisclassified:
     salesagent-7bfi already classifies INVALID_REQUEST/correctable at ingest for
     the identical url. Passing ``field=`` routes a refusal through the seam's
     counterparty-aware path instead, UNLESS the url is also the tenant's actual
-    operator agent (verified unaffected: ``_is_operator_agent`` still wins).
+    operator agent (verified unaffected: ``is_operator_agent`` still wins).
 
     Uses the REAL registry/seam (only ``_get_format_spec_sync``'s mock
     ``side_effect`` is swapped for the real ``fetch_format_spec`` — everything

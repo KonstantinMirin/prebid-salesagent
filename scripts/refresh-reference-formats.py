@@ -83,8 +83,8 @@ async def _capture_formats(url: str):
     from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 
     registry = CreativeAgentRegistry()
-    # Construct our own CreativeAgent rather than rely on DEFAULT_AGENT (which reads
-    # CREATIVE_AGENT_URL at import time and may not match --url).
+    # Construct our own CreativeAgent rather than rely on DEFAULT_AGENT, whose agent_url is
+    # the operator agent's identity (CREATIVE_AGENT_ORIGIN), not the endpoint --url names.
     agent = CreativeAgent(agent_url=url, name="Pinned Reference Creative Agent", enabled=True, priority=1)
     catalog = await registry._fetch_formats_operator(agent)
     # The serving path discards an entry that does not validate and keeps the rest. A

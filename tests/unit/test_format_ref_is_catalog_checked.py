@@ -12,17 +12,18 @@ Both halves of a reference are graded here, because a reference only resolves as
 
 - the ID must be in the pinned capture;
 - the AGENT_URL must be one production treats as an OPERATOR agent. That is asked of
-  production's own ``_is_operator_agent`` rather than compared to a string written here --
+  production's own ``is_operator_agent`` rather than compared to a string written here --
   the alternative pins the spelling and grades nothing. An operator reference is answered
   from the catalog under ``ADCP_TESTING`` and rerouted to the pinned container by
   ``_connection_agent_url`` otherwise; any other url is a counterparty judged by the egress
   seam.
 
 So a fixture must NOT name the dialable ``CREATIVE_AGENT_URL`` the e2e stack configures, even
-though that is the url the run can actually reach. A reference is authored in the RUNNER
-process and resolved in the SERVER process, and only the public identity is an operator agent
-in both -- ``_is_operator_agent`` admits the configured url only where it is set, which is the
-server. The catalog's own 71 entries all declare the public identity too, so it is also what
+though that is the url the run can actually reach: it is an MCP endpoint, not an identity, and
+``is_operator_agent`` never consults it. The operator agent is recognized by origin against
+``CREATIVE_AGENT_ORIGIN``, which the e2e stack sets to the public agent's origin in the RUNNER
+and the SERVER alike, because its container stands in for the public agent. The catalog's own
+71 entries all declare the public identity too, so it is also what
 ``identity.legacy`` is keyed on when a product's arm and a creative's claim are compared. The
 fixture names the identity; production decides the transport.
 """
@@ -31,7 +32,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.core.creative_agent_registry import _is_operator_agent
+from src.core.creative_agent_registry import is_operator_agent
 from src.core.format_cache import load_reference_formats
 from tests.factories.format import resolvable_format_ref
 
@@ -50,7 +51,7 @@ def test_a_catalog_id_yields_a_reference_production_treats_as_operator() -> None
     ref = resolvable_format_ref(served)
 
     assert ref["id"] == served
-    assert _is_operator_agent(ref["agent_url"]), (
+    assert is_operator_agent(ref["agent_url"]), (
         f"{ref['agent_url']!r} is not an operator agent, so production judges a reference naming it "
         "by the egress seam instead of answering it from the catalog"
     )
