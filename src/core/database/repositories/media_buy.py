@@ -540,10 +540,16 @@ class MediaBuyRepository:
         seller_committed: bool = False,
         approved_at: datetime.datetime | None = None,
         approved_by: str | None = None,
+        creative_deadline: datetime.datetime | None = None,
     ) -> MediaBuy | None:
         """Update the status of a media buy within this tenant.
 
         Returns the updated MediaBuy, or None if not found in this tenant.
+
+        ``creative_deadline`` is the buy-level deadline the adapter reported when it
+        created the order. The approval path records it in this same write, so a
+        manually approved buy keeps it the way ``create_from_request`` keeps it for an
+        auto-approved one. None leaves the column as it is.
 
         The status must be a member of the persisted vocabulary. Rejecting an
         unknown value HERE is what lets every reader stop guessing: the wire
@@ -564,6 +570,8 @@ class MediaBuyRepository:
             media_buy.approved_at = approved_at
         if approved_by is not None:
             media_buy.approved_by = approved_by
+        if creative_deadline is not None:
+            media_buy.creative_deadline = creative_deadline
         # Stamp before bumping: _bump_revision leaves revision holding a SQL
         # expression, and reading any attribute after that can trigger a refresh
         # mid-mutation. The stamp reads status and confirmed_at, so it goes first.

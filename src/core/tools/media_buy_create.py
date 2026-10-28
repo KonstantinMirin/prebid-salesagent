@@ -1786,6 +1786,9 @@ def execute_approved_media_buy(
                 seller_committed=True,
                 approved_at=approved_at,
                 approved_by=approved_by,
+                # The deadline the adapter reported on create, kept in this one write
+                # as the auto-approval path keeps it in create_from_request.
+                creative_deadline=response.creative_deadline,
             )
             assert written is not None, f"media buy {media_buy_id!r} vanished mid-write"
             logger.info(log_safe(f"[APPROVAL] Media buy {media_buy_id} -> {resolved}"))
