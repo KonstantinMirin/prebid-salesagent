@@ -264,10 +264,15 @@ def _assignments_block(assignments_by_creative: dict[str, list[DBCreativeAssignm
     )
 
 
-#: The six members list-creatives-response.json marks REQUIRED on every creative item.
-#: They survive every projection: a response that dropped one would not validate, whatever
-#: the buyer selected.
-_ALWAYS_ON_THE_WIRE = frozenset({"creative_id", "name", "format_id", "status", "created_date", "updated_date"})
+#: The members every creative item must carry, whatever the buyer selected: the five
+#: list-creatives-response.json marks REQUIRED, plus the creative's format identity, which
+#: the item's oneOf makes mandatory as exactly one of ``format_id`` (named-format arm) or
+#: ``format_kind`` (canonical arm). Both names are kept because a creative only ever holds
+#: one of them -- ``wire_format_kind`` chooses the arm -- so keeping both keeps the arm this
+#: creative has. Keeping ``format_id`` alone dropped a canonical creative's only identity.
+_ALWAYS_ON_THE_WIRE = frozenset(
+    {"creative_id", "name", "status", "created_date", "updated_date", "format_id", "format_kind"}
+)
 
 #: The two `fields` members that do not name one response field. list-creatives-request.json
 #: says so for the first: "The 'concept' value returns both concept_id and concept_name";
@@ -296,14 +301,16 @@ def _project_to_fields(creative: Creative, fields: list[Any] | None) -> Creative
     """Narrow a creative to the ``fields`` the buyer selected, per list-creatives-request.json.
 
     ``fields`` is "Specific fields to include in response (omit for all fields)" over a
-    closed 13-member enum, so an absent list means the whole creative and a present one
+    closed enum, so an absent list means the whole creative and a present one
     means those members ONLY.
 
-    Only the OPTIONAL members are narrowed. The same pinned response schema marks six
-    members required on every item, so a projection that dropped them would answer the
-    buyer's selection with a document that violates the contract it was selected from —
-    and `fields` cannot express keeping them, since all six are enum members a buyer may
-    omit. Keeping them is the reading that satisfies both halves of the pin.
+    Only the OPTIONAL members are narrowed. The same pinned response schema marks five
+    members required on every item and requires one format identity through its oneOf, so
+    a projection that dropped them would answer the buyer's selection with a document that
+    violates the contract it was selected from — and `fields` cannot express keeping them,
+    since all are enum members a buyer may omit. Keeping them is the reading that satisfies
+    both halves of the pin; the request schema's own `fields` description says the same of
+    localization, which "automatically includes ... the selected format identity".
 
     A member is dropped by being set to None, which ``exclude_none`` then omits — the same
     mechanism that omits an absent tag list, rather than a second way of shaping the wire.

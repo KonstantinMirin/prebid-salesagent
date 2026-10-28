@@ -1192,6 +1192,29 @@ Feature: BR-UC-018 List Creatives
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-option-ref.json
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-response.json pointer=/properties/creatives/items property=format_option_ref
 
+  @T-UC-018-fields-projection-keeps-canonical-identity @schema-v3.2 @list-creatives-fields @format-kind
+  Scenario: A fields selection naming no format identity still lists a canonical creative by its format_kind
+    Given the buyer synced a creative on format_kind "image" with a product-scope format_option_ref
+    When the Buyer Agent sends a list_creatives request with fields ["creative_id"]
+    Then the response is compliant with the list_creatives spec
+    And only the selected and required fields in response
+    And the listed creative should carry format_kind "image" and no format_id
+
+    # creative/list-creatives-response.json requires five members on every listed creative
+    # (creative_id, name, status, created_date, updated_date) and a oneOf over the format
+    # identity: the named-format arm requires format_id, the canonical arm requires
+    # format_kind, and each forbids the other. A `fields` selection cannot drop either
+    # arm's member, because the item would then match neither. The fields boundary rows
+    # above seed legacy creatives only, so they cannot see a projection that keeps
+    # format_id and drops format_kind -- which leaves a canonical creative with no format
+    # identity at all. canonical-formats-migration.mdx's completion checklist names the
+    # library path as one that must preserve format_kind and format_option_ref, and the
+    # request schema's `fields` description says the same of localization, which
+    # "automatically includes ... the selected format identity".
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-response.json pointer=/properties/creatives/items
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-request.json pointer=/properties/fields
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats-migration.mdx section="Completion checklist"
+
   @T-UC-018-storyboard-filter-by-concept-id @schema-v3.1 @v3-1 @list-filter @concept-id
   Scenario: List creatives filtered by concept_ids returns only creatives in that concept carrying concept_id and concept_name
     Given the authenticated principal has creatives grouped under concept "concept_summer_2026" and other creatives under different concepts

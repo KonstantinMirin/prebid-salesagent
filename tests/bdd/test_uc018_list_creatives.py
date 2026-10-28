@@ -1847,6 +1847,24 @@ def then_format_option_ref_is_pin_valid(ctx: dict) -> None:
     _FORMAT_OPTION_REF_VALIDATOR.validate(_listed_format_option_ref(ctx))
 
 
+@then(parsers.parse('the listed creative should carry format_kind "{kind}" and no format_id'))
+def then_listed_creative_carries_format_kind(ctx: dict, kind: str) -> None:
+    """The one seeded creative is listed on the canonical arm, with the kind it was synced by.
+
+    The VALUE is compared, not mere presence: a projection that kept some identity but the
+    wrong one would satisfy a presence check. ``format_id`` absent because the item's oneOf
+    makes the arms exclusive and this creative was synced on the canonical one.
+    """
+    entries = _wire_creatives(ctx)
+    assert len(entries) == 1, f"expected the one seeded creative on the wire, got {len(entries)}"
+    entry = entries[0]
+    assert entry.get("format_kind") == kind, (
+        f"expected the listed creative to carry format_kind {kind!r}, got {entry.get('format_kind')!r}; "
+        f"members on the wire: {sorted(entry)}"
+    )
+    assert "format_id" not in entry, f"a creative synced by format_kind is listed with a format_id: {entry}"
+
+
 def _dispatch_format_ids_filter(ctx: dict) -> None:
     """Send ``filters.format_ids`` carrying the one {agent_url, id} object the Given named."""
     dispatch_request(
