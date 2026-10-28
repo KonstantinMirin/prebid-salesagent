@@ -1197,6 +1197,9 @@ Feature: BR-UC-005 Discover Creative Formats
     # a member the scenario does not grade.
     # vast_tracker / daast_tracker are manifest-payload discriminators in
     # asset-types/index.json — NOT valid filter inputs.
+    # STILL DORMANT: the reference catalog the live e2e stack serves carries a format for 8
+    # of these 16 members (no daast, markdown, css, webhook, brief, catalog, zip or
+    # published_post), so half the rows cannot be realized over e2e_rest.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json pointer=/properties/asset_types
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/asset-content-type.json
 
@@ -1240,7 +1243,7 @@ Feature: BR-UC-005 Discover Creative Formats
 
   @T-UC-005-v31-payload-vs-requirements-separation @main-flow @v3-1 @asset-registry
   Scenario: Format response carries constraints under requirements, not on the asset schema
-    Given the seller catalog has a format with a required image asset capped at 2048 KB
+    Given the seller catalog has a format with a required image asset capped at 2 MB
     When the Buyer Agent requests creative formats for that format
     Then the response is compliant with the list_creative_formats spec
     And the format's "assets" entry should expose "asset_type" with value "image"
@@ -1248,9 +1251,14 @@ Feature: BR-UC-005 Discover Creative Formats
     And the same entry should expose "max_file_size_kb" with value 2048 under "requirements"
     And the same entry should not expose "max_file_size_kb" outside "requirements"
     # v3.1: registry mandates payload-vs-requirements separation
+    # STILL DORMANT, deliberately: no format in the reference catalog the live e2e stack
+    # serves declares an image cap the pin names, so this Given cannot be realized over
+    # e2e_rest, and a Given realized in process only is not wired. It unblocks with a way
+    # for the live server to serve a seeded format (see the UC-005 e2e catalog note in
+    # tests/bdd/conftest.py's _UC005_E2E_FIXTURE_INJECTION_TAGS).
     # Corrected against the pin. The cap is max_file_size_kb, the member
     # core/requirements/image-asset-requirements.json declares (there is no max_file_size,
-    # and no MB unit), so "2 MB" is stated as the 2048 KB the buyer reads. And `required`
+    # and no MB unit), so the 2 MB cap reads as the 2048 KB the buyer sees. And `required`
     # belongs ON the asset entry: core/format.json's baseIndividualAsset declares it there
     # ("Whether this asset is required (true) or optional (false)"), so the old Then that
     # the entry must NOT carry "required" contradicted the pin; the separation the pin

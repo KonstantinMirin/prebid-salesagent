@@ -30,11 +30,7 @@ from typing import Any, get_args
 
 import factory
 from adcp.types import FormatAssetUnion, RepeatableAssetGroup, Responsive
-from adcp.types.domains.core.format import (  # TODO: no stable alias in adcp.types
-    Dimensions,
-    DisclosureCapability,
-    Renders,
-)
+from adcp.types.domains.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
 from pydantic import BaseModel
 
 from src.core.creative_agent_registry import PUBLIC_DEFAULT_AGENT_URL
@@ -119,13 +115,8 @@ ASSET_TYPES = frozenset(_ASSET_CLASS_MAP)
 GROUP_ASSET_TYPES = frozenset(_GROUP_ASSET_CLASS_MAP)
 
 
-def make_asset(asset_type: str, asset_id: str | None = None, **requirements: Any) -> FormatAssetUnion:
+def make_asset(asset_type: str, asset_id: str | None = None) -> FormatAssetUnion:
     """Create a typed asset object from an asset type string.
-
-    ``requirements`` become the slot's ``requirements`` object -- the pinned home of an
-    asset's technical constraints (``core/requirements/<type>-asset-requirements.json``),
-    validated into that type's own requirements model, so a constraint the pin does not
-    declare for the type is refused here rather than seeded.
 
     Refuses an asset type it cannot build. This used to resolve the class with
     ``.get(asset_type, ImageFormatAsset)``, so a Given asking for a video, audio
@@ -148,8 +139,7 @@ def make_asset(asset_type: str, asset_id: str | None = None, **requirements: Any
             "generation gap; if not, the scenario is asking for an asset that does not "
             "exist at this spec version."
         ) from None
-    constraints = {"requirements": requirements} if requirements else {}
-    return cls(asset_id=asset_id or f"{asset_type}_asset", required=True, **constraints)
+    return cls(asset_id=asset_id or f"{asset_type}_asset", required=True)
 
 
 def _find_inner_asset_class(asset_type: str) -> type[BaseModel]:
@@ -230,15 +220,6 @@ def make_responsive_renders() -> Renders:
 def make_fixed_renders(width: int = 728, height: int = 90) -> Renders:
     """Create a fixed-dimension Renders object."""
     return make_renders(width=width, height=height)
-
-
-def make_disclosure_capability(position: str, *persistence: str) -> DisclosureCapability:
-    """One ``disclosure_capabilities`` entry: a position and the persistence modes it supports.
-
-    ``core/format.json`` requires both members and ``minItems: 1`` on ``persistence``, which
-    the generated model enforces, so an entry with no mode is refused here.
-    """
-    return DisclosureCapability(position=position, persistence=list(persistence))
 
 
 # ── Reference catalog selection ──────────────────────────────────────

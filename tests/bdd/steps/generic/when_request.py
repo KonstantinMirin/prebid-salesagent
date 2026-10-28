@@ -209,13 +209,6 @@ def when_send_request_asset_types(ctx: dict, asset_types: str) -> None:
     _call_raw(ctx, asset_types=json.loads(asset_types))
 
 
-@when("the Buyer Agent requests creative formats for that format")
-def when_request_registered_format(ctx: dict) -> None:
-    """Filter on the one format the Given registered, by its (agent_url, id) pair."""
-    (fmt,) = ctx["registry_formats"]
-    _call(ctx, req=ListCreativeFormatsRequest(format_ids=[fmt.format_id]))
-
-
 # There is no "type + asset_types" step. It parsed a `type` the request does not
 # declare, dropped it, and sent asset_types alone -- so BR-RULE-031's AND semantics
 # were stated over one filter. The two scenarios now use the asset_types +
@@ -468,38 +461,6 @@ def _partition_disclosure(ctx: dict, partition: str) -> None:
         _call_raw(ctx, disclosure_positions=[partition])
 
 
-#: The disclosure_persistence each partition label sends. Read against the Given's
-#: registry (``given_seller_various_disclosure_persistence``): no format covers all three
-#: modes, and none covers continuous together with flexible.
-_PERSISTENCE_PARTITIONS: dict[str, list[str]] = {
-    "single_mode": ["continuous"],
-    "multiple_modes_satisfied_across_positions": ["continuous", "initial"],
-    "all_modes": ["continuous", "initial", "flexible"],
-    "no_matching_formats": ["continuous", "flexible"],
-    "format_without_disclosure_capabilities": ["initial"],
-    "unknown_mode": ["permanent"],
-    "empty_array": [],
-    "duplicate_modes": ["continuous", "continuous"],
-}
-
-
-def _partition_disclosure_persistence(ctx: dict, partition: str) -> None:
-    """Map a disclosure_persistence partition label to its filter, dispatched raw.
-
-    Every filtered row goes out raw, valid ones included, so the three rejection rows
-    reach the seller exactly as the valid ones do. The modes sent are recorded as
-    ``ctx["requested_disclosure_persistence"]`` -- the request, not anything read back --
-    for the Then to compute which registered formats must survive.
-    """
-    if partition == "omitted":
-        ctx["requested_disclosure_persistence"] = None
-        _call(ctx)
-        return
-    modes = _PERSISTENCE_PARTITIONS[partition]
-    ctx["requested_disclosure_persistence"] = modes
-    _call_raw(ctx, disclosure_persistence=modes)
-
-
 def _partition_format_id_list(ctx: dict, partition: str, direction: str) -> None:
     """Shared body for the output_format_ids and input_format_ids partitions.
 
@@ -587,11 +548,6 @@ def when_partition_wcag(ctx: dict, partition: str) -> None:
 @when(parsers.parse('the Buyer Agent requests creative formats with disclosure_positions "{partition}"'))
 def when_partition_disclosure(ctx: dict, partition: str) -> None:
     _partition_disclosure(ctx, partition)
-
-
-@when(parsers.parse('the Buyer Agent requests creative formats with disclosure_persistence "{partition}"'))
-def when_partition_disclosure_persistence(ctx: dict, partition: str) -> None:
-    _partition_disclosure_persistence(ctx, partition)
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats with output_format_ids "{partition}"'))
@@ -692,22 +648,6 @@ def when_boundary_disclosure(ctx: dict, boundary_point: str) -> None:
         "duplicate positions ['prominent','prominent']": "duplicate_positions",
     }
     _partition_disclosure(ctx, mapping.get(boundary_point, boundary_point))
-
-
-@when(parsers.parse('the Buyer Agent requests creative formats at persistence boundary "{boundary_point}"'))
-def when_boundary_disclosure_persistence(ctx: dict, boundary_point: str) -> None:
-    mapping = {
-        "single mode ['continuous'] (min array size)": "single_mode",
-        "all 3 modes (max array size)": "all_modes",
-        "two modes satisfied by different positions": "multiple_modes_satisfied_across_positions",
-        "omitted (no filter)": "omitted",
-        "format has no disclosure_capabilities (excluded)": "format_without_disclosure_capabilities",
-        "no format covers all requested modes": "no_matching_formats",
-        "empty array []": "empty_array",
-        "unknown mode string 'permanent'": "unknown_mode",
-        "duplicate modes ['continuous','continuous']": "duplicate_modes",
-    }
-    _partition_disclosure_persistence(ctx, mapping[boundary_point])
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats at output_format_ids boundary "{boundary_point}"'))

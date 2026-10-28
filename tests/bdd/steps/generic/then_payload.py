@@ -319,47 +319,6 @@ def then_no_format_pricing(ctx: dict) -> None:
     assert not priced, f"formats carrying pricing_options on the wire: {priced}"
 
 
-@then(parsers.parse('each returned format should contain at least one asset of type "{asset_type}"'))
-def then_each_format_has_asset_type(ctx: dict, asset_type: str) -> None:
-    formats = _get_formats(ctx)
-    assert formats, f"no formats returned for asset_types [{asset_type!r}] -- the Given registered one carrying it"
-    lacking = [_fmt_name(f) for f in formats if asset_type not in asset_types_of(f)]
-    assert not lacking, f"formats returned for asset_types [{asset_type!r}] without that asset type: {lacking}"
-
-
-def _sole_asset_entry(ctx: dict) -> dict:
-    """The one asset entry of the one format on the wire, as the buyer received it."""
-    formats = wire_field(ctx, "formats")
-    assert len(formats) == 1, f"expected the one requested format, got {[f.get('name') for f in formats]}"
-    assets = formats[0].get("assets") or []
-    assert len(assets) == 1, f"expected one asset entry on the format, got {assets!r}"
-    return assets[0]
-
-
-@then(parsers.parse('the format\'s "assets" entry should expose "{key}" with value "{value}"'))
-def then_asset_entry_value(ctx: dict, key: str, value: str) -> None:
-    entry = _sole_asset_entry(ctx)
-    assert entry.get(key) == value, f"asset entry {key}={entry.get(key)!r}, expected {value!r}: {entry!r}"
-
-
-@then(parsers.parse('the same entry should expose "{key}" with value {value:d} under "requirements"'))
-def then_asset_requirement_value(ctx: dict, key: str, value: int) -> None:
-    requirements = _sole_asset_entry(ctx).get("requirements") or {}
-    assert requirements.get(key) == value, f"requirements.{key}={requirements.get(key)!r}, expected {value}"
-
-
-@then(parsers.parse('the same entry should expose "required" as {value}'))
-def then_asset_entry_required(ctx: dict, value: str) -> None:
-    entry = _sole_asset_entry(ctx)
-    assert entry.get("required") is (value == "true"), f"asset entry required={entry.get('required')!r}"
-
-
-@then(parsers.parse('the same entry should not expose "{key}" outside "requirements"'))
-def then_asset_entry_lacks_key(ctx: dict, key: str) -> None:
-    entry = _sole_asset_entry(ctx)
-    assert key not in entry, f"{key!r} sits on the asset entry itself, outside requirements: {entry!r}"
-
-
 @then(parsers.parse('"{a}", "{b}", and "{c}" should all be returned'))
 def then_three_returned(ctx: dict, a: str, b: str, c: str) -> None:
     names = [_fmt_name(f) for f in _get_formats(ctx)]
@@ -393,8 +352,6 @@ _KNOWN_FILTER_FIELDS = frozenset(
         "wcag",
         "disclosure_positions",
         "disclosure",
-        "disclosure_persistence",
-        "persistence",
         "output_format_ids",
         "input_format_ids",
         "creative agent type",
@@ -656,22 +613,6 @@ def _assert_filter_content(ctx: dict, field: str, label: str) -> None:
                     f"{label} '{field}': format '{_fmt_name(f)}' survived "
                     f"disclosure filtering but has no supported_disclosure_positions"
                 )
-
-    elif field in ("disclosure_persistence", "persistence"):
-        # Exact survivors, not a property of whatever came back: the request schema says
-        # "each requested persistence mode is supported by at least one position in
-        # disclosure_capabilities", so a registered format survives iff the requested modes
-        # are a subset of the modes its positions pool. No request filter means all survive.
-        requested = ctx["requested_disclosure_persistence"]
-        expected = {
-            _fmt_name(r)
-            for r in registry
-            if requested is None
-            or set(requested) <= {str(m.value) for c in (r.disclosure_capabilities or []) for m in c.persistence}
-        }
-        assert returned_names == expected, (
-            f"{label} '{field}' {requested!r}: returned {sorted(returned_names)}, expected {sorted(expected)}"
-        )
 
     elif field == "output_format_ids":
         known_out = ctx.get("known_output_format_ids", [])
