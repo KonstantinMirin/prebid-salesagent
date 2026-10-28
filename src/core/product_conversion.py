@@ -332,38 +332,6 @@ def convert_pricing_option_to_adcp(
         )
 
 
-def _normalize_legacy_placement(placement: dict) -> dict:
-    """Bring a stored placement dict up to the pinned shape.
-
-    Defaults kind="seller_inline" / mode="targetable" for legacy rows (see the
-    call-site comment for the spec grounding). seller_inline additionally
-    REQUIRES ``name`` (placement.json allOf); most legacy rows carry it, but a
-    row missing it must not silently emit a schema-invalid placement
-    (no-quiet-failures). Defined fallback: derive ``name`` from
-    ``placement_id``; if neither exists the row is unidentifiable — fail loud.
-    """
-    normalized = {"kind": "seller_inline", "mode": "targetable", **placement}
-    if normalized["kind"] == "seller_inline" and not normalized.get("name"):
-        placement_id = normalized.get("placement_id")
-        if not placement_id:
-            raise ValueError(
-                "Legacy placement row carries neither 'name' nor 'placement_id' — cannot emit a "
-                f"spec-3.1.1-valid seller_inline placement (row: {placement!r})"
-            )
-        normalized["name"] = placement_id
-    return normalized
-
-
-def served_placements(stored: list | None) -> list:
-    """A product row's ``placements`` as the wire serves them, legacy defaults applied.
-
-    The one reading of the column. ``get_products`` serves it, and ``create_media_buy``
-    grades a package's format coverage against it, so a placement's ``mode`` is the same
-    value in both: a stored row that states none is ``targetable`` everywhere.
-    """
-    return [_normalize_legacy_placement(p) if isinstance(p, dict) else p for p in stored or []]
-
-
 def default_reporting_capabilities() -> LibraryReportingCapabilities:
     """The reporting_capabilities a row that stores NULL is served with.
 
@@ -519,12 +487,9 @@ def convert_product_model_to_schema(
     if product_model.product_card_detailed:
         product_data["product_card_detailed"] = product_model.product_card_detailed
     if product_model.placements:
-        # the pinned SDK makes Placement.kind and Placement.mode required. Placements
-        # stored before these fields existed carry seller-defined metadata (name/description)
-        # inline, so they are seller_inline, not publisher_ref: default kind="seller_inline"
-        # (spec requires publisher_domain for publisher_ref, which legacy rows lack, but name
-        # for seller_inline, which they usually carry) and mode="targetable".
-        product_data["placements"] = served_placements(product_model.placements)
+        # Served as stored: ck_products_placements_explicit makes every stored placement state
+        # its kind and mode, so nothing is filled in here.
+        product_data["placements"] = product_model.placements
     # core/product.json requires reporting_capabilities; the column is still nullable
     # (salesagent-3cs7o.21 makes it NOT NULL with a backfill). The default is supplied HERE,
     # at the row-to-model edge, never by the wire model: Product inherits the field as

@@ -2765,13 +2765,11 @@ async def _create_media_buy_impl(
                 for product_id, row in product_map.items()
             }
             # The placements each product stores, captured beside its arms for the same
-            # reason: the gate's coverage rule reads them after this unit closes. Read through
-            # ``served_placements``, the reading ``get_products`` serves, so the gate grades
-            # the ``mode`` the buyer was shown.
-            from src.core.product_conversion import served_placements
-
+            # reason: the gate's coverage rule reads them after this unit closes. They are the
+            # stored documents ``get_products`` serves unchanged, and each states its ``mode``
+            # (``ck_products_placements_explicit``), so the gate grades the mode the buyer was shown.
             declared_placements = {
-                product_id: served_placements(row.placements) for product_id, row in product_map.items()
+                product_id: list(row.placements or []) for product_id, row in product_map.items()
             }
 
             # AdCP spec (core/targeting.json): "Sellers SHOULD return a validation

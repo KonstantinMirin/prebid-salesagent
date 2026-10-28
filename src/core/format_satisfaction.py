@@ -1075,9 +1075,9 @@ def included_placement_layers(placements: Iterable[Any] | None) -> tuple[Placeme
     Only ``mode: included`` counts. ``core/placement.json`` makes ``included`` "fixed product
     inventory: it cannot be independently selected", so every package buys it, while a
     ``targetable`` placement is purchased only through ``placement_selection``, which this
-    seller does not accept. *placements* is the SERVED reading
-    (``product_conversion.served_placements``), where a stored row stating no ``mode`` is
-    ``targetable``, so the gate grades the mode the buyer was shown.
+    seller does not accept. *placements* are the stored documents, which ``get_products``
+    serves unchanged and which state their ``mode`` (``ck_products_placements_explicit``),
+    so the gate grades the mode the buyer was shown.
 
     A placement that states no inline ``format_options`` is left out: "An omitted optional
     layer is unconstrained", so it accepts every product declaration. A placement whose
@@ -1475,7 +1475,7 @@ def resolve_routes(
     beside an UNPROJECTABLE legacy id was accepted on the option route and the legacy
     route was never resolved at all.
 
-    *placements* is the product's ``placements`` as served (``served_placements``), for the coverage rule
+    *placements* is the product's stored ``placements`` (served unchanged), for the coverage rule
     (:attr:`SelectorResolution.uncovered`). Read on the canonical lane only: a placement's
     inline narrowing is a set of canonical declarations, and the deprecated lane selects
     none to compare it with.
