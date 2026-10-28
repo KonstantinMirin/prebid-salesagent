@@ -117,6 +117,7 @@ elif [ "$MODE" = "ci" ]; then
     # healthy stack across runs); torn down with the Docker stack on EXIT.
     ./scripts/creative-agent-stack.sh up
     export CREATIVE_AGENT_URL="$(./scripts/creative-agent-stack.sh url)"
+    export CREATIVE_AGENT_ORIGIN="$(./scripts/creative-agent-stack.sh origin)"
 
     # ─── Outbound egress escape hatch — TEST PATH ONLY (#1589, salesagent-e6h0) ──
     # The line above exports an https://agent.localhost:<port>/... URL

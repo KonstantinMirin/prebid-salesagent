@@ -13,7 +13,8 @@
 #   scripts/creative-agent-stack.sh up      # idempotent: build+run if needed, wait healthy
 #   scripts/creative-agent-stack.sh build   # idempotent: fetch+build image only (in-network compose service)
 #   scripts/creative-agent-stack.sh down    # stop+rm containers+network (keeps image/tarball cache)
-#   scripts/creative-agent-stack.sh url     # print CREATIVE_AGENT_URL
+#   scripts/creative-agent-stack.sh url     # print CREATIVE_AGENT_URL (the MCP endpoint)
+#   scripts/creative-agent-stack.sh origin  # print CREATIVE_AGENT_ORIGIN (the agent's identity)
 #   scripts/creative-agent-stack.sh publish # build+push pin-keyed image to ghcr.io (CI publish workflow)
 set -euo pipefail
 
@@ -48,7 +49,14 @@ HEALTH="http://localhost:9999/api/creative-agent/health"
 TLS_PROXY="creative-agent-tls"
 TLS_PORT="9443"
 HEALTH_TLS="https://agent.localhost:${TLS_PORT}/api/creative-agent/health"
-CREATIVE_AGENT_URL="https://agent.localhost:${TLS_PORT}/api/creative-agent"
+# The MCP ENDPOINT the seller dials. The reference agent serves MCP only at
+# POST <base>/api/creative-agent/mcp; the bare /api/creative-agent is refused.
+CREATIVE_AGENT_URL="https://agent.localhost:${TLS_PORT}/api/creative-agent/mcp"
+# The operator agent's IDENTITY, an origin. This container stands in for the
+# public reference agent: every reference a test seeds, and the checked-in
+# capture, names the public agent, so that is the origin a reference must be
+# recognized by and rerouted from. Never this container's own origin.
+CREATIVE_AGENT_ORIGIN="https://creative.adcontextprotocol.org"
 
 _healthy() { curl -sf -m 3 "$HEALTH" >/dev/null 2>&1; }
 _tls_healthy() { curl -sf -m 3 --cacert .test-tls/ca.pem "$HEALTH_TLS" >/dev/null 2>&1; }
@@ -166,6 +174,7 @@ cmd_publish() {
 }
 
 cmd_url() { echo "$CREATIVE_AGENT_URL"; }
+cmd_origin() { echo "$CREATIVE_AGENT_ORIGIN"; }
 
 # Fetch the pinned source + build the image only. Idempotent. Shared by `up`
 # (standalone host run) and `build` (in-network: docker-compose.e2e.yml reuses
@@ -271,6 +280,7 @@ case "${1:-}" in
     build) cmd_build ;;
     down) cmd_down ;;
     url) cmd_url ;;
+    origin) cmd_origin ;;
     publish) cmd_publish ;;
-    *) echo "usage: $0 {up|build|down|url|publish}" >&2; exit 2 ;;
+    *) echo "usage: $0 {up|build|down|url|origin|publish}" >&2; exit 2 ;;
 esac

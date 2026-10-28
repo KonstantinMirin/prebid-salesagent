@@ -179,7 +179,19 @@ services:
       # which rate-limits under CI load. The runner service
       # already sets the same value for the direct integration tests.
       # https, via the shared tls-proxy front below.
-      CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent
+      #
+      # Two settings, two meanings. CREATIVE_AGENT_URL is
+      # the MCP endpoint dialled, and the reference agent serves MCP only at
+      # POST <base>/api/creative-agent/mcp; the bare /api/creative-agent is
+      # refused (CSRF 403), and dialling it spent call_mcp_tool's whole retry
+      # budget before the '/mcp' fallback on every call. CREATIVE_AGENT_ORIGIN
+      # is the operator agent's identity, and here it is the PUBLIC agent's
+      # origin: this container stands in for it. Every reference this stack
+      # serves or seeds names the public agent (the reference-formats capture
+      # is normalized to it, the factories default to it), so that is the
+      # origin a reference must be recognized by and rerouted from.
+      CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent/mcp
+      CREATIVE_AGENT_ORIGIN: https://creative.adcontextprotocol.org
       CREATE_DEMO_TENANT: "true"
       # The LIVE server needs the same signing KEK the dev stack has (#1291 D1).
       # A scenario's Given mints a tenant signing key through production, which
@@ -706,8 +718,10 @@ services:
       # https, via the shared tls-proxy front above — the runner dials the same
       # origin the SERVER does, and a `*.adcp.test` value that is not
       # https://...:8443 is a guard failure
-      # (tests/unit/test_architecture_e2e_compose_tls_origins.py).
-      CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent
+      # (tests/unit/test_architecture_e2e_compose_tls_origins.py). The endpoint
+      # and the identity are separate settings; see the adcp-server entry.
+      CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent/mcp
+      CREATIVE_AGENT_ORIGIN: https://creative.adcontextprotocol.org
       # PLAYWRIGHT_BROWSERS_PATH used to sit here, overriding Dockerfile.test's
       # baked /ms-playwright; it was DELETED (not moved) when the `user:` pin
       # went away -- see the HOME/UV_CACHE_DIR note at the top of this block.
