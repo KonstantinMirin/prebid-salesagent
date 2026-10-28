@@ -160,6 +160,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | required_slots       | slot_missing                     | format_kind        |
       | publisher_300        | wrong_publisher_domain           | format_option_refs |
       | fixed_300x250        | option_plus_unprojectable_legacy | format_ids         |
+      | fixed_300x250        | unpublished_option_plus_exact_300x250 | format_option_refs |
       | fixed_300x250        | legacy_display_728x90            | format_ids         |
       | two_image_options    | mismatched_160x600               | format_kind        |
       | fixed_300x250        | oversized_file_300x250           | format_kind        |
@@ -221,6 +222,15 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # mismatched_160x600 is M2's refusal half: a selector that satisfies NEITHER of the two
     # image declarations the product publishes. Without it, the two M2 accept rows above are
     # satisfied by a seller that accepts any image selector whatever its params say.
+    #
+    # unpublished_option_plus_exact_300x250 is the step (1) ordering obligation on the
+    # canonical arm, the sibling of option_plus_unprojectable_legacy on the legacy one: the
+    # option ref fails to resolve and the direct 300x250 route beside it resolves and
+    # selects. package-request.json's format_option_refs description: sellers "reject
+    # unresolved options with UNSUPPORTED_FEATURE and a field path to the failing entry
+    # before comparing co-present routes". Comparing first would answer
+    # CONFLICTING_SELECTORS, the code the pin forbids for a resolution failure.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_option_refs
 
   @T-UC-FORMAT-SATISFACTION-conflicting @format_satisfaction @requires_db
   Scenario Outline: co-present selector routes that select different declarations are refused - <selector>
@@ -266,6 +276,78 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # because an unnormalizable legacy id fails step (1) and the pin forbids relabelling it:
     # "Resolution failure is reported before selector equivalence and must not be
     # mislabeled CONFLICTING_SELECTORS."
+
+  @T-UC-FORMAT-SATISFACTION-conflicting-option-sets @format_satisfaction @requires_db
+  Scenario Outline: co-present routes whose selected option sets differ are refused - <declaration> / <selector>
+    Given the seller declares a canonical format option "<declaration>"
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused CONFLICTING_SELECTORS naming the package
+
+    Examples:
+      | declaration      | selector                                |
+      | two_mrec_options | option_plus_projectable_legacy          |
+      | two_mrec_options | second_mrec_option_plus_legacy          |
+      | fixed_15s_video  | option_plus_conflicting_duration_legacy |
+
+    # media-buy/package-request.json step (2): "derive the product format_options[] entries
+    # selected by each route using directional product satisfaction, and require the
+    # selected option sets to match"; step (3) rejects "different ... selected option sets"
+    # with CONFLICTING_SELECTORS; format_option_refs: "require each route to select the same
+    # product option set". The legacy route's set is derived under the "v2 narrows v1"
+    # relation the same step names (canonical-formats.mdx § "Narrows" -- formal definition).
+    #
+    # THE TWO two_mrec_options ROWS. The product publishes two 300x250 image options that
+    # differ only in image_formats. display_300x250 projects to image 300x250 and states no
+    # file format, so both options narrow it and the legacy route selects BOTH; an option
+    # ref selects one. The sets differ whichever option the ref names, so both rows are
+    # refused -- the verdict does not depend on declaration order. option_plus_projectable_legacy
+    # is accepted against fixed_300x250 above, where the product publishes one option: the
+    # rows differ in the product and in nothing else.
+    #
+    # THE DURATION ROW. A legacy reference states duration as duration_ms
+    # (core/format-id.json); the declaration states duration_ms_exact. The legacy route's
+    # 30000 ms is graded against the option's 15000 ms, selects nothing, and the option ref
+    # selects the option, so the sets differ. With the key left untranslated the duration
+    # was never compared and the pair was accepted.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json
+
+  @T-UC-FORMAT-SATISFACTION-legacy-only-accepted @format_satisfaction @requires_db
+  Scenario: a legacy selector against a product publishing only deprecated format_ids is accepted
+    Given the seller publishes only the deprecated format_ids
+    And the buyer's package selects "legacy_display_300x250"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+  @T-UC-FORMAT-SATISFACTION-legacy-only-option-ref @format_satisfaction @requires_db
+  Scenario Outline: a format option ref against a product publishing no format_options is refused - <selector>
+    Given the seller publishes only the deprecated format_ids
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "format_option_refs" selector
+
+    Examples:
+      | selector                       |
+      | product_option_ref             |
+      | option_plus_projectable_legacy |
+
+    # format_option_refs: "Each reference matches one target product format_options[]
+    # entry", and step (1) says "an unresolved format_option_ref ... MUST be rejected with
+    # UNSUPPORTED_FEATURE". A product that publishes no format_options[] has no entry to
+    # match, and its deprecated format_ids name legacy ids, not options. Both rows were
+    # ACCEPTED before: the deprecated lane graded only the legacy route and read a claim
+    # with no legacy id as "no claim". core/product.json keeps such a product legal at the
+    # pin ("Products MUST carry format_ids, format_options, or both during the 3.x migration
+    # window").
+    #
+    # THE PAIR. product_option_ref is accepted against fixed_300x250 above and refused
+    # here; the only difference is the product's canonical arm. option_plus_projectable_legacy
+    # adds a legacy id the product DOES carry, which the accept scenario just above takes on
+    # its own, so the refusal is the option ref's and not the legacy id's.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_option_refs
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json
 
   # ── The CREATIVE side of the same function ────────────────────────────────────────────
   #

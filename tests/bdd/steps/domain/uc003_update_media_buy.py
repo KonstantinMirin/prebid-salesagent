@@ -2638,12 +2638,21 @@ def given_package_update_start_time(ctx: dict, value: str) -> None:
 
 
 #: A protocol-valid value for each field package-update.json's root ``not`` forbids. Valid
-#: shapes on purpose: the only defect in the request is that the field is present.
+#: shapes on purpose: the only defect in the request is that the field is present. The
+#: last three are package-request.json's canonical selector arms, which the same ``not``
+#: names beside ``format_ids``.
 _IMMUTABLE_PACKAGE_VALUES: dict[str, Any] = {
     "product_id": "prod_other",
     "format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}],
     "pricing_option_id": "po_other",
+    "format_option_refs": [{"scope": "product", "format_option_id": "opt_other"}],
+    "format_kind": "image",
+    "params": {"width": 300, "height": 250},
 }
+
+#: What the generated rows mean by "all three immutable fields": the three they were
+#: written against, before the pin's list of six was read in full.
+_ORIGINAL_THREE_IMMUTABLE = ("product_id", "format_ids", "pricing_option_id")
 
 #: The row texts that name a package update carrying NO immutable field.
 _MUTABLE_ONLY_PACKAGE_UPDATES = ("only updatable fields", "only mutable fields", "only budget")
@@ -2654,14 +2663,15 @@ _MUTABLE_ONLY_PACKAGE_UPDATES = ("only updatable fields", "only mutable fields",
 def given_package_update_with_immutable_fields(ctx: dict, description: str) -> None:
     """Send a budget update plus every immutable field *description* names.
 
-    The three immutable-field outlines (bva-immutable-field-guard, bva-package-immutable-
-    fields, partition-immutable-package-field) phrase the same rows three ways; this reads
-    which of ``product_id`` / ``format_ids`` / ``pricing_option_id`` a row names ("all
-    three" names each). A row naming none must be one of the mutable-only rows, so an
-    unrecognised phrasing fails here instead of silently sending a valid update.
+    The immutable-field outlines (bva-immutable-field-guard, bva-package-immutable-fields,
+    partition-immutable-package-field, package-update-immutable-keyword) phrase the same
+    rows several ways; this reads which of the fields in :data:`_IMMUTABLE_PACKAGE_VALUES`
+    a row names ("all three" names the original three). A row naming none must be one of
+    the mutable-only rows, so an unrecognised phrasing fails here instead of silently
+    sending a valid update.
     """
     if "all three immutable fields" in description:
-        named = list(_IMMUTABLE_PACKAGE_VALUES)
+        named = list(_ORIGINAL_THREE_IMMUTABLE)
     else:
         named = [name for name in _IMMUTABLE_PACKAGE_VALUES if name in description]
     assert named or any(marker in description for marker in _MUTABLE_ONLY_PACKAGE_UPDATES), (
@@ -2670,6 +2680,25 @@ def given_package_update_with_immutable_fields(ctx: dict, description: str) -> N
     package = {"package_id": "pkg_001", "budget": _UPDATED_BUDGET}
     package.update({name: _IMMUTABLE_PACKAGE_VALUES[name] for name in named})
     _ensure_update_defaults(ctx)["packages"] = [package]
+
+
+@then(
+    parsers.parse('the update is refused INVALID_REQUEST naming the package update\'s "{name}" under keyword {keyword}')
+)
+def then_package_update_field_refused_by_keyword(ctx: dict, name: str, keyword: str) -> None:
+    """The refusal names *name* on the one package update, with the schema keyword *keyword*.
+
+    The code alone does not separate the named immutable-field refusal from the generic
+    one an undeclared field earns in dev (``additionalProperties``), and production drops
+    an undeclared field instead of refusing it. ``core/error.json``: ``issues[].keyword`` is
+    the schema keyword that rejected the payload, and ``field`` MUST be ``issues[0].pointer``
+    in JSONPath-lite.
+    """
+    ctx["result"].assert_wire_error(
+        "INVALID_REQUEST",
+        field=f"packages[0].{name}",
+        issues=[{"pointer": f"/packages/0/{name}", "keyword": keyword}],
+    )
 
 
 #: idempotency_key boundary rows -> the value sent. update-media-buy-request.json requires

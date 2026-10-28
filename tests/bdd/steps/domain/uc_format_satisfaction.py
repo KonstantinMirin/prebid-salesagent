@@ -172,6 +172,31 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "params": {"width": 728, "height": 90},
         },
     ],
+    # TWO 300x250 image declarations that differ only in the file formats they take. Both
+    # NARROW the v1 projection of ``display_300x250`` (canonical-formats.mdx § "Narrows"),
+    # so that legacy id selects BOTH, and an option ref naming either one selects a
+    # different set (media-buy/package-request.json step (2)).
+    "two_mrec_options": [
+        {
+            "format_kind": "image",
+            "format_option_id": _PRODUCT_OPTION_ID,
+            "params": {"width": 300, "height": 250, "image_formats": ["jpg", "png"]},
+        },
+        {
+            "format_kind": "image",
+            "format_option_id": "satisfaction_image_mrec_gif",
+            "params": {"width": 300, "height": 250, "image_formats": ["gif"]},
+        },
+    ],
+    # A video option fixed at 15 seconds. ``duration_ms_exact`` is the declaration's
+    # spelling of one fixed duration; a legacy reference spells it ``duration_ms``.
+    "fixed_15s_video": [
+        {
+            "format_kind": "video_hosted",
+            "format_option_id": "satisfaction_video_15s",
+            "params": {"duration_ms_exact": 15000},
+        }
+    ],
     # ``fixed_300x250`` with the ``v1_format_ref`` assertion REMOVED, and nothing else
     # changed. That one difference decides whether the accepted package's deprecated
     # ``format_ids_to_provide`` projection has a source at all, which is the pair the two
@@ -261,6 +286,20 @@ _SELECTORS: dict[str, dict[str, Any]] = {
         "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250"}],
     },
     # --- selectors that do not ---
+    # The SECOND of ``two_mrec_options``' declarations by option ref, beside a legacy id that
+    # both declarations narrow: the option ref selects one entry, the legacy id both.
+    "second_mrec_option_plus_legacy": {
+        "format_option_refs": [{"scope": "product", "format_option_id": "satisfaction_image_mrec_gif"}],
+        "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250"}],
+    },
+    # ``fixed_15s_video``'s option by ref, beside a legacy video id parameterized at 30
+    # seconds. ``video_640x480`` projects to ``video_hosted`` on the pinned registry and the
+    # upgrade carries ``duration_ms`` through, so the legacy route states a duration the
+    # option contradicts.
+    "option_plus_conflicting_duration_legacy": {
+        "format_option_refs": [{"scope": "product", "format_option_id": "satisfaction_video_15s"}],
+        "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "video_640x480", "duration_ms": 30000}],
+    },
     # The storyboard's reject_bare_image_selector_for_fixed_mrec: the right kind, no params.
     "bare_image_kind": {"format_kind": "image"},
     # formats.mdx's fifth rule as an input: the same kind, different dimensions.
@@ -305,6 +344,15 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     "option_plus_unprojectable_legacy": {
         "format_option_refs": [{"scope": "product", "format_option_id": _PRODUCT_OPTION_ID}],
         "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "unmapped_legacy_selector_6648"}],
+    },
+    # The same ordering obligation on the OTHER canonical arm: the option ref fails to
+    # resolve and a complete direct selector beside it resolves. format_option_refs'
+    # description: sellers "reject unresolved options with UNSUPPORTED_FEATURE and a field
+    # path to the failing entry before comparing co-present routes".
+    "unpublished_option_plus_exact_300x250": {
+        "format_option_refs": [{"scope": "product", "format_option_id": "no_such_option"}],
+        "format_kind": "image",
+        "params": {"width": 300, "height": 250},
     },
     # Step 17: fixed-size image dimensions are ATOMIC, so width without height is
     # SCHEMA-invalid and belongs in the other error bucket -- INVALID_REQUEST, not
@@ -399,22 +447,39 @@ def given_tenant_for_create(ctx: dict) -> None:
 def _store_declaring_product(ctx: dict, declaration: str, *, with_legacy_arm: bool) -> None:
     """Store one product carrying *declaration*, with or without the deprecated arm.
 
-    The product becomes ``ctx["default_product"]``, which is what the shared create-request
-    builder points the package at -- so the buyer's request names THIS product without this
-    module duplicating the request literal.
-
     ``with_legacy_arm=False`` stores a CANONICAL-ONLY product: ``format_ids`` NULL, which
     migration 08cd415b3d91 made representable. The product id carries the shape so two
     scenarios naming the same declaration cannot collide on one row.
+    """
+    _store_product(
+        ctx,
+        f"satisfaction_{declaration}" if with_legacy_arm else f"satisfaction_canonical_{declaration}",
+        format_ids=list(_LEGACY_ARM) if with_legacy_arm else None,
+        format_options=_DECLARATIONS[declaration],
+    )
+
+
+def _store_product(
+    ctx: dict,
+    product_id: str,
+    *,
+    format_ids: list[dict[str, Any]] | None,
+    format_options: list[dict[str, Any]] | None,
+) -> None:
+    """Store one product with the given arms and point the buyer's package at it.
+
+    The product becomes ``ctx["default_product"]``, which is what the shared create-request
+    builder points the package at -- so the buyer's request names THIS product without this
+    module duplicating the request literal.
     """
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
     product = ProductFactory(
         tenant=ctx["tenant"],
-        product_id=f"satisfaction_{declaration}" if with_legacy_arm else f"satisfaction_canonical_{declaration}",
+        product_id=product_id,
         delivery_type="non_guaranteed",
-        format_ids=list(_LEGACY_ARM) if with_legacy_arm else None,
-        format_options=_DECLARATIONS[declaration],
+        format_ids=format_ids,
+        format_options=format_options,
         property_tags=["all_inventory"],
     )
     ctx["default_pricing_option"] = PricingOptionFactory(
@@ -478,23 +543,19 @@ def given_legacy_only_sized_product_spelled(ctx: dict, width: int, height: int, 
 
 def _store_legacy_only_sized_product(ctx: dict, width: int, height: int, *, agent_url: str) -> None:
     """Store a legacy-only product whose one deprecated entry is sized, at *agent_url*."""
-    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
-
     entry = dict(_LEGACY_ARM_SIZED[0]) | {"width": width, "height": height, "agent_url": agent_url}
-    product = ProductFactory(
-        tenant=ctx["tenant"],
-        product_id=f"satisfaction_legacy_{width}x{height}",
-        delivery_type="non_guaranteed",
-        format_ids=[entry],
-        format_options=None,
-        property_tags=["all_inventory"],
-    )
-    ctx["default_pricing_option"] = PricingOptionFactory(
-        product=product, pricing_model="cpm", currency="USD", is_fixed=True
-    )
-    ctx["default_product"] = product
-    ctx.pop("request_kwargs", None)
-    _ensure_request_defaults(ctx)
+    _store_product(ctx, f"satisfaction_legacy_{width}x{height}", format_ids=[entry], format_options=None)
+
+
+@given("the seller publishes only the deprecated format_ids")
+def given_legacy_only_product(ctx: dict) -> None:
+    """Store a LEGACY-ONLY product: this module's deprecated arm, and no format_options.
+
+    Still legal at the pin -- ``core/product.json``: "Products MUST carry ``format_ids``,
+    ``format_options``, or both during the 3.x migration window" -- and the shape on which
+    a canonical route has no ``format_options[]`` entry to resolve against.
+    """
+    _store_product(ctx, "satisfaction_legacy_only", format_ids=list(_LEGACY_ARM), format_options=None)
 
 
 @given(parsers.parse('the seller declares a canonical format option "{declaration}" and no format_ids'))
