@@ -70,6 +70,10 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc002_nfr",
+    "tests.bdd.steps.domain.uc002_task_query",
+    "tests.bdd.steps.domain.uc002_v31_request",
+    "tests.bdd.steps.domain.uc002_v31_proposal_targeting",
+    "tests.bdd.steps.domain.uc002_invariants",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc003_storyboard_generic_client",
@@ -726,9 +730,12 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-inv-006-3": "pricing XOR invariant (both set) not validated in create flow — spec-production gap",
     "T-UC-002-inv-006-4": "pricing XOR invariant (neither set) error lacks suggestion field — spec-production gap",
     # RESOLVED: budget positivity validation now works — removed stale xfail T-UC-002-inv-008-2
-    # FIXME: ASAP case sensitivity error code mismatch
-    # Production: Pydantic rejects "ASAP" → ValidationError, spec expects INVALID_REQUEST.
-    "T-UC-002-inv-013-5": "INVALID_REQUEST error code not implemented for wrong-case ASAP — spec-production gap",
+    # Graduated: T-UC-002-inv-013-5 (wrong-case "ASAP"). core/start-timing.json admits the
+    # const "asap" or a date-time, so "ASAP" violates the schema, and the boundary's DTO
+    # parse answers INVALID_REQUEST with field start_time (adcp_error_for's ValidationError
+    # branch). The Given sets start_time through _ensure_request_defaults on every transport;
+    # the Thens read the wire code and the wire suggestion. Measured XPASS(strict) on a2a,
+    # mcp, rest and e2e_rest in run measure_innet_281026_1501; no e2e_rest ledger line.
     # FIXME: sandbox mode not implemented in create_media_buy
     # CreateMediaBuyResult has no sandbox field; no sandbox suppression logic exists.
     # sandbox-production passes vacuously (sandbox absent from response by default).

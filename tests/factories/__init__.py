@@ -61,6 +61,7 @@ from tests.factories.targeting import (
 )
 from tests.factories.user import TenantAuthConfigFactory, UserFactory
 from tests.factories.webhook import PushNotificationConfigFactory, WebhookTaskContextFactory
+from tests.factories.workflow import ContextFactory, WorkflowStepFactory
 
 # Only SQLAlchemyModelFactory subclasses belong here: the harness rebinds
 # ``_meta.sqlalchemy_session`` across every entry. Plain ``factory.Factory``
@@ -94,6 +95,8 @@ ALL_FACTORIES = [
     UserFactory,
     TenantAuthConfigFactory,
     SigningKeyFactory,
+    ContextFactory,
+    WorkflowStepFactory,
 ]
 
 __all__ = [
@@ -144,4 +147,6 @@ __all__ = [
     "TenantFactory",
     "UserFactory",
     "WebhookTaskContextFactory",
+    "ContextFactory",
+    "WorkflowStepFactory",
 ]

@@ -1118,6 +1118,7 @@ def then_response_has_sandbox(ctx: dict) -> None:
 
 
 @then('the response should NOT contain an "errors" field')
+@then('the response should NOT have an "errors" field')
 def then_no_errors_field(ctx: dict) -> None:
     """Assert the response does not contain an 'errors' field at all.
 
@@ -1988,6 +1989,7 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
         r"(?!\d+ packages with valid)"
         r"(?!a reporting_webhook)"
         r"(?!a push_notification_config)"
+        r"(?!an artifact_webhook)"
         r".+[^:])$"
     )
 )
