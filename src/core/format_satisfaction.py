@@ -40,6 +40,11 @@ product declarations each resolved route SELECTS, refuse a disagreement with
 those four steps, one property each; :func:`satisfies` is the single-route entry the four
 creative gates use.
 
+The same section of ``formats.mdx`` then states a sixth rule, about the package rather than
+the route: "For a product with multiple included placements, the selected format set must
+cover every placement." :attr:`SelectorResolution.uncovered` is that rule, asked once the
+four steps have selected a declaration.
+
 WHAT THIS MODULE DOES NOT DO, deliberately:
 
 * It does not derive a creative's params from its assets. A stored creative declares a
@@ -117,6 +122,7 @@ class FormatRefusal(StrEnum):
     LEGACY_UNPROJECTABLE = "legacy_unprojectable"
     LEGACY_NOT_SELECTED = "legacy_not_selected"
     LEGACY_NOT_ACCEPTED = "legacy_not_accepted"
+    PLACEMENT_UNCOVERED = "placement_uncovered"
 
 
 #: The two members that are a RESOLUTION failure in ``media-buy/package-request.json``'s
@@ -1046,6 +1052,96 @@ def _reference_display(reference: LibraryFormatId) -> str:
     return f"{shown} ({', '.join(f'{name}={value}' for name, value in parameters)})" if parameters else shown
 
 
+@dataclass(frozen=True, slots=True)
+class PlacementLayer:
+    """One INCLUDED placement and the seller-inline narrowing it states.
+
+    ``core/product.json``'s ``format_options`` description computes a placement's
+    effective accepted set as the intersection of "(1) the product format_options; (2) the
+    product placement's inline format_options, when present; and (3) for kind
+    publisher_ref, the named publisher's adagents.json catalog narrowing". This is layer
+    (2). Layer (1) is the product's declarations, which the selected declaration already
+    belongs to.
+    """
+
+    placement_id: str
+    declarations: tuple[LibraryFormatDeclaration, ...]
+
+
+def included_placement_layers(placements: Iterable[Any] | None) -> tuple[PlacementLayer, ...]:
+    """The INCLUDED placements of a product that narrow its formats, as stored documents.
+
+    Only ``mode: included`` counts. ``core/placement.json`` makes ``included`` "fixed product
+    inventory: it cannot be independently selected", so every package buys it, while a
+    ``targetable`` placement is purchased only through ``placement_selection``, which this
+    seller does not accept. A stored row with no ``mode`` is served as ``targetable``
+    (``product_conversion._normalize_legacy_placement``), so it is not included here either.
+
+    A placement that states no inline ``format_options`` is left out: "An omitted optional
+    layer is unconstrained", so it accepts every product declaration. A placement whose
+    inline declarations are all unparseable keeps an EMPTY layer, which covers nothing, so
+    it fails closed rather than widening to the product set.
+
+    CEILING: layer (3), a ``publisher_ref`` placement's adagents.json narrowing, is not
+    read. This seller has no resolver for it on the buy path; the pin says "an unresolved
+    publisher placement or format-option reference MUST fail closed", which this reader
+    does not yet do. Products this seller authors carry ``seller_inline`` placements.
+    """
+    layers = []
+    for placement in placements or []:
+        if not isinstance(placement, Mapping) or placement.get("mode") != "included":
+            continue
+        if placement.get("format_options") is None:
+            continue
+        layers.append(
+            PlacementLayer(
+                placement_id=str(placement.get("placement_id")),
+                declarations=product_declarations(placement["format_options"]),
+            )
+        )
+    return tuple(layers)
+
+
+def _placement_accepts(selected: LibraryFormatDeclaration, accepted: LibraryFormatDeclaration) -> bool:
+    """Whether a placement's declaration *accepted* takes the product declaration *selected*.
+
+    The matching rule is ``core/product.json``'s, stated for intersecting these layers:
+    "Match publisher-declared options by {publisher_domain, format_option_id}, match
+    product-local options by format_option_id when publisher_domain is omitted, and
+    otherwise match declarations with the same format_kind whose narrower parameters
+    satisfy the broader declaration." The last case is directional, and the PLACEMENT is
+    the narrower side: ``core/placement.json`` says its inline declarations "are
+    intersected with the product-level format_options and MUST NOT introduce a format
+    outside that product upper bound". So the placement's declaration is the claim and the
+    selected product declaration is the target -- a placement narrowing ``[5000, 60000]``
+    to ``[5000, 30000]`` matches, which the reverse reading refused.
+
+    Only the params the placement STATES are graded. ``canonical-formats.mdx``'s "narrows"
+    definition: "when v2.params omits a parameter that v1 specified, v2 inherits v1's
+    value", and the same document says "A placement without a locale policy inherits the
+    matching product format option's policy". A placement restating the kind without a
+    duration has inherited the product's, not failed to state it.
+    """
+    if (option := _option_identity(accepted)) is not None:
+        return option == _option_identity(selected)
+    claim = {key: value for key, value in _declared_params(accepted).items() if value is not None}
+    return str(accepted.format_kind) == str(selected.format_kind) and not _unsatisfied_params(
+        claim, _stated_constraints(_declared_params(selected), claim)
+    )
+
+
+def _same_selection(
+    left: Sequence[LibraryFormatDeclaration | None], right: Sequence[LibraryFormatDeclaration | None]
+) -> bool:
+    """Whether two arms selected the same option SET, order and repetition aside.
+
+    Membership by ``==`` rather than a ``set``: the pinned declaration models are not
+    hashable, and ``==`` compares their field values, which is what "the same product
+    option set" means. ``None`` -- a route that selected nothing -- equals only ``None``.
+    """
+    return all(d in right for d in left) and all(d in left for d in right)
+
+
 def selector_routes(
     *,
     format_kind: str | None,
@@ -1151,6 +1247,10 @@ class SelectorResolution:
     #: product narrows neither arm, or the package names no selector: both mean the
     #: selector imposes nothing, which is :meth:`__bool__`'s ``True`` with no selection.
     routes: tuple[tuple[FormatRoute, FormatSatisfaction], ...] = ()
+    #: The product's included placements that narrow its formats, for :attr:`uncovered`.
+    #: Empty for every single-route caller (a stored creative), which is what keeps the
+    #: coverage rule on the package path only.
+    placements: tuple[PlacementLayer, ...] = dataclass_field(default=(), compare=False)
 
     @property
     def unresolved(self) -> FormatSatisfaction | None:
@@ -1167,18 +1267,58 @@ class SelectorResolution:
         return next((verdict for _, verdict in self.routes if verdict.refusal in _RESOLUTION_FAILURES), None)
 
     @property
+    def _arm_selections(self) -> tuple[tuple[LibraryFormatDeclaration | None, ...], ...]:
+        """The declarations each ARM selected, one tuple per request field, winner first.
+
+        An arm is one request field, and an array arm selects a SET: ``format_option_refs``
+        "Each reference matches one target product ``format_options[]`` entry", and the
+        receiver must "require each route to select the same product option set"
+        (``media-buy/package-request.json``). Two refs on one arm are therefore one selection
+        of two options, which is how a buyer covers two included placements that accept
+        different formats (``core/product.json``: "Distinct per-placement creatives MAY use
+        the union, but the selected creative set MUST cover every included placement").
+
+        Grouped in :attr:`routes` order, which :func:`selector_routes` builds arm by arm in
+        step (4)'s precedence, so the first group is the winning arm's.
+
+        A route contributes EVERY entry it selected (:func:`_selecting`: a broad legacy id or
+        a bare kind selects each declaration it is compatible with), and a route that selected
+        nothing contributes ``None``, which matches no entry and so still differs from any arm
+        that selected something.
+        """
+        arms: dict[str | None, list[LibraryFormatDeclaration | None]] = {}
+        for route, verdict in self.routes:
+            arms.setdefault(route.field, []).extend(verdict.selection or (None,))
+        return tuple(tuple(selection) for selection in arms.values())
+
+    @property
+    def _winning_arm(self) -> tuple[LibraryFormatDeclaration, ...]:
+        """The declarations the first arm selected, once each, whether or not it is accepted.
+
+        Once each because two refs naming one option select one entry, and a package records
+        one snapshot per selected entry.
+        """
+        chosen: list[LibraryFormatDeclaration] = []
+        for declaration in self._arm_selections[0] if self.routes else ():
+            if declaration is not None and declaration not in chosen:
+                chosen.append(declaration)
+        return tuple(chosen)
+
+    @property
     def conflicting(self) -> bool:
         """Steps (2) and (3): every route resolved, and the selected option sets disagree.
 
-        The comparison is on the SELECTED SETS, which is what step (2) asks for -- "derive
-        the product ``format_options[]`` entries selected by each route ... and require the
-        selected option sets to match" -- and not on the routes' own shapes. Two routes
-        spelled differently that select the same entries agree; that is the storyboard's
-        ``create_media_buy_with_equivalent_dual_emission``, where a product-local option ref
-        and ``display_300x250_image`` "normalize to the same declaration". Two routes whose
-        sets merely OVERLAP do not: a legacy id two options both narrow selects both, and
-        an option ref beside it selects one, which ``format_option_refs`` answers directly
-        -- "require each route to select the same product option set".
+        The comparison is on the SELECTED SETS, per arm, which is what step (2) asks for --
+        "derive the product ``format_options[]`` entries selected by each route ... and
+        require the selected option sets to match" -- and not on the routes' own shapes. Two
+        routes spelled differently that select the same entries agree; that is the
+        storyboard's ``create_media_buy_with_equivalent_dual_emission``, where a
+        product-local option ref and ``display_300x250_image`` "normalize to the same
+        declaration". Two arms whose sets merely OVERLAP do not: a legacy id two options both
+        narrow selects both, and an option ref beside it selects one, which
+        ``format_option_refs`` answers directly -- "require each route to select the same
+        product option set". Entries of ONE arm never conflict with each other: together
+        they are that arm's set (:attr:`_arm_selections`).
 
         A ROUTE THAT SELECTED NOTHING COUNTS AS A DIFFERING SET, and that is the pin's
         reading rather than a choice. ``reject_conflicting_canonical_routes`` sends a
@@ -1188,15 +1328,15 @@ class SelectorResolution:
         none to select, so there is no other mechanism by which that step produces that
         code on that fixture.
 
-        Compared with ``==`` on tuples of the pinned declaration models, which compares
-        their field VALUES. Every selection lists its entries in the product's declaration
-        order, so equal sets are equal tuples, and the empty selection equals only another
-        empty one.
+        Compared as SETS by :func:`_same_selection`, with ``==`` on the pinned declaration
+        models, which compares their field VALUES; order and repetition within an arm do not
+        matter, and ``None`` (a route that selected nothing) equals only ``None``.
         """
-        if self.unresolved is not None or len(self.routes) < 2:
+        arms = self._arm_selections
+        if self.unresolved is not None or len(arms) < 2:
             return False
-        winner = self.routes[0][1].selection
-        return any(verdict.selection != winner for _, verdict in self.routes[1:])
+        first = arms[0]
+        return any(not _same_selection(arm, first) for arm in arms[1:])
 
     @property
     def unsatisfied(self) -> FormatSatisfaction | None:
@@ -1212,8 +1352,54 @@ class SelectorResolution:
         return next((verdict for _, verdict in self.routes if not verdict), None)
 
     @property
+    def uncovered(self) -> FormatSatisfaction | None:
+        """The first included placement the selected declaration set does not cover, or None.
+
+        ``docs/creative/formats.mdx`` § Matching and satisfaction: "For a product with
+        multiple included placements, the selected format set must cover every placement. A
+        seller must reject or refine a package with an uncovered placement; it must not
+        silently remove inventory." This seller rejects. ``core/product.json`` restates it:
+        "uncovered inventory MUST be rejected or refined, never silently omitted".
+
+        Asked only once every route resolved, agreed and selected a declaration, because
+        coverage is a property of the SELECTED set. A package naming no selector "selects
+        all formats supported by the product" (``media-buy/package-request.json``), and the
+        product set is every placement's upper bound, so it is covered by construction. A
+        product with one included placement is held to the same rule: that placement is all
+        of the package's inventory.
+
+        The SET is the winning arm's, because the pin states the rule over a set: each
+        included placement must accept at least one declaration the arm selected. Two refs
+        selecting the two options of a product whose placements accept one each cover both.
+
+        Read off :attr:`_winning_arm` and never through :attr:`selection`, which asks
+        ``bool(self)`` and so this property: the winning arm is the first, as there.
+        """
+        if not self.routes or not self.placements:
+            return None
+        if self.unresolved is not None or self.conflicting or self.unsatisfied is not None:
+            return None
+        chosen = self._winning_arm
+        if not chosen:
+            return None
+        labels = sorted(_declaration_label(d) for d in chosen)
+        for layer in self.placements:
+            if not any(_placement_accepts(d, accepted) for d in chosen for accepted in layer.declarations):
+                return FormatSatisfaction(
+                    satisfied=False,
+                    refusal=FormatRefusal.PLACEMENT_UNCOVERED,
+                    # One value when the arm selected one; a set has no single offending
+                    # value, and the field pointer already names the arm.
+                    rejected_value=labels[0] if len(labels) == 1 else None,
+                    accepted_values=tuple(sorted(_declaration_label(d) for d in layer.declarations)),
+                    summary=f"selected formats {labels!r} do not cover included placement {layer.placement_id!r}",
+                    field=self.routes[0][0].field,
+                )
+        return None
+
+    @property
     def refused(self) -> FormatSatisfaction | None:
-        """The verdict to raise ``UNSUPPORTED_FEATURE`` for, or None. Both lanes, in order.
+        """The verdict to raise ``UNSUPPORTED_FEATURE`` for, or None. Every lane, in order.
 
         ``is not None`` and NEVER ``self.unresolved or self.unsatisfied``, because a
         refusing :class:`FormatSatisfaction` is FALSY by design -- its ``__bool__`` is
@@ -1224,19 +1410,23 @@ class SelectorResolution:
         resolving option ref were both ACCEPTED.
         """
         unresolved = self.unresolved
-        return unresolved if unresolved is not None else self.unsatisfied
+        if unresolved is not None:
+            return unresolved
+        unsatisfied = self.unsatisfied
+        return unsatisfied if unsatisfied is not None else self.uncovered
 
     @property
-    def selected(self) -> LibraryFormatDeclaration | None:
-        """Step (4): the declaration the WINNING route selected, once the selector is accepted.
+    def selection(self) -> tuple[LibraryFormatDeclaration, ...]:
+        """Step (4): the declarations the WINNING arm selected, once the selector is accepted.
 
-        The first route is the winner because :func:`selector_routes` builds them in the
-        pin's precedence order. ``None`` where the selector imposes nothing -- a package
+        The first arm is the winner because :func:`selector_routes` builds the routes in the
+        pin's precedence order. A set, because an array arm selects one entry per reference
+        (:attr:`_arm_selections`). Empty where the selector imposes nothing -- a package
         naming no format, or a product that narrows neither arm -- which is a real answer
         and not a missing one: there is no canonical declaration to record for such a
         package.
         """
-        return self.routes[0][1].declaration if self.routes and bool(self) else None
+        return self._winning_arm if bool(self) else ()
 
     def __bool__(self) -> bool:
         return self.refused is None and not self.conflicting
@@ -1247,6 +1437,7 @@ def resolve_routes(
     declarations: Any,
     *,
     legacy_catalog: Iterable[Any] | None = None,
+    placements: Iterable[Any] | None = None,
 ) -> SelectorResolution:
     """Resolve EVERY route independently. :class:`SelectorResolution` carries the verdict.
 
@@ -1255,6 +1446,11 @@ def resolve_routes(
     storyboard's step 15 answering success -- a package carrying a resolving option ref
     beside an UNPROJECTABLE legacy id was accepted on the option route and the legacy
     route was never resolved at all.
+
+    *placements* is the product's stored ``placements`` column, for the coverage rule
+    (:attr:`SelectorResolution.uncovered`). Read on the canonical lane only: a placement's
+    inline narrowing is a set of canonical declarations, and the deprecated lane selects
+    none to compare it with.
     """
     from src.core.format_resolver import product_format_references
 
@@ -1263,7 +1459,7 @@ def resolve_routes(
     if not declared and not legacy_references:
         # The product declares neither arm, so it imposes no restriction -- the reading all
         # four replaced gates already applied to an empty ``format_ids``. No route is
-        # resolved, which is also what makes ``selected`` None: there is no declaration.
+        # resolved, which is also what makes ``selection`` empty: there is no declaration.
         return SelectorResolution()
 
     # ``routes`` may be empty -- a package naming no format at all. Which arm it SHOULD
@@ -1282,7 +1478,8 @@ def resolve_routes(
                 ),
             )
             for route in routes
-        )
+        ),
+        placements=included_placement_layers(placements) if declared else (),
     )
 
 
@@ -1340,7 +1537,7 @@ def satisfies(
     refused = resolution.refused
     if refused is not None:
         return refused
-    return FormatSatisfaction(satisfied=True, selection=resolution.routes[0][1].selection if resolution.routes else ())
+    return FormatSatisfaction(satisfied=True, selection=resolution.selection)
 
 
 def canonical_refusal(

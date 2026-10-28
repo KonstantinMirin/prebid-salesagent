@@ -84,6 +84,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | fixed_300x250        | complete_300x250               |
       | text_limited_300x250 | exact_300x250                  |
       | duration_range       | exact_duration_in_range        |
+      | exact_duration       | exact_duration_in_range        |
       | fixed_300x250        | product_option_ref             |
       | fixed_300x250        | legacy_display_300x250         |
       | duration_range       | contained_range                |
@@ -171,6 +172,11 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | fixed_300x250        | legacy_unsized_template          | format_ids         |
       | fixed_300x250        | foreign_agent_display_300x250    | format_ids         |
       | fixed_300x250        | malformed_agent_display_300x250  | format_ids         |
+      | duration_range       | range_over_upper_bound           | format_kind        |
+      | exact_duration       | exact_duration_mismatched        | format_kind        |
+      | exact_duration       | contained_range                  | format_kind        |
+      | required_slots       | slot_wrong_asset_type            | format_kind        |
+      | publisher_300        | wrong_publisher_option_id        | format_option_refs |
 
     # legacy_unsized_template and foreign_agent_display_300x250 are legacy references that
     # normalize to the kind and nothing else:
@@ -218,6 +224,24 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # product that bounds its duration -- canonical-formats.mdx's own example row,
     # "video_hosted with no duration ... Reject for this product". exact_duration_outside_range
     # pairs with exact_duration_in_range above: the same key, inside and outside the range.
+    #
+    # THE FIVE ROWS AFTER exact_duration_outside_range each grade one half of a rule that a
+    # sibling row grades only together with another half, so a seller checking one half
+    # passes the sibling and reddens here:
+    #   - range_over_upper_bound mirrors overlapping_range on the HIGH endpoint ([10000,
+    #     90000] against [5000, 60000]); containment tests both ends.
+    #   - exact_duration_mismatched is "Exact ... durations must match" against a
+    #     duration_ms_exact declaration, paired with exact_duration | exact_duration_in_range
+    #     in the accept outline (30000 against 30000 accepted, 15000 refused).
+    #   - exact_duration | contained_range: a RANGE claim does not satisfy an exact duration,
+    #     because a 10s creative meets the claim and not the product. duration_ms_exact is
+    #     one of the four constraints a selector MUST state (canonical-formats.mdx).
+    #   - slot_wrong_asset_type offers the required group video_main as an image. slot_missing
+    #     differs in the group AND the type, so only this row grades "with compatible asset
+    #     types" by itself.
+    #   - wrong_publisher_option_id names the RIGHT publisher_domain and an option id it does
+    #     not publish; wrong_publisher_domain is the other half of "must match both
+    #     publisher_domain and format_option_id".
     #
     # mismatched_160x600 is M2's refusal half: a selector that satisfies NEITHER of the two
     # image declarations the product publishes. Without it, the two M2 accept rows above are
@@ -348,6 +372,93 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # its own, so the refusal is the option ref's and not the legacy id's.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_option_refs
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json
+
+  # ── Coverage: the selected format must cover every INCLUDED placement ─────────────────
+  #
+  # docs/creative/formats.mdx § Matching and satisfaction: "For a product with multiple
+  # included placements, the selected format set must cover every placement. A seller must
+  # reject or refine a package with an uncovered placement; it must not silently remove
+  # inventory." core/product.json's format_options description restates it ("uncovered
+  # inventory MUST be rejected or refined, never silently omitted") and says how a
+  # placement's accepted set is computed: the intersection of the product format_options
+  # and the placement's inline format_options, matched by format_option_id. This seller
+  # rejects, with the satisfaction refusal: UNSUPPORTED_FEATURE naming the arm whose
+  # selection left the placement uncovered.
+  #
+  # Every row stores two_image_options (image 300x250 and image 728x90) and differs only in
+  # the stored placements and the selector. `split` has two INCLUDED placements, one
+  # accepting each option, so neither option covers both. `split_leaderboard_targetable`
+  # is `split` with the 728x90 placement TARGETABLE: core/placement.json makes an included
+  # placement "fixed product inventory" that every package buys, while a targetable one is
+  # bought only through placement_selection, so that row grades the mode and nothing else.
+  # `shared` has both included placements accepting 300x250.
+  #
+  # A package with NO selector is accepted against `split`: media-buy/package-request.json,
+  # "omitting both selects all formats supported by the product", and the product set
+  # covers both placements.
+  #
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/formats.mdx
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/mode/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/format_options/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_option_refs/description
+
+  @T-UC-FORMAT-SATISFACTION-placements-covered @format_satisfaction @requires_db
+  Scenario Outline: a selected format that covers every included placement is accepted - <declaration> <placements> <selector>
+    Given the seller declares canonical format options "<declaration>" across placements "<placements>"
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+    Examples:
+      | declaration       | placements                   | selector           |
+      | two_image_options | shared                       | product_option_ref |
+      | two_image_options | split_leaderboard_targetable | product_option_ref |
+      | two_image_options | split                        | no_selector        |
+      | two_image_options | split                        | both_option_refs   |
+      | two_image_options | shared_inline                | product_option_ref |
+      | duration_range    | narrowed_inline              | contained_range    |
+
+    # both_option_refs is the spec-valid way to cover `split` explicitly: two
+    # format_option_refs on ONE arm select a SET (package-request.json: "require each route
+    # to select the same product option set"), and core/product.json lets that set be a
+    # union: "Distinct per-placement creatives MAY use the union, but the selected creative
+    # set MUST cover every included placement". It pairs with split | product_option_ref
+    # below, which differs only in the second ref.
+    #
+    # The two *_inline rows state a placement's inline declaration WITHOUT a
+    # format_option_id, so it is matched by the third rule of core/product.json: "match
+    # declarations with the same format_kind whose narrower parameters satisfy the broader
+    # declaration". The placement is the narrower side (core/placement.json: its
+    # declarations "MUST NOT introduce a format outside that product upper bound").
+    # narrowed_inline narrows the product's duration_ms_range [5000, 60000] to [5000,
+    # 30000]: a seller that grades the product declaration against the placement's refuses
+    # it. shared_inline restates 300x250 and pairs with split_inline below, which states
+    # 728x90 instead.
+
+  @T-UC-FORMAT-SATISFACTION-placements-uncovered @format_satisfaction @requires_db
+  Scenario Outline: a selected format that leaves an included placement uncovered is refused - <placements> <selector>
+    Given the seller declares canonical format options "two_image_options" across placements "<placements>"
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "<arm>" selector
+
+    Examples:
+      | placements   | selector           | arm                |
+      | split        | product_option_ref | format_option_refs |
+      | split        | exact_300x250      | format_kind        |
+      | split_inline | product_option_ref | format_option_refs |
+
+    # Each refusal row has an accept row that differs in ONE thing: `shared` (the second
+    # placement also accepts 300x250), `split_leaderboard_targetable` (the second placement
+    # is not included), split | both_option_refs (the selection adds the 728x90 option) and
+    # shared_inline (the id-less inline declaration states 300x250, not 728x90). A seller
+    # that ignored placements accepts every refusal row; one that refused every
+    # multi-placement product reddens the accept rows. split_inline is the refusal half of
+    # the format_kind-plus-params match: a seller matching an id-less declaration by kind
+    # alone accepts it. The first two selectors select the same 300x250 declaration by
+    # different routes, so the refusal is about the selected declaration and not the route
+    # that named it.
 
   # ── The CREATIVE side of the same function ────────────────────────────────────────────
   #
@@ -759,11 +870,11 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   # media-buy/package-request.json states its four receiver steps with no mode condition
   # either.
   #
-  # THESE SCENARIOS ARE RED ON PURPOSE. They are the instrument three beads have been
-  # missing, and each one is red for the obligation it names rather than for a reason it
-  # inherits: salesagent-gz86t (the gate does not run), salesagent-1dcfo (so no snapshot is
-  # recorded), salesagent-zoo82 (so C8 has nothing to read). They land WITHOUT the
-  # behaviour change that greens them, which is a different commit and a different scope.
+  # The ordering has since been fixed: the selector gate (_resolve_package_selectors) runs
+  # ABOVE both approval branches, so these scenarios grade that it stays there. They were
+  # landed red first, as the instrument for salesagent-gz86t (the gate did not run),
+  # salesagent-1dcfo (so no snapshot was recorded) and salesagent-zoo82 (so C8 had nothing
+  # to read).
   #
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/formats_to_provide/description
@@ -789,7 +900,6 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # same tool — the selectors differ in exactly whether the product accepts them, which
     # is the dimension being judged. A seller that refused every selector on the approval
     # path would redden this row; one that accepts every selector reddens the row above.
-    # This row passes today; the one above does not.
 
   @T-UC-FORMAT-SATISFACTION-approval-snapshot-recorded @format_satisfaction @requires_db
   Scenario: a parked buy records the declaration its selector selected

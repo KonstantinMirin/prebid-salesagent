@@ -137,6 +137,15 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "params": {"duration_ms_range": [5000, 60000]},
         }
     ],
+    # An EXACT duration, the other half of "Exact dimensions and durations must match"
+    # (formats.mdx). ``duration_ms_exact`` is one of the four constraints a claim must state.
+    "exact_duration": [
+        {
+            "format_kind": "video_hosted",
+            "format_option_id": "satisfaction_video_exact",
+            "params": {"duration_ms_exact": 30000},
+        }
+    ],
     # A REQUIRED SLOT, which formats.mdx grades on both the group and the asset type.
     "required_slots": [
         {
@@ -210,10 +219,79 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
     ],
 }
 
+#: The two declarations ``two_image_options`` publishes, named so a placement can narrow
+#: to one of them by restating it inline -- ``core/placement.json``'s ``format_options``
+#: items are whole declarations, matched to the product's by ``format_option_id``.
+_MREC, _LEADERBOARD = _DECLARATIONS["two_image_options"]
+
+
+def _placement(placement_id: str, mode: str, *accepted: dict[str, Any]) -> dict[str, Any]:
+    """One stored ``core/placement.json`` document: a seller-inline placement narrowing inline."""
+    return {
+        "kind": "seller_inline",
+        "placement_id": placement_id,
+        "name": placement_id,
+        "mode": mode,
+        "format_options": list(accepted),
+    }
+
+
+#: What the seller STORES in ``placements``, per name, for the coverage scenarios. Every
+#: row but ``narrowed_inline`` is stored beside ``two_image_options``, and the rows differ
+#: only in which option each placement accepts and whether it is included.
+_PLACEMENTS: dict[str, list[dict[str, Any]]] = {
+    # Two INCLUDED placements that each accept a different option: no single option covers
+    # both, so a package selecting one leaves the other placement's inventory uncovered.
+    "split": [
+        _placement("satisfaction_mrec_slot", "included", _MREC),
+        _placement("satisfaction_leaderboard_slot", "included", _LEADERBOARD),
+    ],
+    # ``split`` with the leaderboard placement TARGETABLE instead of included: a package
+    # does not buy it unless it selects it, so the 300x250 option covers what is bought.
+    "split_leaderboard_targetable": [
+        _placement("satisfaction_mrec_slot", "included", _MREC),
+        _placement("satisfaction_leaderboard_slot", "targetable", _LEADERBOARD),
+    ],
+    # Two included placements that BOTH accept the 300x250 option.
+    "shared": [
+        _placement("satisfaction_mrec_slot", "included", _MREC),
+        _placement("satisfaction_leaderboard_slot", "included", _MREC, _LEADERBOARD),
+    ],
+    # The ID-LESS inline declarations: no ``format_option_id``, so a placement declaration
+    # is matched to the product's by kind and params (``core/product.json``'s third
+    # matching rule). ``shared_inline``'s second placement restates 300x250 and accepts the
+    # mrec option; ``split_inline``'s states 728x90 and does not.
+    "shared_inline": [
+        _placement("satisfaction_mrec_slot", "included", _MREC),
+        _placement(
+            "satisfaction_inline_slot", "included", {"format_kind": "image", "params": {"width": 300, "height": 250}}
+        ),
+    ],
+    "split_inline": [
+        _placement("satisfaction_mrec_slot", "included", _MREC),
+        _placement(
+            "satisfaction_inline_slot", "included", {"format_kind": "image", "params": {"width": 728, "height": 90}}
+        ),
+    ],
+    # Stored beside ``duration_range`` (video_hosted, ``duration_ms_range`` [5000, 60000]):
+    # one included placement NARROWING it to [5000, 30000] with no ``format_option_id``. The
+    # placement is the narrower side, so it matches; graded the other way round it does not.
+    "narrowed_inline": [
+        _placement(
+            "satisfaction_short_video_slot",
+            "included",
+            {"format_kind": "video_hosted", "params": {"duration_ms_range": [5000, 30000]}},
+        ),
+    ],
+}
+
 #: What the buyer SENDS on its package, per selector name. The members are
 #: ``media-buy/package-request.json``'s three format selectors.
 _SELECTORS: dict[str, dict[str, Any]] = {
     # --- selectors that satisfy ---
+    # NO selector at all: "omitting both selects all formats supported by the product"
+    # (media-buy/package-request.json).
+    "no_selector": {},
     # States the fixed size and nothing else, so every other constraint is inherited.
     "exact_300x250": {"format_kind": "image", "params": {"width": 300, "height": 250}},
     # The pin's create_media_buy_with_direct_canonical_selector: every param the product
@@ -223,6 +301,14 @@ _SELECTORS: dict[str, dict[str, Any]] = {
         "params": {"width": 300, "height": 250, "max_file_size_kb": 200, "image_formats": ["jpg", "png"]},
     },
     "product_option_ref": {"format_option_refs": [{"scope": "product", "format_option_id": _PRODUCT_OPTION_ID}]},
+    # BOTH of ``two_image_options``'s product-local options on one arm: a SET, which is how a
+    # buyer covers two included placements that accept one option each.
+    "both_option_refs": {
+        "format_option_refs": [
+            {"scope": "product", "format_option_id": _PRODUCT_OPTION_ID},
+            {"scope": "product", "format_option_id": _LEADERBOARD["format_option_id"]},
+        ]
+    },
     # The legacy arm ALONE, which is what the storyboard's step 10
     # (create_media_buy_with_legacy_mrec_format) sends: format_ids and no format_kind, no
     # params. This row used to carry ``"format_kind": "image"`` as well, which the old
@@ -308,6 +394,11 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     "unpublished_video_kind": {"format_kind": "video_hosted", "params": {"width": 300, "height": 250}},
     "unpublished_option_ref": {"format_option_refs": [{"scope": "product", "format_option_id": "no_such_option"}]},
     "overlapping_range": {"format_kind": "video_hosted", "params": {"duration_ms_range": [1000, 30000]}},
+    # The UPPER-bound mirror of ``overlapping_range``: the low end is inside the accepted
+    # window and the high end is past it, so a seller testing one endpoint passes one row.
+    "range_over_upper_bound": {"format_kind": "video_hosted", "params": {"duration_ms_range": [10000, 90000]}},
+    # An exact duration that is not the declared exact duration.
+    "exact_duration_mismatched": {"format_kind": "video_hosted", "params": {"duration_ms_exact": 15000}},
     # The exact-duration row's refusal half: the same key, a value outside the range.
     "exact_duration_outside_range": {"format_kind": "video_hosted", "params": {"duration_ms_exact": 90000}},
     # A duration range is one of the four constraints a selector MUST state, so silence
@@ -331,11 +422,23 @@ _SELECTORS: dict[str, dict[str, Any]] = {
         "format_kind": "video_hosted",
         "params": {"slots": [{"asset_group_id": "caption", "asset_type": "text"}]},
     },
+    # The required group, offered as the WRONG asset type. ``slot_missing`` differs in both
+    # halves, so only this row grades "with compatible asset types" on its own.
+    "slot_wrong_asset_type": {
+        "format_kind": "video_hosted",
+        "params": {"slots": [{"asset_group_id": "video_main", "asset_type": "image"}]},
+    },
     # The same option id under a DIFFERENT publisher domain: the second half of the
     # exact-publisher-claim rule.
     "wrong_publisher_domain": {
         "format_option_refs": [
             {"scope": "publisher", "publisher_domain": "other.example", "format_option_id": _PRODUCT_OPTION_ID}
+        ]
+    },
+    # The other half: the RIGHT publisher domain with an option id it does not publish.
+    "wrong_publisher_option_id": {
+        "format_option_refs": [
+            {"scope": "publisher", "publisher_domain": _PUBLISHER_DOMAIN, "format_option_id": "no_such_option"}
         ]
     },
     # Step 15, the ORDERING obligation: the option ref RESOLVES and the legacy id does not.
@@ -444,18 +547,25 @@ def given_tenant_for_create(ctx: dict) -> None:
     )
 
 
-def _store_declaring_product(ctx: dict, declaration: str, *, with_legacy_arm: bool) -> None:
+def _store_declaring_product(
+    ctx: dict, declaration: str, *, with_legacy_arm: bool, placements: str | None = None
+) -> None:
     """Store one product carrying *declaration*, with or without the deprecated arm.
+
+    *placements* names a :data:`_PLACEMENTS` row stored in the product's ``placements``
+    column; ``None`` stores none, which is every scenario but the coverage ones.
 
     ``with_legacy_arm=False`` stores a CANONICAL-ONLY product: ``format_ids`` NULL, which
     migration 08cd415b3d91 made representable. The product id carries the shape so two
     scenarios naming the same declaration cannot collide on one row.
     """
+    product_id = f"satisfaction_{declaration}" if with_legacy_arm else f"satisfaction_canonical_{declaration}"
     _store_product(
         ctx,
-        f"satisfaction_{declaration}" if with_legacy_arm else f"satisfaction_canonical_{declaration}",
+        f"{product_id}_{placements}" if placements else product_id,
         format_ids=list(_LEGACY_ARM) if with_legacy_arm else None,
         format_options=_DECLARATIONS[declaration],
+        placements=_PLACEMENTS[placements] if placements else None,
     )
 
 
@@ -465,6 +575,7 @@ def _store_product(
     *,
     format_ids: list[dict[str, Any]] | None,
     format_options: list[dict[str, Any]] | None,
+    placements: list[dict[str, Any]] | None = None,
 ) -> None:
     """Store one product with the given arms and point the buyer's package at it.
 
@@ -480,6 +591,7 @@ def _store_product(
         delivery_type="non_guaranteed",
         format_ids=format_ids,
         format_options=format_options,
+        placements=placements,
         property_tags=["all_inventory"],
     )
     ctx["default_pricing_option"] = PricingOptionFactory(
@@ -501,6 +613,16 @@ def given_declaration(ctx: dict, declaration: str) -> None:
     refusal is attributable to the rule rather than to an arm the product never declared.
     """
     _store_declaring_product(ctx, declaration, with_legacy_arm=True)
+
+
+@given(parsers.parse('the seller declares canonical format options "{declaration}" across placements "{placements}"'))
+def given_declaration_across_placements(ctx: dict, declaration: str, placements: str) -> None:
+    """Store the dual-arm product of :func:`given_declaration` with stored placements.
+
+    The placements are what the coverage rule reads: each is a stored ``core/placement.json``
+    document, and an included one may narrow the product's declarations inline.
+    """
+    _store_declaring_product(ctx, declaration, with_legacy_arm=True, placements=placements)
 
 
 @given(parsers.parse("the seller publishes only a deprecated format sized {width:d}x{height:d}"))
