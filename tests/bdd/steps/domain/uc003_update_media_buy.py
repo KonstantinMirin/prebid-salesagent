@@ -154,6 +154,7 @@ def _stored_package(ctx: dict, label: str) -> tuple[Any, dict[str, Any]]:
 
 
 @given("the Buyer owns an existing media buy")
+@given("the media buy exists in the seller catalog")
 def given_buyer_owns_media_buy(ctx: dict) -> None:
     """Verify the existing media buy is in ctx AND persisted in DB.
 
@@ -2723,12 +2724,6 @@ def given_approval_configuration(ctx: dict, boundary: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # Storyboard: unknown package on a known media buy (invalid_transitions)
 # ═══════════════════════════════════════════════════════════════════════
-
-
-@given("the media buy exists in the seller catalog")
-def given_media_buy_in_catalog(ctx: dict) -> None:
-    """The Background's buy is persisted for this tenant."""
-    _verify_existing_media_buy(ctx)
 
 
 @given("the buyer references a package_id that does not belong to the media buy")

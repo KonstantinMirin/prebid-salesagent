@@ -7,6 +7,7 @@ dispatch is the shared create When, and every Then reads the dispatched wire.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from adcp.types import ErrorCode
@@ -124,19 +125,30 @@ def _unknown_asset_type(asset: dict[str, Any]) -> None:
     asset["asset_type"] = "hologram"
 
 
-#: boundary point -> (malformation kind, why, how the slot value is broken)
-_ASSET_DISCRIMINATOR_BREAKS = {
+#: boundary point -> (how the slot value is broken, how the creative is marked)
+# Each entry breaks the typed asset in place and marks the creative it sits in. The
+# malformed(...) calls keep their kind and reason literal at the call site, which is what
+# makes each declaration auditable.
+_ASSET_DISCRIMINATOR_BREAKS: dict[str, tuple[Callable[[dict], None], Callable[[dict], Any]]] = {
     "asset slot value with missing asset_type discriminator": (
-        "absent_key",
-        "the asset slot value omits asset_type, the discriminator core/creative-asset.json's asset "
-        "union selects an asset schema by, so the pin refuses it at the boundary as INVALID_REQUEST",
         _drop_asset_type,
+        lambda creative: malformed(
+            "absent_key",
+            "the asset slot value omits asset_type, the discriminator core/creative-asset.json's asset "
+            "union selects an asset schema by, so the pin refuses it at the boundary as INVALID_REQUEST",
+            creative,
+            obligation=ErrorCode.INVALID_REQUEST,
+        ),
     ),
     "asset slot value with unknown asset_type value": (
-        "semantic",
-        "asset_type names no member of the asset union, so no arm can be selected and the pin "
-        "refuses it at the boundary as INVALID_REQUEST",
         _unknown_asset_type,
+        lambda creative: malformed(
+            "semantic",
+            "asset_type names no member of the asset union, so no arm can be selected and the pin "
+            "refuses it at the boundary as INVALID_REQUEST",
+            creative,
+            obligation=ErrorCode.INVALID_REQUEST,
+        ),
     ),
 }
 
@@ -146,14 +158,14 @@ def given_inline_creative_discriminator(ctx: dict, boundary_point: str) -> None:
     """One inline creative whose single asset carries a broken ``asset_type`` (BR-RULE-015)."""
     if boundary_point not in _ASSET_DISCRIMINATOR_BREAKS:
         raise ValueError(f"Unknown creative asset boundary point: {boundary_point!r}")
-    kind, why, breaks = _ASSET_DISCRIMINATOR_BREAKS[boundary_point]
+    breaks, mark = _ASSET_DISCRIMINATOR_BREAKS[boundary_point]
     _add_inline_creatives(ctx, count=1)
     pkg = ctx["request_kwargs"]["packages"][0]
     (creative,) = pkg["creatives"]
     typed = [asset for asset in creative["assets"].values() if isinstance(asset, dict) and "asset_type" in asset]
     assert len(typed) == 1, f"expected exactly one typed asset to break, got {list(creative['assets'])}"
     breaks(typed[0])
-    pkg["creatives"] = [malformed(kind, why, creative, obligation=ErrorCode.INVALID_REQUEST)]
+    pkg["creatives"] = [mark(creative)]
 
 
 # ═══════════════════════════════════════════════════════════════════════
