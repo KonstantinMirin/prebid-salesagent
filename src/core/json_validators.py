@@ -9,8 +9,6 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from adcp.types.domains.core.placement import Kind as LibraryPlacementKind
-from adcp.types.domains.core.placement import Mode as LibraryPlacementMode
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import validates
 
@@ -291,21 +289,18 @@ def validate_json_schema(value: Any, schema: type[BaseModel]) -> dict:
 # so a row that omits one is refused when it is written. Revision 89442a2be9e1 brought the
 # rows stored before this rule up to it.
 #
-# The enum values come from the pinned SDK, so the CHECK follows the pin. A kind missing from
-# ``_PLACEMENT_IDENTITY`` is refused: this seller has not been told what identifies it.
+# The CHECK grades presence and names no enum. A deployed CHECK keeps the values it was
+# created with while a create_all database follows the source, so a value set written here
+# would split the two on the next pin that grows Kind or Mode. The two kind literals are the
+# spec's allOf conditionals and gate only which identity member must be present.
 # Every element counts. The path keeps only the elements that satisfy it (``strict`` mode,
 # so a missing member is an error, which a filter reads as unknown and drops), and the array
 # passes only when nothing was dropped. A non-array document is refused; SQL NULL passes.
-_PLACEMENT_IDENTITY = {
-    LibraryPlacementKind.seller_inline: "name",
-    LibraryPlacementKind.publisher_ref: "publisher_domain",
-}
-_PLACEMENT_KIND_PATH = " || ".join(
-    f'(@.kind == "{kind.value}" && @.{member}.type() == "string")' for kind, member in _PLACEMENT_IDENTITY.items()
-)
-_PLACEMENT_MODE_PATH = " || ".join(f'@.mode == "{mode.value}"' for mode in LibraryPlacementMode)
 _EXPLICIT_PLACEMENT_PATH = (
-    f'strict $[*] ? (@.placement_id.type() == "string" && ({_PLACEMENT_KIND_PATH}) && ({_PLACEMENT_MODE_PATH}))'
+    'strict $[*] ? (@.placement_id.type() == "string" && @.kind.type() == "string"'
+    ' && @.mode.type() == "string"'
+    ' && (@.kind != "seller_inline" || @.name.type() == "string")'
+    ' && (@.kind != "publisher_ref" || @.publisher_domain.type() == "string"))'
 )
 PLACEMENTS_ARE_EXPLICIT_SQL = (
     "CASE WHEN jsonb_typeof(placements) = 'array' THEN "

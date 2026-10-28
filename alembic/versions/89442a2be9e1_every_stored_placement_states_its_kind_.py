@@ -17,8 +17,8 @@ UPGRADE, in three steps:
    ``get_products`` serves every product the same before and after.
 2. Any row that still fails the CHECK stops the upgrade, named. That is a placement the read
    path already refused (no ``placement_id`` and no ``name``, an element that is not an
-   object, a ``kind`` or ``mode`` outside the pinned enums): there is no value the wire
-   served to write, and inventing one is not this migration's decision.
+   object, a document that is not an array): there is no value the wire served to write, and
+   inventing one is not this migration's decision.
 3. ``ck_products_placements_explicit`` refuses every later write that omits one of them
    (``src.core.json_validators.PLACEMENTS_ARE_EXPLICIT_SQL``, which the ``Product`` model
    declares too).
@@ -91,8 +91,8 @@ def upgrade() -> None:
         ),
         remedy=(
             "get_products already refused these rows (a placement with neither placement_id nor name, an "
-            "element that is not an object, or a kind or mode outside the pinned enums), so there is no "
-            "served value to write. Repair or remove each placement with direct SQL, then re-run this migration."
+            "element that is not an object, or a document that is not an array), so there is no served value "
+            "to write. Repair or remove each placement with direct SQL, then re-run this migration."
         ),
     )
     op.create_check_constraint(PLACEMENTS_ARE_EXPLICIT_CHECK, "products", PLACEMENTS_ARE_EXPLICIT_SQL)

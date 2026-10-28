@@ -140,7 +140,6 @@ def test_the_upgrade_writes_what_the_wire_served(migration_db):
     [
         ([{"description": "neither placement_id nor name"}], "an unidentifiable placement"),
         (["homepage_atf"], "an element that is not an object"),
-        ([{"placement_id": "p", "name": "P", "mode": "sometimes"}], "a mode outside the enum"),
         ({"placement_id": "p"}, "a document that is not an array"),
     ],
 )

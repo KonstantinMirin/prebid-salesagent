@@ -147,8 +147,6 @@ def test_stored_placements_are_served_as_stored_on_all_transports(placement_prod
         ({"kind": "seller_inline", "name": "P", "mode": "targetable"}, "no placement_id"),
         ({"kind": "seller_inline", "placement_id": "p", "mode": "targetable"}, "seller_inline without name"),
         ({"kind": "publisher_ref", "placement_id": "p", "mode": "targetable"}, "publisher_ref without domain"),
-        ({"kind": "seller_inline", "placement_id": "p", "name": "P", "mode": "sometimes"}, "mode outside the enum"),
-        ({"kind": "partner", "placement_id": "p", "name": "P", "mode": "targetable"}, "kind outside the enum"),
     ],
 )
 def test_a_placement_omitting_a_required_member_is_refused_when_written(integration_db, placement, why):
