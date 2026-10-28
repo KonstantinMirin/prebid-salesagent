@@ -269,7 +269,7 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 #   - targeting granularity: no per-tenant surface exists and none is being added.
 #     The three rows below record that.
 
-# --- upstream adcp#7338 on the live catalog (1) ---
+# --- upstream adcp#7338 on the live catalog (0 — BLOCK GRADUATED) ---
 # Added 2026-09-13 when @T-UC-005-main's Given moved from minted fmt_N ids to three
 # reference-catalog formats (the tag-level strict xfail that parked all four transports
 # is gone; in-process the scenario now grades POST-S1/S2 for real). Over e2e_rest the
@@ -348,7 +348,16 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # schema filename while ledgered for the asset union. Re-point it at the missing `audio`
 # category (or seed the category) rather than graduating it; #7338 is no longer what holds
 # it here.
-tests/bdd/test_uc005_discover_creative_formats.py::test_discover_full_format_catalog[e2e_rest]
+#
+# Graduated: the row above this note, test_discover_full_format_catalog[e2e_rest]. The
+# re-point this block asked for was right about the defect and wrong about where it lived:
+# innet_281026_1316 records the failure as AttributeError: 'Format' object has no attribute
+# 'type', raised by then_all_formats' e2e branch, which compared display/video/audio
+# categories read off a field core/format.json has not declared since the 3.0 major. No
+# category can be seeded for it. The Then now asks the env what its registry serves on
+# each transport (CreativeFormatsEnv.served_registry_formats -- the whole reference
+# catalog over e2e) and checks total_count, membership and, on a single page, identity.
+# Not yet measured in-network: the next bdd-in-network run grades it.
 
 # --- UC-010 targeting granularity has no per-tenant surface (3) ---
 # Added 2026-09-15. These three rows configure a targeting SHAPE per tenant --

@@ -106,7 +106,11 @@ _DUPLICATE_THRESHOLD = 2
 # unambiguously. The plausible source is the deletion of four dead `type`-filter When steps
 # and the two Givens that seeded only the deleted outlines, but that was not measured, so it
 # is recorded as a guess and not as a fact.
-_DUPLICATE_GROUP_BASELINE = 20
+#
+# 20 -> 19: the uc003 "should NOT contain an \"errors\" field" Then and its unregistered
+# then_media_buy.py twin ("should NOT have ...") shared a body. The twin's sentence is now a
+# second decorator on the uc003 function, so the group is gone rather than merged.
+_DUPLICATE_GROUP_BASELINE = 19
 
 # Steps exempt from the 3+ identical-body scan (load-bearing: each suppresses a
 # cluster that would otherwise fail test_no_excessive_duplicate_step_bodies).
@@ -137,7 +141,9 @@ _ALLOWED_DUPLICATES: set[str] = set()
 # arm exists for the case where they do NOT, because a group that loses members without
 # disappearing is invisible to the group count. Neither number is hand-reasoned: both are what
 # the scan reports on this tree, and the guard's equality arm fails if either drifts.
-_DUPLICATE_MEMBER_BASELINE = 41
+#
+# 41 -> 39: the two members of the "errors" field group recorded at the group baseline.
+_DUPLICATE_MEMBER_BASELINE = 39
 
 
 def _is_step_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:

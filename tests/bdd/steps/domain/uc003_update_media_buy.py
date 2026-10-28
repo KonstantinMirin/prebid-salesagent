@@ -15,13 +15,28 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload, wire_absent, wire_dict
+from tests.bdd.steps._outcome_helpers import (
+    WIRE_MISSING,
+    payload_or_none,
+    require_payload,
+    wire_absent,
+    wire_dict,
+    wire_entry,
+    wire_field,
+    wire_lookup,
+)
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic._table import as_bool, drop_header_if
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
 from tests.factories.mint import mint
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
+
+#: The package budget an update scenario asks for. Deliberately NOT the 5000 the
+#: Background's package is seeded with (``_setup_existing_media_buy``): an update to the
+#: seeded value leaves the row unchanged whether or not the seller wrote it, so every
+#: persistence assertion would hold vacuously.
+_UPDATED_BUDGET = 7500.0
 
 # ═══════════════════════════════════════════════════════════════════════
 # Label mapping — Gherkin package labels → real package_ids
@@ -60,6 +75,77 @@ def _resolve_media_buy_id(ctx: dict, label: str) -> str:
     matches the real ID (e.g. when the conftest doesn't set media_buy_labels).
     """
     return ctx.get("media_buy_labels", {}).get(label, label)
+
+
+def _existing_media_buy(ctx: dict, label: str | None = None) -> Any:
+    """The Background's media buy, checked against *label* when a step names one.
+
+    A sentence that names the buy (``the media buy "mb_existing" ...``) and one that does
+    not (``the media buy ...``) mean the same row; a label that resolves to some other id
+    is a scenario naming a buy the env never seeded, and acting on the Background's buy
+    instead would grade the wrong row.
+    """
+    mb = ctx.get("existing_media_buy")
+    assert mb is not None, "No existing_media_buy in ctx — the route's seed builds it"
+    if label is not None:
+        resolved = _resolve_media_buy_id(ctx, label)
+        assert resolved == mb.media_buy_id, (
+            f"step names media buy {label!r} (resolves to {resolved!r}), but the seeded buy is {mb.media_buy_id!r}"
+        )
+    return mb
+
+
+def _ensure_principal(ctx: dict, principal_id: str) -> None:
+    """Create *principal_id* in the scenario's tenant unless the row already exists.
+
+    Read first, not guessed from ``ctx["principal"]``: a second step naming the same
+    principal (the ownership outlines name it as owner AND as caller) would otherwise
+    insert it twice.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import Principal
+    from tests.factories import PrincipalFactory
+
+    tenant = ctx["tenant"]
+    with db_session(ctx) as session:
+        exists = session.scalars(
+            select(Principal).filter_by(tenant_id=tenant.tenant_id, principal_id=principal_id)
+        ).first()
+    if exists is None:
+        PrincipalFactory(principal_id=principal_id, tenant=tenant)
+        ctx["env"]._commit_factory_data()
+
+
+def _invoice_recipient(legal_name: str) -> dict[str, str]:
+    """A BusinessEntity naming only *legal_name*, the one member core/business-entity.json requires."""
+    return {"legal_name": legal_name}
+
+
+def _expand_length_placeholder(value: str) -> str:
+    """Expand ``<N character string>`` / ``<N char string>`` to N characters; else return *value*."""
+    import re
+
+    match = re.fullmatch(r"<(\d+)\s*char(?:acter)?\s*string>", value.strip())
+    return "x" * int(match.group(1)) if match else value
+
+
+def _stored_package(ctx: dict, label: str) -> tuple[Any, dict[str, Any]]:
+    """``(budget, package_config)`` of the persisted package *label*, read through the repository.
+
+    For the Thens whose claim is what the seller RECORDED: a response can echo a value the
+    seller never wrote, so those read the row. Read through ``MediaBuyUoW`` (tenant-scoped,
+    and pointed at the live server's database on e2e_rest) rather than the env's session.
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    mb = _existing_media_buy(ctx)
+    package_id = _resolve_package_id(ctx, label)
+    with MediaBuyUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.media_buys is not None
+        row = uow.media_buys.get_package(mb.media_buy_id, package_id)
+        assert row is not None, f"no persisted package {package_id!r} (label {label!r}) on {mb.media_buy_id!r}"
+        return row.budget, dict(row.package_config or {})
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -236,7 +322,6 @@ def given_existing_mb_start_time(ctx: dict, start_time: str) -> None:
 def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> None:
     """Build update request kwargs from a data table."""
     import json
-    import re
 
     _supported_fields = {
         "media_buy_id",
@@ -278,14 +363,10 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         elif field == "packages":
             kwargs["packages"] = json.loads(value)
         elif field == "idempotency_key":
-            # Expand <N character string> placeholders (e.g. "<256 character string>")
-            length_match = re.match(r"<(\d+)\s*char(?:acter)?\s*string>", value)
-            kwargs["idempotency_key"] = "x" * int(length_match.group(1)) if length_match else value
+            kwargs["idempotency_key"] = _expand_length_placeholder(value)
         elif field == "invoice_recipient":
-            # BusinessEntity requires legal_name; the override is rejected by production
-            # only when authorized — that authorization check is a production gap
-            # (#1417), so the scenario is xfailed (T-UC-003-ext-t).
-            kwargs["invoice_recipient"] = {"legal_name": value}
+            # The authorization check is a production gap (#1417); T-UC-003-ext-t is xfailed.
+            kwargs["invoice_recipient"] = _invoice_recipient(value)
 
 
 @given(parsers.parse('the invoice_recipient "{recipient}" is not authorized for this account'))
@@ -938,6 +1019,34 @@ def then_response_has_media_buy_id(ctx: dict) -> None:
         )
 
 
+@then(parsers.parse('the response should contain media_buy_id "{label}"'))
+def then_response_has_media_buy_id_label(ctx: dict, label: str) -> None:
+    """Assert the WIRE media_buy_id is the id the Gherkin label names.
+
+    The label resolves to the seeded buy's real id; the value compared is the one the
+    buyer received, so an update that answered for some other buy fails here.
+    """
+    _assert_wire_field_equals(ctx, "media_buy_id", _resolve_media_buy_id(ctx, label))
+
+
+@then(parsers.parse("the package budget should be persisted as {budget:d}"))
+def then_package_budget_persisted(ctx: dict, budget: int) -> None:
+    """Assert the updated package's STORED budget is *budget*.
+
+    Persistence is the claim (BR-RULE-020: adapter success persists the change), and a
+    response can report a budget the seller never wrote, so the row is read. The package
+    is the one the update targeted, ``pkg_001``.
+
+    Moved here from ``generic/then_media_buy.py``, which is not a registered step module,
+    so the sentence had no live definition at all; that copy also looked the package up by
+    id alone, outside any tenant scope.
+    """
+    stored, _config = _stored_package(ctx, "pkg_001")
+    assert stored is not None and float(stored) == float(budget), (
+        f"Expected the stored package budget to be {budget}, got {stored!r}"
+    )
+
+
 @then("the response should contain implementation_date that is null")
 def then_implementation_date_null(ctx: dict) -> None:
     """Assert response has a null implementation_date (pending approval)."""
@@ -1118,6 +1227,7 @@ def then_response_has_sandbox(ctx: dict) -> None:
 
 
 @then('the response should NOT contain an "errors" field')
+@then('the response should NOT have an "errors" field')
 def then_no_errors_field(ctx: dict) -> None:
     """Assert the response does not contain an 'errors' field at all.
 
@@ -1318,23 +1428,12 @@ def given_idempotency_key(ctx: dict, value: str) -> None:
     Uses parsers.re instead of parsers.parse to match empty values
     (partition: empty_string where the value after 'set to' is empty).
     """
-    import re as re_mod
-
     kwargs = _ensure_update_defaults(ctx)
-    stripped = value.strip()
-    if stripped == "<not provided>":
+    if value.strip() == "<not provided>":
         kwargs["idempotency_key"] = OMIT_IDEMPOTENCY_KEY
         return
-
-    # Handle length placeholders: <N character string>, <N char string>, <N chars>
-    length_match = re_mod.match(r"<(\d+)\s*char(?:acter)?\s*string>", stripped)
-    if length_match:
-        n = int(length_match.group(1))
-        kwargs["idempotency_key"] = "x" * n
-        return
-
-    # Empty string or any other value — set as-is
-    kwargs["idempotency_key"] = value
+    # A length placeholder expands; an empty string or any other value is sent as-is.
+    kwargs["idempotency_key"] = _expand_length_placeholder(value)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1988,6 +2087,12 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
         r"(?!\d+ packages with valid)"
         r"(?!a reporting_webhook)"
         r"(?!a push_notification_config)"
+        r"(?!new_packages )"
+        r"(?!1 package update where )"
+        r"(?!1 package update containing )"
+        r"(?!a package update where )"
+        r"(?!1 package with budget update$)"
+        r"(?!an artifact_webhook)"
         r".+[^:])$"
     )
 )
@@ -2000,6 +2105,12 @@ def given_request_includes_fields(ctx: dict, update_fields: str) -> None:
     so those bind to their dedicated create/sync steps instead of this update catch-all.
     The negative lookahead excludes UC-002 package creation patterns (e.g. "2 packages with valid").
     The [^:] at the end ensures this step doesn't capture text ending with ':'.
+
+    The ``new_packages …``, ``1 package update where …``, ``1 package update containing …``
+    and ``a package update where …`` families, and ``1 package with budget update``, have
+    their own steps and are excluded here. Each used to bind HERE as well: the new_packages variants all sent the same single
+    package whatever the sentence said ("two complete package-requests", "an entry missing
+    product_id"), and the package-update families fell through to the ValueError below.
 
     Matched patterns from adapter-dispatch partition/boundary scenarios:
     - '1 package with budget update only'
@@ -2037,27 +2148,18 @@ def given_request_includes_fields(ctx: dict, update_fields: str) -> None:
         kwargs["paused"] = False
         kwargs["start_time"] = "2026-05-01T00:00:00Z"
         kwargs["end_time"] = "2026-07-01T00:00:00Z"
-    elif "new_packages" in stripped:
-        # A complete package-request added mid-flight. Production has no
-        # midflight-additions capability check (BR-RULE-217 -> UNSUPPORTED_FEATURE),
-        # so it accepts new_packages unhandled instead of rejecting — T-UC-003-ext-u
-        # is xfailed (#1417).
-        kwargs["new_packages"] = [
-            {
-                "product_id": "guaranteed_display",
-                "budget": 5000.0,
-                "pricing_option_id": "cpm_usd_fixed",
-            }
-        ]
     else:
         raise ValueError(f"Unknown update_fields pattern: {stripped}")
 
 
 @given(parsers.parse('the media buy exists with status "{status}"'))
-def given_media_buy_exists_with_status(ctx: dict, status: str) -> None:
-    """Ensure the existing media buy is in DB with the given status."""
-    mb = ctx.get("existing_media_buy")
-    assert mb is not None, "No existing_media_buy in ctx"
+@given(parsers.parse('the media buy "{label}" exists with status "{status}"'))
+def given_media_buy_exists_with_status(ctx: dict, status: str, label: str | None = None) -> None:
+    """Ensure the existing media buy is in DB with the given status.
+
+    The quoted form names the buy by its Gherkin label; it must be the Background's buy.
+    """
+    mb = _existing_media_buy(ctx, label)
     if mb.status != status:
         mb.status = status
         env = ctx["env"]
@@ -2066,9 +2168,13 @@ def given_media_buy_exists_with_status(ctx: dict, status: str) -> None:
 
 @given(parsers.parse("the request includes 1 package with budget update"))
 def given_request_with_budget_update(ctx: dict) -> None:
-    """Add a single package with a budget update to the request."""
+    """Add a single package with a budget update to the request.
+
+    The budget differs from the one the Background's package is seeded with, so the
+    persistence-timing outcomes can tell a written update from an untouched row.
+    """
     kwargs = _ensure_update_defaults(ctx)
-    kwargs["packages"] = [{"package_id": "pkg_001", "budget": 5000.0}]
+    kwargs["packages"] = [{"package_id": "pkg_001", "budget": _UPDATED_BUDGET}]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2204,66 +2310,39 @@ def given_adapter_result(ctx: dict, adapter_result: str) -> None:
 
 
 @given(parsers.parse("the media buy exists with owner {owner}"))
-def given_media_buy_with_owner(ctx: dict, owner: str) -> None:
+@given(parsers.parse('the media buy "{label}" exists with owner {owner}'))
+@given(parsers.parse('the media buy is owned by principal "{owner}"'))
+def given_media_buy_with_owner(ctx: dict, owner: str, label: str | None = None) -> None:
     """Ensure the existing media buy is owned by the specified principal.
 
     Creates the owner principal if needed and sets the media buy's principal_id.
     Step text claims the owner "exists" — we must guarantee the principal record
-    is present in the DB, not just set the foreign key.
+    is present in the DB, not just set the foreign key. The quoted form names the buy
+    by its Gherkin label; it must be the Background's buy.
     """
-    from tests.factories import PrincipalFactory
-
-    mb = ctx.get("existing_media_buy")
-    assert mb is not None, "No existing_media_buy in ctx"
-    assert "tenant" in ctx, "No tenant in ctx — owner principal requires a tenant"
-    env = ctx["env"]
-    # Ensure the owner principal exists in the DB.
-    # Step text says "exists with owner X" — the owner principal MUST exist.
-    # Always create if it differs from current ctx principal, or if no principal
-    # exists in ctx at all (the original code silently skipped this case).
+    mb = _existing_media_buy(ctx, label)
     owner_id = owner.strip()
-    existing_principal = ctx.get("principal")
-    if existing_principal is None or existing_principal.principal_id != owner_id:
-        PrincipalFactory(
-            principal_id=owner_id,
-            tenant=ctx["tenant"],
-        )
+    _ensure_principal(ctx, owner_id)
     mb.principal_id = owner_id
-    env._commit_factory_data()
-
-
-@given(parsers.parse('the media buy is owned by principal "{owner_id}"'))
-def given_media_buy_owned_by_principal(ctx: dict, owner_id: str) -> None:
-    """Set the existing media buy's owner to a different principal.
-
-    Creates the owning principal if needed, then updates the media buy.
-    """
-    from tests.factories import PrincipalFactory
-
-    env = ctx["env"]
-    tenant = ctx["tenant"]
-    mb = ctx.get("existing_media_buy")
-    assert mb is not None, "No existing_media_buy in ctx"
-    existing_principal = ctx.get("principal")
-    if existing_principal is None or existing_principal.principal_id != owner_id:
-        PrincipalFactory(
-            principal_id=owner_id,
-            tenant=tenant,
-        )
-    mb.principal_id = owner_id
-    env._commit_factory_data()
+    ctx["env"]._commit_factory_data()
 
 
 @given(parsers.parse("the authenticated principal is {principal}"))
 def given_authenticated_principal(ctx: dict, principal: str) -> None:
-    """Set the authenticated principal for the request via the shared helper.
+    """Authenticate as *principal*, a principal that exists and can reach the request's account.
 
-    ``authenticate_env_as`` owns the switch, the canonical ``ctx["principal_id"]``,
-    and the identity post-condition. Currently dormant — see the note on
-    ``given_buyer_authenticated_as`` / ``steps/generic/_auth.py``; retained on the
-    shared helper so the DRY convention holds when UC-003 is activated.
+    The ownership outlines vary ONE thing, who owns the buy against who sends the update,
+    so everything else must hold for both rows. A principal row that does not exist sends
+    no credential, and one without access to the account the request names is refused at
+    account resolution; either answers before ``_verify_principal`` runs, so the mismatch
+    row would see a refusal it is not about and the match row would fail. The principal is
+    created when absent and granted the env's default account, which is the account
+    ``ctx["account_ref"]`` names (``_seed_update_account_ref``).
     """
-    authenticate_env_as(ctx, principal.strip())
+    principal_id = principal.strip()
+    _ensure_principal(ctx, principal_id)
+    ctx["env"].setup_default_account(principal_id=principal_id)
+    authenticate_env_as(ctx, principal_id)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2504,4 +2583,519 @@ def then_response_valid_actions_array(ctx: dict) -> None:
     assert actions, (
         "valid_actions is empty; a buyer reads it to plan its next call, and an empty "
         "array is what an unnormalized status string yields"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Request builders — the bva-* outlines' base request and its subject
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Each bva outline starts from "a valid update_media_buy request for <label>" and then
+# changes ONE thing. The base must therefore already be a request the seller accepts, so
+# the row's own change is the only thing that can decide the outcome: a base carrying no
+# updatable field is refused as an empty update, and every rejection row would pass on
+# that refusal instead of the one it names.
+
+
+def _update_request_for(ctx: dict, label: str | None) -> dict[str, Any]:
+    """The base update bag: the named buy, the required fields, and one package budget change."""
+    _existing_media_buy(ctx, label)
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["packages"] = [{"package_id": "pkg_001", "budget": _UPDATED_BUDGET}]
+    return kwargs
+
+
+@given(parsers.parse('a valid update_media_buy request for "{label}"'))
+@given(parsers.parse('an update_media_buy request for "{label}"'))
+def given_update_request_for(ctx: dict, label: str) -> None:
+    """Build an accepted update of *label*: one package budget change, nothing else."""
+    _update_request_for(ctx, label)
+
+
+#: billing-eligibility rows -> the invoice_recipient the update overrides with. Only the
+#: invoice_recipient row remains (see the feature's correction note); the entity is one no
+#: Given links to the account, so the seller's authorization check must refuse it.
+_BILLING_CONDITIONS: dict[str, str] = {
+    "invoice_recipient supplied = business entity not authorized for this account": "acme-finance-not-on-acct",
+}
+
+
+@given(parsers.parse('an update_media_buy request for "{label}" with the billing condition: {condition}'))
+def given_update_with_billing_condition(ctx: dict, label: str, condition: str) -> None:
+    """An accepted update of *label* that also overrides invoice_recipient as the row says."""
+    _update_request_for(ctx, label)["invoice_recipient"] = _invoice_recipient(_BILLING_CONDITIONS[condition])
+
+
+@given(parsers.parse("the request includes 1 package update where start_time is {value}"))
+def given_package_update_start_time(ctx: dict, value: str) -> None:
+    """Replace the package update with one that sets only ``start_time`` to *value*.
+
+    Sent as written: the package-scope ``asap`` row exists to show the seller refusing the
+    literal (package-update.json ``start_time`` is ``not: {const: asap}``).
+    """
+    _ensure_update_defaults(ctx)["packages"] = [{"package_id": "pkg_001", "start_time": value}]
+
+
+#: A protocol-valid value for each field package-update.json's root ``not`` forbids. Valid
+#: shapes on purpose: the only defect in the request is that the field is present.
+_IMMUTABLE_PACKAGE_VALUES: dict[str, Any] = {
+    "product_id": "prod_other",
+    "format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}],
+    "pricing_option_id": "po_other",
+}
+
+#: The row texts that name a package update carrying NO immutable field.
+_MUTABLE_ONLY_PACKAGE_UPDATES = ("only updatable fields", "only mutable fields", "only budget")
+
+
+@given(parsers.parse("the request includes a package update where {description}"))
+@given(parsers.parse("the request includes 1 package update containing {description}"))
+def given_package_update_with_immutable_fields(ctx: dict, description: str) -> None:
+    """Send a budget update plus every immutable field *description* names.
+
+    The three immutable-field outlines (bva-immutable-field-guard, bva-package-immutable-
+    fields, partition-immutable-package-field) phrase the same rows three ways; this reads
+    which of ``product_id`` / ``format_ids`` / ``pricing_option_id`` a row names ("all
+    three" names each). A row naming none must be one of the mutable-only rows, so an
+    unrecognised phrasing fails here instead of silently sending a valid update.
+    """
+    if "all three immutable fields" in description:
+        named = list(_IMMUTABLE_PACKAGE_VALUES)
+    else:
+        named = [name for name in _IMMUTABLE_PACKAGE_VALUES if name in description]
+    assert named or any(marker in description for marker in _MUTABLE_ONLY_PACKAGE_UPDATES), (
+        f"package update description {description!r} names no immutable field and is not a mutable-only row"
+    )
+    package = {"package_id": "pkg_001", "budget": _UPDATED_BUDGET}
+    package.update({name: _IMMUTABLE_PACKAGE_VALUES[name] for name in named})
+    _ensure_update_defaults(ctx)["packages"] = [package]
+
+
+#: idempotency_key boundary rows -> the value sent. update-media-buy-request.json requires
+#: the key (``/required``) and constrains it to ``^[A-Za-z0-9_.:-]{16,255}$``; the second
+#: row is long enough and carries a character the pattern excludes.
+_IDEMPOTENCY_KEY_BOUNDARIES: dict[str, Any] = {
+    "absent (field not provided)": OMIT_IDEMPOTENCY_KEY,
+    "valid length, disallowed character (e.g. space)": "bdd update key with spaces",
+}
+
+
+@given(parsers.parse("the request's idempotency_key matches the boundary {boundary}"))
+def given_idempotency_key_boundary(ctx: dict, boundary: str) -> None:
+    """Send the idempotency_key the boundary row describes (or none, for the absent row)."""
+    _ensure_update_defaults(ctx)["idempotency_key"] = _IDEMPOTENCY_KEY_BOUNDARIES[boundary]
+
+
+#: collection_list overlay rows -> the targeting_overlay sent. Each reference carries the
+#: two members core/collection-list-ref.json requires (agent_url, list_id).
+_COLLECTION_LIST_OVERLAYS: dict[str, dict[str, Any]] = {
+    "collection_list with valid agent_url and list_id": {
+        "collection_list": {"agent_url": "https://collections.example.com", "list_id": "cl_include"},
+    },
+    "collection_list_exclude with valid agent_url and list_id": {
+        "collection_list_exclude": {"agent_url": "https://collections.example.com", "list_id": "cl_exclude"},
+    },
+    "both collection_list and collection_list_exclude set": {
+        "collection_list": {"agent_url": "https://collections.example.com", "list_id": "cl_include"},
+        "collection_list_exclude": {"agent_url": "https://collections.example.com", "list_id": "cl_exclude"},
+    },
+}
+
+
+@given(parsers.parse("the request carries a targeting_overlay where {boundary}"))
+def given_collection_list_overlay(ctx: dict, boundary: str) -> None:
+    """Put the row's collection-list overlay on the base request's package update."""
+    _ensure_update_defaults(ctx)["packages"][0]["targeting_overlay"] = dict(_COLLECTION_LIST_OVERLAYS[boundary])
+
+
+@given(parsers.parse("the tenant/adapter approval configuration is {boundary}"))
+def given_approval_configuration(ctx: dict, boundary: str) -> None:
+    """Route the update to manual approval through the tenant flag or the adapter flag."""
+    if boundary.startswith("tenant flag true"):
+        given_tenant_human_review_flag(ctx, "true")
+    elif boundary.startswith("adapter flag true"):
+        given_tenant_human_review_flag(ctx, "false")
+        given_adapter_manual_approval_flag(ctx, "true")
+    else:
+        raise AssertionError(f"unknown approval configuration row: {boundary!r}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Storyboard: unknown package on a known media buy (invalid_transitions)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("the media buy exists in the seller catalog")
+def given_media_buy_in_catalog(ctx: dict) -> None:
+    """The Background's buy is persisted for this tenant."""
+    _verify_existing_media_buy(ctx)
+
+
+@given("the buyer references a package_id that does not belong to the media buy")
+def given_unknown_package_reference(ctx: dict) -> None:
+    """Choose a package_id the seeded buy does not hold."""
+    ctx["unknown_package_id"] = mint(f"pkg_not_on_buy_{uuid.uuid4().hex}")
+
+
+@when("the Buyer Agent sends update_media_buy targeting the unknown package")
+def when_update_unknown_package(ctx: dict) -> None:
+    """Send a budget update for the unknown package of the known buy, with a correlation_id.
+
+    The correlation_id is stamped by the storyboard module's writer, so the shared
+    correlation-echo Then reads the value this request carried.
+    """
+    from tests.bdd.steps.domain.uc003_storyboard_generic_client import stamp_correlation_id
+
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["packages"] = [{"package_id": ctx["unknown_package_id"], "budget": _UPDATED_BUDGET}]
+    stamp_correlation_id(ctx, kwargs)
+    when_send_update_request(ctx)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Idempotency: a key already spent on a different body
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse('idempotency_key "{key}" was previously used with a different request body'))
+def given_idempotency_key_spent(ctx: dict, key: str) -> None:
+    """SPEND *key* on a real, successful update whose body differs from the scenario's.
+
+    The first request crosses the same transport and boundary as the second, so the hash
+    the conflict is detected against is the one production stored -- the same shape as
+    UC-011's ``given_key_already_spent``. Its body is a package budget change; the
+    scenario's own request pauses the buy, so the two canonical payloads differ.
+    """
+    mb = _existing_media_buy(ctx)
+    first = {
+        "media_buy_id": mb.media_buy_id,
+        "idempotency_key": key,
+        "packages": [{"package_id": _resolve_package_id(ctx, "pkg_001"), "budget": _UPDATED_BUDGET}],
+    }
+    dispatch_request(ctx, **apply_required_update_fields(ctx, first))
+    assert ctx.get("error") is None, f"Given: the first update on key {key!r} failed: {ctx.get('error')!r}"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# BR-RULE-217 / BR-RULE-010: new_packages
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Production does not read new_packages today (salesagent-ol033.20.11): the DTO accepts the
+# member and nothing applies it. These steps build the request the pin describes and grade
+# the result on the wire, so they fail until the seller implements the addition.
+
+
+def _product_pair(ctx: dict, product_id: str) -> tuple[str, str]:
+    """``(product_id, pricing_option_id)`` for a seeded product, seeding it on first use.
+
+    The Background's product is already seeded with its option; any other id gets its own
+    product and pricing option, once, so two steps naming one id name one product.
+    """
+    from tests.harness.create_request import pricing_option_id
+
+    if product_id == ctx["default_product"].product_id:
+        return product_id, pricing_option_id(ctx["default_pricing_option"])
+    seeded = ctx.setdefault("seeded_products", {})
+    if product_id not in seeded:
+        env = ctx["env"]
+        product, option = env.setup_product_chain(ctx["tenant"], product_id=product_id)
+        env._commit_factory_data()
+        seeded[product_id] = (product.product_id, pricing_option_id(option))
+    return seeded[product_id]
+
+
+def _set_new_packages(ctx: dict, product_ids: list[str]) -> list[dict[str, Any]]:
+    """Send one complete package-request (product, pricing option, budget) per product id."""
+    from tests.harness.create_request import build_request_packages
+
+    pairs = [_product_pair(ctx, product_id) for product_id in product_ids]
+    entries = build_request_packages(pairs, budget=_UPDATED_BUDGET)
+    _ensure_update_defaults(ctx)["new_packages"] = entries
+    ctx["new_package_product_ids"] = [product_id for product_id, _option in pairs]
+    return entries
+
+
+@given("the request includes new_packages with two complete package-requests")
+def given_new_packages_two(ctx: dict) -> None:
+    """Two complete package-requests for two products the buy does not hold yet."""
+    _set_new_packages(ctx, ["prod_new_a", "prod_new_b"])
+
+
+@given("the request includes new_packages with an entry missing product_id")
+def given_new_packages_missing_product(ctx: dict) -> None:
+    """One package-request without product_id, which package-request.json lists in /required."""
+    entries = _set_new_packages(ctx, ["prod_new_a"])
+    del entries[0]["product_id"]
+
+
+@given(parsers.parse('the request includes new_packages with a package for product "{product_id}"'))
+def given_new_packages_for_product(ctx: dict, product_id: str) -> None:
+    """One complete package-request for *product_id*."""
+    _set_new_packages(ctx, [product_id])
+
+
+@given(parsers.parse('the media buy already has a package for product "{product_id}"'))
+def given_existing_package_for_product(ctx: dict, product_id: str) -> None:
+    """Seed a second package on the Background's buy, for a product seeded with its option."""
+    from tests.factories import MediaPackageFactory
+
+    seeded_id, _option = _product_pair(ctx, product_id)
+    MediaPackageFactory(
+        media_buy=_existing_media_buy(ctx),
+        package_config={"product_id": seeded_id, "budget": 5000.0},
+    )
+    ctx["env"]._commit_factory_data()
+
+
+#: product-uniqueness rows -> the product ids the update's new_packages carry. "existing"
+#: stands for the product of the Background's package.
+_NEW_PACKAGE_SETS: dict[str, list[str]] = {
+    "update new_packages[] adds a product_id not present elsewhere": ["prod_new_a"],
+    "update new_packages[] product_id duplicates an existing media buy package": ["existing"],
+    "update new_packages[] contains two entries with the same product_id": ["prod_new_a", "prod_new_a"],
+}
+
+
+@given(parsers.parse('an update_media_buy request for "{label}" whose package set is described by {boundary}'))
+def given_update_with_package_set(ctx: dict, label: str, boundary: str) -> None:
+    """An update of *label* whose only change is the row's new_packages.
+
+    No package budget change rides along: with one, a seller that ignores new_packages
+    would answer every "accepted" row with a success it earned on the budget.
+    """
+    _existing_media_buy(ctx, label)
+    existing_product = (ctx["existing_package"].package_config or {})["product_id"]
+    _set_new_packages(
+        ctx,
+        [existing_product if product_id == "existing" else product_id for product_id in _NEW_PACKAGE_SETS[boundary]],
+    )
+
+
+@given(parsers.parse('the media buy\'s valid_actions advertises "{action}"'))
+def given_valid_actions_advertise(ctx: dict, action: str) -> None:
+    """Assert the seller's own derivation advertises *action* for the buy in its seeded state.
+
+    ``_adcp_status_and_actions`` is the one function every update response takes
+    ``valid_actions`` from, so this is the list the buyer would read before the update.
+    A precondition, read from production rather than set: a seller advertises what its
+    state machine says, and no test input can make it advertise more.
+    """
+    from src.core.tools.media_buy_update import _adcp_status_and_actions
+
+    _status, actions = _adcp_status_and_actions(_existing_media_buy(ctx))
+    assert action in actions, f"the seller does not advertise {action!r} for this buy; valid_actions={actions!r}"
+
+
+@then("both new packages should appear in the affected_packages")
+def then_new_packages_affected(ctx: dict) -> None:
+    """The wire affected_packages carries one new package per product the request added.
+
+    New packages are told apart from the Background's by package_id (the seller mints
+    one for each), and matched to the request by product_id.
+    """
+    existing_ids = {ctx["existing_package"].package_id}
+    affected = wire_field(ctx, "affected_packages")
+    added = sorted(entry.get("product_id") for entry in affected if entry.get("package_id") not in existing_ids)
+    assert added == sorted(ctx["new_package_product_ids"]), (
+        f"expected new packages for {sorted(ctx['new_package_product_ids'])} in affected_packages, got {affected!r}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# BR-RULE-216: cancellation
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse("the cancellation_reason is set to {value}"))
+def given_cancellation_reason(ctx: dict, value: str) -> None:
+    """Send *value* (a length placeholder expands) as the request's cancellation_reason."""
+    _ensure_update_defaults(ctx)["cancellation_reason"] = _expand_length_placeholder(value)
+
+
+@given(parsers.parse('the media buy "{label}" is in "{status}" status with packages "{first}" and "{second}"'))
+def given_media_buy_status_with_two_packages(ctx: dict, label: str, status: str, first: str, second: str) -> None:
+    """Put the named buy in *status* holding packages *first* and *second*."""
+    _existing_media_buy(ctx, label)
+    given_media_buy_status(ctx, status)
+    given_package_exists(ctx, first)
+    given_package_exists(ctx, second)
+
+
+@then(parsers.parse('package "{label}" should be canceled'))
+def then_package_canceled(ctx: dict, label: str) -> None:
+    """The wire affected_packages entry for *label* reports canceled: true (core/package.json)."""
+    entry = wire_entry(ctx, "affected_packages", package_id=_resolve_package_id(ctx, label))
+    assert entry.get("canceled") is True, f"package {label!r} is not reported canceled: {entry!r}"
+
+
+@then(parsers.parse('the media buy status should NOT be "{status}"'))
+def then_media_buy_status_not(ctx: dict, status: str) -> None:
+    """The wire media_buy_status is present and is not *status*."""
+    actual = wire_field(ctx, "media_buy_status")
+    assert actual != status, f"media_buy_status is {actual!r}; the update must not have made the buy {status!r}"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# BR-RULE-209: sandbox on the three update response shapes
+# ═══════════════════════════════════════════════════════════════════════
+
+#: The account phrases the sandbox outlines use -> whether the named account is a sandbox.
+_ACCOUNT_CONTEXTS: dict[str, bool] = {"a sandbox account": True, "a production account": False}
+
+
+def _name_account(ctx: dict, *, sandbox: bool) -> None:
+    """Seed an account with the given sandbox flag and make it the one the update names.
+
+    ``_seed_account_for_principal`` seeds the row and the caller's access to it; the
+    reference is then written in the dict spelling the update bag uses, into the bag when
+    one exists and into ``ctx["account_ref"]`` for a bag built later.
+    """
+    from tests.bdd.steps.generic.given_auth import _seed_account_for_principal
+
+    _seed_account_for_principal(ctx, sandbox=sandbox)
+    ref = {"account_id": ctx["account_ref"].account_id}
+    ctx["account_ref"] = ref
+    if "update_kwargs" in ctx:
+        ctx["update_kwargs"]["account"] = ref
+
+
+@given("the request's account reference resolves to a sandbox account")
+def given_request_account_is_sandbox(ctx: dict) -> None:
+    """The update will name a sandbox account."""
+    _name_account(ctx, sandbox=True)
+
+
+@given(parsers.parse("an update_media_buy request whose resolved account is {account_context}"))
+def given_update_request_with_account(ctx: dict, account_context: str) -> None:
+    """An accepted update of the Background's buy, naming the account the row describes."""
+    _name_account(ctx, sandbox=_ACCOUNT_CONTEXTS[account_context])
+    _update_request_for(ctx, None)
+
+
+@given(parsers.parse("the update resolves to the {shape} response shape"))
+@given(parsers.parse("the update resolves to the {shape} response shape because {trigger}"))
+def given_update_response_shape(ctx: dict, shape: str, trigger: str | None = None) -> None:
+    """Arrange the request and the approval path so the update answers with *shape*.
+
+    synchronous success: auto-approval and a valid package budget change. terminal
+    failure: a negative package budget, which the budget rule rejects
+    (@T-UC-003-partition-budget-amount). submitted task: manual approval of a valid change.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    if shape == "terminal failure":
+        kwargs["packages"] = [{"package_id": "pkg_001", "budget": -50.0}]
+        return
+    kwargs.setdefault("packages", [{"package_id": "pkg_001", "budget": _UPDATED_BUDGET}])
+    if shape == "synchronous success":
+        given_tenant_human_review_flag(ctx, "false")
+    elif shape == "submitted task":
+        given_tenant_human_review_flag(ctx, "true")
+    else:
+        raise AssertionError(f"unknown update response shape: {shape!r}")
+
+
+@then('the response payload should NOT contain a "sandbox" field')
+def then_payload_has_no_sandbox(ctx: dict) -> None:
+    """The response the buyer received carries no sandbox member, on either branch."""
+    then_response_not_contain_field(ctx, "sandbox")
+
+
+def _assert_sandbox_flag_true(ctx: dict) -> None:
+    assert wire_field(ctx, "sandbox") is True, "a sandbox-account update must report sandbox: true"
+
+
+def _assert_sandbox_flag_not_true(ctx: dict) -> None:
+    flag = wire_lookup(ctx, "sandbox")
+    assert flag is WIRE_MISSING or flag is False, (
+        f"a production-account update must not report sandbox: true, got {flag!r}"
+    )
+
+
+def _assert_real_rejection(ctx: dict) -> None:
+    """A conformant AdCP error came back, and no success member did (not a silent ok)."""
+    ctx["result"].assert_wire_error_is_schema_conformant()
+    then_response_not_contain_field(ctx, "media_buy_id")
+
+
+def _assert_sandbox_forbidden(ctx: dict) -> None:
+    """The terminal-failure arm forbids sandbox (update-media-buy-response.json oneOf/1 `not`)."""
+    ctx["result"].assert_wire_error_is_schema_conformant()
+    then_response_not_contain_field(ctx, "sandbox")
+
+
+_SANDBOX_OUTCOMES = {
+    "sandbox flag present and true": _assert_sandbox_flag_true,
+    "sandbox flag not true": _assert_sandbox_flag_not_true,
+    "sandbox flag omitted": lambda ctx: wire_absent(ctx, "sandbox"),
+    "rejected with a real validation error (not a silent ok)": _assert_real_rejection,
+    "sandbox field forbidden on this shape": _assert_sandbox_forbidden,
+}
+
+
+@then(parsers.parse("the sandbox response-field outcome should be {outcome}"))
+def then_sandbox_outcome(ctx: dict, outcome: str) -> None:
+    """Grade the row's sandbox outcome on the response the buyer received."""
+    _SANDBOX_OUTCOMES[outcome](ctx)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# "the result should be <outcome>": the update-only outcome families
+# ═══════════════════════════════════════════════════════════════════════
+#
+# The shared dispatcher (uc002_create_media_buy.then_result_should_be) asks these, so each
+# outcome sentence has one meaning across use cases.
+
+
+def _requested_budget(ctx: dict) -> float:
+    packages = ctx["update_kwargs"]["packages"]
+    return float(packages[0]["budget"])
+
+
+def _assert_synchronous_success(ctx: dict) -> None:
+    """The update succeeded synchronously: the wire names the buy that was updated.
+
+    Read off the success wire, which an error result does not have, so a rejection fails
+    here with the wire's own diagnosis.
+    """
+    _assert_wire_field_equals(ctx, "media_buy_id", _existing_media_buy(ctx).media_buy_id)
+
+
+def _assert_persisted_success(ctx: dict) -> None:
+    """Synchronous success, and the requested package budget is what the seller stored."""
+    _assert_synchronous_success(ctx)
+    stored, _config = _stored_package(ctx, "pkg_001")
+    assert stored is not None and float(stored) == _requested_budget(ctx), (
+        f"update succeeded but the stored budget is {stored!r}, not the requested {_requested_budget(ctx)}"
+    )
+
+
+def _assert_submitted(ctx: dict) -> None:
+    """The submitted task envelope: status submitted, with a task_id to poll."""
+    _assert_wire_field_equals(ctx, "status", "submitted")
+    then_response_contains_task_id(ctx)
+
+
+_UPDATE_OUTCOMES = {
+    "accepted": _assert_synchronous_success,
+    "success with persisted records": _assert_persisted_success,
+    "success with pending status": _assert_submitted,
+    "submitted task envelope (awaiting approval)": _assert_submitted,
+}
+
+
+def is_update_outcome(outcome: str) -> bool:
+    """Whether *outcome* is one of the update-only outcome sentences graded here."""
+    return outcome in _UPDATE_OUTCOMES
+
+
+def assert_update_outcome(ctx: dict, outcome: str) -> None:
+    """Grade an update-only outcome sentence."""
+    _UPDATE_OUTCOMES[outcome](ctx)
+
+
+def assert_update_not_persisted(ctx: dict) -> None:
+    """After a rejected update, the targeted package does not hold the requested budget."""
+    stored, _config = _stored_package(ctx, "pkg_001")
+    assert stored is None or float(stored) != _requested_budget(ctx), (
+        f"the update was rejected but the stored budget is the requested {_requested_budget(ctx)}"
     )

@@ -24,7 +24,7 @@ DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
-def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None) -> None:
+def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None, **extra: Any) -> None:
     """Dispatch through ctx['transport'] (a wire transport: a2a/mcp/rest).
 
     IMPL was dropped from the BDD default parametrization (#1417), so a
@@ -36,7 +36,7 @@ def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None) -> None:
             "when_request._call: ctx['transport'] is unset. BDD scenarios must dispatch "
             "through a wire transport (a2a/mcp/rest); the IMPL call_impl fallback was removed."
         )
-    _call_via(ctx, transport, req=req)
+    _call_via(ctx, transport, req=req, **extra)
 
 
 def _call_via(
@@ -176,14 +176,37 @@ def when_request_unfiltered(ctx: dict) -> None:
     Serves both the generic 'requests/sends a list_creative_formats request'
     When phrasings and the UC-005 baseline Given 'the Buyer Agent calls
     list_creative_formats without filters' (single canonical dispatch step).
+
+    Names the account an earlier Given seeded (``ctx["account_ref"]``, written by "the
+    request targets a sandbox/production account"), because that is what makes the
+    sentence true: sandbox.mdx makes sandbox account-level -- "Once a request references
+    a sandbox account, the entire request is treated as sandbox" -- so a request that
+    names no account is a production request whatever rows exist.
     """
-    _call(ctx)
+    _call(ctx, **_named_account(ctx))
+
+
+def _named_account(ctx: dict) -> dict[str, Any]:
+    """``{"account": <ref>}`` for the account an earlier Given seeded, else nothing."""
+    account = ctx.get("account_ref")
+    return {"account": account} if account is not None else {}
 
 
 @when("the Buyer Agent sends a list_creative_formats request with invalid dimension filters")
 def when_send_request_invalid_dimensions(ctx: dict) -> None:
-    # min_width=-1 violates the schema's Ge(0) — the SELLER must say so.
-    _call_raw(ctx, min_width=-1)
+    """A dimension filter of the wrong JSON type, which the SELLER must refuse.
+
+    The pinned request declares ``min_width`` as ``{"type": "integer"}`` with no
+    ``minimum``, so a negative width is a valid request and cannot stand for an invalid
+    one; a non-integer is the schema violation the sentence names. The request names the
+    account the scenario seeded, so a sandbox scenario grades a sandbox request.
+    """
+    _call_raw(ctx, min_width="wide", **_named_account(ctx))
+
+
+@when(parsers.parse("the Buyer Agent sends a list_creative_formats request with asset_types {asset_types}"))
+def when_send_request_asset_types(ctx: dict, asset_types: str) -> None:
+    _call_raw(ctx, asset_types=json.loads(asset_types))
 
 
 # There is no "type + asset_types" step. It parsed a `type` the request does not
@@ -256,13 +279,18 @@ def when_request_name_search(ctx: dict, search: str) -> None:
     _call(ctx, req=ListCreativeFormatsRequest(name_search=search))
 
 
-# ── Filter: disclosure_positions ─────────────────────────────────────
+# ── Filter: disclosure_positions / disclosure_persistence ────────────
 
 
-@when(parsers.parse("the Buyer Agent requests formats with disclosure_positions filter {filter_value}"))
-def when_request_disclosure_positions(ctx: dict, filter_value: str) -> None:
-    parsed = json.loads(filter_value)
-    _call_raw(ctx, disclosure_positions=parsed)
+@when(
+    parsers.re(
+        r"the Buyer Agent requests formats with "
+        r"(?P<field>disclosure_positions|disclosure_persistence) filter (?P<filter_value>.+)"
+    )
+)
+def when_request_disclosure_filter(ctx: dict, field: str, filter_value: str) -> None:
+    """Send one of the two disclosure filters verbatim, so the SELLER grades the members."""
+    _call_raw(ctx, **{field: json.loads(filter_value)})
 
 
 # ── Filter: output_format_ids ────────────────────────────────────────

@@ -365,7 +365,20 @@ class MockAdServer(AdServerAdapter):
         test_behavior = self._read_test_behavior()
         if not test_behavior.get(flag):
             return
-        from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPValidationError
+        from src.core.exceptions import (
+            AdCPAdapterError,
+            AdCPConfigurationError,
+            AdCPRateLimitError,
+            AdCPValidationError,
+        )
+
+        # A throttled ad server is its own fault, not a recovery class: RATE_LIMITED shares
+        # ``transient`` with SERVICE_UNAVAILABLE, so the recovery knob below cannot select it.
+        # The knob carries the wait the ad server named, which the buyer receives as
+        # ``retry_after``.
+        rate_limit_retry_after = test_behavior.get("rate_limit_retry_after")
+        if rate_limit_retry_after is not None:
+            raise AdCPRateLimitError(retry_after=int(rate_limit_retry_after))
 
         # The injected knob selects a CLASS, not a recovery value. ``recovery`` is
         # derived from the wire code now, so "give me a terminal failure" is

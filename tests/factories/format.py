@@ -391,6 +391,22 @@ def _uses_asset_type(fmt: Format, asset_type: str) -> bool:
     )
 
 
+def asset_types_of(fmt: Any) -> set[str]:
+    """Every asset type a format declares, individual slots and repeatable-group members alike.
+
+    The asset_types filter matches both (``list-creative-formats-request.json``: "Filter
+    to formats that include these asset types"), so a format carrying a type only inside a
+    group still includes it.
+    """
+    types: set[str] = set()
+    for slot in getattr(fmt, "assets", None) or []:
+        for asset in (slot, *(getattr(slot, "assets", None) or [])):
+            asset_type = getattr(asset, "asset_type", None)
+            if asset_type is not None:
+                types.add(str(getattr(asset_type, "value", asset_type)))
+    return types
+
+
 def pick_reference_format(canonical_kind: str, *, without_asset_type: str | None = None) -> Format:
     """The first reference format declaring *canonical_kind*, in catalog order.
 
