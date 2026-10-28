@@ -492,6 +492,7 @@ none rather than an invented one.
 
 SELLER_RAISED_KEYWORDS: typing.Final[dict[str, JsonSchemaKeyword]] = {
     "oneOf": "oneOf",
+    "readOnly": "readOnly",
 }
 """Keywords a SELLER-RAISED ``PydanticCustomError`` names for itself.
 
@@ -508,7 +509,10 @@ is worse than none. These we can. A oneOf expressed as a model validator (see
 ``CreativeAssetRequest``, where core/creative-asset.json's format_id-XOR-
 format_kind is flattened onto one model) rejects for exactly the reason JSON
 Schema spells ``oneOf``. The error type IS the keyword, so a raise site cannot
-name one this table does not carry.
+name one this table does not carry. ``readOnly`` is the immutable-field refusal on
+a package update (``UpdateMediaBuyRequest._refuse_immutable_package_fields``):
+media-buy/package-update.json says those fields "cannot appear in update
+payloads", which is JSON Schema's readOnly meaning stated as a refusal.
 """
 
 

@@ -2686,6 +2686,35 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F3: remove the immutable field, or create a new media buy to change product/formats/pricing
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
+  @T-UC-003-package-update-immutable-keyword @immutable_field_guard @error @schema-v3.1 @post-f2
+  Scenario Outline: every fully-immutable field in a package update is refused as read-only - <immutable_field>
+    Given a valid update_media_buy request for "mb_existing"
+    And the request includes a package update where the payload carries <immutable_field>
+    When the Buyer Agent sends the update_media_buy request
+    Then the update is refused INVALID_REQUEST naming the package update's "<immutable_field>" as read-only
+    # LOCAL ADDITION. package-update.json at the pin lists six "Fully-immutable fields
+    # (product_id, format_ids, format_option_refs, format_kind, params, pricing_option_id)"
+    # and its root `not` anyOf requires each one. The generated outlines above name three of
+    # them and grade only the code, which an undeclared field also earns in dev (extra
+    # forbidden -> INVALID_REQUEST) and which production (extra ignore) never reaches: there
+    # the field is dropped and the update succeeds. So this outline also grades issues[0]:
+    # the field's own pointer and keyword readOnly, which only the named immutable-field
+    # refusal carries (the generic refusal says additionalProperties, core/error.json's
+    # issues[].keyword being the schema keyword that rejected the payload). A selector reaches update_media_buy only on
+    # new_packages[] (update-media-buy-request.json /properties/new_packages, whose items are
+    # package-request.json).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/not
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json pointer=/properties/issues
+
+    Examples: the six fields the package-update root `not` forbids
+      | immutable_field    |
+      | product_id         |
+      | format_ids         |
+      | format_option_refs |
+      | format_kind        |
+      | params             |
+      | pricing_option_id  |
+
   @T-UC-003-partition-immutable-package-field @partition @immutable_field_guard @schema-v3.1
   Scenario Outline: Immutable package-field guard partition validation - <partition>
     Given a valid update_media_buy request with:

@@ -3468,31 +3468,24 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
         LibraryPackageUpdate, "creatives"
     )
 
-    # Fields that are immutable once a package is created (BR-RULE-198). They are
-    # not valid update fields, so the AdCP package-update schema rejects them via a
-    # root `not` constraint. We surface that as INVALID_REQUEST (a known, named
-    # business-rule rejection) rather than letting them fall through to the generic
-    # extra="forbid" VALIDATION_ERROR — and, because this runs before extra-mode
-    # handling, it also closes the production (extra="ignore") silent-drop gap.
-    _IMMUTABLE_PACKAGE_FIELDS: ClassVar[frozenset[str]] = frozenset({"product_id", "format_ids", "pricing_option_id"})
+    # Fields that are immutable once a package is created (BR-RULE-198): the pin's own list.
+    # media-buy/package-update.json names "Fully-immutable fields (product_id, format_ids,
+    # format_option_refs, format_kind, params, pricing_option_id)", and its root `not` anyOf
+    # requires each of the six. A selector reaches update_media_buy only on new_packages[],
+    # which carries package-request.json. Refused by the REQUEST, not by this model: see
+    # ``UpdateMediaBuyRequest._refuse_immutable_package_fields`` for why it has to run there.
+    _IMMUTABLE_PACKAGE_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {"product_id", "format_ids", "format_option_refs", "format_kind", "params", "pricing_option_id"}
+    )
 
     @model_validator(mode="before")
     @classmethod
     def _validate_package_update_shape(cls, data: Any) -> Any:
-        """Enforce the package-update request shape with INVALID_REQUEST.
+        """Refuse a package update with no package_id as INVALID_REQUEST.
 
-        Two structural ("which package, and is this field allowed?") rules,
-        both graded INVALID_REQUEST by the spec rather than the generic
-        VALIDATION_ERROR:
-        - package_id identifies the package being updated; it is required
-          (BR-UC-003 ext-h). Raising here (mode="before") surfaces a helpful
-          INVALID_REQUEST + suggestion instead of Pydantic's bare
-          "Field required" VALIDATION_ERROR.
-        - immutable fields (BR-RULE-198) cannot be changed post-create; the
-          AdCP package-update schema rejects them via a root ``not`` constraint.
-          Running before extra-mode handling means dev (extra="forbid") and
-          prod (extra="ignore") both reject them as INVALID_REQUEST rather than
-          a generic VALIDATION_ERROR / silent drop.
+        package_id identifies the package being updated; it is required (BR-UC-003 ext-h).
+        Raising here (mode="before") surfaces a helpful INVALID_REQUEST + suggestion instead
+        of Pydantic's bare "Field required" VALIDATION_ERROR.
         """
         if isinstance(data, dict):
             # Raised as a PYDANTIC error, not a typed AdCPInvalidRequestError, and the
@@ -3522,24 +3515,6 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
                             loc=("package_id",),
                             input=data,
                         )
-                    ],
-                )
-            present = sorted(f for f in cls._IMMUTABLE_PACKAGE_FIELDS if f in data)
-            if present:
-                # One entry per immutable field, each carrying its own loc, so `issues[]`
-                # names every offender and `field` derives from issues[0] as the pin's
-                # "populate field from issues[0]" MUST requires.
-                raise PydanticCoreValidationError.from_exception_data(
-                    "UpdateMediaBuyPackage",
-                    [
-                        InitErrorDetails(
-                            type=PydanticCustomError(
-                                "readOnly", "{name} is immutable on a package update", {"name": name}
-                            ),
-                            loc=(name,),
-                            input=data,
-                        )
-                        for name in present
                     ],
                 )
         return data
@@ -3661,6 +3636,43 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
     # scenario (BR-UC-003 @T-UC-003-alt-budget). That does not license a field the schema does
     # not define: we do not support anything the schema rejects. The disagreement is upstream
     # and is filed for reconciliation there, not accommodated here.
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_immutable_package_fields(cls, data: Any) -> Any:
+        """Refuse every fully-immutable field on a package update, in every extra mode.
+
+        HERE, on the request, because it has to run BEFORE the accepted-shape strip
+        (``BuyerRequest._accept_only_declared_fields``). None of the six fields is a declared
+        property of package-update.json, so the strip removes them first: in dev the buyer
+        got the generic ``additionalProperties`` refusal, and in production the field was
+        dropped and the update answered success with nothing changed. The pin does not
+        leave that to the extra mode -- package-update.json says these fields "cannot appear
+        in update payloads", enforced by its root ``not``. A subclass's before-validator runs
+        ahead of the mixin's, which is the ordering this relies on.
+
+        Raised as a PYDANTIC error with a request-rooted loc, for the reason
+        ``AdCPPackageUpdate._validate_package_update_shape`` gives: FastMCP drives this model
+        through a TypeAdapter before the tool body, and a pydantic error is the one shape
+        every boundary converts. One entry per field, so ``issues[]`` names every offender
+        and ``field`` derives from ``issues[0]``, as core/error.json requires.
+        """
+        packages = data.get("packages") if isinstance(data, dict) else None
+        if not isinstance(packages, list):
+            return data
+        errors = [
+            InitErrorDetails(
+                type=PydanticCustomError("readOnly", "{name} is immutable on a package update", {"name": name}),
+                loc=("packages", index, name),
+                input=package,
+            )
+            for index, package in enumerate(packages)
+            if isinstance(package, dict)
+            for name in sorted(AdCPPackageUpdate._IMMUTABLE_PACKAGE_FIELDS & package.keys())
+        ]
+        if errors:
+            raise PydanticCoreValidationError.from_exception_data("UpdateMediaBuyRequest", errors)
+        return data
 
     @model_validator(mode="after")
     def _check_idempotency_key(self):
