@@ -213,8 +213,11 @@ _TOOLS: dict[str, ToolSpec] = {
         impl=_get_products_impl,
         rest=RestBinding("POST", "/products"),
     ),
-    # DEPRECATED FOR A SALES AGENT AT and this row is a COMPATIBILITY SURFACE
-    # rather than the model to extend. ``docs/creative/sales-agent-creative-capabilities.mdx``
+    # DEPRECATED FOR A SALES AGENT since 3.2 (the pinned list-creative-formats-request.json
+    # carries "deprecated": true and "x-deprecated-in": "3.2.0"), and this row is a
+    # COMPATIBILITY SURFACE rather than the model to extend. The pin lets an existing 3.x
+    # agent keep serving it; it is never a prerequisite for sync_creatives and never a
+    # purchasability promise (``docs/creative/task-reference/list_creative_formats.mdx``). ``docs/creative/sales-agent-creative-capabilities.mdx``
     # states why: "An agent-global format list cannot express product-, placement-,
     # account-, or inventory-specific deliverability. For that reason, sales-agent
     # `list_creative_formats` is deprecated in 3.2." ``docs/creative/formats.mdx`` adds
