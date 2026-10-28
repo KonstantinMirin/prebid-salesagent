@@ -305,6 +305,37 @@ def wire_absent(ctx: dict, path: str) -> None:
     assert value is WIRE_MISSING, f"{path!r} unexpectedly present on the wire: {value!r}"
 
 
+def assert_listed_format_option_ref(entry: dict[str, Any], sent: dict[str, Any]) -> None:
+    """Assert a listed creative's ``format_option_ref`` is the document the buyer sent.
+
+    Whole-document equality, not a subset: ``scope`` is the discriminator of
+    core/format-option-ref.json's oneOf, and a subset check over the members the seller DID
+    emit passes while it is gone. The product arm's ``publisher_domain: false`` makes the
+    other direction matter too -- an extra member is as wrong as a missing one.
+    """
+    listed = entry.get("format_option_ref")
+    assert listed == sent, f"the listed format_option_ref is not the reference the buyer sent: {listed!r} != {sent!r}"
+
+
+def assert_listed_on_canonical_kind(
+    entry: dict[str, Any], kind: str, *, option_ref: dict[str, Any] | None = None
+) -> None:
+    """Assert a list_creatives wire entry sits on the canonical arm with format kind *kind*.
+
+    creative/list-creatives-response.json's item is a oneOf over the format identity: the
+    canonical arm requires ``format_kind`` and forbids ``format_id``. The kind is compared
+    by VALUE (a presence check passes on the wrong identity) and ``format_id`` must be
+    absent. When *option_ref* is given, the entry must also carry exactly that
+    ``format_option_ref`` (:func:`assert_listed_format_option_ref`).
+    """
+    assert entry.get("format_kind") == kind, (
+        f"expected the listed creative on format_kind {kind!r}, got {entry.get('format_kind')!r}: {entry}"
+    )
+    assert "format_id" not in entry, f"a creative synced by format_kind is listed with a format_id: {entry}"
+    if option_ref is not None:
+        assert_listed_format_option_ref(entry, option_ref)
+
+
 def stored_package_config(ctx: dict, media_buy_id: str, package_id: str) -> dict[str, Any]:
     """The persisted ``package_config`` for one package, through the repository.
 

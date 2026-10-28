@@ -38,7 +38,7 @@ import asyncio
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import is_e2e, payload_or_none, wire_dict
+from tests.bdd.steps._outcome_helpers import assert_listed_on_canonical_kind, is_e2e, payload_or_none, wire_dict
 from tests.bdd.steps.domain.uc006_sync_creatives import (
     _action_str,
     _build_creative_payload,
@@ -731,12 +731,4 @@ def then_listed_back_with_canonical_identity(ctx: dict, kind: str) -> None:
     the members the seller did emit would miss.
     """
     entry = _listed_back(ctx, latest_creative_id(ctx))
-    assert entry.get("format_kind") == kind, (
-        f"expected the synced creative listed on format_kind {kind!r}, got {entry.get('format_kind')!r}: {entry}"
-    )
-    assert "format_id" not in entry, f"a creative synced by format_kind is listed with a format_id: {entry}"
-    sent = ctx["sent_format_option_ref"]
-    assert entry.get("format_option_ref") == sent, (
-        f"the listed format_option_ref is not the reference the buyer last sent: "
-        f"{entry.get('format_option_ref')!r} != {sent!r}"
-    )
+    assert_listed_on_canonical_kind(entry, kind, option_ref=ctx["sent_format_option_ref"])
