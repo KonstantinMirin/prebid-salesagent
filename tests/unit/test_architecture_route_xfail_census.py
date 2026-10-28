@@ -84,7 +84,11 @@ _CEILINGS: dict[str, int] = {
     # The three catch-alls: `when=_uc("UC-00n", lambda m: True)`. They claim every
     # scenario of their UC that no earlier row took, so these are the entries that can
     # grow without anyone editing a list. 804 of the 819.
-    "uc002-not-wired": 395,
+    # 395 -> 385: twelve create-time billing combinations deleted (create_media_buy has no
+    # billing field at the pin), plus two added by corrections -- inv-080-11 became an
+    # outline over rejected and closed, and the tasks-sort-field partition gained the
+    # "domain is not a sort field" row.
+    "uc002-not-wired": 385,
     "uc003-not-wired": 381,
     "uc010-not-wired": 28,
     # Per-tag UC-010 dormancy rows, generated from `_UC010_PARKED_TAGS`. Their reasons
