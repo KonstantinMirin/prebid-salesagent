@@ -992,21 +992,26 @@ Feature: BR-UC-018 List Creatives
 
   @T-UC-018-storyboard-list-all-creatives-after-sync @schema-v3.1 @v3-1 @list-after-sync
   Scenario: List creatives with no filters returns the library including recently synced creatives
-    Given the buyer recently synced three creatives in three different formats via sync_creatives
+    Given the buyer recently synced three creatives identified by canonical format kinds via sync_creatives
     When the Buyer Agent sends list_creatives with no filters for the same account
     Then the response is compliant with the list_creatives spec
     And the creatives array should include each of the synced creatives
-    And each creative entry should expose creative_id, name, format_id, and status
+    And each creative entry should expose creative_id, name, format_kind, and status, and no format_id
     # creative_lifecycle list_and_filter / list_all: after sync_creatives,
     # list_creatives without filters returns the library for the account
-    # including the synced items. Each entry exposes creative_id, name,
-    # format_id, status. The graded step lives inside the `creative` protocol
-    # baseline storyboard; capabilities.py declares supported_protocols=[media_buy]
-    # only, so this behavior is schema-grounded for us, not storyboard-graded
-    # (matches the sibling scenarios in this file already tagged @schema-v3.1
-    # for the same undeclared-protocol reason).
-    # creative_lifecycle: list_creatives reflects recent sync_creatives state
-    # @source repo=adcp ref=v3.2.3 path=static/compliance/source/protocols/creative/index.yaml phase=list_and_filter step=list_all
+    # including the synced items. "Each creative includes: creative_id, name,
+    # format_kind, status". The creative that step lists was synced by format_kind
+    # (sync_multiple sends format_kind: image), and list-creatives-response.json makes the
+    # two identifiers a oneOf -- format_kind is "Canonical 3.2 path ... Mutually exclusive
+    # with deprecated format_id", and format_id is "DEPRECATED in 3.2. Legacy named-format
+    # path. New listed creatives use format_kind" -- so a canonically-synced creative is
+    # listed by its kind and carries no format_id. The graded step lives inside the
+    # `creative` protocol baseline storyboard; capabilities.py declares
+    # supported_protocols=[media_buy] only, so this behavior is schema-grounded for us,
+    # not storyboard-graded (matches the sibling scenarios in this file already tagged
+    # @schema-v3.1 for the same undeclared-protocol reason).
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/creative/index.yaml phase=list_and_filter step=list_all
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-response.json pointer=/properties/creatives/items/oneOf
 
   @T-UC-018-storyboard-filter-by-format-id-object @schema-v3.1 @v3-1 @list-filter @format-id-object
   Scenario: List creatives filtered by a format_id object returns only creatives matching that {agent_url, id}
@@ -1015,12 +1020,14 @@ Feature: BR-UC-018 List Creatives
     Then the response is compliant with the list_creatives spec
     And the creatives array should only include creatives whose format_id matches both agent_url and id
     And the creatives array should NOT include creatives whose format_id has a different id even on the same agent_url
-    # creative_lifecycle list_filtered: the buyer filters by a format_id object
-    # (agent_url + id). Only creatives whose format_id matches both fields are
-    # returned. A filter shaped as a bare string id (not an object) is not part
-    # of the v3.1 contract; format_ids are objects, period.
-    # creative_lifecycle: format_id object filter exact-matches both (agent_url, id)
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/compliance/source/protocols/creative/index.yaml
+    # core/creative-filters.json format_ids: an array of core/format-id.json objects
+    # (agent_url + id), "Filter legacy named-format creatives. Use format_kinds for
+    # canonical libraries." -- `deprecated: true`, so this is the LEGACY filter, kept for
+    # 3.x buyers; T-UC-018-filter-by-format-kinds grades the canonical one. Only creatives
+    # whose format_id matches both fields are returned, and a filter shaped as a bare
+    # string id is not an object and so not this filter. The storyboard's list_filtered
+    # step filters by format_kinds and grades nothing here.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-filters.json pointer=/properties/format_ids
 
   @T-UC-018-format-id-filter-canonicalizes-stored-agent-url @schema-v3.2 @v3-1 @list-filter @format-id-object
   Scenario: A creative stored under a respelled agent_url is still returned by a format_id filter naming the canonical form

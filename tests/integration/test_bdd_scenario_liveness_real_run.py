@@ -22,13 +22,13 @@ the scenarios' own identity-tag prefix for UC-005:
   because a guard that only ever proves the negative case isn't a guard.
 
   This slice used to be selected by ``@storyboard-v3.1`` itself, and that is the
-  defect the identity prefix fixes: the AdCP 3.2.1 pin WITHDREW that tag from two of
-  the three members (the cited ``list_formats``/``list_formats_integrity`` steps do
-  not exist at 3.2.1), so the slice shrank to the one remaining member — which
-  GRADUATED out of the xfail ledger in the same pin move. A selector that moves takes
-  the expectation derived from it along, and this module ended up demanding a ledgered
-  member of a slice the pin had emptied of ledgered members. Selecting by identity
-  keeps all three measured whatever their provenance tag says.
+  defect the identity prefix fixes: the pin WITHDREW that tag from members whose cited
+  ``list_formats``/``list_formats_integrity`` steps do not exist at the pin, so the slice
+  shrank to the one remaining member — which GRADUATED out of the xfail ledger in the
+  same pin move. A selector that moves takes the expectation derived from it along, and
+  this module ended up demanding a ledgered member of a slice the pin had emptied of
+  ledgered members. Selecting by identity keeps every member measured whatever its
+  provenance tag says.
 
 Which members are ledgered is never frozen into this file: both graders read the
 live ``_XFAIL_TAGS`` routing map (``_ledgered_reasons`` below), so a graduation
@@ -331,9 +331,8 @@ def test_real_run_records_uc005_scenarios_as_ledgered_or_live(tmp_path: Path) ->
     guard proves both directions, not only the failure case.
 
     The slice is the ``T-UC-005-storyboard-*`` family, collected by that IDENTITY
-    prefix. All three members pass for real on every in-process transport today and
-    none is ledgered: the AdCP 3.2.1 pin withdrew the storyboard claim from two of
-    them and graduated the third out of ``_XFAIL_TAGS``. So the live half is asserted
+    prefix. Every member passes for real on every in-process transport today and none
+    is ledgered. So the live half is asserted
     non-empty and the ledgered half is graded by set equality against the live ledger
     (:func:`_assert_ledgered_set_matches_ledger`) rather than by demanding a member
     the pin has legitimately removed.

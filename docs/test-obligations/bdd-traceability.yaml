@@ -4123,12 +4123,6 @@ mappings:
       upstream_refs: ["BR-UC-005-main"]
       business_rules: []
       status: new
-    - adcp_scenario_id: "T-UC-005-storyboard-format-id-roundtrip-from-products"
-      adcp_feature: "BR-UC-005-discover-creative-formats.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-005-main"]
-      business_rules: []
-      status: new
     - adcp_scenario_id: "T-UC-005-storyboard-format-id-third-party-agent-out-of-scope"
       adcp_feature: "BR-UC-005-discover-creative-formats.feature"
       obligation_id: null

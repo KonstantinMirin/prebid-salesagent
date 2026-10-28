@@ -271,9 +271,7 @@ T-UC-006-storyboard-provenance-claim-contradicted :: given the Buyer Agent submi
 
 # T-UC-019-boundary-cancellation  (test_uc019_query_media_buys.py)
 T-UC-019-boundary-cancellation :: given the principal "<>" owns media buy "<>" with status active
-T-UC-019-boundary-cancellation :: given the principal "<>" owns media buy "<>" with status active and packages[<n>].canceled false but emits cancellation
 T-UC-019-boundary-cancellation :: given the principal "<>" owns media buy "<>" with status active and packages[<n>].canceled true with cancellation
-T-UC-019-boundary-cancellation :: given the principal "<>" owns media buy "<>" with status active but seller emits cancellation block
 T-UC-019-boundary-cancellation :: given the principal "<>" owns media buy "<>" with status canceled and cancellation canceled_by 'operator' (not in enum)
 T-UC-019-boundary-cancellation :: given the principal "<>" owns media buy "<>" with status canceled and cancellation reason exactly <n> characters
 T-UC-019-boundary-cancellation :: given the principal "<>" owns media buy "<>" with status canceled and cancellation {<>}
@@ -330,9 +328,6 @@ T-UC-019-inv-292-1 :: given the principal "<>" owns media buy "<>" with status "
 # T-UC-019-inv-292-2  (test_uc019_query_media_buys.py)
 T-UC-019-inv-292-2 :: then the media buy "<>" should not include a cancellation block
 
-# T-UC-019-inv-292-7  (test_uc019_query_media_buys.py)
-T-UC-019-inv-292-7 :: given the seller emits cancellation block with an extra field "<>"
-
 # T-UC-019-inv-293-2  (test_uc019_query_media_buys.py)
 T-UC-019-inv-293-2 :: when the Buyer Agent sends a get_media_buys request with account {<>}
 
@@ -363,7 +358,7 @@ T-UC-019-inv-296-2 :: given the principal "<>" owns media buy "<>" created with 
 T-UC-019-inv-296-3 :: given the principal "<>" owns media buy "<>" created without an invoice_recipient override
 
 # T-UC-019-inv-296-4  (test_uc019_query_media_buys.py)
-T-UC-019-inv-296-4 :: given the principal "<>" owns media buy "<>" with persisted invoice_recipient that includes bank_details
+T-UC-019-inv-296-4 :: given the principal "<>" owns media buy "<>" with persisted invoice_recipient that includes bank
 
 # T-UC-019-inv-package-creative-deadline-inheritance  (test_uc019_query_media_buys.py)
 T-UC-019-inv-package-creative-deadline-inheritance :: given media buy "<>" has package "<>" with creative_deadline "<>"
@@ -371,13 +366,9 @@ T-UC-019-inv-package-creative-deadline-inheritance :: given media buy "<>" has p
 # T-UC-019-partition-cancellation  (test_uc019_query_media_buys.py)
 T-UC-019-partition-cancellation :: given the principal "<>" owns media buy "<>" with status active
 T-UC-019-partition-cancellation :: given the principal "<>" owns media buy "<>" with status active and packages[<n>].canceled true with package cancellation {<>}
-T-UC-019-partition-cancellation :: given the principal "<>" owns media buy "<>" with status active but seller emits cancellation block
 T-UC-019-partition-cancellation :: given the principal "<>" owns media buy "<>" with status canceled and cancellation {<>}
 T-UC-019-partition-cancellation :: given the principal "<>" owns media buy "<>" with status canceled and cancellation {<>} (canceled_by missing)
 T-UC-019-partition-cancellation :: given the principal "<>" owns media buy "<>" with status canceled and per-package cancellation blocks omitted
-
-# T-UC-019-partition-confirmed-at  (test_uc019_query_media_buys.py)
-T-UC-019-partition-confirmed-at :: given the principal "<>" owns media buy "<>" with persisted store missing confirmed_at (defective seller)
 
 # T-UC-019-partition-currency-budget  (test_uc019_query_media_buys.py)
 T-UC-019-partition-currency-budget :: given the principal "<>" owns media buy "<>" with currency "<>" and no total_budget field
@@ -395,12 +386,10 @@ T-UC-019-partition-delivery-status :: given package "<>" activation occurred suc
 T-UC-019-partition-history :: given the principal "<>" owns media buy "<>" with <n> history entries
 
 # T-UC-019-partition-invoice-recipient  (test_uc019_query_media_buys.py)
-T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy "<>" with explicit invoice_recipient override {<>}, bank_details:{<>}}
+T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy "<>" with explicit invoice_recipient override {<>}, bank:{<>}}
 T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy "<>" with explicit invoice_recipient override {<>}], address:{<>}}
 T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy "<>" with no invoice_recipient override (inherits account default)
 T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy "<>" with persisted account binding {<>}
-T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy "<>" with seller defectively echoes bank_details on invoice_recipient
-T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy "<>" with seller emits invoice_recipient with no persisted content
 
 # T-UC-019-partition-package-creative-deadline  (test_uc019_query_media_buys.py)
 T-UC-019-partition-package-creative-deadline :: given media buy "<>" carries buy creative_deadline "<>"

@@ -83,7 +83,6 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc006_storyboard_creative_sync",
     "tests.bdd.steps.domain.uc006_dry_run_parity",
     "tests.bdd.steps.domain.uc005_format_id_shape",
-    "tests.bdd.steps.domain.uc005_format_id_roundtrip",
     "tests.bdd.steps.domain.uc005_format_id_third_party",
     "tests.bdd.steps.domain.signing_enforcement",
     "tests.bdd.steps.domain.uc010_capabilities",
