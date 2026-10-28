@@ -632,16 +632,7 @@ def _legacy_route(
         if any(format_identity_or_none(ref) == asserted for ref in refs):
             return _graded(declaration, params, exact=True)
 
-    upgraded = upgrade_legacy_format_id(assertion)
-    projected = {
-        name: value
-        for name, value in (
-            ("width", upgraded.width),
-            ("height", upgraded.height),
-            ("duration_ms", upgraded.duration_ms),
-        )
-        if value is not None
-    }
+    projected = _legacy_projection(assertion)
     kind = identity.kind
     if not projected:
         if kind is None:
@@ -671,6 +662,55 @@ def _legacy_route(
         rejected_value=assertion.id,
         accepted_values=tuple(sorted(_declaration_label(d) for d in declarations)),
         summary=(f"named format {assertion.id!r} normalizes to a canonical declaration this product does not publish"),
+    )
+
+
+def _legacy_projection(assertion: LibraryFormatId) -> dict[str, Any]:
+    """The canonical params a legacy reference states once the registry upgrades it.
+
+    ``display_300x250_image`` upgrades to ``display_image`` + ``width=300`` + ``height=250``;
+    a broad ``display_image`` upgrades to no params at all. That second case is real: it is
+    the v1 baseline that states nothing, which every same-kind canonical declaration
+    narrows (see :func:`_narrows_legacy`).
+    """
+    upgraded = upgrade_legacy_format_id(assertion)
+    return {
+        name: value
+        for name, value in (
+            ("width", upgraded.width),
+            ("height", upgraded.height),
+            ("duration_ms", upgraded.duration_ms),
+        )
+        if value is not None
+    }
+
+
+def _narrows_legacy(declaration: LibraryFormatDeclaration, claim: FormatSelector) -> bool:
+    """Whether *declaration* narrows the v1 projection of the legacy reference *claim* asserts.
+
+    ``media-buy/package-request.json`` step (2): "legacy-to-canonical parameter
+    compatibility uses the asymmetric v2 narrows v1 relation, not raw object equality".
+    ``docs/creative/canonical-formats.mdx`` § "Narrows" -- formal definition (normative)
+    gives the relation: every parameter the v1 projection states must be met by the v2
+    declaration, and "when v2.params omits a parameter that v1 specified, v2 inherits v1's
+    value", so a declaration silent about one is no conflict. A parameter the v1 projection
+    does not state is open, which is why a broad ``display_image`` is narrowed by every
+    image declaration -- the 300x250 option and the 728x90 one alike -- and a dual emission
+    pairing it with either option ref names the same format.
+
+    One-directional by the same definition ("The reverse (v1 narrows v2) is NOT how the
+    dual-emission contract is checked"), so the declaration is the narrower side here and
+    never the claim. The kind is compared first: a projection is a format SHAPE plus
+    parameters, and an image declaration does not narrow a video reference.
+    """
+    assertion = claim.assertion
+    assert assertion is not None, "only a legacy route has a v1 projection to narrow"
+    if claim.kind is not None and str(declaration.format_kind) != claim.kind:
+        return False
+    declared = _declared_params(declaration)
+    return not any(
+        declared.get(key) is not None and _constraint_unsatisfied(key, bound, declared[key])
+        for key, bound in _legacy_projection(assertion).items()
     )
 
 
@@ -886,8 +926,18 @@ def _legacy_lane(
     """
     from adcp.canonical_formats import format_is_supported
 
-    accepted = tuple(sorted(_reference_display(reference) for reference in legacy_references))
     claimed = identity.assertion
+    if claimed is None and (option := identity.option) is not None:
+        # AN OPTION REF NAMES A format_options[] ENTRY, and this product publishes none.
+        # ``media-buy/package-request.json``: "Each reference matches one target product
+        # ``format_options[]`` entry", and "an unresolved ``format_option_ref`` ... MUST be
+        # rejected with ``UNSUPPORTED_FEATURE``" in step (1), before any co-present route is
+        # compared. The deprecated arm is no substitute: it names legacy ids, not options.
+        # This used to fall through to the ``claimed is None`` acceptance below, so an
+        # option ref the product could not have published was accepted, alone or beside a
+        # legacy id that did match.
+        return _option_route(option, (), None)
+    accepted = tuple(sorted(_reference_display(reference) for reference in legacy_references))
     if claimed is None or any(
         format_is_supported(claimed, reference) and not _pixel_ratio_unsatisfied(claimed, reference)
         for reference in legacy_references
@@ -1081,11 +1131,23 @@ class SelectorResolution:
         VALUES: two routes landing on the same entry hold the same object here, and a
         hypothetical pair of byte-identical entries would agree, which is what "the same
         product format contract" means. ``None`` equals only ``None``.
+
+        A LEGACY ROUTE ALSO AGREES WHEN THE WINNER NARROWS IT. The same step says
+        "legacy-to-canonical parameter compatibility uses the asymmetric v2 narrows v1
+        relation, not raw object equality" -- so ``display_image`` beside an option ref
+        naming the 728x90 image agrees, although the legacy route on its own picks the
+        first image declaration it meets. Equality alone answered that pair
+        CONFLICTING_SELECTORS and the same pair with the 300x250 option ref success, which
+        made the verdict depend on declaration order. See :func:`_narrows_legacy`.
         """
         if self.unresolved is not None or len(self.routes) < 2:
             return False
-        first = self.routes[0][1].declaration
-        return any(verdict.declaration != first for _, verdict in self.routes[1:])
+        winner = self.routes[0][1].declaration
+        return any(
+            verdict.declaration != winner
+            and not (winner is not None and route.claim.assertion is not None and _narrows_legacy(winner, route.claim))
+            for route, verdict in self.routes[1:]
+        )
 
     @property
     def unsatisfied(self) -> FormatSatisfaction | None:
@@ -1095,8 +1157,15 @@ class SelectorResolution:
         With one route that is the pin's "a single resolved route that does not satisfy the
         product"; with several it is every route agreeing on the empty set, which no
         comparison can fault and which still satisfies no product declaration.
+
+        A winner that selected a declaration ends it: every other route agreed with that
+        selection (or :attr:`conflicting` would have answered), including a legacy route
+        that agrees only because the winner narrows it, whose own verdict may still be a
+        refusal.
         """
         if self.unresolved is not None or self.conflicting:
+            return None
+        if self.routes and self.routes[0][1].declaration is not None:
             return None
         return next((verdict for _, verdict in self.routes if not verdict), None)
 
