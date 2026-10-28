@@ -53,12 +53,16 @@ Feature: BR-UC-026 Package Media Buy
     And the response should contain a package with a seller-assigned package_id
     And the package should contain budget 5000
     And the package should contain pricing_option_id "cpm-standard"
-    And the package should contain format_ids defaulting to all product formats
+    And the package carries no format_ids, since the request carried none
     And the package should contain paused as false
     And the package should contain format_ids_to_provide listing formats needing creative assets
     # POST-S1: Buyer knows seller-assigned package_id
     # POST-S2: Complete package state returned (budget, pricing, targeting)
-    # POST-S3: format_ids echoed (defaulted to all product formats)
+    # POST-S3: format_ids are not echoed: the request carried none, and the response field
+    # is "Legacy named-format IDs supplied for this package on create_media_buy" --
+    # "Omitted means the request did not carry legacy format_ids". All product formats are
+    # active by default (package-request.json format_ids), which this field does not report.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/format_ids/description
     # POST-S4: paused state returned (defaults to false)
     # POST-S5: format_ids_to_provide lists formats needing creatives
 
@@ -330,7 +334,7 @@ Feature: BR-UC-026 Package Media Buy
     # POST-F3: Suggestion advises increasing budget
 
   @T-UC-026-ext-e @extension @ext-e @error @post-f1 @post-f2 @post-f3
-  Scenario: Format_ids not supported by product -- INVALID_REQUEST
+  Scenario: Format_ids not supported by product -- UNSUPPORTED_FEATURE
     Given a valid create_media_buy request with a package containing:
     | field              | value                 |
     | product_id         | prod-1                |
@@ -341,12 +345,18 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
-    And the error code should be "INVALID_REQUEST"
+    And the error code should be "UNSUPPORTED_FEATURE"
     And the error should include "suggestion" field
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error identifies unsupported format_ids
     # POST-F3: Suggestion advises checking product's supported formats
+    # The request is schema-valid, so INVALID_REQUEST (schema violation) does not apply.
+    # The package selector contract codes the refusal: "A single resolved route that does
+    # not satisfy the product is rejected with UNSUPPORTED_FEATURE", and an unnormalizable
+    # legacy format_id takes the same code.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_ids/description
 
   @T-UC-026-ext-f @extension @ext-f @error @post-f1 @post-f2 @post-f3
   Scenario: Duplicate catalog types within package -- INVALID_REQUEST
@@ -560,8 +570,14 @@ Feature: BR-UC-026 Package Media Buy
     And a valid create_media_buy request with a package containing no format_ids
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy success spec
-    And the package should be created with format_ids ["banner-300x250", "banner-728x90"]
-    # BR-RULE-197 INV-3: format_ids omitted defaults to all product formats
+    And the package carries no format_ids, since the request carried none
+    # BR-RULE-197 INV-3: format_ids omitted defaults to all product formats.
+    # The default is applied, not echoed. The response package's format_ids are "Legacy
+    # named-format IDs supplied for this package on create_media_buy", and "Omitted means
+    # the request did not carry legacy format_ids". Echoing the product's formats here
+    # would tell the buyer it sent them.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/format_ids/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_ids/description
 
   @T-UC-026-inv-197-4 @invariant @BR-RULE-197 @error
   Scenario: INV-4 violated -- empty format_ids array rejected
@@ -798,10 +814,15 @@ Feature: BR-UC-026 Package Media Buy
       | format_ids_omitted         | success with all product formats defaulted       |
       | single_format              | success with one format                          |
 
+    # unsupported_format is schema-valid and unsatisfied by the product, which the package
+    # selector contract codes UNSUPPORTED_FEATURE; empty_array violates minItems: 1, a schema
+    # violation, which is INVALID_REQUEST.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_ids/minItems
     Examples: Invalid partitions
-      | partition           | outcome                                    |
-      | unsupported_format  | error "INVALID_REQUEST" with suggestion    |
-      | empty_array         | error "INVALID_REQUEST" with suggestion    |
+      | partition           | outcome                                       |
+      | unsupported_format  | error "UNSUPPORTED_FEATURE" with suggestion   |
+      | empty_array         | error "INVALID_REQUEST" with suggestion       |
 
   @T-UC-026-boundary-format-ids @boundary @format_ids
   Scenario Outline: Format_ids boundary validation -- <boundary_point>
@@ -810,14 +831,18 @@ Feature: BR-UC-026 Package Media Buy
     Then the response is compliant with the create_media_buy spec
     And the outcome should be <outcome>
 
+    # A well-formed format_id the product does not accept is UNSUPPORTED_FEATURE under the
+    # package selector contract; only the empty array is a schema violation (minItems: 1).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_ids/minItems
     Examples: Boundary values
-      | boundary_point                                    | outcome                                    |
-      | format_ids omitted (defaults to all product formats) | success                                 |
-      | single format_id matching product format          | success                                    |
-      | all product formats explicitly listed             | success                                    |
-      | one unsupported format_id among valid ones        | error "INVALID_REQUEST" with suggestion    |
-      | empty array []                                    | error "INVALID_REQUEST" with suggestion    |
-      | format_id from different product                  | error "INVALID_REQUEST" with suggestion    |
+      | boundary_point                                    | outcome                                       |
+      | format_ids omitted (defaults to all product formats) | success                                    |
+      | single format_id matching product format          | success                                       |
+      | all product formats explicitly listed             | success                                       |
+      | one unsupported format_id among valid ones        | error "UNSUPPORTED_FEATURE" with suggestion   |
+      | empty array []                                    | error "INVALID_REQUEST" with suggestion       |
+      | format_id from different product                  | error "UNSUPPORTED_FEATURE" with suggestion   |
 
   @T-UC-026-partition-pricing-option @partition @pricing_option_id
   Scenario Outline: Pricing option partition validation -- <partition>
