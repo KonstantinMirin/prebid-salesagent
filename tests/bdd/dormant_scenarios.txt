@@ -339,9 +339,6 @@ T-UC-019-inv-296-3 :: given the principal "<>" owns media buy "<>" created witho
 # T-UC-019-inv-296-4  (test_uc019_query_media_buys.py)
 T-UC-019-inv-296-4 :: given the principal "<>" owns media buy "<>" with persisted invoice_recipient that includes bank
 
-# T-UC-019-inv-package-creative-deadline-inheritance  (test_uc019_query_media_buys.py)
-T-UC-019-inv-package-creative-deadline-inheritance :: given media buy "<>" has package "<>" with creative_deadline "<>"
-
 # T-UC-019-partition-cancellation  (test_uc019_query_media_buys.py)
 T-UC-019-partition-cancellation :: given the principal "<>" owns media buy "<>" with status active
 T-UC-019-partition-cancellation :: given the principal "<>" owns media buy "<>" with status active and packages[<n>].canceled true with package cancellation {<>}
@@ -369,10 +366,6 @@ T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy 
 T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy "<>" with explicit invoice_recipient override {<>}], address:{<>}}
 T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy "<>" with no invoice_recipient override (inherits account default)
 T-UC-019-partition-invoice-recipient :: given the principal "<>" owns media buy "<>" with persisted account binding {<>}
-
-# T-UC-019-partition-package-creative-deadline  (test_uc019_query_media_buys.py)
-T-UC-019-partition-package-creative-deadline :: given media buy "<>" carries buy creative_deadline "<>"
-T-UC-019-partition-package-creative-deadline :: given media buy "<>" carries no buy creative_deadline
 
 # T-UC-019-partition-targeting-rehydration  (test_uc019_query_media_buys.py)
 T-UC-019-partition-targeting-rehydration :: given package "<>" persisted package_config has no targeting_overlay and no legacy targeting
