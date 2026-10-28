@@ -622,7 +622,7 @@ def _legacy_route(
     mapping it belongs to. Fixed in salesagent-iz7dm, where it was 101 of the 376 nodeids
     regressed on land. The id now answers ``image`` in both directions.
     """
-    from src.core.format_resolver import format_identity_or_none
+    from src.core.format_resolver import canonically_addressed, format_identity_or_none
 
     assertion = identity.assertion
     assert assertion is not None, "the legacy route is reached only for a claim asserting a reference"
@@ -632,7 +632,11 @@ def _legacy_route(
         if any(format_identity_or_none(ref) == asserted for ref in refs):
             return _graded(declaration, params, exact=True)
 
-    upgraded = upgrade_legacy_format_id(assertion)
+    # Canonically addressed first: the SDK upgrades a size-encoded id only for the reference
+    # agent, and recognizes that agent by a comparison applying four of the eight steps of
+    # docs/reference/url-canonicalization -- so a respelling of the same agent (a root-label
+    # dot, a dot segment) skipped the upgrade and was graded as a bare kind.
+    upgraded = upgrade_legacy_format_id(canonically_addressed(assertion))
     projected = {
         name: value
         for name, value in (
@@ -873,9 +877,12 @@ def _legacy_lane(
 
     ``identity.assertion`` is the input even though it is declared ``compare=False``. That
     flag means a reference is never compared BY RAW SPELLING -- the same agent respelled is
-    the same agent -- and it is not a prohibition on this call: ``format_is_supported``
-    canonicalizes ``agent_url`` on both sides itself (verified: a trailing slash still
-    matches). Comparing the key instead is what lost the parameters.
+    the same agent -- and it is not a prohibition on this call, which is asked through
+    ``format_resolver.format_accepted_by`` so both sides are canonically addressed first.
+    Calling the SDK predicate directly was a defect: its own agent comparison applies four of
+    the eight steps ``core/format-id.json`` makes a MUST, so a product naming the creative's
+    agent with a trailing root-label dot or a removable dot segment refused that creative
+    (salesagent-ol033.20.23). Comparing the key instead is what lost the parameters.
 
     NOT widened to compare the claim's KIND against the product's refs projected to kinds.
     The projection direction is legal, but ``formats.mdx`` says equal ``format_kind`` alone
@@ -884,12 +891,12 @@ def _legacy_lane(
     that comparison would accept a creative the product does not take. The pin's unit is the
     DECLARATION, kind plus parameters, at which granularity those two separate cleanly.
     """
-    from adcp.canonical_formats import format_is_supported
+    from src.core.format_resolver import format_accepted_by
 
     accepted = tuple(sorted(_reference_display(reference) for reference in legacy_references))
     claimed = identity.assertion
     if claimed is None or any(
-        format_is_supported(claimed, reference) and not _pixel_ratio_unsatisfied(claimed, reference)
+        format_accepted_by(claimed, reference) and not _pixel_ratio_unsatisfied(claimed, reference)
         for reference in legacy_references
     ):
         return _SATISFIED

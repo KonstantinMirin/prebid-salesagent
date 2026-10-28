@@ -42,6 +42,7 @@ from src.core.schemas import (
     FormatKey,
     FormatOptionIdentity,
     LibraryCreativeAsset,
+    canonical_agent_url,
     creative_format_identity,
     format_id_identity,
     format_key_parts,
@@ -979,10 +980,34 @@ def format_accepted_by(requested: FormatRef, supported: FormatRef) -> bool:
     supported format can satisfy a narrower request), which is why the SDK gives
     it its own predicate rather than reusing equivalence — and why this one
     delegates to ``adcp.canonical_formats.format_is_supported`` rather than to
-    the identity pair, which cannot express direction. The SDK predicate reads
-    attributes, so a local ``FormatId`` subclass is handed over as is.
+    the identity pair, which cannot express direction.
+
+    BOTH SIDES ARE CANONICALLY ADDRESSED FIRST, because the SDK's own agent_url
+    comparison is not the pin's. ``core/format-id.json`` makes canonicalization
+    per docs/reference/url-canonicalization a MUST before two references are
+    treated as the same format, and that page says "Implementations MUST apply
+    every step". The SDK's ``canonicalize_agent_url`` applies four of them
+    (scheme and host case, userinfo, default port): measured on the pin, a
+    trailing root-label dot (step 2) and a removable dot segment (step 5) each
+    made one agent two. That also decided whether a legacy id was upgraded at
+    all, because the SDK upgrades ``display_300x250_image`` only for the
+    reference agent and recognizes the agent by that same partial comparison.
+    ``canonical_agent_url`` applies all eight, and the SDK's four are idempotent
+    over its output, so handing the SDK canonical spellings makes its comparison
+    the spec's without re-implementing it.
     """
-    return format_is_supported(requested, supported)
+    return format_is_supported(canonically_addressed(requested), canonically_addressed(supported))
+
+
+def canonically_addressed(ref: FormatRef) -> LibraryFormatId:
+    """*ref* as a model whose ``agent_url`` is the canonical spelling of the same agent.
+
+    For a COMPARISON only: a reference that is stored or echoed keeps the buyer's
+    bytes (see :data:`src.core.schemas.FormatKey`). ``model_copy`` rather than a
+    constructor, so the reference keeps its own type and every parameter it carries.
+    """
+    reference = format_reference(ref)
+    return reference.model_copy(update={"agent_url": canonical_agent_url(reference.agent_url)})
 
 
 def find_format(formats: Iterable[Format], format_id: FormatRef) -> Format | None:
