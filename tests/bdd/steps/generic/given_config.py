@@ -29,6 +29,7 @@ from tests.factories.format import (
     FormatIdFactory,
     make_asset,
     make_asset_group,
+    make_disclosure_capability,
     make_fixed_renders,
     make_renders,
     make_responsive_renders,
@@ -216,6 +217,61 @@ def given_registry_format_no_disclosure(ctx: dict, name: str) -> None:
     fmt = FormatFactory.build(name=name, supported_disclosure_positions=None)
     _add_format(ctx, fmt)
     _sync_registry(ctx)
+
+
+# ── Format with disclosure_capabilities ──────────────────────────────
+
+
+@given(parsers.parse('the registry has format "{name}" with disclosure_capabilities:'))
+def given_registry_format_disclosure_capabilities(ctx: dict, name: str, datatable: Sequence[Sequence[object]]) -> None:
+    """Register a format whose disclosure_capabilities come from a position | persistence table.
+
+    Rows naming the same position are folded into one entry: ``core/format.json`` says
+    "Each position MUST appear at most once" in disclosure_capabilities, so a position's
+    modes are one ``persistence`` list, not one entry per mode.
+    """
+    modes_by_position: dict[str, list[str]] = {}
+    for row in _datatable_to_dicts(datatable):
+        modes_by_position.setdefault(row["position"], []).append(row["persistence"])
+    capabilities = [make_disclosure_capability(position, *modes) for position, modes in modes_by_position.items()]
+    _add_format(ctx, FormatFactory.build(name=name, disclosure_capabilities=capabilities))
+    _sync_registry(ctx)
+
+
+@given(parsers.parse('the registry has format "{name}" with disclosure_capabilities positions {positions}'))
+def given_registry_format_capability_positions(ctx: dict, name: str, positions: str) -> None:
+    """Register a format declaring *positions* through disclosure_capabilities only.
+
+    ``persistence`` is required on every entry (``minItems: 1``) and the sentence names
+    none, so each position carries ``continuous``, the first member of
+    ``enums/disclosure-persistence.json``. The scenarios using this sentence filter on
+    positions alone, so the mode is never what they grade.
+    """
+    capabilities = [make_disclosure_capability(position, "continuous") for position in json.loads(positions)]
+    _add_format(ctx, FormatFactory.build(name=name, disclosure_capabilities=capabilities))
+    _sync_registry(ctx)
+
+
+@given(parsers.parse('the registry has format "{name}" with no disclosure_capabilities field'))
+def given_registry_format_no_disclosure_capabilities(ctx: dict, name: str) -> None:
+    """Register a format that declares no disclosure_capabilities."""
+    _add_format(ctx, FormatFactory.build(name=name, disclosure_capabilities=None))
+    _sync_registry(ctx)
+
+
+@given(parsers.parse('"{name}" has no supported_disclosure_positions field'))
+def given_registered_format_lacks_flat_positions(ctx: dict, name: str) -> None:
+    """Check the registered format *name* declares no flat supported_disclosure_positions.
+
+    The sentence states a property of a format an earlier Given registered, so it is
+    checked against that format rather than set: a scenario grading the
+    disclosure_capabilities route must not be satisfiable through the flat list.
+    """
+    registered = [f for f in ctx.get("registry_formats", []) if f.name == name]
+    assert len(registered) == 1, f"expected exactly one registered format named {name!r}, got {len(registered)}"
+    assert registered[0].supported_disclosure_positions is None, (
+        f"{name!r} declares supported_disclosure_positions={registered[0].supported_disclosure_positions!r}"
+    )
 
 
 # ── Format with output_format_ids / input_format_ids (data table) ────

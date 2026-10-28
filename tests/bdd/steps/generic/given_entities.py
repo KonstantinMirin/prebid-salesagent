@@ -11,16 +11,20 @@ from __future__ import annotations
 
 from pytest_bdd import given, parsers
 
+from src.core.format_cache import load_reference_formats
 from tests.bdd.steps.generic._registry import sync_registry as _sync_registry
 from tests.factories.format import (
     ASSET_TYPES,
     FormatFactory,
     FormatIdFactory,
+    asset_types_of,
     make_asset,
+    make_disclosure_capability,
     make_fixed_renders,
     make_renders,
     make_responsive_renders,
     pick_reference_format,
+    pick_reference_formats,
 )
 
 # ── Background steps (apply to every scenario) ──────────────────────
@@ -105,10 +109,34 @@ def given_registry_multi_categories(ctx: dict) -> None:
     ``video_hosted`` 3, ``video_vast`` 2, every ``html5`` and ``audio_hosted`` format being
     a pixel_tracker carrier. Three genuinely different kinds is what the sentence needs.
     """
-    ctx["registry_formats"] = [
+    ctx["registry_formats"] = _reference_formats_across_kinds()
+    _sync_registry(ctx)
+
+
+def _reference_formats_across_kinds() -> list:
+    """Three reference-catalog formats of three different canonical kinds.
+
+    See :func:`given_registry_multi_categories` for why these three kinds and why the
+    catalog rather than minted formats: the live e2e stack can serve them.
+    """
+    return [
         pick_reference_format(canonical_kind, without_asset_type="pixel_tracker")
         for canonical_kind in ("image", "video_hosted", "video_vast")
     ]
+
+
+@given("the creative agent registry has formats without vendor pricing options")
+def given_registry_formats_without_pricing(ctx: dict) -> None:
+    """Reference-catalog formats, none of which declares ``pricing_options``.
+
+    Drawn from the catalog so the live e2e stack serves the same state; the capture
+    declares ``pricing_options`` on none of its formats, which this checks rather than
+    assumes, so the sentence is true of what was registered.
+    """
+    formats = _reference_formats_across_kinds()
+    priced = [f.name for f in formats if f.pricing_options]
+    assert not priced, f"Given claims formats without vendor pricing, but these declare pricing_options: {priced}"
+    ctx["registry_formats"] = formats
     _sync_registry(ctx)
 
 
@@ -241,6 +269,69 @@ def given_seller_various_disclosure(ctx: dict) -> None:
     ctx["registry_formats"] = [
         FormatFactory.build(name="prominent-ad", supported_disclosure_positions=["prominent"]),
         FormatFactory.build(name="footer-ad", supported_disclosure_positions=["footer"]),
+    ]
+    _sync_registry(ctx)
+
+
+@given("a seller with formats declaring various disclosure persistence capabilities")
+def given_seller_various_disclosure_persistence(ctx: dict) -> None:
+    """Three formats that split the persistence modes across positions (partition/boundary).
+
+    - ``split-modes-ad``: continuous at one position, initial at another -- the shape the
+      request schema calls out ("Different positions may satisfy different modes");
+    - ``flexible-ad``: flexible only;
+    - ``flat-positions-ad``: no disclosure_capabilities, only the flat
+      supported_disclosure_positions, which carries no persistence and so can satisfy
+      no persistence filter.
+
+    No format covers all three modes, so a request for every mode, or for continuous with
+    flexible, is answered empty by an AND filter and non-empty by an OR one.
+    """
+    ctx["registry_formats"] = [
+        FormatFactory.build(
+            name="split-modes-ad",
+            disclosure_capabilities=[
+                make_disclosure_capability("prominent", "continuous"),
+                make_disclosure_capability("footer", "initial"),
+            ],
+        ),
+        FormatFactory.build(
+            name="flexible-ad", disclosure_capabilities=[make_disclosure_capability("overlay", "flexible")]
+        ),
+        FormatFactory.build(name="flat-positions-ad", supported_disclosure_positions=["prominent"]),
+    ]
+    _sync_registry(ctx)
+
+
+@given(parsers.parse('the seller catalog has at least one format containing an "{asset_type}" asset'))
+def given_catalog_format_with_asset_type(ctx: dict, asset_type: str) -> None:
+    """A format carrying *asset_type*, beside a control format that does not.
+
+    The carrier is drawn from the reference catalog when the catalog has one, so the live
+    e2e stack serves the same state; the capture carries only some of the
+    ``enums/asset-content-type.json`` members, and for the rest a format is built with
+    that asset. The control comes from the catalog too: it is what makes "each returned
+    format contains the type" fail on a seller that ignores the filter.
+    """
+    carriers = [f for f in load_reference_formats() if asset_type in asset_types_of(f)]
+    carrier = (
+        carriers[0] if carriers else FormatFactory.build(name=f"{asset_type} carrier", assets=[make_asset(asset_type)])
+    )
+    control = pick_reference_formats(lambda f: asset_type not in asset_types_of(f))[0]
+    ctx["registry_formats"] = [carrier, control]
+    _sync_registry(ctx)
+
+
+@given(parsers.parse("the seller catalog has a format with a required image asset capped at {size_kb:d} KB"))
+def given_catalog_format_with_capped_image(ctx: dict, size_kb: int) -> None:
+    """A format whose required image slot caps file size through its ``requirements``.
+
+    ``max_file_size_kb`` is the pinned member of
+    ``core/requirements/image-asset-requirements.json``; it is set through ``make_asset``,
+    which validates it into that requirements model.
+    """
+    ctx["registry_formats"] = [
+        FormatFactory.build(name="capped-image-ad", assets=[make_asset("image", max_file_size_kb=size_kb)])
     ]
     _sync_registry(ctx)
 

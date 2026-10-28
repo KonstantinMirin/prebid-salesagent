@@ -214,51 +214,6 @@ T-UC-004-window-first-report :: given no prior report exists for media buy "<>" 
 # T-UC-004-window-isfinal-absent  (test_uc004_deliver_media_buy_metrics.py)
 T-UC-004-window-isfinal-absent :: given delivery data for media buy "<>" owned by "<>"
 
-# T-UC-005-boundary-disclosure-persistence  (test_uc005_discover_creative_formats.py)
-T-UC-005-boundary-disclosure-persistence :: given a seller with formats declaring various disclosure persistence capabilities
-
-# T-UC-005-boundary-sandbox  (test_uc005_discover_creative_formats.py)
-T-UC-005-boundary-sandbox :: given a seller handling a list_creative_formats request for the given account context
-
-# T-UC-005-ext-b-persistence-dupes  (test_uc005_discover_creative_formats.py)
-T-UC-005-ext-b-persistence-dupes :: when the Buyer Agent requests formats with disclosure_persistence filter ["<>", "<>"]
-
-# T-UC-005-ext-b-persistence-empty  (test_uc005_discover_creative_formats.py)
-T-UC-005-ext-b-persistence-empty :: when the Buyer Agent requests formats with disclosure_persistence filter []
-
-# T-UC-005-ext-b-persistence-invalid  (test_uc005_discover_creative_formats.py)
-T-UC-005-ext-b-persistence-invalid :: when the Buyer Agent requests formats with disclosure_persistence filter ["<>"]
-
-# T-UC-005-inv-049-11-holds  (test_uc005_discover_creative_formats.py)
-T-UC-005-inv-049-11-holds :: given the registry has format "<>" with disclosure_capabilities:
-
-# T-UC-005-inv-049-11-nofield  (test_uc005_discover_creative_formats.py)
-T-UC-005-inv-049-11-nofield :: given the registry has format "<>" with no disclosure_capabilities field
-
-# T-UC-005-inv-049-11-violated  (test_uc005_discover_creative_formats.py)
-T-UC-005-inv-049-11-violated :: given the registry has format "<>" with disclosure_capabilities:
-
-# T-UC-005-inv-049-8-capabilities  (test_uc005_discover_creative_formats.py)
-T-UC-005-inv-049-8-capabilities :: given the registry has format "<>" with disclosure_capabilities positions ["<>", "<>"]
-
-# T-UC-005-main-no-pricing  (test_uc005_discover_creative_formats.py)
-T-UC-005-main-no-pricing :: given the creative agent registry has formats without vendor pricing options
-
-# T-UC-005-main-pricing  (test_uc005_discover_creative_formats.py)
-T-UC-005-main-pricing :: given the creative agent registry has formats with vendor pricing options
-
-# T-UC-005-partition-disclosure-persistence  (test_uc005_discover_creative_formats.py)
-T-UC-005-partition-disclosure-persistence :: given a seller with formats declaring various disclosure persistence capabilities
-
-# T-UC-005-v31-asset-registry-discriminators  (test_uc005_discover_creative_formats.py)
-T-UC-005-v31-asset-registry-discriminators :: given the seller catalog has at least one format containing an "<>" asset
-
-# T-UC-005-v31-asset-registry-no-variant-siblings  (test_uc005_discover_creative_formats.py)
-T-UC-005-v31-asset-registry-no-variant-siblings :: when the Buyer Agent sends a list_creative_formats request with asset_types ["<>"]
-
-# T-UC-005-v31-payload-vs-requirements-separation  (test_uc005_discover_creative_formats.py)
-T-UC-005-v31-payload-vs-requirements-separation :: given the seller catalog has a format with a required image asset capped at <n> MB
-
 
 # T-UC-006-storyboard-provenance-claim-contradicted  (test_uc006_sync_creatives.py)
 T-UC-006-storyboard-provenance-claim-contradicted :: given the Buyer Agent submits a creative claiming digital_source_type "<>"
