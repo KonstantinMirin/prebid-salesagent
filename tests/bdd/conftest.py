@@ -4361,8 +4361,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Graduated: T-UC-026-ext-g-product, T-UC-026-ext-g-format,
             # T-UC-026-ext-g-pricing (innet_091026_1343, all four transports xpass).
             # Production refuses each immutable field on update from
-            # AdCPPackageUpdate._validate_package_update_shape, which raises one pydantic
-            # `readOnly` error per offending field; adcp_error_for maps a pydantic
+            # UpdateMediaBuyRequest._refuse_immutable_package_fields, which raises one
+            # pydantic `not` error per offending field; adcp_error_for maps a pydantic
             # ValidationError to AdCPInvalidRequestError, so the buyer gets
             # INVALID_REQUEST + recovery=correctable + the CODE_TABLE suggestion with
             # field='packages[0].<name>'. Measured on this tree at the DTO boundary:

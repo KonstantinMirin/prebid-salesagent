@@ -2682,9 +2682,11 @@ def given_package_update_with_immutable_fields(ctx: dict, description: str) -> N
     _ensure_update_defaults(ctx)["packages"] = [package]
 
 
-@then(parsers.parse('the update is refused INVALID_REQUEST naming the package update\'s "{name}" as read-only'))
-def then_package_update_field_read_only(ctx: dict, name: str) -> None:
-    """The refusal names *name* on the one package update, with the keyword ``readOnly``.
+@then(
+    parsers.parse('the update is refused INVALID_REQUEST naming the package update\'s "{name}" under keyword {keyword}')
+)
+def then_package_update_field_refused_by_keyword(ctx: dict, name: str, keyword: str) -> None:
+    """The refusal names *name* on the one package update, with the schema keyword *keyword*.
 
     The code alone does not separate the named immutable-field refusal from the generic
     one an undeclared field earns in dev (``additionalProperties``), and production drops
@@ -2695,7 +2697,7 @@ def then_package_update_field_read_only(ctx: dict, name: str) -> None:
     ctx["result"].assert_wire_error(
         "INVALID_REQUEST",
         field=f"packages[0].{name}",
-        issues=[{"pointer": f"/packages/0/{name}", "keyword": "readOnly"}],
+        issues=[{"pointer": f"/packages/0/{name}", "keyword": keyword}],
     )
 
 

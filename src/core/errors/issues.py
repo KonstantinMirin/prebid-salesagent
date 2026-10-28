@@ -63,9 +63,9 @@ JsonSchemaKeyword = Literal[
     "minLength",
     "minimum",
     "multipleOf",
+    "not",
     "oneOf",
     "pattern",
-    "readOnly",
     "required",
     "type",
 ]
@@ -347,9 +347,9 @@ _KEYWORD_SENTENCES: dict[JsonSchemaKeyword, str] = {
     "minLength": "This field is too short.",
     "minimum": "This field is below the minimum.",
     "multipleOf": "This field must be a multiple of the required step.",
+    "not": "This field matches a shape the schema forbids.",
     "oneOf": "This field does not match any accepted variant.",
     "pattern": "This field does not match the required pattern.",
-    "readOnly": "This field cannot be changed.",
     "required": "This field is required.",
     "type": "This field is the wrong type.",
 }
@@ -491,8 +491,8 @@ none rather than an invented one.
 
 
 SELLER_RAISED_KEYWORDS: typing.Final[dict[str, JsonSchemaKeyword]] = {
+    "not": "not",
     "oneOf": "oneOf",
-    "readOnly": "readOnly",
 }
 """Keywords a SELLER-RAISED ``PydanticCustomError`` names for itself.
 
@@ -509,10 +509,14 @@ is worse than none. These we can. A oneOf expressed as a model validator (see
 ``CreativeAssetRequest``, where core/creative-asset.json's format_id-XOR-
 format_kind is flattened onto one model) rejects for exactly the reason JSON
 Schema spells ``oneOf``. The error type IS the keyword, so a raise site cannot
-name one this table does not carry. ``readOnly`` is the immutable-field refusal on
-a package update (``UpdateMediaBuyRequest._refuse_immutable_package_fields``):
-media-buy/package-update.json says those fields "cannot appear in update
-payloads", which is JSON Schema's readOnly meaning stated as a refusal.
+name one this table does not carry. ``not`` is the immutable-field refusal on a
+package update (``UpdateMediaBuyRequest._refuse_immutable_package_fields``):
+media-buy/package-update.json rejects those fields through its root ``not`` (an
+``anyOf`` of ``required``), so ``not`` is the keyword a JSON Schema validator
+reports for that rejection. ``readOnly`` is NOT that keyword and is not in this
+seller's vocabulary: it is an annotation no validator rejects on, and
+core/error.json asks for "the validator's native keyword name; do not invent
+custom values here".
 """
 
 

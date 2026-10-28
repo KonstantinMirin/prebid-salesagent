@@ -3655,14 +3655,16 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
         ``AdCPPackageUpdate._validate_package_update_shape`` gives: FastMCP drives this model
         through a TypeAdapter before the tool body, and a pydantic error is the one shape
         every boundary converts. One entry per field, so ``issues[]`` names every offender
-        and ``field`` derives from ``issues[0]``, as core/error.json requires.
+        and ``field`` derives from ``issues[0]``, as core/error.json requires. The keyword is
+        ``not``, the one in package-update.json that rejects these fields, because
+        core/error.json's ``issues[].keyword`` is "the validator's native keyword name".
         """
         packages = data.get("packages") if isinstance(data, dict) else None
         if not isinstance(packages, list):
             return data
         errors = [
             InitErrorDetails(
-                type=PydanticCustomError("readOnly", "{name} is immutable on a package update", {"name": name}),
+                type=PydanticCustomError("not", "{name} is immutable on a package update", {"name": name}),
                 loc=("packages", index, name),
                 input=package,
             )
