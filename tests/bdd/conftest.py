@@ -7135,10 +7135,19 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_build_uc003_storyboard_generic_client_env,
         seed=_seed_uc003_storyboard_generic_client,
     ),
+    # The catch-all seeds what the feature's Background states for every UC-003 scenario
+    # -- an existing media buy the buyer owns, with a package, and the account the update
+    # names -- which is the uc003-ext seed. Without it, a measurement with the xfail off
+    # (measure_innet_281026_1501) failed every one of the 1524 nodes this row claims on the
+    # Background's ownership Given ("No existing_media_buy in ctx"), so the row's xfail hid
+    # a missing seed rather than the per-scenario gaps it names. While xfail_reason is set,
+    # _run_env_route xfails before the env is built and the seed does not run; it is here
+    # so that dropping the reason grades each scenario on its own steps.
     EnvRoute(
         tag="uc003-not-wired",
         when=_uc("UC-003", lambda m: True),
         env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
+        seed=_seed_update_with_existing_buy,
         xfail_reason=(
             "UC-003 harness not yet wired for non-extension scenarios (full graduation pending, PR #1567 follow-up)"
         ),
