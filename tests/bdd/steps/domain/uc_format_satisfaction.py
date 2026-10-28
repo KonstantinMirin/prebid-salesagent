@@ -1086,10 +1086,11 @@ def then_refused_legacy_not_accepted(ctx: dict, width: int, height: int) -> None
     """The DEPRECATED lane's refusal, and the dimensions have to be in it.
 
     A DIFFERENT CODE from the canonical sibling, and that is production's documented
-    decision rather than this scenario's preference: ``canonical_refusal`` asserts it is
-    never called for ``LEGACY_NOT_ACCEPTED``, because the legacy lane raises
-    ``AdCPValidationError`` at its own site -- "violates business rules beyond schema
-    validation". A row asserting UNSUPPORTED_FEATURE here would be asserting the canonical
+    decision rather than this scenario's preference: the creative ASSIGNMENT sites skip
+    ``canonical_refusal`` for ``LEGACY_NOT_ACCEPTED`` and raise ``AdCPValidationError``
+    themselves -- "violates business rules beyond schema validation". (A package's own
+    format selector is a different site, coded UNSUPPORTED_FEATURE by
+    ``media-buy/package-request.json``'s selector contract.) A row asserting UNSUPPORTED_FEATURE here would be asserting the canonical
     lane's code against the deprecated lane's refusal, which is the mistake this Then was
     written to replace. No ``field``: the site carries none, for the same reason the bare
     UNSUPPORTED_FEATURE sibling asserts none.

@@ -793,7 +793,6 @@ def _resolve_package_selectors(
             route selected nothing. The pointer names the ARM the verdict came from.
     """
     from src.core.format_satisfaction import (
-        FormatRefusal,
         canonical_refusal,
         conflicting_selectors,
         resolve_routes,
@@ -825,10 +824,15 @@ def _resolve_package_selectors(
                 package_index=pkg_index + 1,
             )
         verdict = selector.refused
-        # A DEPRECATED-LANE refusal is left to the legacy branch in the package loop, which
-        # raises the graded VALIDATION_ERROR with both value lists; ``canonical_refusal``'s
-        # own assert refuses it here (salesagent-n1blr).
-        if verdict is not None and verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED:
+        # BOTH LANES answer here, the deprecated one included. ``media-buy/package-request.json``
+        # @ 3.2.7, "Format selector contract (normative)": "A single resolved route that does
+        # not satisfy the product is rejected with ``UNSUPPORTED_FEATURE``", and a legacy
+        # ``format_id`` that cannot be normalized takes the same code. A product declaring
+        # only ``format_ids`` is still a product the route has to satisfy, so a legacy
+        # reference outside its set is that refusal. The deprecated lane used to be skipped
+        # here and answered VALIDATION_ERROR by the package loop, which the contract leaves
+        # no room for.
+        if verdict is not None:
             assert verdict.field is not None, "a selector route always names its request field"
             raise canonical_refusal(
                 verdict,
