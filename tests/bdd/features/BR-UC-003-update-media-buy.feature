@@ -408,9 +408,10 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-atomic-error @invariant @BR-RULE-018
   Scenario: Atomic response -- error has no success fields
     Given a valid update_media_buy request with:
-    | field        | value       |
-    | media_buy_id | mb_existing |
-    | paused       | true        |
+    | field        | value          |
+    | media_buy_id | mb_nonexistent |
+    | paused       | true           |
+    And no media buy exists with media_buy_id "mb_nonexistent"
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the response should contain an "errors" array
@@ -418,6 +419,13 @@ Feature: BR-UC-003 Update Media Buy
     And the response should NOT contain "buyer_ref" field
     And the response should NOT contain "affected_packages" field
     # BR-RULE-018 INV-2: Error → no success fields
+    # LOCAL CORRECTION: the generated request paused the Background's ACTIVE buy, which the
+    # pinned state machine permits ("pause" is a valid action for active), so nothing in the
+    # scenario produced the error its Thens grade. The request now names a buy the seller
+    # does not hold, which the pinned enums/error-code.json answers with MEDIA_BUY_NOT_FOUND
+    # ("Referenced media buy does not exist or is not accessible to the requesting agent"),
+    # the same trigger @T-UC-003-ext-b uses.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
 
   @T-UC-003-approval-auto @invariant @BR-RULE-017
   Scenario: Approval workflow -- both flags false, auto-approved
@@ -485,13 +493,16 @@ Feature: BR-UC-003 Update Media Buy
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
-    | budget     | 5000    |
+    | budget     | 7500    |
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy success spec
     And the response status should be "completed"
-    And the package budget should be persisted as 5000
+    And the package budget should be persisted as 7500
     # BR-RULE-020 INV-1: Adapter success → changes persisted
+    # LOCAL CORRECTION: the generated budget was 5000, which is the budget the Background's
+    # package is seeded with, so "persisted as 5000" held whether or not the update wrote
+    # anything. 7500 differs from the seed, so only a persisted write satisfies the Then.
 
   @T-UC-003-creative-replace @invariant @BR-RULE-024
   Scenario: Creative replacement -- new set replaces existing
@@ -2251,29 +2262,38 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-v31-error-conflict-version @error @v3.1 @error-details @concurrency @ext-s @post-f1 @post-f2 @post-f3
   Scenario: CONFLICT error carries v3.1 details shape (resource_id + expected/current version)
-    Given the media buy "mb_existing" is at version 7
-    And the Buyer Agent's last-read version of "mb_existing" is 5
+    Given the media buy "mb_existing" is at revision 7
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
     | paused       | true        |
+    And the request revision is set to 5
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "CONFLICT"
-    And the error "details" object should include "resource_id" with value "mb_existing"
-    And the error "details" object should include "expected_version" with value 5
-    And the error "details" object should include "current_version" with value 7
+    And the wire error details should include resource_id "mb_existing"
+    And the wire error details should include expected_version "5"
+    And the wire error details should include current_version "7"
     And the error should include a "suggestion" field
     # POST-F1: System state unchanged (no partial write)
     # POST-F2: CONFLICT details enable optimistic-concurrency retry
     # POST-F3: Buyer Agent re-reads at current_version and retries (suggestion guides the fix)
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # LOCAL CORRECTION: the generated Givens named a "version" and a buyer-side "last-read
+    # version", neither of which the pinned update request can carry. The pin's only
+    # optimistic-concurrency token on update_media_buy is `revision`: "Expected current
+    # revision for optimistic concurrency ... sellers MUST reject the update with CONFLICT if
+    # the media buy's current revision does not match". The Givens now seed the buy's
+    # revision and send the stale one, through the steps @T-UC-003-partition-revision uses.
+    # The details keys are error-details/conflict.json's: resource_id, expected_version
+    # ("Version or ETag the client was operating against") and current_version, read off the
+    # wire rather than off a reconstructed exception.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/revision
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/error-details/conflict.json
 
   @T-UC-003-v31-error-idempotency-conflict @error @v3.1 @error-details @idempotency @post-f1 @post-f2 @post-f3
   Scenario: IDEMPOTENCY_CONFLICT error carries v3.1 details shape with ETag versions
     Given idempotency_key "upd-20260521-001" was previously used with a different request body
-    And the recorded ETag for that key is "W/\"etag-abc\""
     And a valid update_media_buy request with:
     | field           | value             |
     | media_buy_id    | mb_existing       |
@@ -2283,12 +2303,22 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "IDEMPOTENCY_CONFLICT"
-    And the error "details" object should include "resource_id" with value "mb_existing"
-    And the error "details" object should include "current_version" with value "W/\"etag-abc\""
+    And the wire error object carries no "field" key
     And the error should include a "suggestion" field
     # POST-F1: System state unchanged
-    # POST-F2: IDEMPOTENCY_CONFLICT details accept string ETag (not only numeric versions)
     # POST-F3: Buyer Agent retries with a fresh idempotency_key (suggestion guides the fix)
+    # LOCAL CORRECTION: the generated scenario seeded an ETag for the key and asserted it
+    # came back as details.current_version, plus a details.resource_id. The pinned
+    # L1/security.mdx "IDEMPOTENCY_CONFLICT response shape" says the error body "MUST include
+    # code: IDEMPOTENCY_CONFLICT and a human-readable message" and "MUST NOT include the
+    # cached response, the original payload, a canonical-form diff, or any fingerprint
+    # derived from them. A field json-pointer hint ... Sellers MUST NOT emit one." An ETag of
+    # the cached response is such a fingerprint, and error-details/conflict.json (the shape
+    # with resource_id/current_version) is the CONFLICT shape, not this one. Both details
+    # Thens and the ETag Given are gone; the field-pointer prohibition replaces them. The
+    # first request is spent on the wire, so the hash the conflict is detected against is
+    # the one production computed.
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx
 
   @T-UC-003-storyboard-media-buy-not-found @storyboard-v3.1 @v3-1 @structured-errors @media-buy-not-found
   Scenario: update_media_buy with unknown media_buy_id returns structured MEDIA_BUY_NOT_FOUND, not a 500
@@ -2708,13 +2738,18 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the response payload should NOT contain a "sandbox" field
     # BR-RULE-209 INV-10: update_media_buy three-way oneOf -- sandbox appears only on synchronous success
+    # LOCAL CORRECTION: the "submitted task" row is removed. The pinned
+    # update-media-buy-response.json forbids sandbox on the terminal-failure arm
+    # (UpdateMediaBuyError: not anyOf [... {required: [sandbox]} ...]) but not on the
+    # submitted arm, whose `not` lists only media_buy_id and warnings and whose
+    # additionalProperties is true. Asserting "forbidden" there grades a prohibition the
+    # pin does not make.
     # ---------- BR-RULE-013 INV-6: package-level start_time 'asap' forbidden ----------
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
 
     Examples:
       | shape            | trigger                                            |
       | terminal failure | a validation error rejects the update              |
-      | submitted task   | manual approval queues the update (UpdateMediaBuySubmitted) |
 
   @T-UC-003-package-start-time-asap @invariant @BR-RULE-013 @error @schema-v3.1 @post-f2 @post-f3
   Scenario: Package-level start_time 'asap' is schema-forbidden (INV-6)
@@ -2740,18 +2775,25 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the sandbox response-field outcome should be <outcome>
+    # LOCAL CORRECTION, two rows. (1) "sandbox: false in response (explicit production)"
+    # asserted "present and false" for the SAME input as the next row, which asserts
+    # "omitted", so one of the two failed whatever the seller sent. The pinned success arm
+    # says only "When true, this response contains simulated data from sandbox mode", so a
+    # production account may carry false or nothing; the row now asserts "not true", the
+    # reading UC-005's sandbox outline gives the same row. (2) "sandbox present on
+    # update_media_buy submitted task envelope" is removed: the submitted arm does not forbid
+    # sandbox (its `not` lists only media_buy_id and warnings; additionalProperties true).
     # ---------- start_time package-scope boundary (start_time.yaml) ----------
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
 
     Examples: sandbox response semantics (BR-UC-003)
       | boundary                                                            | account_context    | response_shape      | outcome                              |
       | sandbox: true in response (sandbox account)                         | a sandbox account  | synchronous success | sandbox flag present and true        |
-      | sandbox: false in response (explicit production)                    | a production account | synchronous success | sandbox flag present and false     |
+      | sandbox: false in response (explicit production)                    | a production account | synchronous success | sandbox flag not true              |
       | sandbox absent in response (production account)                     | a production account | synchronous success | sandbox flag omitted                |
       | sandbox: true on update_media_buy synchronous success shape         | a sandbox account  | synchronous success | sandbox flag present and true        |
       | sandbox account with invalid budget (real validation error)         | a sandbox account  | terminal failure    | rejected with a real validation error (not a silent ok) |
       | sandbox present on update_media_buy terminal-failure (errors) shape  | a sandbox account  | terminal failure    | sandbox field forbidden on this shape |
-      | sandbox present on update_media_buy submitted task envelope         | a sandbox account  | submitted task      | sandbox field forbidden on this shape |
 
   @T-UC-003-bva-start-time-package-scope @boundary @start_time @schema-v3.1 @post-f2
   Scenario Outline: start_time boundary at package scope - <boundary>
@@ -2865,18 +2907,23 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: four create_media_buy rows are removed. "single package", "two
+    # packages, different products", "two packages, same product_id" and "proposal_id
+    # supplied" describe a create request's package set. On update, packages[] items are
+    # package-update.json, whose root `not` rejects product_id (so no update can name a
+    # product there), and update-media-buy-request.json declares no proposal_id. The
+    # new_packages rows are the update's own product-uniqueness surface and stay; their
+    # "rejected (duplicate)" outcome now names the code @T-UC-003-new-packages-duplicate
+    # grades for the same refusal.
     # ---------- approval_workflow submitted-envelope boundaries (approval_workflow.yaml) ----------
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/not
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/new_packages
 
     Examples: product uniqueness across packages (BR-UC-002/003)
       | boundary                                                                | outcome              |
-      | single package (trivially unique)                                       | accepted             |
-      | two packages, different products                                        | accepted             |
-      | two packages, same product_id                                           | rejected (duplicate) |
-      | proposal_id supplied, packages omitted (no buyer packages array)        | accepted             |
       | update new_packages[] adds a product_id not present elsewhere           | accepted             |
-      | update new_packages[] product_id duplicates an existing media buy package | rejected (duplicate) |
-      | update new_packages[] contains two entries with the same product_id     | rejected (duplicate) |
+      | update new_packages[] product_id duplicates an existing media buy package | error "VALIDATION_ERROR" — rejected (duplicate) |
+      | update new_packages[] contains two entries with the same product_id     | error "VALIDATION_ERROR" — rejected (duplicate) |
 
   @T-UC-003-bva-approval-workflow @boundary @approval_workflow @schema-v3.1 @post-s7 @post-s8
   Scenario Outline: approval workflow submitted-envelope boundary - <boundary>

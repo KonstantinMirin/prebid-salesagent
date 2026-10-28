@@ -781,9 +781,17 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
     - Workflow outcomes: correct approval path was taken
     - Persistence outcomes: DB state matches the expected persistence behavior
     - Task list outcomes: task query returned correctly shaped/ordered results
-    - Error outcomes: AdCPSalesAgentError with matching code and recovery
+    - Error outcomes: AdCPSalesAgentError with matching code and recovery; an error row
+      ending "no records persisted" also proves the rejected update stored nothing
+    - Update outcomes (UC-003): graded by ``uc003_update_media_buy.assert_update_outcome``
     - Unknown: raises ValueError so unmapped rows are caught immediately
     """
+    from tests.bdd.steps.domain.uc003_update_media_buy import (
+        assert_update_not_persisted,
+        assert_update_outcome,
+        is_update_outcome,
+    )
+
     if outcome == "success":
         # Bare success outcome (e.g. UC-003 targeting-overlay "Valid partitions"):
         # the operation proceeded without error and produced a response.
@@ -793,6 +801,10 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
         _assert_account_resolution_succeeds(ctx)
     elif outcome.startswith("error"):
         _assert_error_outcome(ctx, outcome)
+        if outcome.endswith("no records persisted"):
+            assert_update_not_persisted(ctx)
+    elif is_update_outcome(outcome):
+        assert_update_outcome(ctx, outcome)
     elif _is_pipeline_routing_outcome(outcome):
         _assert_pipeline_routing(ctx, outcome)
     elif _is_validation_pass_outcome(outcome):

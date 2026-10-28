@@ -477,6 +477,21 @@ def then_operation_fails(ctx: dict) -> None:
     )
 
 
+@then('the response should have an "errors" array')
+@then('the response should contain an "errors" array')
+def then_response_has_errors_array(ctx: dict) -> None:
+    """Assert the wire rejection carries a non-empty, conformant errors array.
+
+    The helper asserts the array is non-empty and validates every entry against pinned
+    ``core/error.json``, which subsumes the per-entry code-and-message checks the two
+    hand-rolled versions of this step used to spell out.
+
+    Moved here from ``then_media_buy.py``, which is not a registered step module, so both
+    sentences had no live definition and every scenario using one stopped at it.
+    """
+    ctx["result"].assert_wire_error_is_schema_conformant()
+
+
 @then("the entire sync operation fails")
 def then_entire_sync_operation_fails(ctx: dict) -> None:
     """Assert the sync operation failed entirely -- no partial successes.
@@ -1145,7 +1160,11 @@ def then_wire_error_details_include(ctx: dict, key: str, value: str) -> None:
     Accepts a scalar (equality) or a list (membership), because a details value that
     names several offending items — duplicate ids, unsupported values — is naturally
     an array and the scenario names ONE of them.
+
+    A media buy LABEL (``"mb_existing"``) is resolved to the id the scenario seeded: the
+    Background registers the label, and the seller can only report the real id.
     """
+    value = ctx.get("media_buy_labels", {}).get(value, value)
     error_object = ctx["result"].wire_error_object()
     assert error_object is not None, "no wire error object captured"
     details = error_object.get("details") or {}
