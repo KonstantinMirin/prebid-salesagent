@@ -27,7 +27,7 @@
 # scenario either; the other local dry_run feature grades out-of-transaction
 # effects, not the preview's content.
 #
-# @source repo=adcp ref=v3.2.3 path=dist/schemas/3.1.1/creative/sync-creatives-request.json pointer=/properties/dry_run
+# @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json pointer=/properties/dry_run
 Feature: UC-006 sync_creatives — a dry_run preview describes the outcome the live run produces (local)
 
   @T-UC-006-local-dryrun-parity @dry-run @invariant

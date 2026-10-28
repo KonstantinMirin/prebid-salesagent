@@ -218,7 +218,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the suggestion should contain "provide authentication credentials"
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows error
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/signals/get-signals-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/signals/get-signals-response.json
 
   @T-UC-008-ext-b-idempotency-replay @extension @activation @idempotency
   Scenario: Repeat activation with same idempotency_key replays original outcome
@@ -234,7 +234,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And no second charge is recorded
     # BR-RULE-048 INV-3: at-most-once execution (v3.1 idempotency_key)
     # idempotency_key format/required governed by BR-RULE-081; this covers replay semantics only
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/signals/get-signals-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/signals/get-signals-response.json
 
   @T-UC-008-ext-b-idempotency-distinct-key @extension @activation @idempotency
   Scenario: Activation with a different idempotency_key performs a new deployment
@@ -980,7 +980,7 @@ Feature: BR-UC-008 Manage Audience Signals
     # PRE-B7 violation: signal_agent_segment_id required
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows error
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/signals/get-signals-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/signals/get-signals-response.json
 
   @T-UC-008-gap-empty-activate-destinations @extension @ext-b @activation @error
   Scenario: Activation rejected -- empty destinations array
@@ -995,7 +995,7 @@ Feature: BR-UC-008 Manage Audience Signals
     # PRE-B8 violation: destinations minItems: 1
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows error
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/signals/get-signals-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/signals/get-signals-response.json
 
   @T-UC-008-gap-invalid-action @extension @ext-b @activation @error
   Scenario: Activation rejected -- invalid action value
@@ -1011,7 +1011,7 @@ Feature: BR-UC-008 Manage Audience Signals
     # PRE-B8a violation: action must be "activate" or "deactivate"
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows error
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/signals/get-signals-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/signals/get-signals-response.json
 
   @T-UC-008-gap-default-action @extension @activation
   Scenario: Activation with omitted action defaults to activate
@@ -1070,7 +1070,7 @@ Feature: BR-UC-008 Manage Audience Signals
     Then the response signal entry should include "restricted_attributes" with value ["age"]
     And the response signal entry should include "policy_categories" with value ["children_directed"]
     # v3.1: governance agents match restricted_attributes structurally, not by name inference
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/signals/get-signals-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/signals/get-signals-response.json
 
   @T-UC-008-v31-signal-source-catalog @v3-1 @signal-source
   Scenario: signal_id.source "catalog" carries (data_provider_domain, id) and is externally verifiable
@@ -1080,7 +1080,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And each entry's signal_id should reference "data_provider_domain" "provider.example.com"
     And the Buyer Agent should be able to verify authorization via "provider.example.com/adagents.json"
     # v3.1: catalog source -> keyed by (data_provider_domain, id); adagents.json-verifiable
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/signals/get-signals-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/signals/get-signals-response.json
 
   @T-UC-008-v31-signal-source-agent @v3-1 @signal-source
   Scenario: signal_id.source "agent" carries (agent_url, id) and is not externally verifiable
@@ -1090,7 +1090,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And each entry's signal_id should reference "agent_url" "https://signals.example.com"
     And the response payload should NOT advertise external verifiability for those signals
     # v3.1: agent source -> keyed by (agent_url, id); buyer trusts agent claim
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/signals/get-signals-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/signals/get-signals-response.json
 
   @T-UC-008-v31-error-audience-too-small @v3-1 @error-details
   Scenario: AUDIENCE_TOO_SMALL error carries v3.1 details shape (minimum_size + current_size)

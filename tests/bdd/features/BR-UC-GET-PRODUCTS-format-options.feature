@@ -29,11 +29,11 @@ Feature: Canonical format options a seller stores are announced to buyers on the
   # by the canonical_formats storyboard's get_seeded_divergent_product step, which a
   # refusing seller fails.
   #
-  # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/product.json
-  # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/product-format-declaration.json
-  # @source repo=adcp ref=v3.2.3 path=enums/error-code.json
-  # @source repo=adcp ref=v3.2.3 path=docs/creative/canonical-formats.mdx
-  # @source repo=adcp ref=v3.2.3 path=dist/compliance/3.2.3/protocols/media-buy/scenarios/canonical_formats.yaml
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-format-declaration.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/FORMAT_DECLARATION_DIVERGENT
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx
+  # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/protocols/media-buy/scenarios/canonical_formats.yaml
 
   Background:
     Given a tenant is configured for product discovery

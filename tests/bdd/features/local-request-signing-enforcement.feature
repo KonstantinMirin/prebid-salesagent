@@ -24,10 +24,10 @@
 # Reconcile upstream in adcp-req (a "seller enforces inbound request signatures"
 # storyboard), then retire this file in favor of the regenerated one.
 #
-# @source repo=adcp ref=v3.2.3 path=docs/building/by-layer/L1/security.mdx pointer=L1268-L1269
-# @source repo=adcp ref=v3.2.3 path=docs/building/by-layer/L1/security.mdx pointer=L1375
-# @source repo=adcp ref=v3.2.3 path=docs/building/by-layer/L1/security.mdx pointer=L1462-L1465
-# @source repo=adcp ref=v3.2.3 path=dist/compliance/3.1.1/test-vectors/request-signing/negative/027-webhook-registration-authentication-unsigned.json pointer=/expected_outcome
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1509-L1510
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1620
+# @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1709-L1712
+# @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/test-vectors/request-signing/negative/027-webhook-registration-authentication-unsigned.json pointer=/expected_outcome
 Feature: Inbound request-signature enforcement on an AdCP operation (local)
 
   @T-UC-006-local-signing-required-unsigned @request-signing @error-path @invariant
@@ -93,8 +93,8 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # Graded on all four transports BECAUSE the metadata range is refused ahead of the
     # `allow_private` hatch the e2e stack holds open — a private-range address would
     # grade the opposite behavior there. See the Given's docstring.
-    # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.2/enums/request-signing-error-code.json pointer=/enumMetadata/request_signature_jwks_untrusted
-    # @source repo=adcp ref=v3.2.3 path=docs/building/by-layer/L1/security.mdx pointer=L1358
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/request-signing-error-code.json pointer=/enumMetadata/request_signature_jwks_untrusted
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx pointer=L1357
 
   @T-UC-006-local-signing-webhook-credentials @request-signing @error-path @invariant @boundary
   Scenario: a registration carrying webhook authentication is refused unless signed

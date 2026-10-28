@@ -203,7 +203,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # push-config endpoints map the same gate to InvalidParamsError with the
     # AdCP VALIDATION_ERROR envelope in data= — unit-pinned, not this scenario.
     # recovery=correctable comes from error-code.json's enumMetadata.
-    # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.1.1/enums/error-code.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_REQUEST
     # POST-F1, POST-F2, POST-F3
     # --- ext-b: AUTH_INVALID ---
 
@@ -1161,7 +1161,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # sync_creatives' pinned request schema marks idempotency_key REQUIRED, but the
     # universal storyboard has NO `task: sync_creatives` step at 3.1.1 — the obligation
     # is mandated and UNGRADED, so these two scenarios are its only grading for this tool.
-    # @source repo=adcp ref=v3.2.3 path=dist/compliance/3.1.1/universal/idempotency.yaml
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/universal/idempotency.yaml
 
   @T-UC-006-idempotency-replay @uc006-idempotency @idempotency-key @happy-path
   Scenario: Retrying a sync with the same idempotency_key does not re-execute the write
@@ -1455,7 +1455,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # status surface here is the advisory CreativeStatus on each per-creative RESULT
     # of the SyncCreativesSuccess shape. These boundaries fix the enum membership of
     # that response value.
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json
 
     Examples: Valid scope combinations
       | boundary_point                          | scope_setup                                              | expected                                                       |
@@ -1497,7 +1497,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # synchronously, so the pin's third shape is never produced and cannot be graded.
     # sync_creatives makes no ad-platform call and bills nothing on any account, so
     # INV-2/INV-3 have no observable here beyond the flag itself.
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json
 
     Examples: Synchronous success shape (sandbox permitted)
       | boundary_point                      | creative                          | account_kind                             | expected                                        |
@@ -1548,7 +1548,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # ("DAAST has no NonLinearAds element"). A refused tracker is a schema violation,
     # so the whole request is INVALID_REQUEST (as ext-c). Accepted trackers are stored
     # as sent, for the sales agent to assemble into TrackingEvents at serve time.
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json
 
     Examples: Accepted trackers, persisted as sent
       | partition            | tracker_assets                                               | expected                                                      |

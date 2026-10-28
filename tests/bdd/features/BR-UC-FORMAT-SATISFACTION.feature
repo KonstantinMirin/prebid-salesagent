@@ -45,8 +45,8 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   # deferral is spent, and the scenario it was blocking is the one stage-1 guarantee
   # nothing graded.
   #
-  # @source repo=adcp ref=v3.2.3 path=docs/creative/formats.mdx
-  # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/product-format-declaration.json
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/formats.mdx
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-format-declaration.json
   # @source repo=adcp ref=v3.2.3 path=dist/compliance/3.2.3/protocols/media-buy/scenarios/canonical_formats.yaml
 
   Background:
@@ -253,7 +253,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   # (what this seller happened to guess) was accepted. That is salesagent-ol033.16, and it is
   # why the accept row above used to seed banner_image with a comment apologising for it.
   #
-  # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/formats/canonical/image.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image.json pointer=/properties/slots/default
 
   @T-UC-FORMAT-SATISFACTION-creative-asset-unnamed @format_satisfaction @requires_db
   Scenario: a canonical creative whose media asset no slot names is refused
@@ -406,7 +406,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   # The control id has to be SERVED as well as projectable -- `display_300x250` is projectable
   # but ABSENT from the capture, so the authoring door refuses it before the gate is reached.
   #
-  # @source repo=adcp ref=v3.2.3 path=registries/v1-canonical-mapping.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json
 
   @T-UC-FORMAT-SATISFACTION-upsert-unprojectable @creative_library_upsert @requires_db
   Scenario: a creative whose format resolves to no canonical kind is refused, not stored
@@ -606,8 +606,8 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   # recorded), salesagent-zoo82 (so C8 has nothing to read). They land WITHOUT the
   # behaviour change that greens them, which is a different commit and a different scope.
   #
-  # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/media-buy/package-request.json
-  # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/package.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/formats_to_provide/description
 
   @T-UC-FORMAT-SATISFACTION-approval-gate-refuses @format_satisfaction @requires_db
   Scenario: a human-review tenant still refuses a selector the product does not accept

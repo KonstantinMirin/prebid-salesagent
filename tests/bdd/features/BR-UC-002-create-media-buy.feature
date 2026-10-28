@@ -568,7 +568,7 @@ Feature: BR-UC-002 Create Media Buy
     # setTaskPushNotificationConfig) map the same gate to InvalidParamsError
     # with the AdCP VALIDATION_ERROR envelope in data= — unit-pinned, not this scenario.
     # recovery=correctable comes from error-code.json's enumMetadata.
-    # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.1.1/enums/error-code.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_REQUEST
 
   @T-UC-002-ext-o @extension @ext-o @error @post-f1 @post-f2 @post-f3
   Scenario: Creative IDs not found in library
@@ -660,9 +660,9 @@ Feature: BR-UC-002 Create Media Buy
   # unidentified one is refused -- is ungraded there, under the media-buy protocol or any
   # other.
   #
-  # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.1.1/core/assets/url-asset.json
-  # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.1.1/core/asset-group-vocabulary.json
-  # @source repo=adcp ref=v3.2.3 path=dist/compliance/3.1.1/universal/canonical-format-validate-input.yaml
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/url-asset.json pointer=/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/asset-group-vocabulary.json
+  # @source repo=adcp ref=v3.2.7 path=static/compliance/source/universal/canonical-format-validate-input.yaml
 
   # The tag carries the `T-UC-002-ext-` prefix because this IS an extension scenario and it
   # needs exactly what the other ext scenarios need: the create chain plus
@@ -756,7 +756,7 @@ Feature: BR-UC-002 Create Media Buy
     # That is also why the fix cannot be "does this kind declare a sized slot": audio_hosted
     # does, so that predicate refuses this very manifest.
     #
-    # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.2.3/formats/canonical/audio_hosted.json
+    # @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/formats/canonical/audio_hosted.json
 
   # --- A product may rename the slot its media arrives in ---
 
@@ -783,7 +783,7 @@ Feature: BR-UC-002 Create Media Buy
     # reddens unless that declaration was consulted, which a demonstration keyed to a name
     # some other list also carries could not establish.
     #
-    # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.2.3/core/product-format-declaration.json
+    # @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/core/product-format-declaration.json
     # --- ext-r: Account Not Found ---
 
   @T-UC-002-ext-r @extension @ext-r @error @post-f1 @post-f2 @post-f3
@@ -2379,7 +2379,7 @@ Feature: BR-UC-002 Create Media Buy
     # transports (impl/mcp/a2a/rest and e2e_rest) already emit INVALID_REQUEST in
     # agreement -- the scenario was the only thing asking for the other code.
     # The code enum and its descriptions live in core/error.json.
-    # @source repo=adcp ref=v3.2.3 path=core/error.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-idempotency-pattern-invalid @v31 @idempotency-key @validation @post-f2 @ext-w
@@ -3206,7 +3206,7 @@ Feature: BR-UC-002 Create Media Buy
     # the denial reason on the error details so the buyer's orchestrator can
     # log and either escalate to human or retry with reduced scope.
     # governance_denied: seller surfaces governance denial as a structured error
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/governance_denied_recovery.yaml
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/governance_denied_recovery.yaml
 
   @T-UC-002-storyboard-governance-denied-recovery @schema-v3.1 @v3-1 @governance @recovery
   Scenario: Governance denied recovery -- buyer shrinks the buy to within plan limits and retries successfully
@@ -3292,7 +3292,7 @@ Feature: BR-UC-002 Create Media Buy
     # committed_metrics references not in product available_metrics; this storyboard
     # tests the measurement_terms field specifically.
     # measurement_terms_rejected: seller refuses unworkable measurement_terms with structured error
-    # @source repo=adcp ref=v3.2.3 path=static/compliance/source/protocols/media-buy/scenarios/measurement_terms_rejected.yaml phase=reject_terms step=create_media_buy_aggressive_terms
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/measurement_terms_rejected.yaml phase=reject_terms step=create_media_buy_aggressive_terms
 
   @T-UC-002-storyboard-pending-creatives-state-transition @schema-v3.1 @v3-1 @lifecycle @pending-creatives @pending-start
   Scenario: Media buy created without creatives sits in pending_creatives until sync_creatives completes, then transitions to pending_start

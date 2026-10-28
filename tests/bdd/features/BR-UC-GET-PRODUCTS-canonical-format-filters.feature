@@ -23,8 +23,8 @@ Feature: Canonical format filters on get_products narrow the catalogue the buyer
   # expected set is derived from the seeded catalogue passes with the filter deleted, which
   # is the trap the sibling format_id feature documents at length.
   #
-  # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/product-filters.json property=format_kinds
-  # @source repo=adcp ref=v3.2.3 path=_schemas/3.2/core/product-filters.json property=standard_formats_only
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-filters.json property=format_kinds
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-filters.json property=standard_formats_only
 
   Background:
     Given a tenant is configured for product discovery

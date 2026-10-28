@@ -1674,7 +1674,7 @@ Feature: BR-UC-019 Query Media Buys
     # member is the first. The invariant this scenario actually grades is INV-7 (the
     # sandbox error is REAL, not simulated), which the following two steps carry; the
     # code was incidental to it and is now stated instead of guessed.
-    # @source repo=adcp ref=v3.2.3 path=core/error.json (code enum + descriptions)
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions (code enum + descriptions)
 
   @T-UC-019-boundary-sandbox @boundary @sandbox @br-rule-209
   Scenario Outline: sandbox response semantics boundary - <boundary_point>

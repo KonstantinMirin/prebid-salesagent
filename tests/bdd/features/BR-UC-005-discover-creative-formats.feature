@@ -339,7 +339,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # The obligation is core/format.json on supported_disclosure_positions: "When omitted,
     # the format makes no disclosure rendering guarantees -- creative agents SHOULD treat
     # this as incompatible with briefs that require specific disclosure positions."
-    # @source repo=adcp ref=v3.2.3 path=static/schemas/source/core/format.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json
     # --- INV-9: output_format_ids OR-match (NEW) ---
 
   @T-UC-005-inv-049-8-capabilities @invariant @BR-RULE-049
@@ -683,9 +683,9 @@ Feature: BR-UC-005 Discover Creative Formats
   #                     schema constraints. Recovery: correctable."
   #   VALIDATION_ERROR "Request contains invalid field values or violates business
   #                     rules BEYOND schema validation."
-  # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.1.1/enums/error-code.json pointer=/INVALID_REQUEST
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_REQUEST
   # (pinned locally at tests/fixtures/adcp_schemas_pinned/enums/error-code.json:102)
-  # @source repo=adcp ref=v3.2.3 path=dist/schemas/3.1.1/media-buy/list-creative-formats-request.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json pointer=/properties/asset_types/minItems
   #   pointer=/properties/asset_types/minItems  (minItems=1 also on format_ids,
   #   disclosure_positions, output_format_ids, input_format_ids)
   # This matches the codes the ext-b error scenarios above already assert for the same
@@ -1264,4 +1264,4 @@ Feature: BR-UC-005 Discover Creative Formats
     # discover_formats: format_id object shape is the federation contract
     # The strict "every entry / never a bare string" form is mandated by the schema
     # (core/format-id.json: required [agent_url, id]); the storyboard grades field_present on formats[0].
-    # @source repo=adcp ref=v3.2.3 path=static/schemas/source/core/format-id.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json
