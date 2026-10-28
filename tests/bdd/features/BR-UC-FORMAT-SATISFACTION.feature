@@ -100,7 +100,11 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # numeric limit whose name carries no bound prefix, which is the case that separates a
     # rule keyed on the pin's list from one keyed on the constraint's shape.
     #
-    # THE LAST TWO ROWS ARE WORK ITEM M2, and they are the same two selectors that appear
+    # THE LAST TWO ROWS grade a PACKAGE SELECTOR against two same-kind declarations, which
+    # media-buy/package-request.json lets resolve by directional satisfaction. They do NOT
+    # grade the MANIFEST rule (core/creative-asset.json format_option_ref: "Required when
+    # the target product has multiple format_options entries sharing the same
+    # format_kind"); no scenario grades that one yet. They are the same two selectors that appear
     # in the refusal outline below against `fixed_300x250` — which is what makes them
     # informative. A product publishing TWO image declarations, 300x250 and 728x90, accepts
     # both; a product publishing only the first accepts one and refuses the other. So a
@@ -180,8 +184,8 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # "video_hosted with no duration ... Reject for this product". exact_duration_outside_range
     # pairs with exact_duration_in_range above: the same key, inside and outside the range.
     #
-    # mismatched_160x600 is M2's refusal half: a selector that satisfies NEITHER of the two
-    # image declarations the product publishes. Without it, the two M2 accept rows above are
+    # mismatched_160x600 is the two-image-options refusal half: a selector that satisfies
+    # NEITHER image declaration the product publishes. Without it, the two accept rows above are
     # satisfied by a seller that accepts any image selector whatever its params say.
 
   @T-UC-FORMAT-SATISFACTION-conflicting @format_satisfaction @requires_db
@@ -794,3 +798,110 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # different code, and one working says nothing about the other. The legacy selector
     # route against a canonical-only product is a different question (it resolves through
     # the declaration's asserted ref) and belongs to stage 4's own scenarios, not here.
+
+  # ── MANIFEST IDENTITY: which arm a creative names, and what the seller does with it ───
+  #
+  # docs/creative/creative-manifests.mdx (at the pin) gives a creative ONE identity:
+  # "format_kind names the canonical creative shape ... Compound format_id references are
+  # deprecated in 3.2. New manifests use the canonical branch", narrowed by
+  # format_option_ref "when a product accepts multiple declarations of the same kind".
+  # Its § Deprecated compatibility branch adds the ban these first three scenarios grade:
+  # a 3.2 implementation "must not ... mix format_id and format_kind in one manifest".
+  # core/creative-asset.json states that ban as its root oneOf, each arm carrying a `not`
+  # on the other's identifier, and the seller receives creative-asset items in three
+  # places: sync_creatives creatives[], and packages[].creatives[] on create_media_buy and
+  # on update_media_buy. A request carrying a mixed item is schema-invalid, so it is
+  # refused whole with INVALID_REQUEST, and issues[] says which rule (oneOf) and which item
+  # (the pointer addresses the buyer's own array, not a model name).
+  #
+  # The control for all three is the option-ref scenario below them: the SAME tool, a
+  # creative carrying format_kind alone (with its option ref), accepted and stored. A
+  # seller refusing every canonical creative reddens it; one accepting the mix reddens
+  # these.
+  #
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-manifests.mdx
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-asset.json pointer=/oneOf
+
+  @T-UC-FORMAT-SATISFACTION-manifest-mixed-sync @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives refuses a creative naming both format_id and format_kind
+    Given the buyer syncs a creative identified by both format_id "display_300x250_image" and canonical kind "image"
+    When the Buyer Agent syncs it into the library
+    Then the buyer is refused INVALID_REQUEST
+    And the response error issues include keyword oneOf for field creatives.0
+
+  @T-UC-FORMAT-SATISFACTION-manifest-mixed-create @format_satisfaction @requires_db
+  Scenario: create_media_buy refuses an uploaded creative naming both format_id and format_kind
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the buyer's package uploads a creative identified by both format_id "display_300x250_image" and canonical kind "image"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused INVALID_REQUEST
+    And the response error issues include keyword oneOf for field packages.0.creatives.0
+
+  @T-UC-FORMAT-SATISFACTION-manifest-mixed-update @format_satisfaction @requires_db
+  Scenario: update_media_buy refuses an uploaded creative naming both format_id and format_kind
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the buyer already holds a media buy for that product
+    And the buyer's package uploads a creative identified by both format_id "display_300x250_image" and canonical kind "image"
+    When the Buyer Agent uploads the package's creatives through update_media_buy
+    Then the buyer is refused INVALID_REQUEST
+    And the response error issues include keyword oneOf for field packages.0.creatives.0
+
+    # The update row grades WHERE the refusal happens. The SDK's own creative type checks
+    # only "at least one" identifier, so a seller that kept it on package updates refuses a
+    # mixed item later, inside the per-package loop, after earlier package changes may
+    # already have reached the ad server, and with the pointer /creatives/0, which names
+    # nothing in an update request. Refused at the boundary, the pointer is the buyer's own
+    # packages[0].creatives[0].
+
+  # ── The canonical arm, sent over the wire and stored whole ────────────────────────────
+  #
+  # The UC-018 round-trip scenarios read a format_option_ref back through list_creatives,
+  # but their creatives are SEEDED, so no scenario sent one through sync_creatives. These
+  # two do, against the packaged product that publishes "satisfaction_image_mrec". The
+  # option ref is product-scoped, and "A product-scoped reference resolves only with the
+  # enclosing product/package context" (creative-manifests.mdx § Exact option routing), so
+  # the sync ASSIGNS the creative: the assignment is the product context the ref resolves
+  # in. The refusal row is the same input naming an option the product does not publish,
+  # which § Validation step 5 makes a refusal ("Reject unknown or uncovered selections").
+  #
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-asset.json pointer=/properties/format_option_ref
+
+  @T-UC-FORMAT-SATISFACTION-manifest-option-ref-stored @format_satisfaction_sync @requires_db
+  Scenario: a creative synced by format_kind with a product option ref is assigned and stored with both
+    Given a packaged product declaring a canonical image option fixed at 300x250
+    And the buyer syncs a creative whose format_option_ref names product option "satisfaction_image_mrec" of canonical kind "image"
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+    And the creative is stored carrying canonical kind "image"
+    And the creative is stored with its format_option_ref naming product option "satisfaction_image_mrec"
+
+  @T-UC-FORMAT-SATISFACTION-manifest-option-ref-unpublished @format_satisfaction_sync @requires_db
+  Scenario: an assignment whose format_option_ref names an option the product does not publish is refused
+    Given a packaged product declaring a canonical image option fixed at 300x250
+    And the buyer syncs a creative whose format_option_ref names product option "no_such_option" of canonical kind "image"
+    When the Buyer Agent assigns it to that package
+    Then the buyer is refused UNSUPPORTED_FEATURE
+
+  # ── Review applies to a canonical creative on UPDATE, not only on create ──────────────
+  #
+  # Approval is seller-specific and applies to every manifest (creative-manifests.mdx
+  # § Libraries and trafficking: "A valid manifest can still enter review"). The update
+  # path applied the tenant's approval mode only when the item carried format_id, so a
+  # creative identified by format_kind kept its old status on re-sync under every mode.
+  # Each row seeds the library row in the status the mode must MOVE it away from, so a
+  # seller that leaves the status alone reddens both rows.
+  #
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json pointer=/oneOf/0/properties/creatives/items/properties/status
+
+  @T-UC-FORMAT-SATISFACTION-manifest-update-review @format_satisfaction_sync @requires_db
+  Scenario Outline: re-syncing a creative identified by format_kind applies the approval mode — <mode>
+    Given the tenant has approval_mode "<mode>"
+    And a creative identified by canonical kind "image" is already in the library as "<prior>"
+    And the buyer syncs a creative identified by canonical kind "image"
+    When the Buyer Agent syncs it into the library
+    Then the per-creative result should carry advisory status "<status>"
+
+    Examples:
+      | mode          | prior          | status         |
+      | auto-approve  | pending_review | approved       |
+      | require-human | approved       | pending_review |

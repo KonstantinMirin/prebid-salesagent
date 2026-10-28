@@ -264,9 +264,12 @@ Feature: BR-UC-006 Sync Creative Assets
     # --- ext-e: INVALID_REQUEST ---
 
   @T-UC-006-ext-e @extension @ext-e @error
-  # format_id is in core/creative-asset.json /required: omitting it is a schema
-  # violation and the whole request is refused with INVALID_REQUEST at the transport,
-  # before any creative is processed -- not a per-item failure.
+  # core/creative-asset.json's root oneOf requires exactly one of format_id (the
+  # deprecated arm) and format_kind (the canonical arm). A creative naming neither -- here
+  # format_id null and no format_kind -- matches no arm, a schema violation, so the whole
+  # request is refused with INVALID_REQUEST at the transport, before any creative is
+  # processed -- not a per-item failure. format_id alone is not in /required.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-asset.json pointer=/oneOf
   Scenario: Creative format required — missing format_id
     Given the Buyer is authenticated
     And a creative with name "Banner" but no format_id
