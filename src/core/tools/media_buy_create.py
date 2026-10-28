@@ -3755,27 +3755,34 @@ async def _create_media_buy_impl(
 
             # If found and has format_ids, validate and use those
             if matching_package and matching_package.format_ids:
-                from src.core.format_resolver import (
-                    format_display,
-                    format_identity_or_none,
-                    product_format_identities,
-                    resolved_dimensions,
-                )
+                from src.core.format_resolver import format_identity_or_none, resolved_dimensions
+                from src.core.format_satisfaction import FormatRefusal
 
-                # Validate that requested formats are supported by product.
-                # Identity is (canonical agent_url, id) per the pinned core/format-id.json,
-                # asked of format_resolver. This branch used to additionally accept a
-                # supported key with "/mcp" APPENDED to the requested URL — an unmandated
-                # widening that made one host's MCP endpoint and its bare origin the same
-                # agent; the path is part of the canonical form and stays part of it.
-                product_format_keys = product_format_identities(pkg_product.format_ids)
-                requested_format_keys = product_format_identities(matching_package.format_ids)
-
-                unsupported_formats = [
-                    format_display(key) for key in sorted(requested_format_keys - product_format_keys)
+                # Whether the requested formats are ones the product accepts was decided
+                # ONCE, by ``_resolve_package_selectors``, and is READ here. What is left to
+                # this site is the deprecated lane's refusal, which that resolution hands on
+                # rather than raising (see the LEGACY_NOT_ACCEPTED branch there).
+                #
+                # This used to be a second, independent gate: the set difference of the
+                # request's raw ``(agent_url, id)`` keys against the product's
+                # ``format_ids``. That is the comparison core/product-format-declaration.json
+                # forbids under "Format matching vs satisfaction (normative)" -- "do not
+                # exact-match raw (agent_url, id) pairs once a format_id has been projected"
+                # -- and docs/creative/template-format-ids.mdx § Compatibility says the same:
+                # "do all matching on the canonical shape". So it refused what satisfaction
+                # had just accepted: ``display_300x250_image`` against a product whose
+                # declaration and deprecated arm name ``display_300x250`` (both normalize to
+                # display_image 300x250), and ANY legacy selector against a canonical-only
+                # product, whose empty arm made every key "unsupported"
+                # (salesagent-ol033.20.26).
+                resolution = selector_resolutions.get(pkg_index)
+                not_accepted = [
+                    verdict
+                    for _, verdict in (resolution.routes if resolution is not None else ())
+                    if verdict.refusal is FormatRefusal.LEGACY_NOT_ACCEPTED
                 ]
 
-                if unsupported_formats:
+                if not_accepted:
                     # The two branches this replaces built a diagnostic sentence into a
                     # local and then raised bare, so the string was DEAD -- neither the
                     # buyer nor the log ever saw it, and the refusal named nothing at all
@@ -3784,22 +3791,24 @@ async def _create_media_buy_impl(
                     # text (ADR-010); the facts those sentences carried are `rejected_value`
                     # and `accepted_values`, which are declared keys.
                     #
-                    # ONE raise, not two: "the product has no format_ids configured" is
-                    # `accepted_values=[]`, which says it without a second branch saying it
-                    # in words.
+                    # The values are the verdicts' own: each refused route's reference and the
+                    # product's accepted references, parameters included, as the deprecated
+                    # lane renders them -- so a refusal from a product sized 300x250 says so.
                     raise AdCPValidationError(
                         field=package_field_path("format_ids", pkg_index),
                         details=ValidationDetails(
                             product_id=pkg_product.product_id,
-                            rejected_value=unsupported_formats,
-                            accepted_values=[format_display(key) for key in sorted(product_format_keys)],
+                            rejected_value=[verdict.rejected_value for verdict in not_accepted],
+                            accepted_values=list(not_accepted[0].accepted_values),
                         ),
                     )
 
                 # Merge dimensions from product's format_ids if request format_ids don't have them.
                 # This handles the case where buyer specifies a format but not dimensions.
-                # Keyed on the same federation identity the support check above compares on,
-                # so a format that PASSED that check cannot then miss its own dimensions.
+                # Keyed on the federation identity, so a request naming a product entry by a
+                # respelling of its agent still finds that entry's dimensions. A request
+                # spelled differently from the entry it normalizes onto finds none and keeps
+                # its own, which is a FALLBACK missing, never a refusal.
                 product_format_dimensions: dict[FormatKey, tuple[int | None, int | None, float | None]]
                 product_format_dimensions = {}
                 for fmt in pkg_product.format_ids or []:

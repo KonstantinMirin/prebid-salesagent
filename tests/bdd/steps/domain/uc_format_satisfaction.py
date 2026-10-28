@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import uuid
 from typing import Any
+from urllib.parse import urlsplit
 
 from pytest_bdd import given, parsers, then, when
 
@@ -55,6 +56,46 @@ _LEGACY_ARM: list[dict[str, str]] = [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "
 _LEGACY_ARM_SIZED: list[dict[str, Any]] = [
     {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250", "width": 300, "height": 250}
 ]
+
+#: The creative agent's host, which every spelling below is written against.
+_AGENT_HOST = urlsplit(DEFAULT_CREATIVE_AGENT_URL).netloc
+
+#: Spellings of the creative agent's url, by the name a scenario gives them. AUTHORED, never
+#: computed by ``canonical_agent_url``: asking the canonicalizer under test to build its own
+#: inputs would compare the implementation with itself.
+#:
+#: The first three name the SAME agent under docs/reference/url-canonicalization at the pin,
+#: one algorithm step each -- step 2 lowercases the host, step 2 removes "a single trailing
+#: [root-label] dot", step 5 applies ``remove_dot_segments`` to the path (``/x/..`` is ``/``,
+#: which is also what step 5 gives the empty path). The host case is the CONTROL: the SDK's
+#: own comparison already applied that step, so a row that only ever passed proves the
+#: scenario can pass. The last names a DIFFERENT agent, because "canonicalization removes
+#: only dot segments, never real path segments" -- it is the row a seller that collapsed
+#: too much would fail.
+_AGENT_URL_SPELLINGS: dict[str, str] = {
+    "an upper-cased host": f"https://{_AGENT_HOST.upper()}",
+    "a trailing root-label dot": f"https://{_AGENT_HOST}.",
+    "a removable dot segment": f"https://{_AGENT_HOST}/x/..",
+    "a different path": f"https://{_AGENT_HOST}/other-agent",
+}
+
+
+def _agent_url_spelled(variant: str) -> str:
+    """The creative agent's url in the named spelling, refusing a row that respells nothing.
+
+    The spellings are written against a bare-authority url, so the guard checks that is
+    still what the factory's default is: an agent url that grew a path would turn
+    ``/x/..`` into a different path and the dot-segment row into a different agent.
+    """
+    assert DEFAULT_CREATIVE_AGENT_URL == f"https://{_AGENT_HOST}", (
+        f"the spellings are written for a bare https authority; the default agent is now "
+        f"{DEFAULT_CREATIVE_AGENT_URL!r}, so rewrite them against its path"
+    )
+    spelled = _AGENT_URL_SPELLINGS.get(variant)
+    assert spelled is not None, f"no agent url spelling named {variant!r}; have {sorted(_AGENT_URL_SPELLINGS)}"
+    assert spelled != DEFAULT_CREATIVE_AGENT_URL, f"{variant!r} does not respell the agent url at all"
+    return spelled
+
 
 #: The option id the product publishes, and the id a publisher-scoped declaration publishes
 #: under its own domain. Named once so a selector row and its declaration cannot drift.
@@ -166,6 +207,24 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     # the defect, not the refusal: `bare_kind_beside_option_ref` below now grades that
     # two-route shape deliberately, and this one grades step 10 as written.
     "legacy_display_300x250": {"format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250"}]},
+    # A legacy id that reaches the 300x250 declaration ONLY through normalization. Nothing
+    # this module's products carry spells it -- their deprecated arm and their
+    # ``v1_format_ref`` both say ``display_300x250`` -- while the SDK's registry upgrade
+    # takes both ids to display_image 300x250. So it is the one selector on which a seller
+    # matching raw (agent_url, id) pairs and one matching the canonical shape disagree, which
+    # is the comparison core/product-format-declaration.json forbids ("do not exact-match raw
+    # (agent_url, id) pairs once a format_id has been projected"). It is also the id the
+    # storyboard's create_media_buy_with_legacy_mrec_format step sends.
+    "legacy_display_300x250_image": {
+        "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250_image"}]
+    },
+    # The storyboard's create_media_buy_with_equivalent_dual_emission: the product-local
+    # option ref and ``display_300x250_image`` "normalize to the same declaration", so the
+    # two routes agree and the buy is accepted.
+    "option_plus_equivalent_legacy_image": {
+        "format_option_refs": [{"scope": "product", "format_option_id": _PRODUCT_OPTION_ID}],
+        "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250_image"}],
+    },
     # The SAME deprecated id the seller publishes, sized EXPLICITLY by the buyer and
     # differently from the seller's catalogue entry. ``core/format-id.json`` carries
     # width/height on the reference for exactly this parameterized case, and the two halves
@@ -264,6 +323,26 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     # does not satisfy the product". The SAME id beside a resolving option ref is the
     # conflict row below, and the two differ in nothing else.
     "legacy_display_728x90": {"format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_728x90"}]},
+    # Two legacy references that normalize to the KIND alone. The registry maps both to
+    # ``image`` by glob, while neither carries or projects a size: ``display_image`` is the
+    # unparameterized template, and the SDK upgrades ``display_300x250`` to 300x250 only for
+    # the reference agent, so at another agent it projects nothing. Against a product fixing
+    # 300x250 each is "a broad request with no dimensions", which
+    # core/product-format-declaration.json says "does not satisfy a fixed-size ... product".
+    # Both were accepted by satisfaction and refused only by a raw-key gate that ran after
+    # it -- VALIDATION_ERROR, and for the wrong reason (salesagent-ol033.20.26).
+    "legacy_unsized_template": {"format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_image"}]},
+    "foreign_agent_display_300x250": {
+        "format_ids": [{"agent_url": "https://another-creative-agent.example", "id": "display_300x250"}]
+    },
+    # The creative agent's host with TWO trailing dots. docs/reference/url-canonicalization,
+    # step 2: "More than one trailing dot creates an empty DNS label rather than a root-label
+    # spelling and MUST be rejected", and comparers MUST reject a malformed authority. The
+    # wire accepts it (``format: uri``), so the refusal is the seller's: it names no agent and
+    # so no format. It used to raise out of the comparison and answer INTERNAL_ERROR.
+    "malformed_agent_display_300x250": {
+        "format_ids": [{"agent_url": f"https://{_AGENT_HOST}..", "id": "display_300x250"}]
+    },
     # M2's refusal half: a selector satisfying NEITHER image declaration ``two_image_options``
     # publishes, so the two M2 accept rows cannot be passed by accepting every image.
     "mismatched_160x600": {"format_kind": "image", "params": {"width": 160, "height": 600}},
@@ -376,9 +455,32 @@ def given_legacy_only_sized_product(ctx: dict, width: int, height: int) -> None:
     carry ``format_ids``, ``format_options``, or both during the 3.x migration window" --
     and is the population this rule still serves.
     """
+    _store_legacy_only_sized_product(ctx, width, height, agent_url=DEFAULT_CREATIVE_AGENT_URL)
+
+
+@given(
+    parsers.parse(
+        "the seller publishes only a deprecated format sized {width:d}x{height:d} "
+        "at the creative agent's url with {variant}"
+    )
+)
+def given_legacy_only_sized_product_spelled(ctx: dict, width: int, height: int, variant: str) -> None:
+    """The same legacy-only product, its entry naming the creative agent in another spelling.
+
+    The create-path half of ``core/format-id.json``'s MUST: "Callers comparing two
+    format-id values MUST canonicalize agent_url per the AdCP URL canonicalization rules
+    before treating two formats as the same." Only the PRODUCT's spelling moves; the buyer's
+    selector names the agent as the factory does, so the two references disagree in bytes
+    and in nothing the algorithm keeps.
+    """
+    _store_legacy_only_sized_product(ctx, width, height, agent_url=_agent_url_spelled(variant))
+
+
+def _store_legacy_only_sized_product(ctx: dict, width: int, height: int, *, agent_url: str) -> None:
+    """Store a legacy-only product whose one deprecated entry is sized, at *agent_url*."""
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
-    entry = dict(_LEGACY_ARM_SIZED[0]) | {"width": width, "height": height}
+    entry = dict(_LEGACY_ARM_SIZED[0]) | {"width": width, "height": height, "agent_url": agent_url}
     product = ProductFactory(
         tenant=ctx["tenant"],
         product_id=f"satisfaction_legacy_{width}x{height}",
@@ -580,10 +682,32 @@ def given_sync_legacy_sized_product(ctx: dict, width: int, height: int) -> None:
     present the claim would be graded by ``_canonical_lane``, which projects, and the row
     would grade the projection instead of the deprecated arm's own comparison.
     """
+    _seed_legacy_sized_sync_chain(ctx, width, height, agent_url=DEFAULT_CREATIVE_AGENT_URL)
+
+
+@given(
+    parsers.parse(
+        "a packaged product selling only a deprecated format sized {width:d}x{height:d} "
+        "at the creative agent's url with {variant}"
+    )
+)
+def given_sync_legacy_sized_product_spelled(ctx: dict, width: int, height: int, variant: str) -> None:
+    """The same legacy-only product, its entry naming the creative agent in another spelling.
+
+    The assignment path's half of ``core/format-id.json``'s MUST. It is the one comparison the
+    deprecated lane makes that a respelling reaches: the creative's claim is resolved against
+    the agent's catalog under its own spelling, and only the PRODUCT's entry is respelled, so
+    nothing upstream of the satisfaction verdict sees the second spelling at all.
+    """
+    _seed_legacy_sized_sync_chain(ctx, width, height, agent_url=_agent_url_spelled(variant))
+
+
+def _seed_legacy_sized_sync_chain(ctx: dict, width: int, height: int, *, agent_url: str) -> None:
+    """The sync chain over a legacy-only product selling one sized template at *agent_url*."""
     _seed_sync_chain(
         ctx,
         format_options=None,
-        format_ids=[{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_image", "width": width, "height": height}],
+        format_ids=[{"agent_url": agent_url, "id": "display_image", "width": width, "height": height}],
     )
 
 

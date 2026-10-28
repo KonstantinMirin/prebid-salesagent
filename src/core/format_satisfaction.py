@@ -622,17 +622,23 @@ def _legacy_route(
     mapping it belongs to. Fixed in salesagent-iz7dm, where it was 101 of the 376 nodeids
     regressed on land. The id now answers ``image`` in both directions.
     """
-    from src.core.format_resolver import format_identity_or_none
+    from src.core.format_resolver import canonically_addressed, format_identity_or_none
 
     assertion = identity.assertion
     assert assertion is not None, "the legacy route is reached only for a claim asserting a reference"
+    # ``None`` is a reference whose agent_url the canonicalizer refused (FormatSelector.of_legacy).
+    # It must not equal an unusable v1_format_ref, which ``format_identity_or_none`` also maps to None.
     asserted = identity.legacy
     for declaration in declarations:
         refs = declaration.v1_format_ref or []
-        if any(format_identity_or_none(ref) == asserted for ref in refs):
+        if asserted is not None and any(format_identity_or_none(ref) == asserted for ref in refs):
             return _graded(declaration, params, exact=True)
 
-    upgraded = upgrade_legacy_format_id(assertion)
+    # Canonically addressed first: the SDK upgrades a size-encoded id only for the reference
+    # agent, and recognizes that agent by a comparison applying four of the eight steps of
+    # docs/reference/url-canonicalization -- so a respelling of the same agent (a root-label
+    # dot, a dot segment) skipped the upgrade and was graded as a bare kind.
+    upgraded = upgrade_legacy_format_id(canonically_addressed(assertion))
     projected = {
         name: value
         for name, value in (
@@ -873,9 +879,12 @@ def _legacy_lane(
 
     ``identity.assertion`` is the input even though it is declared ``compare=False``. That
     flag means a reference is never compared BY RAW SPELLING -- the same agent respelled is
-    the same agent -- and it is not a prohibition on this call: ``format_is_supported``
-    canonicalizes ``agent_url`` on both sides itself (verified: a trailing slash still
-    matches). Comparing the key instead is what lost the parameters.
+    the same agent -- and it is not a prohibition on this call, which is asked through
+    ``format_resolver.format_accepted_by`` so both sides are canonically addressed first.
+    Calling the SDK predicate directly was a defect: its own agent comparison applies four of
+    the eight steps ``core/format-id.json`` makes a MUST, so a product naming the creative's
+    agent with a trailing root-label dot or a removable dot segment refused that creative
+    (salesagent-ol033.20.23). Comparing the key instead is what lost the parameters.
 
     NOT widened to compare the claim's KIND against the product's refs projected to kinds.
     The projection direction is legal, but ``formats.mdx`` says equal ``format_kind`` alone
@@ -884,12 +893,12 @@ def _legacy_lane(
     that comparison would accept a creative the product does not take. The pin's unit is the
     DECLARATION, kind plus parameters, at which granularity those two separate cleanly.
     """
-    from adcp.canonical_formats import format_is_supported
+    from src.core.format_resolver import format_accepted_by
 
     accepted = tuple(sorted(_reference_display(reference) for reference in legacy_references))
     claimed = identity.assertion
     if claimed is None or any(
-        format_is_supported(claimed, reference) and not _pixel_ratio_unsatisfied(claimed, reference)
+        format_accepted_by(claimed, reference) and not _pixel_ratio_unsatisfied(claimed, reference)
         for reference in legacy_references
     ):
         return _SATISFIED
@@ -936,11 +945,18 @@ def _reference_display(reference: LibraryFormatId) -> str:
     accepts (display_image)" names the same string twice and tells the buyer nothing. The
     parameter names come off the model, not a list, for the reason
     ``_FORMAT_ID_PARAMETERS`` exists.
+
+    A buyer's reference whose ``agent_url`` the canonicalizer refuses has no identity to
+    render, so it is shown as sent: the refusal it appears in is the reason it was refused.
     """
     from src.core.format_resolver import format_display
     from src.core.schemas._base import _FORMAT_ID_PARAMETERS, format_id_identity
+    from src.core.signing.canonical import TargetUriMalformedError
 
-    shown = format_display(format_id_identity(reference))
+    try:
+        shown = format_display(format_id_identity(reference))
+    except TargetUriMalformedError:
+        shown = f"{reference.agent_url}/{reference.id}"
     parameters = sorted(
         (name, value) for name in _FORMAT_ID_PARAMETERS if (value := getattr(reference, name)) is not None
     )
@@ -1006,7 +1022,16 @@ def selector_routes(
             logger.debug(
                 "No canonical projection for package selector %r; the reference is its only identity", legacy_ref
             )
-        routes.append(FormatRoute(FormatSelector.of_legacy(legacy_ref, kind=kind), field="format_ids"))
+        # ``params={}`` and not ``None``: a package's legacy reference STATES its params, and
+        # they are exactly the ones it carries or its normalization projects. ``None`` is a
+        # stored creative's "params unknown" and skips the grading -- which, for a reference
+        # that normalizes to a kind and nothing else (a template such as ``display_image``
+        # with no size, or an id the registry maps by glob but the SDK does not upgrade),
+        # accepted it against a product fixing 300x250. core/product-format-declaration.json:
+        # "A broad request with no dimensions or duration does not satisfy a fixed-size or
+        # fixed-duration product". A raw-key gate after satisfaction used to refuse that by
+        # accident; it is gone (salesagent-ol033.20.26), so the rule is applied here instead.
+        routes.append(FormatRoute(FormatSelector.of_legacy(legacy_ref, kind=kind), params={}, field="format_ids"))
     return tuple(routes)
 
 

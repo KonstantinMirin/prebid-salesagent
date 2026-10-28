@@ -695,10 +695,22 @@ class FormatSelector:
         hold: ``satisfies`` turns it into ``FormatRefusal.LEGACY_UNPROJECTABLE`` and reports
         it to the buyer. The creative-side constructor of the same name REQUIRES a kind,
         because a creative in that state is refused at the door instead.
+
+        ``legacy=None`` when the canonicalizer refuses the reference's ``agent_url`` (two
+        trailing dots, for example, which ``AnyUrl`` accepts). docs/reference/url-canonicalization
+        says comparers MUST reject such an authority, so the reference has no identity to
+        compare and names no format: the routes then refuse it with the product's own code,
+        where computing the key here raised past them as INTERNAL_ERROR.
         """
+        from src.core.signing.canonical import TargetUriMalformedError
+
+        try:
+            legacy: FormatKey | None = format_id_identity(format_id)
+        except TargetUriMalformedError:
+            legacy = None
         return cls(
             kind=kind,
-            legacy=format_id_identity(format_id),
+            legacy=legacy,
             legacy_parameters=_legacy_parameters_of(format_id),
             assertion=format_id,
         )

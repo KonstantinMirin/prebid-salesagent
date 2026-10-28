@@ -42,11 +42,13 @@ from src.core.schemas import (
     FormatKey,
     FormatOptionIdentity,
     LibraryCreativeAsset,
+    canonical_agent_url,
     creative_format_identity,
     format_id_identity,
     format_key_parts,
 )
 from src.core.security.outbound_http import UrlProvenance
+from src.core.signing.canonical import TargetUriMalformedError
 from src.core.validation_helpers import run_async_in_sync_context
 
 # What callers may hand the identity helpers: a structured reference, a bare
@@ -351,6 +353,10 @@ def format_reference_or_none(entry: Any) -> LibraryFormatId | None:
     documents, stopping one step earlier so a caller can have the reference rather than its
     key. Everything that docstring says about ``None`` and about absent fields applies here
     and is not restated.
+
+    An entry whose ``agent_url`` the canonicalizer refuses is dropped here too, the way
+    :func:`format_identity_or_none` already drops it when it computes the key: kept, it
+    would reach every comparison against the product as a reference no agent can match.
     """
     try:
         ref: Any = entry
@@ -361,7 +367,9 @@ def format_reference_or_none(entry: Any) -> LibraryFormatId | None:
             ref.pop("format_id", None)
             if "id" not in ref:
                 return None
-        return format_reference(ref)
+        reference = format_reference(ref)
+        canonical_agent_url(reference.agent_url)  # TargetUriMalformedError is a ValueError
+        return reference
     except (ValidationError, ValueError, TypeError, AttributeError):
         logger.warning("Unusable stored format reference, ignored: %r", entry)
         return None
@@ -979,10 +987,44 @@ def format_accepted_by(requested: FormatRef, supported: FormatRef) -> bool:
     supported format can satisfy a narrower request), which is why the SDK gives
     it its own predicate rather than reusing equivalence — and why this one
     delegates to ``adcp.canonical_formats.format_is_supported`` rather than to
-    the identity pair, which cannot express direction. The SDK predicate reads
-    attributes, so a local ``FormatId`` subclass is handed over as is.
+    the identity pair, which cannot express direction.
+
+    BOTH SIDES ARE CANONICALLY ADDRESSED FIRST, because the SDK's own agent_url
+    comparison is not the pin's. ``core/format-id.json`` makes canonicalization
+    per docs/reference/url-canonicalization a MUST before two references are
+    treated as the same format, and that page says "Implementations MUST apply
+    every step". The SDK's ``canonicalize_agent_url`` applies four of them
+    (scheme and host case, userinfo, default port): measured on the pin, a
+    trailing root-label dot (step 2) and a removable dot segment (step 5) each
+    made one agent two. That also decided whether a legacy id was upgraded at
+    all, because the SDK upgrades ``display_300x250_image`` only for the
+    reference agent and recognizes the agent by that same partial comparison.
+    ``canonical_agent_url`` applies all eight, and the SDK's four are idempotent
+    over its output, so handing the SDK canonical spellings makes its comparison
+    the spec's without re-implementing it.
     """
-    return format_is_supported(requested, supported)
+    return format_is_supported(canonically_addressed(requested), canonically_addressed(supported))
+
+
+def canonically_addressed(ref: FormatRef) -> LibraryFormatId:
+    """*ref* as a model whose ``agent_url`` is the canonical spelling of the same agent.
+
+    For a COMPARISON only: a reference that is stored or echoed keeps the buyer's
+    bytes (see :data:`src.core.schemas.FormatKey`). ``model_copy`` rather than a
+    constructor, so the reference keeps its own type and every parameter it carries.
+
+    An ``agent_url`` the algorithm refuses to canonicalize (``TargetUriMalformedError``,
+    for example a host with two trailing dots, which ``AnyUrl`` accepts) is returned as
+    sent. It cannot name the same agent as any well-formed URL, so the comparison fails
+    closed and the caller answers its own correctable refusal, the policy #1291 set for a
+    malformed agent_url, instead of the exception escaping as INTERNAL_ERROR.
+    """
+    reference = format_reference(ref)
+    try:
+        canonical = canonical_agent_url(reference.agent_url)
+    except TargetUriMalformedError:
+        return reference
+    return reference.model_copy(update={"agent_url": canonical})
 
 
 def find_format(formats: Iterable[Format], format_id: FormatRef) -> Format | None:

@@ -64,6 +64,9 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-format-declaration.json
   # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/canonical_formats.yaml
   # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/template-format-ids.mdx
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json pointer=/properties/agent_url/description
+  # @source repo=adcp ref=v3.2.7 path=docs/reference/url-canonicalization.mdx
 
   Background:
     Given a tenant is configured for media buy creation
@@ -90,6 +93,21 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | fixed_300x250        | direct_plus_legacy             |
       | two_image_options    | exact_300x250                  |
       | two_image_options    | mismatched_728x90              |
+      | fixed_300x250        | legacy_display_300x250_image        |
+      | fixed_300x250        | option_plus_equivalent_legacy_image |
+
+    # THE LAST TWO ROWS GRADE NORMALIZATION RATHER THAN SPELLING. Every other legacy row here
+    # sends display_300x250, which is literally the product's deprecated entry AND its
+    # declaration's v1_format_ref, so a seller that exact-matched raw (agent_url, id) pairs
+    # passed them unchanged. display_300x250_image is spelled by neither and reaches the
+    # 300x250 declaration only through the registry's upgrade (both ids become display_image
+    # 300x250). docs/creative/template-format-ids.mdx § Compatibility: "Normalize them to
+    # canonical declarations immediately and do all matching on the canonical shape", and
+    # core/product-format-declaration.json, "Format matching vs satisfaction (normative)":
+    # "do not exact-match raw (agent_url, id) pairs once a format_id has been projected".
+    # The second row is the storyboard's create_media_buy_with_equivalent_dual_emission. Both
+    # were refused VALIDATION_ERROR by a second, raw-key gate that ran after satisfaction had
+    # accepted them (salesagent-ol033.20.26).
 
     # `exact_300x250` against `fixed_300x250` states the fixed size and omits the size cap
     # and the file-format set the declaration also fixes; `complete_300x250` restates them.
@@ -149,6 +167,26 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | text_limited_300x250 | headline_over_limit_300x250      | format_kind        |
       | duration_range       | duration_omitted                 | format_kind        |
       | duration_range       | exact_duration_outside_range     | format_kind        |
+      | fixed_300x250        | legacy_unsized_template          | format_ids         |
+      | fixed_300x250        | foreign_agent_display_300x250    | format_ids         |
+      | fixed_300x250        | malformed_agent_display_300x250  | format_ids         |
+
+    # legacy_unsized_template and foreign_agent_display_300x250 are legacy references that
+    # normalize to the kind and nothing else:
+    # the unsized display_image template, and display_300x250 at an agent the registry's
+    # size upgrade does not cover. Neither states the fixed size, so each is the legacy
+    # spelling of bare_image_kind, and core/product-format-declaration.json refuses it the
+    # same way: "A broad request with no dimensions or duration does not satisfy a
+    # fixed-size or fixed-duration product". Until salesagent-ol033.20.26 both were ACCEPTED
+    # by satisfaction and then refused VALIDATION_ERROR by a raw (agent_url, id) gate -- the
+    # comparison the same document forbids -- so removing that gate needed the satisfaction
+    # rule to refuse them for the reason the pin gives.
+    #
+    # malformed_agent_display_300x250 names the creative agent's host with two trailing dots.
+    # docs/reference/url-canonicalization step 2: "More than one trailing dot creates an empty
+    # DNS label rather than a root-label spelling and MUST be rejected". It names no agent, so
+    # the registry's size upgrade does not apply and it is the third kind-only reference,
+    # refused for the same reason. It used to raise out of the comparison as INTERNAL_ERROR.
 
     # bare_image_kind IS the storyboard's reject_bare_image_selector_for_fixed_mrec, and
     # mismatched_728x90 is formats.mdx's fifth rule stated as an input: the two selectors
@@ -793,4 +831,139 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # params selector and a product-scoped format_option_ref reach the declaration by
     # different code, and one working says nothing about the other. The legacy selector
     # route against a canonical-only product is a different question (it resolves through
-    # the declaration's asserted ref) and belongs to stage 4's own scenarios, not here.
+    # the declaration's asserted ref, or through the registry's upgrade) and is the outline
+    # below.
+
+  # ── Legacy selectors are matched on the canonical shape, not on their spelling ─────────
+  #
+  # docs/creative/template-format-ids.mdx § Compatibility, at the pin: "Implementations may
+  # still parse legacy template IDs for older 3.x peers. Normalize them to canonical
+  # declarations immediately and do all matching on the canonical shape." The normative
+  # restatement is core/product-format-declaration.json's "Format matching vs satisfaction":
+  # "Legacy named formats MUST be normalized to canonical declarations before comparison; do
+  # not exact-match raw (agent_url, id) pairs once a format_id has been projected".
+  #
+  # Each accept row below was REFUSED before salesagent-ol033.20.26: after satisfaction had
+  # accepted the package, a second gate compared the request's raw (agent_url, id) keys with
+  # the product's deprecated format_ids and refused the difference with VALIDATION_ERROR. A
+  # canonical-only product has no deprecated arm, so EVERY legacy selector was a difference.
+  # Each outline is paired with a refusal on the same product, so a seller that accepted
+  # every legacy selector reddens there.
+
+  @T-UC-FORMAT-SATISFACTION-canonical-only-legacy-selector @format_satisfaction @requires_db
+  Scenario Outline: a legacy selector normalizing onto a canonical-only product's declaration is accepted - <selector>
+    Given the seller declares a canonical format option "fixed_300x250" and no format_ids
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+    And the package snapshots the "satisfaction_image_mrec" declaration fixed at 300x250
+
+    Examples: one legacy route by the declaration's own assertion, one by the registry
+      | selector                     |
+      | legacy_display_300x250       |
+      | legacy_display_300x250_image |
+
+    # display_300x250 is the declaration's own v1_format_ref, so it resolves by lookup;
+    # display_300x250_image resolves only through the registry's upgrade. The snapshot Then
+    # is what shows the route SELECTED the declaration rather than imposing nothing: a
+    # selector that selects nothing leaves the package with no snapshot.
+
+  @T-UC-FORMAT-SATISFACTION-canonical-only-legacy-refused @format_satisfaction @requires_db
+  Scenario: a legacy selector normalizing to another size is refused by a canonical-only product
+    Given the seller declares a canonical format option "fixed_300x250" and no format_ids
+    And the buyer's package selects "legacy_display_728x90"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "format_ids" selector
+
+  @T-UC-FORMAT-SATISFACTION-legacy-only-normalized @format_satisfaction @requires_db
+  Scenario Outline: a legacy-only product accepts a legacy selector of the same canonical shape - <selector>
+    Given the seller publishes only a deprecated format sized 300x250
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+    Examples:
+      | selector                     |
+      | legacy_display_300x250       |
+      | legacy_display_300x250_image |
+
+    # The product's one deprecated entry is display_300x250 sized 300x250. The first row
+    # names it byte for byte and is the control; the second names it only through the
+    # registry's upgrade. The deprecated lane grades both as directional satisfaction over
+    # upgraded references -- the clause's "normalized to canonical declarations before
+    # comparison" -- so they are the same input to it.
+
+  @T-UC-FORMAT-SATISFACTION-legacy-only-normalized-refused @format_satisfaction @requires_db
+  Scenario: a legacy-only product refuses a legacy selector normalizing to another size
+    Given the seller publishes only a deprecated format sized 300x250
+    And the buyer's package selects "legacy_display_728x90"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused VALIDATION_ERROR naming the 300x250 it accepts
+
+  # The deprecated lane's half of malformed_agent_display_300x250 in the refusal outline above:
+  # the same id the product publishes, at the creative agent's host spelled with two trailing
+  # dots, which docs/reference/url-canonicalization step 2 says "MUST be rejected". The
+  # comparison fails closed and the lane's own refusal answers, where the canonicalizer's
+  # exception used to escape it as INTERNAL_ERROR.
+  @T-UC-FORMAT-SATISFACTION-legacy-only-malformed-agent @format_satisfaction @requires_db
+  Scenario: a legacy-only product refuses a legacy selector whose agent_url cannot be canonicalized
+    Given the seller publishes only a deprecated format sized 300x250
+    And the buyer's package selects "malformed_agent_display_300x250"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused VALIDATION_ERROR naming the 300x250 it accepts
+
+  # ── The same agent, spelled differently, is the same format ───────────────────────────
+  #
+  # core/format-id.json, properties.agent_url: "Callers comparing two format-id values MUST
+  # canonicalize agent_url per the AdCP URL canonicalization rules before treating two
+  # formats as the same." docs/reference/url-canonicalization: "Implementations MUST apply
+  # every step and compare the result byte-for-byte." Only the PRODUCT's deprecated entry is
+  # respelled; the creative or selector names the agent as every other row here does.
+  #
+  # Each spelling is one step of the algorithm: step 2 lowercases the host and removes "a
+  # single trailing dot" from a DNS hostname, step 5 applies remove_dot_segments to the path.
+  # The host-case row is the CONTROL -- the comparison already applied that step. The other
+  # two were refused on the assignment path (salesagent-ol033.20.23): the deprecated lane
+  # compared through the SDK's own canonicalizer, which applies four of the eight steps and
+  # neither of those. The refusal scenarios hold the other side: "canonicalization removes
+  # only dot segments, never real path segments", so another path is another agent.
+
+  @T-UC-FORMAT-SATISFACTION-sync-respelled-agent @format_satisfaction_sync @requires_db
+  Scenario Outline: a creative is accepted by a deprecated entry naming its agent in another spelling - <variant>
+    Given a packaged product selling only a deprecated format sized 300x250 at the creative agent's url with <variant>
+    And the buyer syncs a creative identified by format_id "display_image" sized 300x250
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+    Examples:
+      | variant                   |
+      | an upper-cased host       |
+      | a trailing root-label dot |
+      | a removable dot segment   |
+
+  @T-UC-FORMAT-SATISFACTION-sync-other-agent-path @format_satisfaction_sync @requires_db
+  Scenario: a creative is refused by a deprecated entry naming another path on its agent's host
+    Given a packaged product selling only a deprecated format sized 300x250 at the creative agent's url with a different path
+    And the buyer syncs a creative identified by format_id "display_image" sized 300x250
+    When the Buyer Agent assigns it to that package
+    Then the buyer is refused VALIDATION_ERROR naming the 300x250 it accepts
+
+  @T-UC-FORMAT-SATISFACTION-respelled-agent @format_satisfaction @requires_db
+  Scenario Outline: a legacy selector is accepted by a deprecated entry naming its agent in another spelling - <variant>
+    Given the seller publishes only a deprecated format sized 300x250 at the creative agent's url with <variant>
+    And the buyer's package selects "legacy_display_300x250"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+    Examples:
+      | variant                   |
+      | an upper-cased host       |
+      | a trailing root-label dot |
+      | a removable dot segment   |
+
+  @T-UC-FORMAT-SATISFACTION-other-agent-path @format_satisfaction @requires_db
+  Scenario: a legacy selector is refused by a deprecated entry naming another path on its agent's host
+    Given the seller publishes only a deprecated format sized 300x250 at the creative agent's url with a different path
+    And the buyer's package selects "legacy_display_300x250"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused VALIDATION_ERROR naming the 300x250 it accepts
