@@ -225,15 +225,19 @@ def _package_format_snapshots(
     work item C7's, reached later than the auto path and for the same reason
     (``core/package.json``: a package "MUST retain and return this checklist").
 
+    One snapshot per declaration the winning arm selected: ``core/package.json``'s "Each
+    entry is a PackageFormatSnapshot of the selected effective Product format declaration",
+    and two ``format_option_refs`` select two.
+
     Empty when the selector selected nothing: a product narrowing neither arm, or a
     request naming no selector. The caller turns that into an ABSENT field rather than an
     empty array, which is what ``formats_to_provide``'s ``minItems: 1`` requires.
     """
     from src.core.format_resolver import package_format_snapshot
 
-    if selector is None or selector.selected is None or product_id is None:
+    if selector is None or product_id is None:
         return ()
-    return (package_format_snapshot(selector.selected, product_id=product_id),)
+    return tuple(package_format_snapshot(declaration, product_id=product_id) for declaration in selector.selection)
 
 
 def _legacy_formats_to_provide(

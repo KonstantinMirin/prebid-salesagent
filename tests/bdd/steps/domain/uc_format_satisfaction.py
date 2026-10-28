@@ -171,8 +171,8 @@ def _placement(placement_id: str, mode: str, *accepted: dict[str, Any]) -> dict[
 
 
 #: What the seller STORES in ``placements``, per name, for the coverage scenarios. Every
-#: row is stored beside ``two_image_options``, and the rows differ only in which option
-#: each placement accepts and whether it is included.
+#: row but ``narrowed_inline`` is stored beside ``two_image_options``, and the rows differ
+#: only in which option each placement accepts and whether it is included.
 _PLACEMENTS: dict[str, list[dict[str, Any]]] = {
     # Two INCLUDED placements that each accept a different option: no single option covers
     # both, so a package selecting one leaves the other placement's inventory uncovered.
@@ -190,6 +190,32 @@ _PLACEMENTS: dict[str, list[dict[str, Any]]] = {
     "shared": [
         _placement("satisfaction_mrec_slot", "included", _MREC),
         _placement("satisfaction_leaderboard_slot", "included", _MREC, _LEADERBOARD),
+    ],
+    # The ID-LESS inline declarations: no ``format_option_id``, so a placement declaration
+    # is matched to the product's by kind and params (``core/product.json``'s third
+    # matching rule). ``shared_inline``'s second placement restates 300x250 and accepts the
+    # mrec option; ``split_inline``'s states 728x90 and does not.
+    "shared_inline": [
+        _placement("satisfaction_mrec_slot", "included", _MREC),
+        _placement(
+            "satisfaction_inline_slot", "included", {"format_kind": "image", "params": {"width": 300, "height": 250}}
+        ),
+    ],
+    "split_inline": [
+        _placement("satisfaction_mrec_slot", "included", _MREC),
+        _placement(
+            "satisfaction_inline_slot", "included", {"format_kind": "image", "params": {"width": 728, "height": 90}}
+        ),
+    ],
+    # Stored beside ``duration_range`` (video_hosted, ``duration_ms_range`` [5000, 60000]):
+    # one included placement NARROWING it to [5000, 30000] with no ``format_option_id``. The
+    # placement is the narrower side, so it matches; graded the other way round it does not.
+    "narrowed_inline": [
+        _placement(
+            "satisfaction_short_video_slot",
+            "included",
+            {"format_kind": "video_hosted", "params": {"duration_ms_range": [5000, 30000]}},
+        ),
     ],
 }
 
@@ -209,6 +235,14 @@ _SELECTORS: dict[str, dict[str, Any]] = {
         "params": {"width": 300, "height": 250, "max_file_size_kb": 200, "image_formats": ["jpg", "png"]},
     },
     "product_option_ref": {"format_option_refs": [{"scope": "product", "format_option_id": _PRODUCT_OPTION_ID}]},
+    # BOTH of ``two_image_options``'s product-local options on one arm: a SET, which is how a
+    # buyer covers two included placements that accept one option each.
+    "both_option_refs": {
+        "format_option_refs": [
+            {"scope": "product", "format_option_id": _PRODUCT_OPTION_ID},
+            {"scope": "product", "format_option_id": _LEADERBOARD["format_option_id"]},
+        ]
+    },
     # The legacy arm ALONE, which is what the storyboard's step 10
     # (create_media_buy_with_legacy_mrec_format) sends: format_ids and no format_kind, no
     # params. This row used to carry ``"format_kind": "image"`` as well, which the old

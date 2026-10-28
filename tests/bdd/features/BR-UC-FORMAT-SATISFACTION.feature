@@ -280,38 +280,65 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   # @source repo=adcp ref=v3.2.7 path=docs/creative/formats.mdx
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/mode/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/format_options/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_option_refs/description
 
   @T-UC-FORMAT-SATISFACTION-placements-covered @format_satisfaction @requires_db
-  Scenario Outline: a selected format that covers every included placement is accepted - <placements> <selector>
-    Given the seller declares canonical format options "two_image_options" across placements "<placements>"
+  Scenario Outline: a selected format that covers every included placement is accepted - <declaration> <placements> <selector>
+    Given the seller declares canonical format options "<declaration>" across placements "<placements>"
     And the buyer's package selects "<selector>"
     When the Buyer Agent sends the create_media_buy request
     Then the buyer receives the media buy
 
     Examples:
-      | placements                   | selector           |
-      | shared                       | product_option_ref |
-      | split_leaderboard_targetable | product_option_ref |
-      | split                        | no_selector        |
+      | declaration       | placements                   | selector           |
+      | two_image_options | shared                       | product_option_ref |
+      | two_image_options | split_leaderboard_targetable | product_option_ref |
+      | two_image_options | split                        | no_selector        |
+      | two_image_options | split                        | both_option_refs   |
+      | two_image_options | shared_inline                | product_option_ref |
+      | duration_range    | narrowed_inline              | contained_range    |
+
+    # both_option_refs is the spec-valid way to cover `split` explicitly: two
+    # format_option_refs on ONE arm select a SET (package-request.json: "require each route
+    # to select the same product option set"), and core/product.json lets that set be a
+    # union: "Distinct per-placement creatives MAY use the union, but the selected creative
+    # set MUST cover every included placement". It pairs with split | product_option_ref
+    # below, which differs only in the second ref.
+    #
+    # The two *_inline rows state a placement's inline declaration WITHOUT a
+    # format_option_id, so it is matched by the third rule of core/product.json: "match
+    # declarations with the same format_kind whose narrower parameters satisfy the broader
+    # declaration". The placement is the narrower side (core/placement.json: its
+    # declarations "MUST NOT introduce a format outside that product upper bound").
+    # narrowed_inline narrows the product's duration_ms_range [5000, 60000] to [5000,
+    # 30000]: a seller that grades the product declaration against the placement's refuses
+    # it. shared_inline restates 300x250 and pairs with split_inline below, which states
+    # 728x90 instead.
 
   @T-UC-FORMAT-SATISFACTION-placements-uncovered @format_satisfaction @requires_db
-  Scenario Outline: a selected format that leaves an included placement uncovered is refused - <selector>
-    Given the seller declares canonical format options "two_image_options" across placements "split"
+  Scenario Outline: a selected format that leaves an included placement uncovered is refused - <placements> <selector>
+    Given the seller declares canonical format options "two_image_options" across placements "<placements>"
     And the buyer's package selects "<selector>"
     When the Buyer Agent sends the create_media_buy request
     Then the buyer is refused UNSUPPORTED_FEATURE naming the "<arm>" selector
 
     Examples:
-      | selector           | arm                |
-      | product_option_ref | format_option_refs |
-      | exact_300x250      | format_kind        |
+      | placements   | selector           | arm                |
+      | split        | product_option_ref | format_option_refs |
+      | split        | exact_300x250      | format_kind        |
+      | split_inline | product_option_ref | format_option_refs |
 
     # Each refusal row has an accept row that differs in ONE thing: `shared` (the second
-    # placement also accepts 300x250) and `split_leaderboard_targetable` (the second
-    # placement is not included). A seller that ignored placements accepts both refusal
-    # rows; one that refused every multi-placement product reddens all three accept rows.
-    # Both selectors select the same 300x250 declaration by different routes, so the refusal
-    # is about the selected declaration and not the route that named it.
+    # placement also accepts 300x250), `split_leaderboard_targetable` (the second placement
+    # is not included), split | both_option_refs (the selection adds the 728x90 option) and
+    # shared_inline (the id-less inline declaration states 300x250, not 728x90). A seller
+    # that ignored placements accepts every refusal row; one that refused every
+    # multi-placement product reddens the accept rows. split_inline is the refusal half of
+    # the format_kind-plus-params match: a seller matching an id-less declaration by kind
+    # alone accepts it. The first two selectors select the same 300x250 declaration by
+    # different routes, so the refusal is about the selected declaration and not the route
+    # that named it.
 
   # ── The CREATIVE side of the same function ────────────────────────────────────────────
   #
