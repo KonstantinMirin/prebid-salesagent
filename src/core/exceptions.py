@@ -32,6 +32,7 @@ from src.core.errors.details import (
     EntityRefDetails,
     ErrorDetails,
     InvalidStateDetails,
+    PricingValidationDetails,
     ProductRefDetails,
     RejectionReasonDetails,
     SelectorConflictDetails,
@@ -1386,6 +1387,18 @@ class AdCPBudgetTooLowError(AdCPSalesAgentError[BudgetDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_TOO_LOW
 
 
+class AdCPInvalidPricingOptionError(AdCPSalesAgentError[PricingValidationDetails]):
+    """A package names a ``pricing_option_id`` its product does not offer (INVALID_PRICING_OPTION).
+
+    The pinned enum reserves the code for exactly this: "at the request level for
+    ``create_media_buy`` when the submitted pricing option cannot be resolved", with
+    ``error.field`` pointing at the offending record path (``packages[0].pricing_option_id``).
+    Distinct from PRODUCT_NOT_FOUND, which is the product itself being unknown.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.INVALID_PRICING_OPTION
+
+
 class AdCPCapabilityNotSupportedError(AdCPSalesAgentError[CapabilityRefusalDetails]):
     """Requested capability is not supported by this seller (422, UNSUPPORTED_FEATURE).
 
@@ -1467,6 +1480,20 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
     """
 
     _code: ClassVar[ErrorCodeT] = ErrorCode.IDEMPOTENCY_EXPIRED
+
+
+class AdCPIdempotencyInFlightError(AdCPConflictError):
+    """A same-key request committed but has not produced its cached response yet (409, IDEMPOTENCY_IN_FLIGHT).
+
+    security.mdx#idempotency rule 9, reject-and-redirect: the seller "returns
+    ``IDEMPOTENCY_IN_FLIGHT`` immediately, with top-level ``error.retry_after``
+    (seconds) populated", and the buyer "MUST retry with the same
+    ``idempotency_key``". Raised where the dup-booking backstop finds the winner's
+    buy inside the replay window with no cache row to replay yet. Recovery is
+    transient, loaded from the pinned enumMetadata like every other code.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.IDEMPOTENCY_IN_FLIGHT
 
 
 class AdCPCreativeRejectedError(AdCPSalesAgentError[CreativeRejectionDetails]):

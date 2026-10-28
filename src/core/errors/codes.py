@@ -364,6 +364,7 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
         ErrorCode.MEDIA_BUY_NOT_FOUND: 404,
         ErrorCode.PACKAGE_NOT_FOUND: 404,
         ErrorCode.PRODUCT_NOT_FOUND: 404,
+        ErrorCode.INVALID_PRICING_OPTION: 404,
         ErrorCode.REFERENCE_NOT_FOUND: 404,
         ErrorCode.SESSION_NOT_FOUND: 404,
         # 409 — the request collides with state that already exists.
@@ -371,6 +372,7 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
         ErrorCode.CONFLICT: 409,
         ErrorCode.IDEMPOTENCY_CONFLICT: 409,
         ErrorCode.IDEMPOTENCY_EXPIRED: 409,
+        ErrorCode.IDEMPOTENCY_IN_FLIGHT: 409,
         # 410 — the resource's own status forbids the operation.
         ErrorCode.INVALID_STATE: 410,
         # Same band, same sentence: "The media buy or package cannot be canceled in its
