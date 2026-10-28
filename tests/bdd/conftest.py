@@ -7094,10 +7094,17 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
         seed=_seed_media_buy_chain_create_dispatch,
     ),
+    # The remainder of UC-002. It seeds what the uc002-ext row seeds, for the same reason:
+    # its Background claims "a tenant exists with completed setup checklist", and
+    # validate_setup_complete reads the rows setup_media_buy_data writes on every
+    # transport. Unseeded, a box run with the xfail lifted refused 452 of these nodeids
+    # CONFIGURATION_ERROR before reaching what they grade. The xfail stays until each
+    # scenario graduates (.claude/rules/workflows/xpass-graduation.md).
     EnvRoute(
         tag="uc002-not-wired",
         when=_uc("UC-002", lambda m: True),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
+        seed=_seed_media_buy_chain_create_dispatch,
         xfail_reason="UC-002 harness not yet wired for non-extension scenarios",
     ),
     # ── UC-003 ──────────────────────────────────────────────────────────────
