@@ -463,7 +463,11 @@ def _resolved_format_verdicts(
                 (
                     product.product_id,
                     cid,
-                    satisfies(claim.as_selector(), product.format_options, legacy_catalog=product.format_ids),
+                    satisfies(
+                        claim.as_selector(),
+                        product.format_contract.format_options,
+                        legacy_catalog=product.format_contract.format_ids,
+                    ),
                 )
             )
     return verdicts
@@ -2721,15 +2725,11 @@ async def _create_media_buy_impl(
             # documents rather than as rows because the gate runs after this unit closes
             # and a detached row raises on attribute access.
             #
-            # The declarations are what the product AUTHORED, which is what a selector is
-            # graded against. That is the same answer the converted schema Product gives:
-            # ``format_satisfaction.product_declarations`` absorbs both shapes on purpose,
-            # and the one place the two could differ -- the divergence decline, which
-            # announces no legacy arm -- cannot change a verdict, because the deprecated
-            # lane is reached ONLY when a product declares no ``format_options`` at all,
-            # and a product with no canonical arm has no divergence to decline.
+            # Read through ``format_contract``, the same contract the converted schema
+            # Product is built from, so a selector is graded against exactly the arms the
+            # buyer was announced -- including a linked profile's.
             declared_format_arms = {
-                product_id: (list(row.format_options or []), list(row.format_ids or []))
+                product_id: (list(row.format_contract.format_options or []), list(row.format_contract.format_ids))
                 for product_id, row in product_map.items()
             }
 
@@ -4236,10 +4236,11 @@ async def _create_media_buy_impl(
                                     creative = creatives_by_id.get(creative_id)
                                     if creative:
                                         stored_identity = CreativeFormatIdentity.from_row(creative)
+                                        contract = product_format_check.format_contract
                                         verdict = satisfies(
                                             stored_identity.as_selector(),
-                                            product_format_check.format_options,
-                                            legacy_catalog=product_format_check.format_ids,
+                                            contract.format_options,
+                                            legacy_catalog=contract.format_ids,
                                         )
 
                                         if not verdict:

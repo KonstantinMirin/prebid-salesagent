@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from adcp.types import BrandReference
@@ -53,6 +53,9 @@ from src.core.signing.algorithms import (
     signing_alg_check_clause,
     signing_purpose_check_clause,
 )
+
+if TYPE_CHECKING:
+    from src.core.format_resolver import FormatContract
 
 logger = logging.getLogger(__name__)
 
@@ -540,27 +543,30 @@ class Product(Base, JSONValidatorMixin):
 
     # Effective properties - auto-resolve from inventory profile if set
     @property
-    def effective_format_ids(self) -> list[dict[str, str]] | None:
-        """Get format_ids from inventory profile (if set) or product itself.
+    def format_contract(self) -> "FormatContract":
+        """The format contract this product is served and graded against.
 
-        Returns format_ids as list of FormatId dicts: [{"agent_url": str, "id": str}, ...]
-        When inventory_profile_id is set, returns current profile's format_ids (auto-updates).
-        When inventory_profile_id is null, returns product's own format_ids.
+        A linked inventory profile supplies the contract, as it supplies the publisher
+        properties; the product's own columns answer only when it has no profile. The one
+        exception is a profile that carries no canonical arm while the product does: the
+        product's declarations are then the canonical source, because the pin makes
+        ``format_options`` the source of truth and a legacy-only profile has none to offer.
 
-        Database validation ensures all format_ids match AdCP FormatId spec.
+        The canonical arm, wherever it comes from, decides the whole contract
+        (:func:`~src.core.format_resolver.format_contract`): its legacy projection is derived
+        from the declarations and no stored ``format_ids`` column is read. Only a product
+        with no canonical arm is served the legacy arm it, or its profile, authored.
 
-        NULLABLE since migration 08cd415b3d91, and the union is deliberate rather than
-        smoothed to ``[]`` here. A canonically-authored product has no legacy arm at all,
-        and that is a different fact from "an empty legacy arm": the wire must OMIT
-        ``format_ids`` for such a product, not send it empty, because the schema's
-        deprecated anyOf branch is satisfied by the KEY's presence. Returning ``None``
-        makes a caller decide; returning ``[]`` would let one emit the wrong shape without
-        noticing. The inventory-profile branch is still non-nullable, so only the
-        product's own arm can be None.
+        The FK column is tested before the relationship so a detached row with no profile
+        never triggers a lazy load.
         """
-        if self.inventory_profile_id and self.inventory_profile:
-            return self.inventory_profile.format_ids
-        return self.format_ids
+        from src.core.format_resolver import format_contract
+
+        profile = self.inventory_profile if self.inventory_profile_id and self.inventory_profile else None
+        return format_contract(
+            format_options=(profile.format_options if profile else None) or self.format_options,
+            format_ids=profile.format_ids if profile else self.format_ids,
+        )
 
     @property
     def effective_properties(self) -> list[dict] | None:

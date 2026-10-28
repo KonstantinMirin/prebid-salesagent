@@ -486,13 +486,14 @@ def _validate_creatives_for_assignment(
     # a product declaring ``format_options[]`` imposed no restriction here at all, and a
     # creative carrying no legacy assertion was REFUSED here while the create path skipped
     # it. ``satisfies`` reads both arms off the product and decides which lane applies.
+    contract = product.format_contract
     first_refusal: FormatSatisfaction | None = None
     incompatible: list[str] = []
     for creative in creatives_list:
         # The stored identity, through the ONE row reader, with BOTH arms -- the canonical
         # kind and option as well as the retained legacy assertion.
         stored = CreativeFormatIdentity.from_row(creative)
-        verdict = satisfies(stored.as_selector(), product.format_options, legacy_catalog=product.format_ids)
+        verdict = satisfies(stored.as_selector(), contract.format_options, legacy_catalog=contract.format_ids)
         if verdict:
             continue
         if verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED:

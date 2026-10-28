@@ -1276,8 +1276,7 @@ def _route_selector(route: FormatRoute) -> str:
     Rendered rather than echoed as the object: a legacy reference carries four parameters
     the pin says are no part of which format it names, and
     ``format_resolver.format_display`` is the one spelling of that identity in this
-    codebase -- the same choice :class:`FormatOptionDivergenceSummary` makes and for the
-    same reason.
+    codebase.
     """
     from src.core.format_resolver import format_display
 

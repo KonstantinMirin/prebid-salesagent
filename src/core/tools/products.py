@@ -18,7 +18,7 @@ from adcp.types.legacy import LegacyProduct as LibraryProduct
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
 from src.core.errors.codes import ErrorCode
-from src.core.errors.details import FormatDeclarationDivergenceDetails, PolicyViolationDetails
+from src.core.errors.details import PolicyViolationDetails
 from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPInternalError,
@@ -374,18 +374,9 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
 
         # Convert database Product models to AdCP Product schema
         products = []
-        # Products whose two format arms disagree, keyed by product_id. Filled by the
-        # conversion, which is where the decision is made, and turned into advisories at
-        # the RESPONSE, where the buyer's own product index exists -- the pin makes
-        # `error.field` pointing at the offending product a MUST, and the index a product
-        # has in the response is not the one it has in this loop (access filtering, the
-        # property list, variants and ranking all run in between).
-        divergences: dict[str, FormatDeclarationDivergenceDetails] = {}
         for product_obj in db_products:
             try:
-                validated_product = convert_product_model_to_schema(
-                    product_obj, adapter_type=tenant_adapter_type, divergences=divergences
-                )
+                validated_product = convert_product_model_to_schema(product_obj, adapter_type=tenant_adapter_type)
                 products.append(validated_product)
                 logger.debug(f"Successfully converted product {product_obj.product_id}")
             except AdCPSalesAgentError:
@@ -479,9 +470,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
             for variant_model in dynamic_variants:
                 # Convert database model to schema (returns library Product)
                 # Cast to our extended Product type for mypy compatibility
-                variant_schema = convert_product_model_to_schema(
-                    variant_model, adapter_type=tenant_adapter_type, divergences=divergences
-                )
+                variant_schema = convert_product_model_to_schema(variant_model, adapter_type=tenant_adapter_type)
                 # Type: ignore - library Product is compatible with our extended Product at runtime
                 products.append(variant_schema)
 
@@ -807,33 +796,17 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         for product in eligible_products:
             product.pricing_options = []
 
-    # FORMAT_DECLARATION_DIVERGENT, on a POPULATED SUCCESS. The pinned enum calls it a
-    # "Non-fatal advisory", says "Hard-failing the entire get_products response is
-    # discouraged -- it punishes downstream buyers for the producer bug", and mandates
-    # errors[] as the single surface ("Logger-only is insufficient"). The storyboard grades
-    # exactly that shape: compliance/.../canonical_formats.yaml, step
-    # get_seeded_divergent_product, requires the response to validate, the seeded product
-    # to still be returned, errors[0].code == FORMAT_DECLARATION_DIVERGENT, and
-    # errors[0].source == "producer". `source` is producer and not sdk because the SELLER
-    # self-detected on emit, which is the one case the enum text gives the producer.
+    # FORMAT_DECLARATION_DIVERGENT, on a POPULATED SUCCESS, for the one divergence this seller
+    # can still produce. The pinned enum calls the code a "Non-fatal advisory", says
+    # "Hard-failing the entire get_products response is discouraged", and makes errors[] the
+    # single surface; `source` is producer because the SELLER self-detects on emit, and
+    # `field` is built from the RESPONSE order so it names the product the buyer sees.
     #
-    # Built from the RESPONSE order so `field` names the product the buyer is looking at. A
-    # divergent product that no longer survives filtering emits nothing: there is no
-    # products[N] for the pointer to name, and nothing for the buyer to go and look at.
-    format_advisories = [
-        Error.of(  # structural-guard: advisory per-product divergence in GetProductsResponse.errors[]
-            ErrorCode.FORMAT_DECLARATION_DIVERGENT,
-            field=f"products[{index}]",
-            details=divergences[product.product_id],
-            source=LibraryErrorSource.producer,
-        )
-        for index, product in enumerate(eligible_products)
-        if product.product_id in divergences
-    ]
-
-    # The pin's OTHER FORMAT_DECLARATION_DIVERGENT details shape, on the SAME lane, the same
-    # pointer rule and the same `source`. `formats/canonical/_base.json` asks for the same code
-    # when "a producer-self-emitted overlap on a single declaration" happens, with
+    # The reference-axis divergence (a stored format_ids arm disagreeing with the declarations'
+    # v1_format_ref) is no longer producible: a canonical product's format_ids is DERIVED from
+    # those refs (`CanonicalFormats`), so the two arms agree by construction.
+    # `formats/canonical/_base.json` asks for the same code when "a producer-self-emitted
+    # overlap on a single declaration" happens, with
     # `details: { collision_kind, target, overlapping_fields, winning_extension_uri }` --
     # PlatformExtensionCollisionDetails is exactly those four.
     #
@@ -868,7 +841,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     # but mypy still needs cast() due to list invariance in static typing
     resp = GetProductsResponse(
         products=cast(list[LibraryProduct], eligible_products),
-        errors=(format_advisories + collision_advisories) or None,
+        errors=collision_advisories or None,
         message=_products_message(len(eligible_products), anonymous=principal_id is None),
     )
 

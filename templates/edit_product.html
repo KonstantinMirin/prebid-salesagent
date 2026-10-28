@@ -105,46 +105,37 @@
         <h3 style="margin-top: 2rem;">Creative Formats</h3>
 
         {# format_ids is NOT authored here: deprecated in AdCP 3.2, removed in 4.0, and the
-           pin says "Do not author a new product from format_ids alone". The picker that
-           used to stand here is gone; the canonical arm is authored below.
-
-           THREE SEPARATE FACTS, never collapsed into one "format_ids" value. Showing a
-           single number for a profile-linked product leaves the operator unable to tell
-           whether they can change it -- the same complaint as an advisory naming an object
-           the operator cannot fix, one layer up in the UI (salesagent-ym571). #}
+           pin says "Do not author a new product from format_ids alone". What a legacy buyer
+           receives is shown read-only: derived from the canonical declarations when the
+           product has them, or the legacy-only arm a pre-3.2 product was authored with. #}
         <div class="form-group" style="background: #f8f9fa; border-left: 3px solid #adb5bd; padding: 0.75rem 1rem;">
             <label style="font-weight: 600;">Legacy named formats (read-only)</label>
 
             <p style="color: #666; font-size: 0.9rem; margin: 0.5rem 0;">
-                <strong>Asserted by this product's declarations:</strong>
-                {% if derived_legacy_refs %}
-                    {{ derived_legacy_refs | join(', ') }}
-                    <br><em style="color: #888;">Derived from the canonical declarations below
-                    (their <code>v1_format_ref</code>), not stored as the product's own arm.</em>
+                <strong>Announced to legacy buyers:</strong>
+                {% if announced_legacy_refs %}
+                    {{ announced_legacy_refs | join(', ') }}
                 {% else %}
-                    <em>none &mdash; the declarations below assert no legacy reference.</em>
+                    <em>none</em>
                 {% endif %}
+                <br><em style="color: #888;">
+                {% if legacy_refs_derived %}
+                    Derived from the canonical declarations (their <code>v1_format_ref</code>);
+                    nothing is stored as a second catalog.
+                {% else %}
+                    A legacy-only arm authored before canonical declarations. Author
+                    format_options below and it is no longer served.
+                {% endif %}
+                </em>
             </p>
 
+            {% if inventory_profile_name %}
             <p style="color: #666; font-size: 0.9rem; margin: 0.5rem 0;">
-                <strong>Authored on this product:</strong>
-                {% if own_legacy_refs %}
-                    {{ own_legacy_refs | join(', ') }}
-                    <br><em style="color: #888;">Stored on the product itself. No longer
-                    editable here; it is kept as recorded.</em>
-                {% else %}
-                    <em>none &mdash; this product carries no legacy arm of its own.</em>
-                {% endif %}
-            </p>
-
-            {% if inventory_profile_legacy_refs is not none %}
-            <p style="color: #666; font-size: 0.9rem; margin: 0.5rem 0;">
-                <strong>Supplied by inventory profile
-                &ldquo;{{ inventory_profile_name }}&rdquo;:</strong>
-                {{ inventory_profile_legacy_refs | join(', ') if inventory_profile_legacy_refs else '<em>none</em>' | safe }}
-                <br><em style="color: #888;">This is what buyers receive, because a linked
-                profile supplies the arm. It lives on the profile and is SHARED &mdash;
-                changing it there affects every product linked to it.</em>
+                <strong>Supplied through inventory profile
+                &ldquo;{{ inventory_profile_name }}&rdquo;.</strong>
+                <br><em style="color: #888;">When the profile carries canonical declarations they
+                replace this product's own. The profile is SHARED &mdash; changing it there affects
+                every product linked to it.</em>
             </p>
             {% endif %}
         </div>

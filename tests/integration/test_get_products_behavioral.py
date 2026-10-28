@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.exceptions import AdCPAuthorizationError, AdCPSalesAgentError, AdCPValidationError
+from src.core.format_resolver import NamedFormats
 from src.core.resolved_identity import PublicIdentity, ResolvedIdentity
 from src.core.tenant_context import TenantContext
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
@@ -790,7 +791,9 @@ class TestProductConversionNegativeCardinality:
         mock_model.name = "Bad Product"
         mock_model.description = "No properties"
         mock_model.delivery_type = "guaranteed"
-        mock_model.effective_format_ids = [{"agent_url": "https://example.com", "id": "display_300x250"}]
+        mock_model.format_contract = NamedFormats(
+            format_ids=({"agent_url": "https://example.com", "id": "display_300x250"},)
+        )
         mock_model.effective_properties = []
 
         with pytest.raises(ValueError, match="no publisher_properties"):
@@ -805,7 +808,9 @@ class TestProductConversionNegativeCardinality:
         mock_model.name = "Bad Product"
         mock_model.description = "No pricing"
         mock_model.delivery_type = "guaranteed"
-        mock_model.effective_format_ids = [{"agent_url": "https://example.com", "id": "display_300x250"}]
+        mock_model.format_contract = NamedFormats(
+            format_ids=({"agent_url": "https://example.com", "id": "display_300x250"},)
+        )
         mock_model.effective_properties = [
             {"publisher_domain": "test.com", "selection_type": "by_tag", "property_tags": ["all"]}
         ]
