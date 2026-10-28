@@ -500,7 +500,13 @@ def then_each_error_has_suggestion(ctx: dict) -> None:
 
 @then('both the protocol envelope "adcp_error" field and the payload "errors" array should be populated')
 def then_both_error_layers(ctx: dict) -> None:
-    """error-handling.mdx: "A fatal task failure SHOULD populate both layers" -- the same code in each."""
+    """error-handling.mdx: "A fatal task failure SHOULD populate both layers" -- the same code in each.
+
+    ``assert_wire_error`` checks both layers through ``assert_envelope_shape``: ``adcp_error``
+    present, ``errors[]`` non-empty, and the two agreeing on code and recovery. The expected
+    code is read off ``errors[0]`` because this Then grades agreement; the scenario's own
+    code Then pins which code it is.
+    """
     result = ctx["result"]
     code = result.wire_error_code()
     assert code is not None, "the refusal carries no payload errors[] entry"
