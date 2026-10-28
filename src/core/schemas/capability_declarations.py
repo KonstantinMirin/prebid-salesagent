@@ -703,11 +703,19 @@ class CapabilityDeclarations(BaseModel):
         advertised as a 3.2 signing posture". This seller serves 3.2, so the condition fires
         on every response it emits.
 
-        An ABSENT value never reaches here: ``RequestSigningPosture`` derives ``required``
-        from ``supported``, which is what makes a declaration of the field optional rather
-        than obligatory for the operator. So the only values this rejects are the two the pin
-        names, and the refusal is the one the operator needs -- the alternative is emitting a
-        document the buyer's own schema check refuses, naming nothing.
+        An ABSENT value passes: with ``supported`` true, ``RequestSigningPosture`` derives
+        ``required``, which is what makes a declaration of the field optional rather than
+        obligatory for the operator; with ``supported`` false nothing is verified and there is
+        no policy to state. So the only values this rejects are the two the pin names, and the
+        refusal is the one the operator needs -- the alternative is emitting a document the
+        buyer's own schema check refuses, naming nothing.
+
+        The refusal does not depend on ``supported``. The if/then only fires on
+        ``supported: true``, but the field's description forbids advertising ``either`` /
+        ``forbidden`` as a 3.2 posture with no exception for an unsupported one, and a 3.2
+        response that omits the field does not carry the legacy ``either`` default either
+        ("Omission retains the legacy effective default of 'either' only for a 3.0/3.1
+        response").
 
         Why a refusal rather than a quiet rewrite to ``required``: this posture is also what
         the verifier enforces. Accepting ``either`` and enforcing ``required`` would tighten
@@ -717,17 +725,16 @@ class CapabilityDeclarations(BaseModel):
         "Infrastructure that rewrites bodies MUST use a separately configured legacy
         endpoint/origin or disable request signing under 3.2."
         """
-        if not posture.supported:
-            return
         declared = enum_value(posture.covers_content_digest)
-        if declared == CoversContentDigest.required.value:
+        if declared in (None, CoversContentDigest.required.value):
             return
         self._reject(
             "request_signing.covers_content_digest",
             "A verifier that advertises request signing must advertise "
             "covers_content_digest 'required': every accepted signature on a request with a "
             "body covers content-digest. 'either' and 'forbidden' are 3.0/3.1 compatibility "
-            "postures that must not be advertised as a 3.2 signing posture; a deployment that "
+            "postures that must not be advertised as a 3.2 signing posture, with or without "
+            "request signing supported; a deployment that "
             "cannot require body binding declares request_signing.supported false instead "
             "(get-adcp-capabilities-response.json, the allOf if/then on "
             "request_signing.supported; security.mdx, Signed Requests (Transport Layer)).",

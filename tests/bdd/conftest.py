@@ -1332,7 +1332,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "T-UC-010-degradation-partitions",
         {"no_principal", "account_degraded"},
         "INV-4 keeps adapter channels principal-free so no_principal does not degrade to "
-        "[display]; account_degraded expects a supported_billing-only account block but "
+        "the adapter-unavailable shape; account_degraded expects a supported_billing-only account block but "
         "_build_account_block always emits require_operator_auth/sandbox as real values "
         "— #1856 account-config surface",
     ),
@@ -5415,6 +5415,11 @@ def _uc010_wired_tags() -> frozenset[str]:
             # Batch 3 — degradation-sections + channel-all-canonical
             "T-UC-010-degradation-sections",
             "T-UC-010-channel-all-canonical",
+            # Wired when their Thens were corrected to the pin: the channel outline seeds the
+            # catalog production reads, and the protocols scenario reads its enum from the
+            # pin; both need only setup the env already has.
+            "T-UC-010-channel-mapping",
+            "T-UC-010-v31-supported-protocols-extended",
             # Batch 4 — features / targeting / idempotency-required
             "T-UC-010-features",
             "T-UC-010-targeting",
