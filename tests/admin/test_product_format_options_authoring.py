@@ -240,35 +240,32 @@ def test_a_format_kind_the_pin_does_not_define_is_refused(operator, seller, fact
 
 
 def test_the_edit_form_authors_the_canonical_arm_on_a_legacy_product(operator, seller, factory_session):
-    """A product already selling on format_ids gains format_options without losing it.
+    """A legacy product that gains canonical declarations retires its stored format_ids.
 
-    Both arms is the third legal shape under the anyOf, and the pin's instruction for a
-    seller that still has legacy buyers: "sellers MAY additionally project those
-    declarations to format_ids".
+    canonical-formats.mdx, Producer rules: "Compatibility format_ids MUST be derived from
+    them rather than maintained as a second authored catalog." So once the operator authors
+    declarations, the stored column is cleared and the format_ids the product serves is
+    derived from the declaration's ``v1_format_ref``.
     """
     tenant, _ = seller
     tenant_id = tenant.tenant_id
     ProductFactory(tenant=tenant, product_id="legacy_product", format_ids=[LEGACY_FORMAT_ID])
     factory_session.commit()
+    declaration = {**IMAGE_DECLARATION, "v1_format_ref": [LEGACY_FORMAT_ID]}
 
     response = operator.post(
         f"/tenant/{tenant_id}/products/legacy_product/edit",
-        data=_edit_form(name="Legacy Product", format_options=json.dumps([IMAGE_DECLARATION])),
+        data=_edit_form(name="Legacy Product", format_options=json.dumps([declaration])),
         follow_redirects=True,
     )
 
     assert response.status_code == 200, response.data[:2000]
     row = _stored(factory_session, tenant_id, "legacy_product")
-    assert row.format_options == [IMAGE_DECLARATION]
-    assert row.format_ids == [LEGACY_FORMAT_ID], "an edit that submits one arm leaves the other alone"
+    assert row.format_options == [declaration]
+    assert row.format_ids is None, f"the stored legacy column survived beside the declarations: {row.format_ids!r}"
 
-    # Both arms is a legal shape, so the conversion must serve BOTH. Asserted on the
-    # served product rather than on the columns: the row assertions above only round-trip
-    # strings this test wrote, which cannot tell a stored id that RESOLVES from one that
-    # does not. LEGACY_FORMAT_ID names an id the reference catalog actually carries
-    # ("display_300x250_image"; the bare "display_300x250" is absent from it), and the
-    # served arm below is the pinned FormatReferenceStructuredObject the DTO declares --
-    # so it came back through validation into the pin's type, not as the dict stored.
+    # Served through the production conversion: the legacy arm a 3.x buyer receives is the
+    # declaration's asserted ref, as the pinned FormatReferenceStructuredObject.
     served = convert_product_model_to_schema(row, adapter_type="mock")
     assert [declaration.format_kind for declaration in served.format_options] == ["image"]
     assert [reference.id for reference in served.format_ids] == ["display_300x250_image"]

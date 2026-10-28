@@ -5,12 +5,13 @@
      format_kind, so the document is handed through as authored and validated against
      that union server-side (src/admin/blueprints/products.py).
 
-     Included by add_product.html, add_product_gam.html and edit_product.html. One
-     include rather than three copies -- the field, its help text and its pre-fill rule
-     are one thing.
+     Included by add_product.html, add_product_gam.html, edit_product.html and the two
+     inventory-profile forms. One include rather than five copies -- the field, its help
+     text and its pre-fill rule are one thing.
 
      Reads from the enclosing context, both optional:
-     - product.format_options: the stored declaration, on the edit forms
+     - product.format_options: the stored declaration, on the edit forms (the profile
+       edit form binds its profile as `product`)
      - form_data.format_options: what the operator typed, preserved across a refusal
 -->
 
@@ -23,10 +24,10 @@
     <label for="format_options">Canonical format declarations (<code>format_options</code>)</label>
     <p style="color: #666; font-size: 0.9rem; margin-bottom: 0.5rem;">
         AdCP 3.2 authoring path. A JSON array of declarations, each naming a
-        <code>format_kind</code> and its <code>params</code>. New products should declare
-        formats here; the format templates above write the deprecated
-        <code>format_ids</code> arm, which AdCP 4.0 removes. A product must declare at
-        least one of the two. Leave blank to declare none.
+        <code>format_kind</code> and its <code>params</code>. To reach buyers that still
+        read the deprecated <code>format_ids</code>, add a <code>v1_format_ref</code> to a
+        declaration: <code>format_ids</code> is derived from those references and is not
+        authored anywhere else.
     </p>
     <textarea id="format_options" name="format_options" rows="8"
               style="width: 100%; font-family: monospace; font-size: 0.85rem;"

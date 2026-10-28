@@ -1486,15 +1486,18 @@ def edit_product(tenant_id, product_id):
                     # No profile selected - clear inventory profile association
                     product.inventory_profile_id = None
 
-                # format_ids IS LEFT EXACTLY AS STORED. This surface no longer authors it
-                # (see `_refuse_a_product_with_no_format_arm`), and an edit must not be the
-                # thing that silently drops an existing legacy product's only format
-                # declaration -- which is what writing an empty picker's value back would
-                # have done.
-
-                # Apply the canonical arm (validated above, outside the session)
+                # Apply the canonical arm (validated above, outside the session).
+                #
+                # format_ids is not authored here. A legacy-only product keeps it as stored, so
+                # an edit cannot drop its only format declaration; once the product authors
+                # canonical declarations the stored column is retired, because its legacy arm
+                # is then derived from them (`Product.format_contract`) and a column kept
+                # beside them would be the "second authored catalog" canonical-formats.mdx's
+                # producer rules forbid.
                 if format_options_submitted:
                     product.format_options = authored_format_options
+                    if authored_format_options:
+                        product.format_ids = None
                     from sqlalchemy.orm import attributes
 
                     attributes.flag_modified(product, "format_options")

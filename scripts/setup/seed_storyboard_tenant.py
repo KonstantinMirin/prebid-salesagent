@@ -195,7 +195,7 @@ def seed_storyboard_tenant() -> str:
     from adcp.types import BrandReference
     from sqlalchemy import select
 
-    from scripts.setup.seed_products import seed_product
+    from scripts.setup.seed_products import canonical_declaration, seed_product
     from src.core.credentials import hash_token
     from src.core.database.database_session import get_db_session
     from src.core.database.models import (
@@ -395,9 +395,9 @@ def seed_storyboard_tenant() -> str:
                 "product_id": "storyboard_display_premium",
                 "name": "Premium Display Advertising",
                 "description": "High-impact display ads across premium content",
-                "formats": [
-                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90_image"},
+                "format_options": [
+                    canonical_declaration("image", "display_300x250_image", width=300, height=250),
+                    canonical_declaration("image", "display_728x90_image", width=728, height=90),
                 ],
                 "targeting_template": {"geo": ["US"], "device_type": "any"},
                 "delivery_type": "guaranteed",
@@ -407,8 +407,8 @@ def seed_storyboard_tenant() -> str:
                 "product_id": "storyboard_video_premium",
                 "name": "Premium Video Advertising",
                 "description": "Pre-roll video ads with guaranteed completion rates",
-                "formats": [
-                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_standard_30s"},
+                "format_options": [
+                    canonical_declaration("video_hosted", "video_standard_30s", duration_ms_exact=30000),
                 ],
                 "targeting_template": {"geo": ["US"], "device_type": "any"},
                 "delivery_type": "guaranteed",
