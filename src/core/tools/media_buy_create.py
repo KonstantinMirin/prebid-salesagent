@@ -758,6 +758,7 @@ def _pre_validate_package_creatives(
 def _resolve_package_selectors(
     req: CreateMediaBuyRequest,
     declared_format_arms: dict[str, tuple[list[Any], list[Any]]],
+    declared_placements: dict[str, list[Any]],
 ) -> dict[int, "SelectorResolution"]:
     """Resolve every package's format selector, and refuse before any state is persisted.
 
@@ -784,13 +785,17 @@ def _resolve_package_selectors(
         req: the buyer's request; its packages carry the selector arms.
         declared_format_arms: per product_id, the ``(format_options, format_ids)``
             documents the product AUTHORED, captured while its row was attached.
+        declared_placements: per product_id, the stored ``placements`` documents, for the
+            pin's coverage rule: the selected format set must cover every included
+            placement (``docs/creative/formats.mdx`` § Matching and satisfaction).
 
     Raises:
         AdCPConflictingSelectorsError: co-present routes resolved and selected different
             product options. The pointer names the PACKAGE, which is what
             ``enums/error-code.json`` asks for on this code.
-        AdCPCapabilityNotSupportedError: a route failed to resolve, or a single resolved
-            route selected nothing. The pointer names the ARM the verdict came from.
+        AdCPCapabilityNotSupportedError: a route failed to resolve, a single resolved
+            route selected nothing, or the selected declaration leaves an included
+            placement uncovered. The pointer names the ARM the verdict came from.
     """
     from src.core.format_satisfaction import (
         FormatRefusal,
@@ -816,6 +821,7 @@ def _resolve_package_selectors(
             ),
             declarations,
             legacy_catalog=legacy_catalog,
+            placements=declared_placements.get(pkg.product_id or ""),
         )
         if selector.conflicting:
             raise conflicting_selectors(
@@ -2745,6 +2751,9 @@ async def _create_media_buy_impl(
                 product_id: (list(row.format_contract.format_options or []), list(row.format_contract.format_ids))
                 for product_id, row in product_map.items()
             }
+            # The placements each product stores, captured beside its arms for the same
+            # reason: the gate's coverage rule reads them after this unit closes.
+            declared_placements = {product_id: list(row.placements or []) for product_id, row in product_map.items()}
 
             # AdCP spec (core/targeting.json): "Sellers SHOULD return a validation
             # error if the product has property_targeting_allowed: false."
@@ -3193,7 +3202,7 @@ async def _create_media_buy_impl(
         # ... REGARDLESS OF THE TENANT'S APPROVAL MODE, BEFORE any media-buy state is
         # persisted". The selector gate arrived later and did not follow suit; this is it
         # following suit.
-        selector_resolutions = _resolve_package_selectors(req, declared_format_arms)
+        selector_resolutions = _resolve_package_selectors(req, declared_format_arms, declared_placements)
 
         # No tenant field declares auto-creation; the dict shim this replaced always
         # answered its default, so the tenant never disables it.

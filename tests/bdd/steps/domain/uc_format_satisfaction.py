@@ -153,10 +153,53 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
     ],
 }
 
+#: The two declarations ``two_image_options`` publishes, named so a placement can narrow
+#: to one of them by restating it inline -- ``core/placement.json``'s ``format_options``
+#: items are whole declarations, matched to the product's by ``format_option_id``.
+_MREC, _LEADERBOARD = _DECLARATIONS["two_image_options"]
+
+
+def _placement(placement_id: str, mode: str, *accepted: dict[str, Any]) -> dict[str, Any]:
+    """One stored ``core/placement.json`` document: a seller-inline placement narrowing inline."""
+    return {
+        "kind": "seller_inline",
+        "placement_id": placement_id,
+        "name": placement_id,
+        "mode": mode,
+        "format_options": list(accepted),
+    }
+
+
+#: What the seller STORES in ``placements``, per name, for the coverage scenarios. Every
+#: row is stored beside ``two_image_options``, and the rows differ only in which option
+#: each placement accepts and whether it is included.
+_PLACEMENTS: dict[str, list[dict[str, Any]]] = {
+    # Two INCLUDED placements that each accept a different option: no single option covers
+    # both, so a package selecting one leaves the other placement's inventory uncovered.
+    "split": [
+        _placement("satisfaction_mrec_slot", "included", _MREC),
+        _placement("satisfaction_leaderboard_slot", "included", _LEADERBOARD),
+    ],
+    # ``split`` with the leaderboard placement TARGETABLE instead of included: a package
+    # does not buy it unless it selects it, so the 300x250 option covers what is bought.
+    "split_leaderboard_targetable": [
+        _placement("satisfaction_mrec_slot", "included", _MREC),
+        _placement("satisfaction_leaderboard_slot", "targetable", _LEADERBOARD),
+    ],
+    # Two included placements that BOTH accept the 300x250 option.
+    "shared": [
+        _placement("satisfaction_mrec_slot", "included", _MREC),
+        _placement("satisfaction_leaderboard_slot", "included", _MREC, _LEADERBOARD),
+    ],
+}
+
 #: What the buyer SENDS on its package, per selector name. The members are
 #: ``media-buy/package-request.json``'s three format selectors.
 _SELECTORS: dict[str, dict[str, Any]] = {
     # --- selectors that satisfy ---
+    # NO selector at all: "omitting both selects all formats supported by the product"
+    # (media-buy/package-request.json).
+    "no_selector": {},
     # States the fixed size and nothing else, so every other constraint is inherited.
     "exact_300x250": {"format_kind": "image", "params": {"width": 300, "height": 250}},
     # The pin's create_media_buy_with_direct_canonical_selector: every param the product
@@ -343,8 +386,13 @@ def given_tenant_for_create(ctx: dict) -> None:
     )
 
 
-def _store_declaring_product(ctx: dict, declaration: str, *, with_legacy_arm: bool) -> None:
+def _store_declaring_product(
+    ctx: dict, declaration: str, *, with_legacy_arm: bool, placements: str | None = None
+) -> None:
     """Store one product carrying *declaration*, with or without the deprecated arm.
+
+    *placements* names a :data:`_PLACEMENTS` row stored in the product's ``placements``
+    column; ``None`` stores none, which is every scenario but the coverage ones.
 
     The product becomes ``ctx["default_product"]``, which is what the shared create-request
     builder points the package at -- so the buyer's request names THIS product without this
@@ -356,12 +404,14 @@ def _store_declaring_product(ctx: dict, declaration: str, *, with_legacy_arm: bo
     """
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
+    product_id = f"satisfaction_{declaration}" if with_legacy_arm else f"satisfaction_canonical_{declaration}"
     product = ProductFactory(
         tenant=ctx["tenant"],
-        product_id=f"satisfaction_{declaration}" if with_legacy_arm else f"satisfaction_canonical_{declaration}",
+        product_id=f"{product_id}_{placements}" if placements else product_id,
         delivery_type="non_guaranteed",
         format_ids=list(_LEGACY_ARM) if with_legacy_arm else None,
         format_options=_DECLARATIONS[declaration],
+        placements=_PLACEMENTS[placements] if placements else None,
         property_tags=["all_inventory"],
     )
     ctx["default_pricing_option"] = PricingOptionFactory(
@@ -383,6 +433,16 @@ def given_declaration(ctx: dict, declaration: str) -> None:
     refusal is attributable to the rule rather than to an arm the product never declared.
     """
     _store_declaring_product(ctx, declaration, with_legacy_arm=True)
+
+
+@given(parsers.parse('the seller declares canonical format options "{declaration}" across placements "{placements}"'))
+def given_declaration_across_placements(ctx: dict, declaration: str, placements: str) -> None:
+    """Store the dual-arm product of :func:`given_declaration` with stored placements.
+
+    The placements are what the coverage rule reads: each is a stored ``core/placement.json``
+    document, and an included one may narrow the product's declarations inline.
+    """
+    _store_declaring_product(ctx, declaration, with_legacy_arm=True, placements=placements)
 
 
 @given(parsers.parse("the seller publishes only a deprecated format sized {width:d}x{height:d}"))

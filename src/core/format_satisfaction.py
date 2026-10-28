@@ -40,6 +40,11 @@ product declarations each resolved route SELECTS, refuse a disagreement with
 those four steps, one property each; :func:`satisfies` is the single-route entry the four
 creative gates use.
 
+The same section of ``formats.mdx`` then states a sixth rule, about the package rather than
+the route: "For a product with multiple included placements, the selected format set must
+cover every placement." :attr:`SelectorResolution.uncovered` is that rule, asked once the
+four steps have selected a declaration.
+
 WHAT THIS MODULE DOES NOT DO, deliberately:
 
 * It does not derive a creative's params from its assets. A stored creative declares a
@@ -117,6 +122,7 @@ class FormatRefusal(StrEnum):
     LEGACY_UNPROJECTABLE = "legacy_unprojectable"
     LEGACY_NOT_SELECTED = "legacy_not_selected"
     LEGACY_NOT_ACCEPTED = "legacy_not_accepted"
+    PLACEMENT_UNCOVERED = "placement_uncovered"
 
 
 #: The two members that are a RESOLUTION failure in ``media-buy/package-request.json``'s
@@ -947,6 +953,74 @@ def _reference_display(reference: LibraryFormatId) -> str:
     return f"{shown} ({', '.join(f'{name}={value}' for name, value in parameters)})" if parameters else shown
 
 
+@dataclass(frozen=True, slots=True)
+class PlacementLayer:
+    """One INCLUDED placement and the seller-inline narrowing it states.
+
+    ``core/product.json``'s ``format_options`` description computes a placement's
+    effective accepted set as the intersection of "(1) the product format_options; (2) the
+    product placement's inline format_options, when present; and (3) for kind
+    publisher_ref, the named publisher's adagents.json catalog narrowing". This is layer
+    (2). Layer (1) is the product's declarations, which the selected declaration already
+    belongs to.
+    """
+
+    placement_id: str
+    declarations: tuple[LibraryFormatDeclaration, ...]
+
+
+def included_placement_layers(placements: Iterable[Any] | None) -> tuple[PlacementLayer, ...]:
+    """The INCLUDED placements of a product that narrow its formats, as stored documents.
+
+    Only ``mode: included`` counts. ``core/placement.json`` makes ``included`` "fixed product
+    inventory: it cannot be independently selected", so every package buys it, while a
+    ``targetable`` placement is purchased only through ``placement_selection``, which this
+    seller does not accept. A stored row with no ``mode`` is served as ``targetable``
+    (``product_conversion._normalize_legacy_placement``), so it is not included here either.
+
+    A placement that states no inline ``format_options`` is left out: "An omitted optional
+    layer is unconstrained", so it accepts every product declaration. A placement whose
+    inline declarations are all unparseable keeps an EMPTY layer, which covers nothing, so
+    it fails closed rather than widening to the product set.
+
+    CEILING: layer (3), a ``publisher_ref`` placement's adagents.json narrowing, is not
+    read. This seller has no resolver for it on the buy path; the pin says "an unresolved
+    publisher placement or format-option reference MUST fail closed", which this reader
+    does not yet do. Products this seller authors carry ``seller_inline`` placements.
+    """
+    layers = []
+    for placement in placements or []:
+        if not isinstance(placement, Mapping) or placement.get("mode") != "included":
+            continue
+        if placement.get("format_options") is None:
+            continue
+        layers.append(
+            PlacementLayer(
+                placement_id=str(placement.get("placement_id")),
+                declarations=product_declarations(placement["format_options"]),
+            )
+        )
+    return tuple(layers)
+
+
+def _placement_accepts(selected: LibraryFormatDeclaration, accepted: LibraryFormatDeclaration) -> bool:
+    """Whether a placement's declaration *accepted* takes the product declaration *selected*.
+
+    The matching rule is ``core/product.json``'s, stated for intersecting these layers:
+    "Match publisher-declared options by {publisher_domain, format_option_id}, match
+    product-local options by format_option_id when publisher_domain is omitted, and
+    otherwise match declarations with the same format_kind whose narrower parameters
+    satisfy the broader declaration." The last case is directional: the selected
+    declaration is the claim and the placement's declaration is the target, by the same
+    rules a package selector is graded with.
+    """
+    if (option := _option_identity(accepted)) is not None:
+        return option == _option_identity(selected)
+    return str(accepted.format_kind) == str(selected.format_kind) and not _unsatisfied_params(
+        _declared_params(selected), _declared_params(accepted)
+    )
+
+
 def selector_routes(
     *,
     format_kind: str | None,
@@ -1043,6 +1117,10 @@ class SelectorResolution:
     #: product narrows neither arm, or the package names no selector: both mean the
     #: selector imposes nothing, which is :meth:`__bool__`'s ``True`` with no selection.
     routes: tuple[tuple[FormatRoute, FormatSatisfaction], ...] = ()
+    #: The product's included placements that narrow its formats, for :attr:`uncovered`.
+    #: Empty for every single-route caller (a stored creative), which is what keeps the
+    #: coverage rule on the package path only.
+    placements: tuple[PlacementLayer, ...] = dataclass_field(default=(), compare=False)
 
     @property
     def unresolved(self) -> FormatSatisfaction | None:
@@ -1101,8 +1179,51 @@ class SelectorResolution:
         return next((verdict for _, verdict in self.routes if not verdict), None)
 
     @property
+    def uncovered(self) -> FormatSatisfaction | None:
+        """The first included placement the selected declaration does not cover, or None.
+
+        ``docs/creative/formats.mdx`` § Matching and satisfaction: "For a product with
+        multiple included placements, the selected format set must cover every placement. A
+        seller must reject or refine a package with an uncovered placement; it must not
+        silently remove inventory." This seller rejects. ``core/product.json`` restates it:
+        "uncovered inventory MUST be rejected or refined, never silently omitted".
+
+        Asked only once every route resolved, agreed and selected a declaration, because
+        coverage is a property of the SELECTED set. A package naming no selector "selects
+        all formats supported by the product" (``media-buy/package-request.json``), and the
+        product set is every placement's upper bound, so it is covered by construction. A
+        product with one included placement is held to the same rule: that placement is all
+        of the package's inventory.
+
+        Read off :attr:`routes` and never through :attr:`selected`, which asks ``bool(self)``
+        and so this property: the winning route is the first, as there.
+        """
+        if not self.routes or not self.placements:
+            return None
+        if self.unresolved is not None or self.conflicting or self.unsatisfied is not None:
+            return None
+        route, verdict = self.routes[0]
+        chosen = verdict.declaration
+        if chosen is None:
+            return None
+        for layer in self.placements:
+            if not any(_placement_accepts(chosen, accepted) for accepted in layer.declarations):
+                return FormatSatisfaction(
+                    satisfied=False,
+                    refusal=FormatRefusal.PLACEMENT_UNCOVERED,
+                    rejected_value=_declaration_label(chosen),
+                    accepted_values=tuple(sorted(_declaration_label(d) for d in layer.declarations)),
+                    summary=(
+                        f"selected format {_declaration_label(chosen)!r} does not cover "
+                        f"included placement {layer.placement_id!r}"
+                    ),
+                    field=route.field,
+                )
+        return None
+
+    @property
     def refused(self) -> FormatSatisfaction | None:
-        """The verdict to raise ``UNSUPPORTED_FEATURE`` for, or None. Both lanes, in order.
+        """The verdict to raise ``UNSUPPORTED_FEATURE`` for, or None. Every lane, in order.
 
         ``is not None`` and NEVER ``self.unresolved or self.unsatisfied``, because a
         refusing :class:`FormatSatisfaction` is FALSY by design -- its ``__bool__`` is
@@ -1113,7 +1234,10 @@ class SelectorResolution:
         resolving option ref were both ACCEPTED.
         """
         unresolved = self.unresolved
-        return unresolved if unresolved is not None else self.unsatisfied
+        if unresolved is not None:
+            return unresolved
+        unsatisfied = self.unsatisfied
+        return unsatisfied if unsatisfied is not None else self.uncovered
 
     @property
     def selected(self) -> LibraryFormatDeclaration | None:
@@ -1136,6 +1260,7 @@ def resolve_routes(
     declarations: Any,
     *,
     legacy_catalog: Iterable[Any] | None = None,
+    placements: Iterable[Any] | None = None,
 ) -> SelectorResolution:
     """Resolve EVERY route independently. :class:`SelectorResolution` carries the verdict.
 
@@ -1144,6 +1269,11 @@ def resolve_routes(
     storyboard's step 15 answering success -- a package carrying a resolving option ref
     beside an UNPROJECTABLE legacy id was accepted on the option route and the legacy
     route was never resolved at all.
+
+    *placements* is the product's stored ``placements`` column, for the coverage rule
+    (:attr:`SelectorResolution.uncovered`). Read on the canonical lane only: a placement's
+    inline narrowing is a set of canonical declarations, and the deprecated lane selects
+    none to compare it with.
     """
     from src.core.format_resolver import product_format_references
 
@@ -1171,7 +1301,8 @@ def resolve_routes(
                 ),
             )
             for route in routes
-        )
+        ),
+        placements=included_placement_layers(placements) if declared else (),
     )
 
 

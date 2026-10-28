@@ -253,6 +253,66 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # "Resolution failure is reported before selector equivalence and must not be
     # mislabeled CONFLICTING_SELECTORS."
 
+  # ── Coverage: the selected format must cover every INCLUDED placement ─────────────────
+  #
+  # docs/creative/formats.mdx § Matching and satisfaction: "For a product with multiple
+  # included placements, the selected format set must cover every placement. A seller must
+  # reject or refine a package with an uncovered placement; it must not silently remove
+  # inventory." core/product.json's format_options description restates it ("uncovered
+  # inventory MUST be rejected or refined, never silently omitted") and says how a
+  # placement's accepted set is computed: the intersection of the product format_options
+  # and the placement's inline format_options, matched by format_option_id. This seller
+  # rejects, with the satisfaction refusal: UNSUPPORTED_FEATURE naming the arm whose
+  # selection left the placement uncovered.
+  #
+  # Every row stores two_image_options (image 300x250 and image 728x90) and differs only in
+  # the stored placements and the selector. `split` has two INCLUDED placements, one
+  # accepting each option, so neither option covers both. `split_leaderboard_targetable`
+  # is `split` with the 728x90 placement TARGETABLE: core/placement.json makes an included
+  # placement "fixed product inventory" that every package buys, while a targetable one is
+  # bought only through placement_selection, so that row grades the mode and nothing else.
+  # `shared` has both included placements accepting 300x250.
+  #
+  # A package with NO selector is accepted against `split`: media-buy/package-request.json,
+  # "omitting both selects all formats supported by the product", and the product set
+  # covers both placements.
+  #
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/formats.mdx
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/mode/description
+
+  @T-UC-FORMAT-SATISFACTION-placements-covered @format_satisfaction @requires_db
+  Scenario Outline: a selected format that covers every included placement is accepted - <placements> <selector>
+    Given the seller declares canonical format options "two_image_options" across placements "<placements>"
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+    Examples:
+      | placements                   | selector           |
+      | shared                       | product_option_ref |
+      | split_leaderboard_targetable | product_option_ref |
+      | split                        | no_selector        |
+
+  @T-UC-FORMAT-SATISFACTION-placements-uncovered @format_satisfaction @requires_db
+  Scenario Outline: a selected format that leaves an included placement uncovered is refused - <selector>
+    Given the seller declares canonical format options "two_image_options" across placements "split"
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "<arm>" selector
+
+    Examples:
+      | selector           | arm                |
+      | product_option_ref | format_option_refs |
+      | exact_300x250      | format_kind        |
+
+    # Each refusal row has an accept row that differs in ONE thing: `shared` (the second
+    # placement also accepts 300x250) and `split_leaderboard_targetable` (the second
+    # placement is not included). A seller that ignored placements accepts both refusal
+    # rows; one that refused every multi-placement product reddens all three accept rows.
+    # Both selectors select the same 300x250 declaration by different routes, so the refusal
+    # is about the selected declaration and not the route that named it.
+
   # ── The CREATIVE side of the same function ────────────────────────────────────────────
   #
   # The two scenarios above grade a PACKAGE SELECTOR. The ones below grade a stored CREATIVE
