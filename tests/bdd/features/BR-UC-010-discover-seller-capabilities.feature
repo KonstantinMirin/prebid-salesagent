@@ -567,17 +567,26 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant has full capabilities configured
     When the Buyer Agent calls get_adcp_capabilities with protocols filter ["media_buy", "signals", "governance", "sponsored_intelligence", "creative"]
     Then the response is compliant with the get_adcp_capabilities spec
+    And the response should include supported_protocols containing "media_buy"
     And the response should include the media_buy section
-    And the response should include the signals section
-    And the response should include the governance section
-    And the response should include the sponsored_intelligence section
-    And the response should include the creative section
-    # Spec-true boundary (not a gap pin): a filter equal to the full request enum yields the
-    # same sections whether the filter is honored or ignored. Note the request/response enum
-    # asymmetry: the response supported_protocols enum adds "brand" and "measurement", which
-    # the request filter cannot select.
+    And the response should NOT include the signals, governance, sponsored_intelligence or creative sections
+    # Boundary: a filter naming every request-enum value, the last one ("creative") included,
+    # is accepted and answered with the sections for the protocols this seller SUPPORTS. The
+    # filter selects among supported protocols; it does not create sections. The request
+    # schema says "If omitted, returns capabilities for all supported protocols", and the
+    # response schema makes each non-media_buy section conditional on its protocol: "Only
+    # present if <protocol> is in supported_protocols". This tenant declares only media_buy,
+    # so signals, governance, sponsored_intelligence and creative must be absent.
+    # Corrected against the pin: the generated Thens required all four sections, which no
+    # seller that does not implement all four protocols may emit.
+    # Note the request/response enum asymmetry: the response supported_protocols enum adds
+    # "brand" and "measurement", which the request filter cannot select.
     # @bva protocols: creative (last enum value)
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-request.json pointer=/properties/protocols/items/enum
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-request.json pointer=/properties/protocols
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/signals
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/governance
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/sponsored_intelligence
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/creative
 
   @T-UC-010-ext-request-vendor-namespaced @extension @ext-request @partition
   Scenario: A vendor-namespaced request ext is accepted and the normal capabilities response is returned
