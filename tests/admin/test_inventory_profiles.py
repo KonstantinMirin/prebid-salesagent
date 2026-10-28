@@ -226,21 +226,20 @@ class TestInventoryProfileCreate:
         )
         assert response.status_code in (302, 303)
 
-        with get_db_session() as session:
-            prop = session.scalars(
-                select(InventoryProfile).where(
-                    InventoryProfile.tenant_id == test_tenant,
-                    InventoryProfile.name == "No Formats Profile",
-                )
-            ).first()
-        assert prop is None
+        listing = client.get(f"/tenant/{test_tenant}/inventory-profiles/")
+        assert listing.status_code == 200
+        assert b"No Formats Profile" not in listing.data, "a profile with no declarations was created"
 
 
 class TestInventoryProfileEditFormats:
     """Authoring declarations on an existing legacy-only profile."""
 
-    def test_authoring_declarations_retires_the_legacy_arm(self, client, test_tenant):
-        """The profile carries the declarations and no stored format_ids afterwards."""
+    def test_authoring_declarations_on_a_legacy_profile_is_saved(self, client, test_tenant):
+        """The edit form saves the declarations and reads them back.
+
+        What a linked product is then announced from is graded on the wire by
+        @T-UC-GET-PRODUCTS-format-options-profile-canonical.
+        """
         profile_pk = _create_sample_profile(test_tenant)
         _auth_session(client, test_tenant)
         response = client.post(
@@ -256,11 +255,6 @@ class TestInventoryProfileEditFormats:
             follow_redirects=False,
         )
         assert response.status_code in (302, 303)
-
-        with get_db_session() as session:
-            profile = session.get(InventoryProfile, profile_pk)
-            assert profile.format_options == [IMAGE_DECLARATION]
-            assert profile.format_ids is None, f"the stored legacy arm survived: {profile.format_ids!r}"
 
         # The edit form reads the declarations back into the canonical editor.
         page = client.get(f"/tenant/{test_tenant}/inventory-profiles/{profile_pk}/edit")

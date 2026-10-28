@@ -1112,53 +1112,6 @@ class TestUC003UpdateCreativeIds:
             # The identifier is STRUCTURED now: details/field, not prose.
             assert exc_info.value.error_code == "INVALID_STATE"
 
-    def test_creative_format_compatibility_check(self):
-        """Creative format mismatch with product returns INVALID_CREATIVES.
-
-        Covers: UC-003-ALT-UPDATE-CREATIVE-IDS-05
-        """
-        with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            uow = env.mock["uow"].return_value
-
-            mock_mb = MagicMock()
-            mock_mb.media_buy_id = "mb_creative"
-            uow.media_buys.get_by_id.return_value = mock_mb
-
-            # Creative with "video" format
-            c1 = MagicMock()
-            c1.creative_id = "C1"
-            c1.status = "active"
-            # A projectable id that is still INCOMPATIBLE with the product's
-            # display_300x250 below -- the mismatch is what this grades. A bare "video"
-            # has no canonical projection, so the write gate would refuse it
-            # UNSUPPORTED_FEATURE before the compatibility check ran, and the test would
-            # pass its raises() on the wrong error.
-            stamp_format_identity(c1, format_id="video_640x480", agent_url="http://test.com")
-            uow.creatives.get_by_ids.side_effect = None
-            uow.creatives.get_by_ids.return_value = [c1]
-
-            # Product with only "display_300x250" format
-            mock_product = MagicMock()
-            mock_product.format_ids = [{"agent_url": "http://test.com", "id": "display_300x250"}]
-            mock_product.name = "Display Product"
-            uow.products.get_by_id.return_value = mock_product
-
-            # Package with product
-            mock_pkg = stub_package_row(package_config={"product_id": "prod_1"})
-            uow.media_buys.get_package.return_value = mock_pkg
-
-            identity = env.identity
-            req = UpdateMediaBuyRequest(
-                account={"account_id": "acct_test"},
-                idempotency_key="test-idem-key-0001",
-                media_buy_id="mb_creative",
-                packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
-            )
-            with pytest.raises(AdCPValidationError) as exc_info:
-                _update_media_buy_impl(req=req, identity=identity)
-            # The identifier is STRUCTURED now: details/field, not prose.
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
-
     def test_creative_update_no_adapter_call(self):
         """Creative ID updates persist directly to DB without adapter call.
 

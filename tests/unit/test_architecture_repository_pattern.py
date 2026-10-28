@@ -669,7 +669,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/admin/test_creatives_blueprint.py", "test_reject_creative_sets_status_rejected"),
     ("tests/admin/test_creatives_blueprint.py", "test_tenant"),
     ("tests/admin/test_inventory_profiles.py", "_create_sample_profile"),
-    ("tests/admin/test_inventory_profiles.py", "test_create_profile_missing_formats_redirects_without_creation"),
     ("tests/admin/test_inventory_profiles.py", "test_create_profile_missing_name_redirects_without_creation"),
     ("tests/admin/test_inventory_profiles.py", "test_create_profile_with_tags_saves_to_db"),
     ("tests/admin/test_inventory_profiles.py", "test_delete_profile_removes_from_db"),
