@@ -108,9 +108,8 @@ Feature: BR-UC-002 Create Media Buy
 
   @T-UC-002-alt-creatives @alternative @alt-creatives @post-s1
   Scenario: Media buy with inline creative uploads
-    Given a valid create_media_buy request
+    Given a valid create_media_buy request with inline creatives
     And the account exists and is active
-    And the request includes packages with inline "creatives" array
     And each creative has a valid format_id, name, and assets with URL and dimensions
     And the creative agent has the referenced formats registered
     When the Buyer Agent sends the create_media_buy request
@@ -119,6 +118,9 @@ Feature: BR-UC-002 Create Media Buy
     And the system should assign the uploaded creatives to packages
     And the response should include the created media buy with creative assignments
     # POST-S1: Buyer knows their media buy has been created and is activating
+    # The inline creatives come from the create Given. The former line "the request includes
+    # packages with inline "creatives" array" bound UC-003's update-request catch-all, which
+    # builds an update body and refuses that wording.
     # --- Alt: Proposal-Based ---
 
   @T-UC-002-alt-proposal @alternative @alt-proposal @post-s1 @post-s2 @post-s3 @post-s11
@@ -492,7 +494,10 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    # INVALID_PRICING_OPTION: "at the request level for create_media_buy when the submitted
+    # pricing option cannot be resolved" -- not VALIDATION_ERROR.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_PRICING_OPTION
+    And the error code should be "INVALID_PRICING_OPTION"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -536,7 +541,10 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    # BUDGET_TOO_LOW: "Budget is below the seller's minimum" -- the option's minimum spend is
+    # the seller's minimum for this package, the same code the tenant minimum answers with.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/BUDGET_TOO_LOW
+    And the error code should be "BUDGET_TOO_LOW"
 
     # --- ext-o: Creative Not Found in Library ---
 
@@ -933,11 +941,15 @@ Feature: BR-UC-002 Create Media Buy
     And a package uses a bid-based auction pricing model with max_bid set to true
     And the buyer supplies a bid_price above the floor_price
     When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy spec
-    And the pricing option should be accepted
-    And the buyer bid_price should be interpreted as a ceiling rather than an exact price
-    And the seller may clear at any price between the floor_price and the bid_price
-    # BR-RULE-006 INV-5 (v3.1): max_bid=true on cpm/cpc/cpcv/cpv/vcpm makes bid_price a ceiling
+    Then the response is compliant with the create_media_buy success spec
+    And the response package should carry bidding max_bid equal to the buyer bid_price
+    # BR-RULE-006 INV-5: max_bid is deprecated legacy input the seller normalizes. The pin's
+    # package-request bid_price: "Legacy normalization: selected pricing_option.max_bid=true
+    # maps to bidding.max_bid"; package.json bid_price: "3.2 sellers normalize accepted legacy
+    # input and SHOULD echo bidding instead." Where the seller then clears is not observable at
+    # creation, so "the seller may clear at any price between floor and bid" is not asserted.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/bid_price
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/bid_price
     # --- BR-RULE-008: Budget Positivity ---
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
@@ -975,15 +987,23 @@ Feature: BR-UC-002 Create Media Buy
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-inv-012-5 @invariant @BR-RULE-012 @v31
-  Scenario: INV-5 holds -- legacy mode validates total budget against the daily cap
+  Scenario: INV-5 -- a request with total_budget but neither packages nor proposal_id is refused
     Given a valid create_media_buy request
     And the account exists and is active
     And the request uses legacy mode with no per-package budgets
     And the tenant has max_daily_package_spend configured
     When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy spec
-    And the media buy total budget should be validated against the daily cap as a single daily figure
-    # BR-RULE-012 INV-5 (v3.1): legacy (no per-package budgets) validates the total against the cap
+    Then the response is compliant with the create_media_buy error spec
+    And the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error recovery should be "correctable"
+    # BR-RULE-012 INV-5: the pin has no "legacy mode". create-media-buy-request.json anyOf
+    # admits three shapes -- packages each with budget; packages + total_budget +
+    # budget_allocation seller_optimized; proposal_id + total_budget -- so a total_budget with
+    # no packages and no proposal_id matches none, and the daily cap is never reached. Schema
+    # violation is INVALID_REQUEST (enums/error-code.json).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/anyOf
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_REQUEST
     # --- BR-RULE-013: DateTime Validity ---
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
@@ -1040,15 +1060,22 @@ Feature: BR-UC-002 Create Media Buy
     # --- BR-RULE-018: Atomic Response Semantics ---
 
   @T-UC-002-inv-017-4 @invariant @BR-RULE-017 @v31
-  Scenario: INV-4 holds -- a paused approval task surfaces input-required then resolves
-    Given a create_media_buy request that requires manual approval
-    And the response returned a submitted task envelope with a task_id
-    When the approval task is paused awaiting the human decision
+  Scenario: INV-4 holds -- a buy awaiting the seller's human review stays a submitted task
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And tenant human_review_required is true
+    When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy submitted spec
-    And the task status should be "input-required"
-    And on completion the task should resolve to "completed" with a media_buy_id on the completion artifact or to "rejected"
+    And the approval path should be manual
     And "pending_approval" should never be used as a MediaBuyStatus value
-    # BR-RULE-017 INV-4 (v3.1): approval modeled at the task layer; pending_approval is not a MediaBuyStatus
+    # BR-RULE-017 INV-4: approval is modelled at the task layer. specification.mdx: "Sales agents
+    # MAY require internal human review (e.g. IO signing) by keeping the task in status:
+    # "submitted" until the reviewer acts. Sales agents MAY also use status: "input-required"
+    # when the buyer must respond ... there is no pending_approval MediaBuy status". The seller's
+    # own reviewer is not the buyer, so "input-required" was the wrong status here. The task's
+    # resolution (completed with media_buy_id, or rejected) follows the reviewer's decision,
+    # which no buyer request makes; it needs a When that drives the seller's decision.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/specification.mdx
     # --- BR-RULE-018: Atomic Response Semantics ---
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
@@ -1101,15 +1128,21 @@ Feature: BR-UC-002 Create Media Buy
     # --- BR-RULE-020: Adapter Atomicity ---
 
   @T-UC-002-inv-018-8 @invariant @BR-RULE-018 @v31
-  Scenario: INV-8 holds -- two-layer envelope and payload error model
-    Given a create_media_buy request that produces a response
-    When the task fails fatally
+  Scenario: INV-8 holds -- a fatal failure populates both the envelope and the payload error layers
+    Given a create_media_buy request that fails validation
+    And the account exists and is active
+    When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And both the protocol envelope "adcp_error" field and the payload "errors" array should be populated
-    And when only a non-fatal warning occurs only the payload "errors" array should carry it with severity "warning"
-    And a non-fatal warning should not set the envelope "adcp_error" field
     And the envelope should not emit the legacy "task_status" or "response_status" fields
-    # BR-RULE-018 INV-8 (v3.1): fatal => adcp_error + payload errors[]; warning => payload-only
+    # BR-RULE-018 INV-8: error-handling.mdx "A fatal task failure SHOULD populate both layers";
+    # task-lifecycle.mdx "Agents MUST NOT emit the legacy task_status or response_status fields
+    # alongside status". The non-fatal half ("Non-fatal errors populate only the payload": a
+    # submitted task's warning rides errors[] with severity "warning" and never adcp_error)
+    # was asserted here against a FATAL failure, where no warning exists; it needs its own
+    # scenario with a request whose submitted answer carries an advisory.
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L3/error-handling.mdx
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L3/task-lifecycle.mdx
     # --- BR-RULE-020: Adapter Atomicity ---
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
@@ -1150,25 +1183,37 @@ Feature: BR-UC-002 Create Media Buy
   Scenario: INV-4 holds -- pre-adapter validation failure never invokes the adapter
     Given a valid create_media_buy request
     And the account exists and is active
-    But pre-adapter validation fails on creative completeness or adapter pricing/budget constraints
+    But a referenced creative is missing its required assets
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
+    And the error code should be "VALIDATION_ERROR"
     And the ad server adapter should never be invoked
-    And no database records should be created
-    # BR-RULE-020 INV-4 (v3.1): validation precedes the adapter call; failure persists nothing
+    And no media buy record should be persisted
+    And no package records should be persisted
+    # BR-RULE-020 INV-4 (v3.1): validation precedes the adapter call; failure persists nothing.
+    # One named pre-adapter failure (a stored creative with no assets, a business rule beyond
+    # schema validation: VALIDATION_ERROR) rather than "creative completeness or pricing/budget",
+    # which a single request cannot be. "no database records should be created" passed on any
+    # error without reading the store; the two persistence lines read it.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/VALIDATION_ERROR
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-inv-020-5 @invariant @BR-RULE-020 @v31
-  Scenario: INV-5 holds -- dry-run mode never invokes the adapter and persists nothing
+  Scenario: INV-5 holds -- the deprecated X-Dry-Run header does not turn a create into a preview
     Given a valid create_media_buy request
     And the account exists and is active
-    And the request is sent in dry-run mode
+    And the request carries the deprecated "X-Dry-Run" header
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy success spec
-    And the ad server adapter should never be invoked
-    And a simulated success should be returned
-    And no database records should be created
-    # BR-RULE-020 INV-5 (v3.1): dry-run validates fully but never calls the adapter or persists
+    And the media buy should proceed to adapter execution
+    And the media buy record should be persisted in the database
+    # BR-RULE-020 INV-5: create_media_buy has no dry-run. create-media-buy-request.json declares
+    # no dry_run, and sandbox.mdx scopes dry_run to "Sync tasks only". The one dry-run signal a
+    # buyer can still send a create is the deprecated header, and the pin rules on it: "Sellers
+    # MUST NOT alter behavior based on these headers." A preview that skipped the ad server and
+    # persisted nothing would be exactly that alteration. Sandbox is the spec's no-side-effect
+    # mode, graded by @T-UC-002-sandbox-*.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/sandbox.mdx
     # --- BR-RULE-026: Creative Assignment Validation ---
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
@@ -1182,14 +1227,20 @@ Feature: BR-UC-002 Create Media Buy
     And the creative assignment should proceed
 
   @T-UC-002-inv-026-2 @invariant @BR-RULE-026 @error
-  Scenario: INV-2 violated -- creative in error state rejected
+  Scenario: INV-2 violated -- a creative in the terminal rejected state cannot be assigned
     Given a valid create_media_buy request with creative assignments
     And the account exists and is active
-    But a referenced creative is in "error" state
+    But a referenced creative is in "rejected" state
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
+    And the error code should be "INVALID_STATE"
     And the error should include "suggestion" field
+    # enums/creative-status.json has no "error" member; "rejected" is its terminal refusal.
+    # Assigning it is an "Operation ... not permitted for the resource's current status":
+    # INVALID_STATE (enums/error-code.json).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/creative-status.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_STATE
 
   @T-UC-002-inv-026-4 @invariant @BR-RULE-026 @error
   Scenario: INV-4 violated -- creative format incompatible with product
@@ -1199,7 +1250,11 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
+    # Same condition and code as @T-UC-002-ext-p: a format outside the product's declared set
+    # "violates business rules beyond schema validation".
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/VALIDATION_ERROR
     # --- BR-RULE-080: Account Resolution Validation ---
 
   @T-UC-002-inv-080-1 @invariant @BR-RULE-080 @error
@@ -1213,30 +1268,42 @@ Feature: BR-UC-002 Create Media Buy
     And the error should include "suggestion" field
     # --- BR-RULE-087: Optimization Goal Validation ---
 
-  @T-UC-002-inv-080-11 @invariant @BR-RULE-080 @v31 @open-question
-  Scenario: INV-11 -- account in terminal lifecycle status cannot create media buys
+  @T-UC-002-inv-080-11 @invariant @BR-RULE-080 @v31
+  Scenario Outline: INV-11 -- an account in terminal lifecycle status <status> cannot create media buys
     Given a create_media_buy request
-    But the resolved account has a terminal lifecycle status of "rejected" or "closed"
+    But the resolved account has terminal lifecycle status "<status>"
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
-    And the account should be treated as not operational and unable to create media buys
-    And no dedicated error code exists in error-code.json for this state
-    And the resolution outcome is unspecified by the protocol
-    # BR-RULE-080 INV-11 (v3.1): account-status.json defines rejected/closed; no matching error code (open question G-acct-lifecycle)
+    And the error code should be "ACCOUNT_NOT_FOUND"
+    And no media buy record should be persisted
+    # BR-RULE-080 INV-11: the protocol does specify this. accounts/overview.mdx lists
+    # create_media_buy as "No" for rejected/closed and rules: "Sellers MUST reject operations on
+    # accounts in terminal states with ACCOUNT_NOT_FOUND or an appropriate error".
+    # ACCOUNT_NOT_FOUND is the code it names, and the one this seller answers.
+    # @source repo=adcp ref=v3.2.7 path=docs/accounts/overview.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/account-status.json
+
+    Examples: Terminal account statuses
+      | status   |
+      | rejected |
+      | closed   |
+
     # --- BR-RULE-087: Optimization Goal Validation ---
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
-  @T-UC-002-inv-087-5 @invariant @BR-RULE-087 @error
-  Scenario: INV-5 violated -- duplicate priority values in optimization goals
+  @T-UC-002-inv-087-5 @invariant @BR-RULE-087
+  Scenario: INV-5 holds -- duplicate priority values in optimization goals are accepted
     Given a valid create_media_buy request
     And the account exists and is active
-    But a package has two optimization goals with the same priority value
+    And a package has two optimization goals with the same priority value
     When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy error spec
-    And the operation should fail
-    And the error code should be "INVALID_REQUEST"
-    And the error recovery should be "correctable"
-    And the error should include "suggestion" field
+    Then the response is compliant with the create_media_buy success spec
+    And the media buy should be created
+    # The pin permits ties and resolves them by array order. optimization-goal.json priority:
+    # "Ties use array order, so the earliest goal at the lowest explicit priority is primary";
+    # the schema description: "This array-order tie-break makes duplicate priorities
+    # deterministic." Refusing them would refuse a request the pin accepts.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/optimization-goal.json
 
   @T-UC-002-inv-087-6 @invariant @BR-RULE-087 @error
   Scenario: INV-6 violated -- optimization_goals array empty
@@ -1259,8 +1326,14 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
-    And the error code should be "INVALID_REQUEST"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
+    # optimization-goal.json value_field: "sellers must reject these target kinds when no event
+    # source entry includes value_field". The schema does not encode it (no if/then ties
+    # target.kind to value_field), so the refusal is a business rule beyond schema validation:
+    # VALIDATION_ERROR, not INVALID_REQUEST (enums/error-code.json).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/optimization-goal.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/VALIDATION_ERROR
 
   @T-UC-002-partition-budget-amount @partition @budget-amount
   Scenario Outline: Budget amount partition validation - <partition>
@@ -1271,6 +1344,10 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
     # --- pricing_option_xor partitions (BR-RULE-006) ---
+    # A negative budget violates package-request.json `budget` ("minimum": 0), a schema
+    # constraint: INVALID_REQUEST at the budget, not BUDGET_TOO_LOW (a business minimum).
+    # Zero passes the schema and is refused by the seller's minimum.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/budget/minimum
 
     Examples: Valid partitions
       | partition        | value    | outcome                          |
@@ -1279,7 +1356,7 @@ Feature: BR-UC-002 Create Media Buy
     Examples: Invalid partitions
       | partition        | value | outcome                                      |
       | zero_amount      | 0     | error BUDGET_TOO_LOW with suggestion          |
-      | negative_amount  | -50   | error BUDGET_TOO_LOW with suggestion          |
+      | negative_amount  | -50   | error INVALID_REQUEST on packages[0].budget with suggestion |
 
   @T-UC-002-partition-pricing-option-xor @partition @pricing-option-xor
   Scenario Outline: Pricing option XOR partition validation - <partition>
@@ -1296,11 +1373,20 @@ Feature: BR-UC-002 Create Media Buy
       | fixed_pricing     | pricing validation passes       |
       | auction_pricing   | pricing validation passes       |
       | cpa_model         | pricing validation passes       |
+      | both_set          | pricing validation passes       |
 
+    # both_set: the XOR is a constraint on the PUBLISHED option -- floor_price is "mutually
+    # exclusive with fixed_price" -- and this seller publishes a fixed option as fixed_price
+    # alone, so a buyer selecting it holds a valid fixed option. Nothing in the pin refuses
+    # the buy, and CONFIGURATION_ERROR is for a misconfiguration that "prevents handling the
+    # request", which a stray floor does not.
+    # neither_set: the seller cannot hold an option with neither (fixed needs a rate, auction a
+    # floor), so what a buyer can send is a pricing_option_id that resolves to no option.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/pricing-options/cpm-option.json pointer=/properties/floor_price/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_PRICING_OPTION
     Examples: Invalid partitions
-      | partition         | outcome                         |
-      | both_set          | error with suggestion           |
-      | neither_set       | error with suggestion           |
+      | partition         | outcome                                                                     |
+      | neither_set       | error INVALID_PRICING_OPTION on packages[0].pricing_option_id with suggestion |
 
   @T-UC-002-partition-currency-consistency @partition @currency-consistency
   Scenario Outline: Currency consistency partition validation - <partition>
@@ -1334,6 +1420,10 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
     # --- minimum_spend partitions (BR-RULE-011) ---
+    # Duplicate product_ids: the pin does not forbid them, so the refusal is this seller's
+    # business rule -- VALIDATION_ERROR ("violates business rules beyond schema validation"),
+    # pointed at the packages array because no single package is at fault.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/VALIDATION_ERROR
 
     Examples: Valid partitions
       | partition           | outcome                         |
@@ -1342,7 +1432,7 @@ Feature: BR-UC-002 Create Media Buy
 
     Examples: Invalid partitions
       | partition           | outcome                         |
-      | duplicate_product   | error with suggestion           |
+      | duplicate_product   | error VALIDATION_ERROR on packages with suggestion |
 
   @T-UC-002-partition-minimum-spend @partition @minimum-spend
   Scenario Outline: Minimum spend partition validation - <partition>
@@ -1353,6 +1443,9 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
     # --- daily_spend_cap partitions (BR-RULE-012) ---
+    # BUDGET_TOO_LOW: "Budget is below the seller's minimum" -- the product (pricing option)
+    # minimum and the tenant minimum alike -- pointed at the refused package budget.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/BUDGET_TOO_LOW
 
     Examples: Valid partitions
       | partition                  | outcome                      |
@@ -1362,8 +1455,8 @@ Feature: BR-UC-002 Create Media Buy
 
     Examples: Invalid partitions
       | partition                  | outcome                         |
-      | budget_below_product_min   | error with suggestion           |
-      | budget_below_tenant_min    | error with suggestion           |
+      | budget_below_product_min   | error BUDGET_TOO_LOW on packages[0].budget with suggestion |
+      | budget_below_tenant_min    | error BUDGET_TOO_LOW on packages[0].budget with suggestion |
 
   @T-UC-002-partition-daily-spend-cap @partition @daily-spend-cap
   Scenario Outline: Daily spend cap partition validation - <partition>
@@ -1395,38 +1488,48 @@ Feature: BR-UC-002 Create Media Buy
     And the result should be <outcome>
     # --- end_time partitions (BR-RULE-013) ---
 
+    # Future instants are written in 2099, as the pinned storyboards write theirs: a date
+    # this close to the run expires, and a create refuses a start_time in the past.
+    # future_naive_datetime is INVALID: start-timing.json types the instant as
+    # "format": "date-time", which JSON Schema takes from RFC 3339, and an RFC 3339
+    # date-time carries its offset (time-offset is not optional). A naive value violates
+    # the schema, so it is refused, not "treated as UTC".
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/start-timing.json pointer=/oneOf/1
     Examples: Valid partitions
       | partition              | value                      | outcome                      |
       | asap_literal           | asap                       | start time resolves to now   |
-      | future_iso_datetime    | 2026-04-01T00:00:00Z       | start time accepted          |
-      | future_naive_datetime  | 2026-04-01T00:00:00        | start time treated as UTC    |
+      | future_iso_datetime    | 2099-04-01T00:00:00Z       | start time accepted          |
 
     Examples: Invalid partitions
-      | partition              | value                      | outcome                               |
-      | past_datetime          | 2020-01-01T00:00:00Z       | error INVALID_REQUEST with suggestion  |
-      | absent                 | null                        | error INVALID_REQUEST with suggestion  |
-      | wrong_case_asap        | ASAP                        | error INVALID_REQUEST with suggestion  |
+      | partition              | value                      | outcome                                             |
+      | future_naive_datetime  | 2099-04-01T00:00:00        | error INVALID_REQUEST on start_time with suggestion  |
+      | past_datetime          | 2020-01-01T00:00:00Z       | error INVALID_REQUEST on start_time with suggestion  |
+      | absent                 | null                        | error INVALID_REQUEST on start_time with suggestion  |
+      | wrong_case_asap        | ASAP                        | error INVALID_REQUEST on start_time with suggestion  |
 
   @T-UC-002-partition-end-time @partition @end-time
   Scenario Outline: End time partition validation - <partition>
     Given a valid create_media_buy request
     And the account exists and is active
-    And start_time is "2026-04-01T00:00:00Z"
+    And start_time is 2099-04-01T00:00:00Z
     And end_time is <value>
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
     # --- targeting_overlay partitions (BR-RULE-014) ---
 
+    # The start_time above was a QUOTED literal, which the single-token step passed through
+    # with its quotes, so every row was refused on start_time and the end_time rows passed
+    # on the wrong field. The field below is what makes that visible.
     Examples: Valid partitions
       | partition              | value                      | outcome                    |
-      | after_start_time       | 2026-04-30T23:59:59Z       | end time accepted          |
+      | after_start_time       | 2099-04-30T23:59:59Z       | end time accepted          |
 
     Examples: Invalid partitions
-      | partition              | value                      | outcome                               |
-      | equal_to_start         | 2026-04-01T00:00:00Z       | error INVALID_REQUEST with suggestion  |
-      | before_start           | 2026-03-15T00:00:00Z       | error INVALID_REQUEST with suggestion  |
-      | absent                 | null                        | error INVALID_REQUEST with suggestion  |
+      | partition              | value                      | outcome                                           |
+      | equal_to_start         | 2099-04-01T00:00:00Z       | error INVALID_REQUEST on end_time with suggestion  |
+      | before_start           | 2099-03-15T00:00:00Z       | error INVALID_REQUEST on end_time with suggestion  |
+      | absent                 | null                        | error INVALID_REQUEST on end_time with suggestion  |
 
   @T-UC-002-partition-targeting-overlay @partition @targeting-overlay
   Scenario Outline: Targeting overlay partition validation - <partition>
@@ -1551,6 +1654,13 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
     # --- catalog_distinct_type partitions (BR-RULE-089) ---
+    # A value the schema refuses is INVALID_REQUEST ("violates schema constraints"); a value
+    # the schema admits but this product does not support is UNSUPPORTED_FEATURE. In
+    # core/optimization-goal.json: view_duration_seconds and target.value are
+    # "exclusiveMinimum": 0 (so 0 and -1 are schema violations), target.kind is a closed
+    # discriminator (an unknown kind matches no branch), and metric is a closed enum with no
+    # "viewability" member. Those rows are INVALID_REQUEST.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/optimization-goal.json
 
     Examples: Valid partitions
       | partition                              | outcome                              |
@@ -1571,14 +1681,14 @@ Feature: BR-UC-002 Create Media Buy
       | unsupported_metric                     | error UNSUPPORTED_FEATURE with suggestion          |
       | unregistered_event_source              | error INVALID_REQUEST with suggestion              |
       | duplicate_priority                     | error INVALID_REQUEST with suggestion              |
-      | unsupported_view_duration              | error UNSUPPORTED_FEATURE with suggestion          |
+      | unsupported_view_duration              | error INVALID_REQUEST with suggestion              |
       | unsupported_reach_unit                 | error UNSUPPORTED_FEATURE with suggestion          |
       | unsupported_attribution_window         | error UNSUPPORTED_FEATURE with suggestion          |
       | empty_array                            | error INVALID_REQUEST with suggestion              |
       | exceeds_max_goals                      | error INVALID_REQUEST with suggestion              |
-      | unsupported_target_kind                | error UNSUPPORTED_FEATURE with suggestion          |
+      | unsupported_target_kind                | error INVALID_REQUEST with suggestion              |
       | value_target_without_value_field       | error INVALID_REQUEST with suggestion              |
-      | metric_not_supported_by_product        | error UNSUPPORTED_FEATURE with suggestion          |
+      | metric_not_supported_by_product        | error INVALID_REQUEST with suggestion              |
       | event_not_supported_by_product         | error UNSUPPORTED_FEATURE with suggestion          |
 
   @T-UC-002-partition-catalog-distinct-type @partition @catalog-distinct-type
@@ -1613,18 +1723,25 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
     # --- persistence_timing partitions (BR-RULE-020) ---
+    # A plain string or a FormatId missing agent_url/id violates core/format-id.json ("never a
+    # plain string"; required agent_url, id): INVALID_REQUEST, field = issues[0].pointer.
+    # A well-formed id that no canonical declaration of the product resolves: "an entry that
+    # cannot be normalized is rejected with UNSUPPORTED_FEATURE" (package-request.json).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json pointer=/required
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_ids/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_REQUEST
 
     Examples: Valid partitions
       | partition              | outcome                      |
       | valid_format_id        | format validation passes     |
 
     Examples: Invalid partitions
-      | partition              | outcome                      |
-      | plain_string           | error with suggestion        |
-      | missing_agent_url      | error with suggestion        |
-      | missing_id             | error with suggestion        |
-      | unregistered_agent     | error with suggestion        |
-      | unknown_format         | error with suggestion        |
+      | partition              | outcome                                                                  |
+      | plain_string           | error INVALID_REQUEST on packages[0].format_ids[0] with suggestion          |
+      | missing_agent_url      | error INVALID_REQUEST on packages[0].format_ids[0].agent_url with suggestion |
+      | missing_id             | error INVALID_REQUEST on packages[0].format_ids[0].id with suggestion       |
+      | unregistered_agent     | error UNSUPPORTED_FEATURE on packages[0].format_ids with suggestion         |
+      | unknown_format         | error UNSUPPORTED_FEATURE on packages[0].format_ids with suggestion         |
 
   @T-UC-002-partition-persistence-timing @partition @persistence-timing
   Scenario Outline: Persistence timing partition validation - <partition>
@@ -1647,132 +1764,144 @@ Feature: BR-UC-002 Create Media Buy
 
   @T-UC-002-partition-tasks-sort-field @partition @tasks-sort-field
   Scenario Outline: Tasks sort field partition validation - <partition>
-    Given a valid create_media_buy request
-    And the account exists and is active
+    Given the Buyer Agent owns tasks of several types, statuses and update times
     And the task list sort field is <partition>
     When the Buyer Agent queries the task list
     Then the response is compliant with the list_tasks spec
     And the result should be <outcome>
     # --- sort_direction partitions ---
+    # sort.field is the enum [created_at, updated_at, status, task_type, protocol], default
+    # created_at; sort.direction defaults to desc. "domain" is not a sort field: the pin names
+    # that axis protocol.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/list-tasks-request.json pointer=/properties/sort
 
     Examples: Valid partitions
       | partition       | outcome                               |
-      | created_at      | tasks sorted by creation timestamp     |
-      | updated_at      | tasks sorted by update timestamp       |
-      | status          | tasks sorted by status value           |
-      | task_type       | tasks sorted by operation type         |
-      | domain          | tasks sorted by AdCP domain            |
-      | omitted         | defaults to created_at sort            |
+      | created_at      | tasks sorted by created_at desc        |
+      | updated_at      | tasks sorted by updated_at desc        |
+      | status          | tasks sorted by status desc            |
+      | task_type       | tasks sorted by task_type desc         |
+      | protocol        | tasks sorted by protocol desc          |
+      | omitted         | tasks sorted by created_at desc        |
 
     Examples: Invalid partitions
-      | partition       | outcome                               |
-      | unknown_value   | error unknown sort field               |
+      | partition       | outcome                                          |
+      | unknown_value   | error INVALID_REQUEST correctable on sort.field  |
+      | domain          | error INVALID_REQUEST correctable on sort.field  |
 
   @T-UC-002-partition-sort-direction @partition @sort-direction
   Scenario Outline: Sort direction partition validation - <partition>
-    Given a valid create_media_buy request
-    And the account exists and is active
-    And the sort direction is <partition>
+    Given the Buyer Agent owns tasks of several types, statuses and update times
+    And the task list sort direction is <partition>
     When the Buyer Agent queries the task list
     Then the response is compliant with the list_tasks spec
     And the result should be <outcome>
     # --- adcp_domain partitions ---
+    # sort.direction is enums/sort-direction.json [asc, desc], default desc; sort.field
+    # defaults to created_at.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/list-tasks-request.json pointer=/properties/sort
 
     Examples: Valid partitions
       | partition       | outcome                               |
-      | asc             | results in ascending order             |
-      | desc            | results in descending order            |
-      | omitted         | defaults to desc order                 |
+      | asc             | tasks sorted by created_at asc         |
+      | desc            | tasks sorted by created_at desc        |
+      | omitted         | tasks sorted by created_at desc        |
 
     Examples: Invalid partitions
-      | partition       | outcome                               |
-      | unknown_value   | error unknown sort direction           |
+      | partition       | outcome                                             |
+      | unknown_value   | error INVALID_REQUEST correctable on sort.direction |
 
   @T-UC-002-partition-adcp-domain @partition @adcp-domain
-  Scenario Outline: AdCP domain partition validation - <partition>
-    Given a valid create_media_buy request
-    And the account exists and is active
-    And the domain filter is <partition>
+  Scenario Outline: AdCP protocol filter partition validation - <partition>
+    Given the Buyer Agent owns tasks of several types, statuses and update times
+    And the protocol filter is <partition>
     When the Buyer Agent queries the task list
     Then the response is compliant with the list_tasks spec
     And the result should be <outcome>
     # --- task_status partitions ---
+    # The pin has no "domain" filter: filters.protocol / filters.protocols (minItems 1) take
+    # enums/adcp-protocol.json, kebab-case ("media-buy", not "media_buy"). Each task reports
+    # the same axis as its "domain".
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/list-tasks-request.json pointer=/properties/filters
 
     Examples: Valid partitions
-      | partition       | outcome                               |
-      | media_buy       | tasks filtered to media-buy domain     |
-      | signals         | tasks filtered to signals domain       |
-      | governance      | tasks filtered to governance domain    |
-      | creative        | tasks filtered to creative domain      |
-      | domain_array    | tasks filtered to multiple domains     |
-      | omitted         | tasks from all domains returned        |
+      | partition         | outcome                                     |
+      | media-buy         | tasks with protocol media-buy only          |
+      | signals           | tasks with protocol signals only            |
+      | governance        | tasks with protocol governance only         |
+      | creative          | tasks with protocol creative only           |
+      | media-buy+signals | tasks with protocol media-buy, signals only |
+      | omitted           | tasks of every protocol                     |
 
     Examples: Invalid partitions
-      | partition       | outcome                               |
-      | unknown_value   | error unknown domain value             |
-      | empty_array     | error empty array violates minItems    |
+      | partition         | outcome                                              |
+      | unknown_value     | error INVALID_REQUEST correctable on filters.protocol  |
+      | empty array       | error INVALID_REQUEST correctable on filters.protocols |
 
   @T-UC-002-partition-task-status @partition @task-status
   Scenario Outline: Task status partition validation - <partition>
-    Given a valid create_media_buy request
-    And the account exists and is active
+    Given the Buyer Agent owns tasks of several types, statuses and update times
     And the task status filter is <partition>
     When the Buyer Agent queries the task list
     Then the response is compliant with the list_tasks spec
     And the result should be <outcome>
     # --- task_type partitions ---
+    # filters.status / filters.statuses (minItems 1) take enums/task-status.json, whose
+    # members are kebab-case ("input-required", "auth-required").
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/list-tasks-request.json pointer=/properties/filters
 
     Examples: Valid partitions
-      | partition        | outcome                               |
-      | submitted        | tasks filtered to submitted status     |
-      | working          | tasks filtered to working status       |
-      | input_required   | tasks filtered to input-required       |
-      | completed        | tasks filtered to completed status     |
-      | canceled         | tasks filtered to canceled status      |
-      | failed           | tasks filtered to failed status        |
-      | rejected         | tasks filtered to rejected status      |
-      | auth_required    | tasks filtered to auth-required        |
-      | unknown_status   | tasks filtered to unknown status       |
-      | status_array     | tasks filtered to multiple statuses    |
-      | omitted          | tasks of all statuses returned         |
+      | partition        | outcome                                   |
+      | submitted        | tasks with status submitted only          |
+      | working          | tasks with status working only            |
+      | input-required   | tasks with status input-required only     |
+      | completed        | tasks with status completed only          |
+      | canceled         | tasks with status canceled only           |
+      | failed           | tasks with status failed only             |
+      | rejected         | tasks with status rejected only           |
+      | auth-required    | tasks with status auth-required only      |
+      | unknown          | tasks with status unknown only            |
+      | submitted+working | tasks with status submitted, working only |
+      | omitted          | tasks of every status                     |
 
     Examples: Invalid partitions
-      | partition        | outcome                               |
-      | unknown_value    | error unknown status value             |
-      | empty_array      | error empty array violates minItems    |
+      | partition        | outcome                                              |
+      | unknown_value    | error INVALID_REQUEST correctable on filters.status   |
+      | empty array      | error INVALID_REQUEST correctable on filters.statuses |
 
   @T-UC-002-partition-task-type @partition @task-type
   Scenario Outline: Task type partition validation - <partition>
-    Given a valid create_media_buy request
-    And the account exists and is active
+    Given the Buyer Agent owns tasks of several types, statuses and update times
     And the task type filter is <partition>
     When the Buyer Agent queries the task list
     Then the response is compliant with the list_tasks spec
     And the result should be <outcome>
+    # filters.task_type / filters.task_types (minItems 1) take enums/task-type.json.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/list-tasks-request.json pointer=/properties/filters
 
     Examples: Valid partitions
-      | partition              | outcome                                 |
-      | create_media_buy       | tasks filtered to create_media_buy       |
-      | update_media_buy       | tasks filtered to update_media_buy       |
-      | sync_creatives         | tasks filtered to sync_creatives         |
-      | activate_signal        | tasks filtered to activate_signal        |
-      | get_signals            | tasks filtered to get_signals            |
-      | create_property_list   | tasks filtered to create_property_list   |
-      | update_property_list   | tasks filtered to update_property_list   |
-      | get_property_list      | tasks filtered to get_property_list      |
-      | list_property_lists    | tasks filtered to list_property_lists    |
-      | delete_property_list   | tasks filtered to delete_property_list   |
-      | sync_accounts          | tasks filtered to sync_accounts          |
-      | get_creative_delivery  | tasks filtered to get_creative_delivery  |
-      | sync_event_sources     | tasks filtered to sync_event_sources     |
-      | log_event              | tasks filtered to log_event              |
-      | task_type_array        | tasks filtered to multiple types         |
-      | omitted                | tasks of all types returned              |
+      | partition                         | outcome                                                   |
+      | create_media_buy                  | tasks with task_type create_media_buy only                |
+      | update_media_buy                  | tasks with task_type update_media_buy only                |
+      | sync_creatives                    | tasks with task_type sync_creatives only                  |
+      | activate_signal                   | tasks with task_type activate_signal only                 |
+      | get_signals                       | tasks with task_type get_signals only                     |
+      | create_property_list              | tasks with task_type create_property_list only            |
+      | update_property_list              | tasks with task_type update_property_list only            |
+      | get_property_list                 | tasks with task_type get_property_list only               |
+      | list_property_lists               | tasks with task_type list_property_lists only             |
+      | delete_property_list              | tasks with task_type delete_property_list only            |
+      | sync_accounts                     | tasks with task_type sync_accounts only                   |
+      | get_creative_delivery             | tasks with task_type get_creative_delivery only           |
+      | sync_event_sources                | tasks with task_type sync_event_sources only              |
+      | log_event                         | tasks with task_type log_event only                       |
+      | create_media_buy+update_media_buy | tasks with task_type create_media_buy, update_media_buy only |
+      | omitted                           | tasks of every task_type                                  |
 
     Examples: Invalid partitions
-      | partition              | outcome                                 |
-      | unknown_value          | error unknown task type                  |
-      | empty_array            | error empty array violates minItems      |
+      | partition              | outcome                                                |
+      | unknown_value          | error INVALID_REQUEST correctable on filters.task_type  |
+      | empty array            | error INVALID_REQUEST correctable on filters.task_types |
 
   @T-UC-002-boundary-budget-amount @boundary @budget-amount
   Scenario Outline: Budget amount boundary validation - <boundary_point>
@@ -1783,12 +1912,14 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
     # --- pricing_option_xor boundaries (BR-RULE-006) ---
+    # A negative budget violates package-request.json `budget` ("minimum": 0): INVALID_REQUEST.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/budget/minimum
 
     Examples: Boundary values
       | boundary_point                       | value | outcome                                      |
       | amount = 0 (rejected by rule)        | 0     | error BUDGET_TOO_LOW with suggestion          |
       | amount = 0.01 (minimum positive)     | 0.01  | budget validation passes                     |
-      | amount negative                      | -1    | error BUDGET_TOO_LOW with suggestion          |
+      | amount negative                      | -1    | error INVALID_REQUEST on packages[0].budget with suggestion |
 
   @T-UC-002-boundary-pricing-option-xor @boundary @pricing-option-xor
   Scenario Outline: Pricing option XOR boundary validation - <boundary_point>
@@ -1799,14 +1930,20 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
     # --- currency_consistency boundaries (BR-RULE-009) ---
+    # fixed+floor: the seller publishes a fixed row as fixed_price alone, so the buyer holds
+    # a valid fixed option (floor_price is "mutually exclusive with fixed_price" on the
+    # published option). "neither": the seller cannot hold such a row, so the buyer-side
+    # form is an id the product does not offer -- INVALID_PRICING_OPTION.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/pricing-options/cpm-option.json pointer=/properties/floor_price/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_PRICING_OPTION
 
     Examples: Boundary values
       | boundary_point                                   | config                  | outcome                         |
       | fixed_price only (valid fixed)                   | fixed_price=10.00       | pricing validation passes       |
       | floor_price only (valid auction)                 | floor_price=1.00        | pricing validation passes       |
-      | both present (mutually exclusive)                | fixed+floor             | error with suggestion           |
+      | both present (mutually exclusive)                | fixed+floor             | pricing validation passes       |
       | neither present, v3.1 schema (auction, no floor) | neither (v3.1 schema)   | pricing validation passes       |
-      | neither present, salesagent code enforcement     | neither (code rejects)  | error with suggestion           |
+      | neither present, salesagent code enforcement     | neither (code rejects)  | error INVALID_PRICING_OPTION on packages[0].pricing_option_id with suggestion |
       | max_bid=true on bid-based auction model          | max_bid=true            | pricing validation passes       |
 
   @T-UC-002-boundary-currency-consistency @boundary @currency-consistency
@@ -1838,12 +1975,16 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
     # --- minimum_spend boundaries (BR-RULE-011) ---
+    # Duplicate product_ids: the pin does not forbid them, so the refusal is this seller's
+    # business rule -- VALIDATION_ERROR ("violates business rules beyond schema validation"),
+    # pointed at the packages array because no single package is at fault.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/VALIDATION_ERROR
 
     Examples: Boundary values
       | boundary_point                           | config            | outcome                      |
       | single package (trivially unique)        | 1 pkg prod-A      | product validation passes    |
       | two packages, different products         | 2 pkg prod-A,B    | product validation passes    |
-      | two packages, same product_id            | 2 pkg prod-A,A    | error with suggestion        |
+      | two packages, same product_id            | 2 pkg prod-A,A    | error VALIDATION_ERROR on packages with suggestion |
       | proposal_id supplied, packages omitted (no buyer packages array) | proposal_id, no packages | product validation passes |
 
   @T-UC-002-boundary-minimum-spend @boundary @minimum-spend
@@ -1855,13 +1996,16 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
     # --- daily_spend_cap boundaries (BR-RULE-012) ---
+    # BUDGET_TOO_LOW: "Budget is below the seller's minimum" -- the product (pricing option)
+    # minimum and the tenant minimum alike -- pointed at the refused package budget.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/BUDGET_TOO_LOW
 
     Examples: Boundary values
       | boundary_point                                                 | config              | outcome                      |
       | budget = product min_spend (exact match)                       | budget=100 min=100  | minimum spend passes         |
-      | budget = product min_spend - 0.01                              | budget=99.99 min=100 | error with suggestion        |
+      | budget = product min_spend - 0.01                              | budget=99.99 min=100 | error BUDGET_TOO_LOW on packages[0].budget with suggestion |
       | budget = tenant min_package_budget (exact, no product min)     | budget=50 tmin=50   | minimum spend passes         |
-      | budget = tenant min_package_budget - 0.01 (no product min)    | budget=49.99 tmin=50 | error with suggestion        |
+      | budget = tenant min_package_budget - 0.01 (no product min)    | budget=49.99 tmin=50 | error BUDGET_TOO_LOW on packages[0].budget with suggestion |
       | no min configured at any level                                 | budget=1 no-min     | minimum spend passes         |
 
   @T-UC-002-boundary-daily-spend-cap @boundary @daily-spend-cap
@@ -1894,10 +2038,10 @@ Feature: BR-UC-002 Create Media Buy
     Examples: Boundary values
       | boundary_point             | value                    | outcome                               |
       | literal 'asap'             | asap                     | start time resolves to now            |
-      | future ISO datetime        | 2026-04-01T00:00:00Z     | start time accepted                   |
-      | past datetime              | 2020-01-01T00:00:00Z     | error INVALID_REQUEST with suggestion |
-      | 'ASAP' wrong case          | ASAP                     | error INVALID_REQUEST with suggestion |
-      | absent (null)              | null                     | error INVALID_REQUEST with suggestion |
+      | future ISO datetime        | 2099-04-01T00:00:00Z     | start time accepted                   |
+      | past datetime              | 2020-01-01T00:00:00Z     | error INVALID_REQUEST on start_time with suggestion |
+      | 'ASAP' wrong case          | ASAP                     | error INVALID_REQUEST on start_time with suggestion |
+      | absent (null)              | null                     | error INVALID_REQUEST on start_time with suggestion |
 
   @T-UC-002-boundary-start-time-package-scope @boundary @start-time
   Scenario Outline: Package-scope start_time boundary validation - <boundary_point>
@@ -1916,7 +2060,7 @@ Feature: BR-UC-002 Create Media Buy
 
   @T-UC-002-boundary-end-time @boundary @end-time
   Scenario Outline: End time boundary validation - <boundary_point>
-    Given a valid create_media_buy request with start_time "2026-04-01T00:00:00Z"
+    Given a valid create_media_buy request with start_time "2099-04-01T00:00:00Z"
     And the account exists and is active
     And end_time is <value>
     When the Buyer Agent sends the create_media_buy request
@@ -1926,10 +2070,10 @@ Feature: BR-UC-002 Create Media Buy
 
     Examples: Boundary values
       | boundary_point                       | value                    | outcome                               |
-      | end_time after start_time            | 2026-04-30T23:59:59Z     | end time accepted                     |
-      | end_time = start_time (rejected)     | 2026-04-01T00:00:00Z     | error INVALID_REQUEST with suggestion |
-      | end_time before start_time           | 2026-03-15T00:00:00Z     | error INVALID_REQUEST with suggestion |
-      | absent (null)                        | null                     | error INVALID_REQUEST with suggestion |
+      | end_time after start_time            | 2099-04-30T23:59:59Z     | end time accepted                     |
+      | end_time = start_time (rejected)     | 2099-04-01T00:00:00Z     | error INVALID_REQUEST on end_time with suggestion |
+      | end_time before start_time           | 2099-03-15T00:00:00Z     | error INVALID_REQUEST on end_time with suggestion |
+      | absent (null)                        | null                     | error INVALID_REQUEST on end_time with suggestion |
 
   @T-UC-002-boundary-targeting-overlay @boundary @targeting-overlay
   Scenario Outline: Targeting overlay boundary validation - <boundary_point>
@@ -2028,6 +2172,13 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
     # --- catalog_distinct_type boundaries (BR-RULE-089) ---
+    # A value the schema refuses is INVALID_REQUEST ("violates schema constraints"); a value
+    # the schema admits but this product does not support is UNSUPPORTED_FEATURE. In
+    # core/optimization-goal.json: view_duration_seconds and target.value are
+    # "exclusiveMinimum": 0 (so 0 and -1 are schema violations), target.kind is a closed
+    # discriminator (an unknown kind matches no branch), and metric is a closed enum with no
+    # "viewability" member. Those rows are INVALID_REQUEST.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/optimization-goal.json
 
     Examples: Boundary values
       | boundary_point                                                          | config                   | outcome                                          |
@@ -2038,9 +2189,9 @@ Feature: BR-UC-002 Create Media Buy
       | priority = 1 (minimum valid)                                            | priority=1               | optimization validation passes                   |
       | priority = 0 (below minimum)                                            | priority=0               | error INVALID_REQUEST with suggestion             |
       | view_duration_seconds = 0.001 (just above exclusiveMinimum 0)           | vds=0.001                | optimization validation passes                   |
-      | view_duration_seconds = 0 (at exclusiveMinimum boundary)                | vds=0                    | error UNSUPPORTED_FEATURE with suggestion          |
+      | view_duration_seconds = 0 (at exclusiveMinimum boundary)                | vds=0                    | error INVALID_REQUEST with suggestion              |
       | target.value = 0.001 (just above exclusiveMinimum 0)                    | target=0.001             | optimization validation passes                   |
-      | target.value = 0 (at exclusiveMinimum boundary)                         | target=0                 | error UNSUPPORTED_FEATURE with suggestion          |
+      | target.value = 0 (at exclusiveMinimum boundary)                         | target=0                 | error INVALID_REQUEST with suggestion              |
       | kind = 'metric' with metric field present (valid branch)                | metric kind valid        | optimization validation passes                   |
       | kind = 'event' with event_sources field present (valid branch)          | event kind valid         | optimization validation passes                   |
       | product has metric_optimization + metric goal submitted                 | metric capable           | optimization validation passes                   |
@@ -2084,14 +2235,21 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
     # --- persistence_timing boundaries (BR-RULE-020) ---
+    # A plain string or a FormatId missing agent_url/id violates core/format-id.json ("never a
+    # plain string"; required agent_url, id): INVALID_REQUEST, field = issues[0].pointer.
+    # A well-formed id that no canonical declaration of the product resolves: "an entry that
+    # cannot be normalized is rejected with UNSUPPORTED_FEATURE" (package-request.json).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json pointer=/required
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_ids/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_REQUEST
 
     Examples: Boundary values
       | boundary_point                                | config              | outcome                      |
       | valid object (registered agent + known format) | valid FormatId      | format validation passes     |
-      | plain string (wrong type)                      | "banner_300x250"    | error with suggestion        |
-      | missing agent_url                              | no agent_url        | error with suggestion        |
-      | unregistered agent                             | bad agent_url       | error with suggestion        |
-      | unknown format id                              | unknown format      | error with suggestion        |
+      | plain string (wrong type)                      | "banner_300x250"    | error INVALID_REQUEST on packages[0].format_ids[0] with suggestion          |
+      | missing agent_url                              | no agent_url        | error INVALID_REQUEST on packages[0].format_ids[0].agent_url with suggestion |
+      | unregistered agent                             | bad agent_url       | error UNSUPPORTED_FEATURE on packages[0].format_ids with suggestion         |
+      | unknown format id                              | unknown format      | error UNSUPPORTED_FEATURE on packages[0].format_ids with suggestion         |
 
   @T-UC-002-boundary-persistence-timing @boundary @persistence-timing
   Scenario Outline: Persistence timing boundary validation - <boundary_point>
@@ -2111,93 +2269,98 @@ Feature: BR-UC-002 Create Media Buy
 
   @T-UC-002-boundary-tasks-sort-field @boundary @tasks-sort-field
   Scenario Outline: Tasks sort field boundary validation - <boundary_point>
-    Given a valid create_media_buy request
-    And the account exists and is active
-    And the task list sort field boundary is: <config>
+    Given the Buyer Agent owns tasks of several types, statuses and update times
+    And the task list sort field is <config>
     When the Buyer Agent queries the task list
     Then the response is compliant with the list_tasks spec
     And the result should be <outcome>
     # --- sort_direction boundaries ---
+    # sort.field enum [created_at, updated_at, status, task_type, protocol]: protocol, not
+    # domain, is the last member.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/list-tasks-request.json pointer=/properties/sort
 
     Examples: Boundary values
-      | boundary_point                            | config          | outcome                               |
-      | created_at (first enum value, default)    | created_at      | tasks sorted by creation timestamp     |
-      | domain (last enum value)                  | domain          | tasks sorted by AdCP domain            |
-      | Not provided (uses default created_at)    | omitted         | defaults to created_at sort            |
-      | priority (not in enum)                    | priority        | error unknown sort field               |
+      | boundary_point                            | config          | outcome                                          |
+      | created_at (first enum value, default)    | created_at      | tasks sorted by created_at desc                  |
+      | protocol (last enum value)                | protocol        | tasks sorted by protocol desc                    |
+      | Not provided (uses default created_at)    | omitted         | tasks sorted by created_at desc                  |
+      | priority (not in enum)                    | priority        | error INVALID_REQUEST correctable on sort.field  |
 
   @T-UC-002-boundary-sort-direction @boundary @sort-direction
   Scenario Outline: Sort direction boundary validation - <boundary_point>
-    Given a valid create_media_buy request
-    And the account exists and is active
-    And the sort direction boundary is: <config>
+    Given the Buyer Agent owns tasks of several types, statuses and update times
+    And the task list sort direction is <config>
     When the Buyer Agent queries the task list
     Then the response is compliant with the list_tasks spec
     And the result should be <outcome>
     # --- adcp_domain boundaries ---
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/sort-direction.json
 
     Examples: Boundary values
-      | boundary_point                      | config      | outcome                               |
-      | asc (first enum value)              | asc         | results in ascending order             |
-      | desc (last enum value, default)     | desc        | results in descending order            |
-      | Not provided (uses default desc)    | omitted     | defaults to desc order                 |
-      | ascending (not in enum)             | ascending   | error unknown sort direction           |
+      | boundary_point                      | config      | outcome                                             |
+      | asc (first enum value)              | asc         | tasks sorted by created_at asc                      |
+      | desc (last enum value, default)     | desc        | tasks sorted by created_at desc                     |
+      | Not provided (uses default desc)    | omitted     | tasks sorted by created_at desc                     |
+      | ascending (not in enum)             | ascending   | error INVALID_REQUEST correctable on sort.direction |
 
   @T-UC-002-boundary-adcp-domain @boundary @adcp-domain
-  Scenario Outline: AdCP domain boundary validation - <boundary_point>
-    Given a valid create_media_buy request
-    And the account exists and is active
-    And the domain filter boundary is: <config>
+  Scenario Outline: AdCP protocol filter boundary validation - <boundary_point>
+    Given the Buyer Agent owns tasks of several types, statuses and update times
+    And the protocol filter is <config>
     When the Buyer Agent queries the task list
     Then the response is compliant with the list_tasks spec
     And the result should be <outcome>
     # --- task_status boundaries ---
+    # enums/adcp-protocol.json runs media-buy .. measurement; creative is not the last member.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/adcp-protocol.json
 
     Examples: Boundary values
-      | boundary_point                                      | config                    | outcome                               |
-      | media-buy (first enum value)                        | media-buy                 | tasks filtered to media-buy domain     |
-      | creative (last enum value)                          | creative                  | tasks filtered to creative domain      |
-      | ["media-buy", "signals"] (multi-domain array)       | media-buy+signals         | tasks filtered to multiple domains     |
-      | Not provided (no domain filtering)                  | omitted                   | tasks from all domains returned        |
-      | analytics (not in enum)                             | analytics                 | error unknown domain value             |
-      | [] (empty array, violates minItems)                 | empty array               | error empty array violates minItems    |
+      | boundary_point                                      | config                    | outcome                                                |
+      | media-buy (first enum value)                        | media-buy                 | tasks with protocol media-buy only                     |
+      | measurement (last enum value)                       | measurement               | tasks with protocol measurement only                   |
+      | ["media-buy", "signals"] (multi-protocol array)     | media-buy+signals         | tasks with protocol media-buy, signals only            |
+      | Not provided (no protocol filtering)                | omitted                   | tasks of every protocol                                |
+      | analytics (not in enum)                             | analytics                 | error INVALID_REQUEST correctable on filters.protocol  |
+      | [] (empty array, violates minItems)                 | empty array               | error INVALID_REQUEST correctable on filters.protocols |
 
   @T-UC-002-boundary-task-status @boundary @task-status
   Scenario Outline: Task status boundary validation - <boundary_point>
-    Given a valid create_media_buy request
-    And the account exists and is active
-    And the task status filter boundary is: <config>
+    Given the Buyer Agent owns tasks of several types, statuses and update times
+    And the task status filter is <config>
     When the Buyer Agent queries the task list
     Then the response is compliant with the list_tasks spec
     And the result should be <outcome>
     # --- task_type boundaries ---
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/task-status.json
 
     Examples: Boundary values
-      | boundary_point                                                        | config                              | outcome                               |
-      | submitted (first enum value)                                          | submitted                           | tasks filtered to submitted status     |
-      | unknown (last enum value)                                             | unknown                             | tasks filtered to unknown status       |
-      | ["submitted", "working", "input-required"] (multi-status array)       | submitted+working+input-required    | tasks filtered to multiple statuses    |
-      | Not provided (no status filtering)                                    | omitted                             | tasks of all statuses returned         |
-      | pending (not in enum)                                                 | pending                             | error unknown status value             |
-      | [] (empty array, violates minItems)                                   | empty array                         | error empty array violates minItems    |
+      | boundary_point                                                        | config                              | outcome                                                    |
+      | submitted (first enum value)                                          | submitted                           | tasks with status submitted only                           |
+      | unknown (last enum value)                                             | unknown                             | tasks with status unknown only                             |
+      | ["submitted", "working", "input-required"] (multi-status array)       | submitted+working+input-required    | tasks with status submitted, working, input-required only  |
+      | Not provided (no status filtering)                                    | omitted                             | tasks of every status                                      |
+      | pending (not in enum)                                                 | pending                             | error INVALID_REQUEST correctable on filters.status        |
+      | [] (empty array, violates minItems)                                   | empty array                         | error INVALID_REQUEST correctable on filters.statuses      |
 
   @T-UC-002-boundary-task-type @boundary @task-type
   Scenario Outline: Task type boundary validation - <boundary_point>
-    Given a valid create_media_buy request
-    And the account exists and is active
-    And the task type filter boundary is: <config>
+    Given the Buyer Agent owns tasks of several types, statuses and update times
+    And the task type filter is <config>
     When the Buyer Agent queries the task list
     Then the response is compliant with the list_tasks spec
     And the result should be <outcome>
+    # enums/task-type.json runs create_media_buy .. sync_reporting_receipts; log_event is not
+    # the last member.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/task-type.json
 
     Examples: Boundary values
-      | boundary_point                                                    | config                             | outcome                               |
-      | create_media_buy (first enum value)                               | create_media_buy                   | tasks filtered to create_media_buy     |
-      | log_event (last enum value)                                       | log_event                          | tasks filtered to log_event            |
-      | ["create_media_buy", "update_media_buy"] (multi-type array)       | create_media_buy+update_media_buy  | tasks filtered to multiple types       |
-      | Not provided (no task type filtering)                             | omitted                            | tasks of all types returned            |
-      | delete_media_buy (not in enum)                                    | delete_media_buy                   | error unknown task type                |
-      | [] (empty array, violates minItems)                               | empty array                        | error empty array violates minItems    |
+      | boundary_point                                                    | config                             | outcome                                                      |
+      | create_media_buy (first enum value)                               | create_media_buy                   | tasks with task_type create_media_buy only                   |
+      | sync_reporting_receipts (last enum value)                         | sync_reporting_receipts            | tasks with task_type sync_reporting_receipts only            |
+      | ["create_media_buy", "update_media_buy"] (multi-type array)       | create_media_buy+update_media_buy  | tasks with task_type create_media_buy, update_media_buy only |
+      | Not provided (no task type filtering)                             | omitted                            | tasks of every task_type                                     |
+      | delete_media_buy (not in enum)                                    | delete_media_buy                   | error INVALID_REQUEST correctable on filters.task_type       |
+      | [] (empty array, violates minItems)                               | empty array                        | error INVALID_REQUEST correctable on filters.task_types      |
 
   @T-UC-002-nfr-001 @nfr @nfr-001
   Scenario: Security hardening -- request validation and rate limiting
@@ -2388,18 +2551,26 @@ Feature: BR-UC-002 Create Media Buy
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
-    And the response should indicate a validation error
-    And the error should reference idempotency_key constraint "<violation>"
+    And the error code should be "INVALID_REQUEST"
+    And the error should name idempotency_key as rejected by schema keyword "<keyword>"
     And the error should include "suggestion" field
     # v3.1: idempotency_key pattern ^[A-Za-z0-9_.:-]{16,255}$
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # Corrected to the pin: a malformed key is a schema rejection, "A malformed request returns
+    # `INVALID_REQUEST` without ever touching the cache" (security.mdx Idempotency rule 1), so
+    # the code is INVALID_REQUEST, not VALIDATION_ERROR. The constraint is graded through the
+    # pin's structured channel, error.issues[].keyword ("Schema keyword that rejected the
+    # payload ... e.g. 'pattern', 'minimum', 'maxLength'"), never through message text.
+    # The maxLength row used to carry 247 characters, which is a VALID key; it carries 256.
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx (L414: Idempotency rule 1)
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json pointer=/properties/issues/items/properties/keyword
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/idempotency_key
 
     Examples:
-      | value                                                | violation                              |
-      | short                                                | minLength 16 violated                  |
-      | key with spaces in it that is long enough           | pattern [A-Za-z0-9_.:-] violated       |
-      | key/with/slashes/that/is/also/long/enough           | pattern [A-Za-z0-9_.:-] violated       |
-      | AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA | maxLength 255 violated                 |
+      | value                                                | keyword   |
+      | short                                                | minLength |
+      | key with spaces in it that is long enough           | pattern   |
+      | key/with/slashes/that/is/also/long/enough           | pattern   |
+      | AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA | maxLength |
 
   @T-UC-002-v31-idempotency-in-flight @v31 @idempotency-key @error-details @post-f2 @post-f3 @ext-w
   Scenario: v3.1 idempotency_key matching an in-flight request rejects with IDEMPOTENCY_IN_FLIGHT
@@ -2407,13 +2578,18 @@ Feature: BR-UC-002 Create Media Buy
     And a prior request for the same (seller, account, idempotency_key) pair is still in flight
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
-    And the response should indicate a terminal failure
+    And the response should indicate a transient failure
     And the error code should be "IDEMPOTENCY_IN_FLIGHT"
     And the error should include "retry_after" field
     And the error should include "suggestion" field
     And no new media buy should have been created
     # BR-RULE-211 INV-4: in-flight key MAY reject with IDEMPOTENCY_IN_FLIGHT; buyer MUST NOT mint a fresh key
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # Corrected to the pin: the recovery is transient, not terminal. error-code.json
+    # enumMetadata IDEMPOTENCY_IN_FLIGHT: "recovery": "transient"; security.mdx rule 9
+    # (reject-and-redirect): "the seller returns `IDEMPOTENCY_IN_FLIGHT` immediately, with
+    # top-level `error.retry_after` (seconds) populated".
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumMetadata/IDEMPOTENCY_IN_FLIGHT
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx (L440-445: Idempotency rule 9)
 
   @T-UC-002-v31-idempotency-expired @v31 @idempotency-key @error-details @post-f2 @post-f3 @ext-w
   Scenario: v3.1 idempotency_key whose cached response has expired rejects with IDEMPOTENCY_EXPIRED
@@ -2426,20 +2602,27 @@ Feature: BR-UC-002 Create Media Buy
     And the error should include "suggestion" field
     And no new media buy should have been created
     # BR-RULE-211 INV-5: expired cached response -> IDEMPOTENCY_EXPIRED; buyer MUST perform natural-key existence check before minting fresh key
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # security.mdx rule 6: "A request arriving after eviction with a key the seller has seen
+    # SHOULD be rejected with `IDEMPOTENCY_EXPIRED` rather than silently treated as new".
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx (L428: Idempotency rule 6)
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumMetadata/IDEMPOTENCY_EXPIRED
 
   @T-UC-002-v31-idempotency-canonical-comparison @v31 @idempotency-key @post-s1 @ext-w @happy-path
-  Scenario: v3.1 idempotency replay with reordered fields and whitespace is treated as identical
+  Scenario: v3.1 idempotency replay with reordered fields is treated as identical
     Given a media buy was already created for the same seller with idempotency_key "buy-2026-q1-canon-001"
-    And a create_media_buy request with idempotency_key "buy-2026-q1-canon-001" whose payload differs only in field ordering and insignificant whitespace
+    And a create_media_buy request with idempotency_key "buy-2026-q1-canon-001" whose payload differs only in field ordering
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy success spec
     And the response should succeed
     And the response should include the previously created "media_buy_id"
     And no new ad platform order should have been created
-    # BR-RULE-211 INV-6: canonical comparison is semantic; field ordering / insignificant whitespace MUST NOT affect outcome
+    # BR-RULE-211 INV-6: canonical comparison is semantic; field ordering MUST NOT affect outcome
+    # security.mdx "Payload equivalence": "The canonical form is RFC 8785 JSON Canonicalization
+    # Scheme (JCS) — number serialization, key ordering, and escaping all follow JCS §3".
+    # "insignificant whitespace" was dropped from this scenario: whitespace exists only in the
+    # serialized bytes each transport writes, so no transport-independent Given can vary it.
     # --- v3.1: submitted task envelope discrimination ---
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx (L472: Payload equivalence)
 
   @T-UC-002-v31-submitted-envelope-shape @v31 @submitted-envelope @post-s7 @post-s9
   Scenario: v3.1 submitted envelope carries task_id but not media_buy_id
@@ -2453,25 +2636,29 @@ Feature: BR-UC-002 Create Media Buy
     And the response should not include a media_buy_id at the envelope level
     And the response should not include a packages array at the envelope level
     # v3.1: media_buy_id and packages land on the task's completion artifact, not the envelope
-    # v3.1: not.anyOf excludes media_buy_id, packages, sandbox from submitted shape
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # The pin's submitted branch: "not": {"anyOf": [required media_buy_id, required packages,
+    # required warnings]} (sandbox is not in that list at the pin).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-response.json pointer=/oneOf/2/not
 
   @T-UC-002-v31-submitted-envelope-message @v31 @submitted-envelope @prompt-injection
-  Scenario: v3.1 submitted envelope optional message field is untrusted seller input
+  Scenario: v3.1 submitted envelope message is plain text within the schema bound
     Given the tenant requires manual approval
     And a valid create_media_buy request with account "acc-001"
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
-    And the seller emits a submitted envelope with a human-readable message
     Then the response is compliant with the create_media_buy submitted spec
     And the response status should be "submitted"
-    And the buyer SHOULD treat the message field as untrusted input
-    And the buyer SHOULD escape the message before rendering to HTML
-    And the buyer SHOULD sanitize the message before passing to an LLM prompt context
+    And the submitted envelope carries a plain-text message of at most 2000 characters
     # v3.1: message field is bounded to maxLength 2000, plain text only
     # v3.1: message MUST be treated as untrusted seller input (prompt-injection defense)
+    # Corrected to the pin. The three "the buyer SHOULD ..." Thens are deleted: they are
+    # obligations on the BUYER ("Buyers MUST treat this as untrusted seller input: escape
+    # before rendering ..."), and this suite grades the seller. The seller's half of the same
+    # property is what remains: the message is "Plain text only" and "maxLength": 2000. The
+    # When "the seller emits a submitted envelope with a human-readable message" described the
+    # response rather than an action, and is folded into the Then.
     # --- v3.1: synchronous success response fields ---
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-response.json pointer=/oneOf/2/properties/message
 
   @T-UC-002-v31-success-revision-and-actions @v31 @sync-success @post-s1 @post-s3
   Scenario: v3.1 sync success response carries revision, confirmed_at, valid_actions
@@ -2501,12 +2688,19 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy success spec
     And the response should succeed
     And the response status should be "completed"
-    And the response should include a "status" field with value "<media_buy_status>"
-    And the response status field should not equal "submitted"
+    And the wire media_buy_status should be "<media_buy_status>"
+    And the wire status should be "completed"
     # v3.1: synchronous-success status field carries MediaBuyStatus, not task-level "submitted"
     # v3.1: "submitted" is a task-level literal, exclusive to the submitted envelope shape
+    # Corrected to the pin. The lifecycle value lives in `media_buy_status`, not `status`:
+    # create_media_buy.mdx "The top-level `status` is the envelope task-status (TaskStatus) —
+    # `completed` on synchronous success. The body-level `media_buy_status` carries the buy's
+    # lifecycle state". The old Then asked `status` to equal a MediaBuyStatus value while the
+    # line above it asked `status` to equal "completed"; and "status should not equal
+    # submitted" is subsumed by the wire status pinned to "completed".
     # --- v3.1: governance plan_id ---
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx (L1523)
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-response.json pointer=/oneOf/0/properties/media_buy_status
 
     Examples:
       | initial_state                       | media_buy_status   |
@@ -2625,16 +2819,20 @@ Feature: BR-UC-002 Create Media Buy
   @T-UC-002-v31-io-acceptance-incomplete @v31 @io-acceptance @proposal-based @validation @post-f2 @ext-x
   Scenario Outline: v3.1 io_acceptance missing a required member rejects with INVALID_REQUEST
     Given a create_media_buy request with proposal_id "prop-abc-2026" and an io_acceptance missing "<missing_member>"
-    And the proposal's insertion_order requires_signature is true
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
-    And the response should indicate a validation error
     And the error code should be "INVALID_REQUEST"
     And the error should reference the missing "<missing_member>" member
     And the error should include "suggestion" field
     # BR-RULE-213 INV-2: io_acceptance present but missing io_id/accepted_at/signatory -> INVALID_REQUEST naming member(s)
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # CORRECTED against the pin. io_acceptance declares "required": ["io_id", "accepted_at",
+    # "signatory"] on the object itself, so the refusal does not depend on the proposal: the
+    # "requires_signature is true" precondition is dropped (it decides only whether
+    # io_acceptance must be PRESENT). The "validation error" Then is dropped too: it asserted
+    # VALIDATION_ERROR, and a missing required member is INVALID_REQUEST ("missing required
+    # fields", enums/error-code.json; L1/security.mdx "Schema validation runs first").
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
     Examples:
       | missing_member |
@@ -2684,7 +2882,7 @@ Feature: BR-UC-002 Create Media Buy
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-package-paused-on-creation @v31 @paused @post-s1
-  Scenario: v3.1 package created with paused=true does not deliver impressions
+  Scenario: v3.1 package created with paused=true is reported paused
     Given the tenant is configured for auto-approval
     And a valid create_media_buy request with one package having paused set to true
     And the account "acc-001" exists and is active
@@ -2693,10 +2891,15 @@ Feature: BR-UC-002 Create Media Buy
     And the response should succeed
     And the response status should be "completed"
     And the paused package should be created in a paused state
-    And the paused package should not deliver impressions until resumed
     # v3.1: paused flag on package-request (default false); paused packages do not serve
+    # Corrected to the pin. "the paused package should not deliver impressions until resumed"
+    # is deleted: a create response carries no delivery, so nothing in this scenario can
+    # observe it; delivery is graded by get_media_buy_delivery (UC-004). What the create
+    # does carry is the package state: core/package.json `paused` "Whether this package is
+    # paused by the buyer. Paused packages do not deliver impressions."
     # --- v3.1: committed_metrics negotiation ---
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/paused
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/paused
 
   @T-UC-002-v31-committed-metrics-standard-accepted @v31 @committed-metrics @post-s3
   Scenario: v3.1 committed_metrics standard scope -- seller accepts and stamps committed_at
@@ -2721,12 +2924,16 @@ Feature: BR-UC-002 Create Media Buy
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
-    And the response should indicate an error
+    And the operation should fail
     And the error code should be "TERMS_REJECTED"
     And the error should reference the offending committed_metrics entry
     # v3.1: seller SHOULD reject with TERMS_REJECTED when the proposal exceeds product capability
+    # media-buy/package-request.json committed_metrics: "each `scope: standard` entry's
+    # `metric_id` MUST be in the product's `available_metrics` ... sellers SHOULD reject with
+    # `TERMS_REJECTED` and reference the offending entry when the proposal exceeds product
+    # capability."
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json
     # --- v3.1: planned_delivery transparency ---
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-planned-delivery-with-governance @v31 @planned-delivery @governance @post-s3
   Scenario: v3.1 planned_delivery present in response when account has governance agents
@@ -2769,11 +2976,16 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy success spec
     And the response should succeed
     And the response status should be "completed"
-    And the agency_estimate_number should be persisted on the media buy
+    And the media buy should persist agency_estimate_number "AE-2026-Q1-12345"
     # v3.1: primary financial reference for broadcast buys; maxLength 100
     # v3.1: per-package agency_estimate_number MAY override the buy-level value
+    # The value is named in the Then so the assertion compares the stored record against the
+    # scenario's own literal. create-media-buy-request.json: "Travels with the order and
+    # creative traffic identifiers through the transaction lifecycle"; neither
+    # create-media-buy-response.json nor get-media-buys-response.json carries the buy-level
+    # field, so the stored record is where the seller can be seen to have kept it.
     # --- v3.1 wave A: BUDGET_TOO_LOW error-details routing ---
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/agency_estimate_number
 
   @T-UC-002-v31-error-budget-too-low-details @v31 @error-details @budget-too-low @post-f2 @post-f3
   Scenario: v3.1 BUDGET_TOO_LOW error carries minimum_budget and currency in details
@@ -2792,140 +3004,77 @@ Feature: BR-UC-002 Create Media Buy
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-error-conflict-details @v31 @error-details @conflict @idempotency-key @post-f2 @ext-w
-  Scenario: v3.1 IDEMPOTENCY_CONFLICT error carries resource_id and version info on idempotency-key replay with divergent payload
-    Given a create_media_buy request with idempotency_key "buy-2026-q1-conflict-001"
-    And a prior media buy "mb-789" exists for the same (seller, idempotency_key) pair with revision 1
+  Scenario: v3.1 IDEMPOTENCY_CONFLICT on idempotency-key reuse with a divergent payload exposes only the code
+    Given a media buy was already created for the same seller with idempotency_key "buy-2026-q1-conflict-001"
     And the new request payload diverges from the prior request payload
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the response should indicate a correctable failure
     And the error code should be "IDEMPOTENCY_CONFLICT"
-    And the error "details" object should include "resource_id" with value "mb-789"
-    And the error details should include current_version 1
+    And the error should carry no details, issues or field pointer
     And the error should include "suggestion" field
-    # v3.1: error-details/conflict.json — recommended details for IDEMPOTENCY_CONFLICT
     # v3.1: recovery correctable — resend the exact original payload, or mint a fresh idempotency_key for the changed order
+    # Corrected to the pin. The resource_id / current_version Thens are deleted because the
+    # pin forbids them: security.mdx "IDEMPOTENCY_CONFLICT response shape" — the error body
+    # "MUST NOT include the cached response, the original payload, a canonical-form diff, or
+    # any fingerprint derived from them", a `field` hint "Sellers MUST NOT emit", and "The
+    # error body exposes only the code." The prior buy is a REAL first create under the key,
+    # not a seeded "mb-789" row, so the conflict is computed against a hash production stored.
     # --- v3.1 wave A: POLICY_VIOLATION error-details routing ---
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx (L535-556: IDEMPOTENCY_CONFLICT response shape)
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx (L427: Idempotency rule 5)
 
   @T-UC-002-v31-error-policy-violation-details @v31 @error-details @policy-violation @post-f2 @post-f3 @ext-y
-  Scenario: v3.1 POLICY_VIOLATION error carries policy_id and violated_rules
+  Scenario: v3.1 POLICY_VIOLATION on a create_media_buy that violates the seller's policy
     Given a create_media_buy request that violates the seller's editorial policy
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
-    And the response should indicate a terminal failure
+    And the response should indicate a correctable failure
     And the error code should be "POLICY_VIOLATION"
-    And the error details should include a "policy_id" field
-    And the error details should include a "violated_rules" array
     And the error should include "suggestion" field
     # v3.1: error-details/policy-violation.json — recommended details for POLICY_VIOLATION
-    # v3.1: policy_url MAY be present for full policy text retrieval
-    # --- v3.1 wave A: BILLING_NOT_SUPPORTED error-details routing ---
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # Corrected to the pin. Recovery is correctable (error-code.json enumMetadata
+    # POLICY_VIOLATION), not terminal. The policy_id / violated_rules Thens are deleted: the
+    # details shape is "Recommended", every field optional, `origin` is "Optional so
+    # undisclosed seller policies can return only the typed POLICY_VIOLATION code", and
+    # policy_id is a shared-registry id a seller policy uses seller_policy_ref instead of.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumMetadata/POLICY_VIOLATION
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/error-details/policy-violation.json
 
-  @T-UC-002-v31-error-billing-not-supported-capability @v31 @error-details @billing-not-supported @scope-capability @post-f2 @post-f3 @ext-z
-  Scenario: v3.1 BILLING_NOT_SUPPORTED scope=capability echoes supported_billing
-    Given a create_media_buy request with billing value "agent"
-    And the seller's supported_billing capability is ["operator", "advertiser"]
-    And the account "acc-001" exists and is active
-    When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy error spec
-    And the response should indicate a terminal failure
-    And the error code should be "BILLING_NOT_SUPPORTED"
-    And the error details scope should be "capability"
-    And the error details supported_billing should equal ["operator", "advertiser"]
-    And the error should include "suggestion" field
-    # v3.1: error-details/billing-not-supported.json — capability-gate variant
-    # v3.1: advice — buyer chooses from supported_billing and retries
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
-
-  @T-UC-002-v31-error-billing-not-supported-account @v31 @error-details @billing-not-supported @scope-account @post-f2 @ext-z
-  Scenario: v3.1 BILLING_NOT_SUPPORTED scope=account is emitted only when agent identity is established
-    Given a create_media_buy request with billing value "agent"
-    And the seller's supported_billing capability includes "agent" generally
-    And the seller does not accept "agent" billing on the account "acc-001" relationship
-    And the caller's agent identity is established
-    When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy error spec
-    And the response should indicate a terminal failure
-    And the error code should be "BILLING_NOT_SUPPORTED"
-    And the error details scope should be "account"
-    And the error should include "suggestion" field
-    # v3.1: error-details/billing-not-supported.json — per-account-relationship gate
-    # v3.1: scope MUST be omitted on the unauthenticated/unestablished-identity path to avoid acting as a per-account oracle
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
-
-  @T-UC-002-v31-error-billing-not-supported-unauth-omits-scope @v31 @error-details @billing-not-supported @uniform-response @post-f2 @ext-z
-  Scenario: v3.1 BILLING_NOT_SUPPORTED omits scope when agent identity is not established
-    Given a create_media_buy request with billing value "agent"
-    And the caller's agent identity is NOT established
-    When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy error spec
-    And the response should indicate a terminal failure
-    And the error code should be "BILLING_NOT_SUPPORTED"
-    And the error details should NOT include a "scope" field
-    And the error should include "suggestion" field
-    # v3.1: uniform-response rule — emitting scope=account on an unauthenticated path leaks per-account state
-    # --- v3.1 wave A: BILLING_NOT_PERMITTED_FOR_AGENT error-details routing ---
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
-
-  @T-UC-002-v31-error-billing-not-permitted-for-agent-suggested @v31 @error-details @billing-not-permitted-for-agent @autonomous-retry @post-f2 @post-f3 @ext-z
-  Scenario: v3.1 BILLING_NOT_PERMITTED_FOR_AGENT with suggested_billing enables autonomous retry
-    Given a create_media_buy request with billing value "agent"
-    And the seller's supported_billing capability includes "agent" generally
-    And the calling agent's commercial relationship with the seller is passthrough-only
-    When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy error spec
-    And the response should indicate a terminal failure
-    And the error code should be "BILLING_NOT_PERMITTED_FOR_AGENT"
-    And the error details rejected_billing should be "agent"
-    And the error details suggested_billing should be "operator"
-    And the error should include "suggestion" field
-    # v3.1: error-details/billing-not-permitted-for-agent.json — minimal shape
-    # v3.1: suggested_billing carries AT MOST ONE canonical retry value
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
-
-  @T-UC-002-v31-error-billing-not-permitted-for-agent-terminal @v31 @error-details @billing-not-permitted-for-agent @terminal-pending-onboarding @post-f2 @ext-z
-  Scenario: v3.1 BILLING_NOT_PERMITTED_FOR_AGENT without suggested_billing is terminal-pending-onboarding
-    Given a create_media_buy request with billing value "advertiser"
-    And the calling agent has no retryable billing value for this seller's commercial relationship
-    When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy error spec
-    And the response should indicate a terminal failure
-    And the error code should be "BILLING_NOT_PERMITTED_FOR_AGENT"
-    And the error details rejected_billing should be "advertiser"
-    And the error details should NOT include a "suggested_billing" field
-    And the error should include "suggestion" field
-    # v3.1: terminal-pending-onboarding — buyer must complete offline payments-relationship onboarding
-    # v3.1: sellers MUST NOT add ad-hoc keys carrying per-agent commercial state
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
-
-  @T-UC-002-v31-billing-eligible-proceeds @v31 @billing @post-s6 @ext-z @happy-path
-  Scenario: v3.1 billing party in supported_billing and agent-permitted proceeds past the billing gate
-    Given a valid create_media_buy request with billing value "operator"
-    And the seller's supported_billing capability includes "operator"
-    And the calling agent's commercial relationship permits "operator" billing
-    And the account "acc-001" exists and is active
-    When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy spec
-    And the request should proceed past the billing eligibility gate
-    # BR-RULE-214 INV-1: eligible billing party -> proceeds to next validation
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+  # DELETED: the six billing-gate scenarios that stood here
+  # (@T-UC-002-v31-error-billing-not-supported-{capability,account,unauth-omits-scope},
+  # @T-UC-002-v31-error-billing-not-permitted-for-agent-{suggested,terminal},
+  # @T-UC-002-v31-billing-eligible-proceeds). Each sent "a create_media_buy request with billing
+  # value X", and create_media_buy has no `billing` field: create-media-buy-request.json
+  # declares account, advertiser_industry, agency_estimate_number, artifact_webhook, ... and no
+  # billing (its additionalProperties does not widen this seller's DTO). The pin puts the
+  # billing gate on sync_accounts: sync_accounts.mdx "`billing` ... Who the seller invoices for
+  # this buyer-storefront account relationship"; conformance.mdx `billing_gate_dispatch`:
+  # "Two-gate dispatch on `sync_accounts.billing` rejection". That gate is graded in
+  # BR-UC-011-manage-accounts.feature (@T-UC-011-ext-c-rejected, @T-UC-011-billing-agent-gate-*).
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties
+  # @source repo=adcp ref=v3.2.7 path=docs/accounts/tasks/sync_accounts.mdx (L107: billing)
+  # @source repo=adcp ref=v3.2.7 path=docs/building/verification/conformance.mdx (L182: billing_gate_dispatch)
 
   @T-UC-002-inv-214-8 @invariant @BR-RULE-214 @billing @v31 @open-question
-  Scenario: INV-8 -- unauthorized invoice_recipient override fails the billing-eligibility gate
+  Scenario: INV-8 -- unauthorized invoice_recipient override rejects the media buy
     Given a create_media_buy request that carries an invoice_recipient overriding the account default billing entity
     And the account exists and is active
     But the invoice_recipient is not authorized for the account
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
-    And the seller should validate the invoice_recipient authorization before the buy proceeds
-    And the buy should be rejected at the buy-time billing-eligibility gate
-    And no dedicated error code is defined in v3.1 for this rejection
+    And no new media buy should have been created
     # BR-RULE-214 INV-8 (v3.1): entity-level gate orthogonal to capability/per-account/per-agent gates; error code is an open question
+    # Corrected to the pin. The three Thens that stood here asserted no wire value ("should
+    # validate", "rejected at the gate", "no dedicated code is defined"). The pin's obligation
+    # is the rejection itself: create-media-buy-request.json invoice_recipient "The seller MUST
+    # validate the invoice recipient is authorized for this account", and
+    # provisioning-walkthrough.mdx "If the seller does not authorize `invoice_recipient` ...
+    # the seller rejects the media buy". The pin names no code for it, so none is asserted.
     # --- v3.1 wave A: offering / offering-asset-group lifecycle ---
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/invoice_recipient
+    # @source repo=adcp ref=v3.2.7 path=docs/accounts/provisioning-walkthrough.mdx (L383)
 
   @T-UC-002-v31-offering-referenced-via-package-catalog @v31 @offering @offering-asset-group @catalog-driven @post-s3
   Scenario: v3.1 media buy with catalog-driven package references brand offering with typed asset groups
@@ -2938,51 +3087,70 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy success spec
     And the response should succeed
     And the response status should be "completed"
-    And the package should be bound to the offering's asset groups for creative assembly
+    And the response package should echo the offering catalog carrying "summer-sale" with asset groups "headlines" and "images_landscape"
     # v3.1: core/offering.json — promotable brand offering with assets[] of core/offering-asset-group.json
     # v3.1: asset_group_id values come from per-format offering_asset_constraints (discoverable via list_creative_formats)
+    # CORRECTED: "bound to the offering's asset groups for creative assembly" names seller-internal
+    # state with no wire surface. What the pin puts on the wire is the echo, core/package.json
+    # catalogs: "Catalogs this package promotes. ... Echoed from the create_media_buy request."
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json
     # --- v3.1 wave A: catchment in targeting.store_catchments ---
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-catchment-isochrone @v31 @catchment @store-catchments @targeting @post-s1
-  Scenario: v3.1 targeting.store_catchments with isochrone method (travel_time + transport_mode)
+  Scenario: v3.1 targeting.store_catchments selects catchment zones of a synced store catalog -- refused by a seller with no store catalogs
     Given a valid create_media_buy request
-    And the targeting includes a store_catchments entry with catchment_id "drive", travel_time {value:15, unit:"min"}, and transport_mode "driving"
-    And the account "acc-001" exists and is active
-    And the tenant is configured for auto-approval
-    When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy success spec
-    And the response should succeed
-    And the catchment should be accepted as an isochrone definition
-    # v3.1: core/catchment.json — oneOf travel_time+transport_mode XOR radius XOR geometry
-    # v3.1: travel_time requires transport_mode
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
-
-  @T-UC-002-v31-catchment-radius @v31 @catchment @store-catchments @targeting @post-s1
-  Scenario: v3.1 targeting.store_catchments with simple radius method
-    Given a valid create_media_buy request
-    And the targeting includes a store_catchments entry with catchment_id "local" and radius {value:5, unit:"km"}
-    And the account "acc-001" exists and is active
-    And the tenant is configured for auto-approval
-    When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy success spec
-    And the response should succeed
-    And the catchment should be accepted as a radius definition
-    # v3.1: core/catchment.json — radius variant (exclusiveMinimum 0)
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
-
-  @T-UC-002-v31-catchment-xor-violation @v31 @catchment @store-catchments @validation @post-f2
-  Scenario: v3.1 catchment with both radius and geometry violates oneOf and is rejected
-    Given a create_media_buy request
-    And the targeting includes a store_catchments entry providing BOTH radius and geometry
+    And the targeting includes a store_catchments entry for catalog "retail-locations" narrowed to catchment "drive"
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
-    And the response should indicate a validation error
-    And the error should reference the catchment oneOf constraint
-    # v3.1: core/catchment.json — oneOf enforces exactly one method per catchment
+    And the operation should fail
+    And the error code should be "UNSUPPORTED_FEATURE"
+    And the error should include "field" field with value "packages[0].targeting_overlay.store_catchments"
+    # CORRECTED against the pin. A targeting.store_catchments entry does not carry a
+    # catchment definition: core/targeting.json declares its items as {catalog_id (required),
+    # store_ids, catchment_ids} -- "Target users within store catchment areas from a synced
+    # store catalog". The travel_time / transport_mode / radius / geometry methods of
+    # core/catchment.json live on core/store-item.json, i.e. on the catalog synced through
+    # sync_catalogs, and the targeting entry selects them by catchment_ids.
+    # This seller declares catalog_management false and ships no sync_catalogs, so no store
+    # catalog can exist for the reference to resolve against. core/targeting.json: "A fresh
+    # create/update request MUST be applied exactly or rejected"; the targeting reference:
+    # "The seller must declare support for store catchment targeting in get_adcp_capabilities".
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json
+
+  @T-UC-002-v31-catchment-radius @v31 @catchment @store-catchments @targeting @post-s1
+  Scenario: v3.1 targeting.store_catchments narrowed to specific stores of a synced store catalog -- refused by a seller with no store catalogs
+    Given a valid create_media_buy request
+    And the targeting includes a store_catchments entry for catalog "retail-locations" narrowed to store "store_nyc_001"
+    And the account "acc-001" exists and is active
+    When the Buyer Agent sends the create_media_buy request
+    Then the response is compliant with the create_media_buy error spec
+    And the operation should fail
+    And the error code should be "UNSUPPORTED_FEATURE"
+    And the error should include "field" field with value "packages[0].targeting_overlay.store_catchments"
+    # CORRECTED against the pin, for the reason the isochrone scenario above records: a
+    # radius is a core/catchment.json method on a synced store item, not a member of a
+    # targeting.store_catchments entry. store_ids is the entry's other narrowing field
+    # ("Filter to specific stores within the catalog").
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json
+
+  @T-UC-002-v31-catchment-xor-violation @v31 @catchment @store-catchments @validation @post-f2
+  Scenario: v3.1 a geo_proximity entry with both radius and geometry violates oneOf and is rejected
+    Given a create_media_buy request
+    And the targeting includes a geo_proximity entry providing BOTH radius and geometry
+    And the account "acc-001" exists and is active
+    When the Buyer Agent sends the create_media_buy request
+    Then the response is compliant with the create_media_buy error spec
+    And the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error should include "field" field with value "packages[0].targeting_overlay.geo_proximity[0]"
+    # CORRECTED against the pin. The buyer-supplied one-method-per-area oneOf (travel_time +
+    # transport_mode XOR radius XOR geometry) is the oneOf on core/targeting.json geo_proximity
+    # items; a store_catchments entry declares none of the three. A oneOf violation is a schema violation, so the code is
+    # INVALID_REQUEST ("violates schema constraints", enums/error-code.json), not
+    # VALIDATION_ERROR.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json
     # --- v3.1 wave A: price (catalog/proposal pricing surface) ---
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-price-shape-on-proposal-item @v31 @price @proposal-based @post-s11
   Scenario: v3.1 proposal item carries price with amount, ISO 4217 currency, and period
@@ -3036,9 +3204,16 @@ Feature: BR-UC-002 Create Media Buy
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
-    And the response should indicate a validation error
+    And the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error should include "field" field with value "packages[0].targeting_overlay.frequency_cap.scope"
     # v3.1: an undeclared key inside frequency_cap is refused in dev and dropped in production
     # (critical pattern #7); cross-package and cross-buy scoping are not in this release
+    # CORRECTED: the refusal of an undeclared key is a SCHEMA refusal, so the code is
+    # INVALID_REQUEST ("Request is malformed, missing required fields, or violates schema
+    # constraints"), not VALIDATION_ERROR ("violates business rules beyond schema
+    # validation"), per enums/error-code.json. Same code as @T-UC-002-ext-f-managed.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/frequency-cap.json
 
   @T-UC-002-boundary-sandbox-response @boundary @sandbox @br-rule-209
   Scenario Outline: v3.1 sandbox response-semantics boundary validation - <boundary_point>
@@ -3047,34 +3222,31 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # Corrected to the pin. sandbox.mdx: sellers "SHOULD include `sandbox: true` in success
+    # responses when processing a sandbox account request", and "Sandbox errors are real
+    # validation errors". The schema field only ever confirms sandbox mode ("When true, this
+    # response contains simulated data"), so a production account is answered with sandbox
+    # absent OR false; the two rows that demanded one spelling each ("omitted", "false") for
+    # the same production account are one outcome. "explicit production" is the natural key
+    # with sandbox false: sandbox.mdx "adding a sandbox boolean to { "account_id": "..." } is
+    # invalid". The error branch of create-media-buy-response.json forbids `sandbox`
+    # (`not: anyOf ... required: [sandbox]`).
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/sandbox.mdx (L14, L236-238, L253)
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-response.json pointer=/oneOf/1/not
 
     Examples: Boundary values
       | boundary_point                                              | outcome                                |
       | sandbox: true in response (sandbox account)                 | success with sandbox echoed true       |
-      | sandbox absent in response (production account)             | success with sandbox omitted           |
-      | sandbox: false in response (explicit production)            | success with sandbox false             |
+      | sandbox absent in response (production account)             | success with sandbox absent or false   |
+      | sandbox: false in the natural key (explicit production)     | success with sandbox absent or false   |
       | sandbox account with invalid budget (real validation error) | error BUDGET_TOO_LOW with suggestion   |
       | sandbox: true on create_media_buy synchronous success shape | success with sandbox echoed true       |
-      | sandbox present on create_media_buy terminal-failure (errors) shape | error response without sandbox field |
+      | sandbox present on create_media_buy terminal-failure (errors) shape | error BUDGET_TOO_LOW without a sandbox field |
 
-  @T-UC-002-boundary-billing-eligibility @boundary @billing @br-rule-214
-  Scenario Outline: v3.1 billing eligibility boundary validation - <boundary_point>
-    Given a create_media_buy request whose resolved billing reflects "<boundary_point>"
-    And the account exists and is active
-    When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy spec
-    And the result should be <outcome>
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
-
-    Examples: Boundary values
-      | boundary_point                                                                                                     | outcome                                              |
-      | billing resolved = operator; operator in supported_billing; agent permitted                                        | proceeds past billing gate                           |
-      | billing resolved = advertiser; seller's supported_billing = [operator, agent]                                      | error BILLING_NOT_SUPPORTED with suggestion          |
-      | billing resolved = operator; seller supports operator generally; no operator billing relationship on this account  | error BILLING_NOT_SUPPORTED scope account with suggestion |
-      | billing resolved = agent; agent in supported_billing; calling agent is passthrough-only                            | error BILLING_NOT_PERMITTED_FOR_AGENT with suggestion |
-      | billing resolved = agent; caller unauthenticated                                                                   | error BILLING_NOT_SUPPORTED with suggestion          |
-      | invoice_recipient supplied = business entity not authorized for this account                                       | error rejected at buy-time billing gate (no dedicated code, open question) |
+  # DELETED: @T-UC-002-boundary-billing-eligibility. Five of its six rows sent a `billing`
+  # value on create_media_buy, which the request schema does not declare (see the note where
+  # the six billing-gate scenarios stood). The sixth, an unauthorized invoice_recipient, is
+  # the same obligation as @T-UC-002-inv-214-8 and is graded there.
 
   @T-UC-002-boundary-plan-id-governance @boundary @governance @plan-id @br-rule-212
   Scenario Outline: v3.1 governance plan_id boundary validation - <boundary_point>
@@ -3159,7 +3331,7 @@ Feature: BR-UC-002 Create Media Buy
     # that fabricate a fresh task_id break the buyer's polling contract -- buyers
     # cannot tell whether the buy is queued or confirmed.
     # create_media_buy_async: deterministic task_id roundtrips through registered controller directive
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/governance_approved.yaml
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/create_media_buy_async.yaml phase=submitted_arm_response step=create_media_buy_submitted
 
   @T-UC-002-storyboard-governance-approved @schema-v3.1 @v3-1 @governance @governance-decision
   Scenario: Governance approved -- seller creates the buy and propagates the governance decision payload
@@ -3296,15 +3468,25 @@ Feature: BR-UC-002 Create Media Buy
 
   @T-UC-002-storyboard-pending-creatives-state-transition @schema-v3.1 @v3-1 @lifecycle @pending-creatives @pending-start
   Scenario: Media buy created without creatives sits in pending_creatives until sync_creatives completes, then transitions to pending_start
-    Given the buyer sends create_media_buy without inline creatives
+    Given the tenant is configured for auto-approval
+    And the buyer sends create_media_buy without inline creatives
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy success spec
-    And the response should carry status "pending_creatives"
-    When the buyer subsequently completes sync_creatives for all required creatives
-    Then the buy's status should transition to "pending_start"
+    And the wire status should be "completed"
+    And the wire media_buy_status should be "pending_creatives"
+    When the buyer syncs a creative and assigns it to the package through update_media_buy
+    Then the buy's media_buy_status should transition to "pending_start"
     # pending_creatives_to_start storyboard: when a buy is created without inline
     # creatives, the seller persists it in pending_creatives. Once the buyer calls
     # sync_creatives and all required creatives reach an acceptable status, the
     # buy transitions to pending_start. The state transition is observable via
     # get_media_buys (covered in UC-019) but the anchor is the buy state on UC-002.
     # pending_creatives_to_start: creative sync unblocks pending_creatives -> pending_start
+    # CORRECTED against the storyboard. create_buy_no_creatives grades TWO fields:
+    # media_buy_status == "pending_creatives" and the envelope status == "completed"
+    # ("Envelope task-status is completed on synchronous success"); "status pending_creatives"
+    # conflated them. The unblock is sync_creatives AND then update_media_buy with
+    # creative_assignments (step assign_creative_to_package), not sync_creatives alone. The
+    # storyboard gates on media_buy.creative_approval_mode == auto_approve, hence the tenant
+    # Given.
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/pending_creatives_to_start.yaml phase=create_without_creatives step=create_buy_no_creatives

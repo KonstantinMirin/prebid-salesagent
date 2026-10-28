@@ -1051,92 +1051,66 @@ def given_neither_fixed_nor_floor(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _setup_fixed_pricing(ctx: dict, rate: float = 5.00) -> None:
-    """Configure a fixed-price pricing option (is_fixed=True, rate set, no floor)."""
-    po = ctx.get("default_pricing_option")
-    assert po is not None, "No default_pricing_option in ctx"
-    if po.is_fixed and po.rate:
-        # Default PO is already fixed — just ensure it has the right rate if overridden
-        if rate != 5.00:
-            env = ctx["env"]
-            new_po = PricingOptionFactory(
-                product=ctx["default_product"],
-                pricing_model="cpm",
-                currency="USD",
-                is_fixed=True,
-                rate=rate,
-            )
-            env._commit_factory_data()
-            kwargs = _ensure_request_defaults(ctx)
-            assert kwargs.get("packages"), "No packages in request — cannot assign fixed pricing option"
-            kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(new_po)
-        return
-    # Default PO is not fixed — create a new fixed one
+def _select_new_pricing_option(ctx: dict, **option: Any) -> None:
+    """Seed a pricing option on the default product and select it on the first package.
+
+    Every pricing/currency Given that varies the selected option goes through here. An
+    option whose id would collide with the seeded ``cpm_usd_fixed`` must name its own
+    ``pricing_option_id``: ``uq_pricing_options_option_id`` is unique per product.
+    """
     env = ctx["env"]
-    new_po = PricingOptionFactory(
-        product=ctx["default_product"],
-        pricing_model="cpm",
-        currency="USD",
-        is_fixed=True,
-        rate=rate,
-    )
+    po = PricingOptionFactory(product=ctx["default_product"], **option)
     env._commit_factory_data()
     kwargs = _ensure_request_defaults(ctx)
-    assert kwargs.get("packages"), "No packages in request — cannot assign fixed pricing option"
-    kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(new_po)
+    assert kwargs.get("packages"), "No packages in request — cannot select a pricing option"
+    kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(po)
+
+
+def _setup_fixed_pricing(ctx: dict, rate: float = 5.00) -> None:
+    """Select a fixed-price option (is_fixed=True, rate set, no floor) at ``rate``."""
+    po = ctx["default_pricing_option"]
+    if po.is_fixed and po.rate == Decimal(str(rate)):
+        _ensure_request_defaults(ctx)["packages"][0]["pricing_option_id"] = pricing_option_id(po)
+        return
+    _select_new_pricing_option(
+        ctx, pricing_model="cpm", currency="USD", is_fixed=True, rate=rate, pricing_option_id=f"cpm_usd_fixed_{rate}"
+    )
 
 
 def _setup_auction_pricing(ctx: dict, floor: float = 2.0, bid: float = 5.0) -> None:
-    """Configure an auction pricing option (is_fixed=False, floor set) with bid_price."""
-    env = ctx["env"]
-    auction_po = PricingOptionFactory(
-        product=ctx["default_product"],
-        pricing_model="cpm",
-        currency="USD",
-        is_fixed=False,
-        price_guidance={"floor": floor},
+    """Select an auction option (is_fixed=False, floor set) and bid on it."""
+    _select_new_pricing_option(
+        ctx, pricing_model="cpm", currency="USD", is_fixed=False, price_guidance={"floor": floor}
     )
-    env._commit_factory_data()
-    kwargs = _ensure_request_defaults(ctx)
-    assert kwargs.get("packages"), "No packages in request — cannot assign auction pricing option"
-    kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(auction_po)
-    kwargs["packages"][0]["bid_price"] = bid
+    _ensure_request_defaults(ctx)["packages"][0]["bid_price"] = bid
 
 
 def _setup_both_pricing(ctx: dict, rate: float = 5.00, floor: float = 2.0) -> None:
-    """Configure a malformed PO with both fixed_price and floor_price (XOR violation).
+    """Select a fixed option whose row also carries a floor (both set on the seller row).
 
-    SPEC-PRODUCTION GAP: Production treats this as a valid fixed option because
-    _validate_pricing_model_selection only checks is_fixed + rate. The XOR invariant
-    is a spec-level constraint not enforced at create_media_buy time.
+    The XOR is a property of the PUBLISHED option, and the seller publishes a fixed row as
+    ``fixed_price`` alone (``product_conversion``), so the buyer sees a valid fixed option.
     """
-    env = ctx["env"]
-    malformed_po = PricingOptionFactory(
-        product=ctx["default_product"],
+    _select_new_pricing_option(
+        ctx,
         pricing_model="cpm",
         currency="USD",
         is_fixed=True,
         rate=rate,
         price_guidance={"floor": floor},
+        pricing_option_id="cpm_usd_fixed_with_floor",
     )
-    env._commit_factory_data()
-    kwargs = _ensure_request_defaults(ctx)
-    assert kwargs.get("packages"), "No packages in request — cannot assign both-set pricing option"
-    kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(malformed_po)
 
 
 def _setup_neither_pricing(ctx: dict) -> None:
-    """Configure request with a pricing_option_id that has neither fixed nor auction pricing.
+    """Select a pricing_option_id that resolves to no option on the product.
 
-    DB constraints (check_fixed_has_rate + check_auction_has_price_guidance) make
-    it impossible to INSERT a PricingOption row without valid pricing data.
-    Instead, we reference a synthetic pricing_option_id that doesn't match any
-    existing option — this exercises the app-level "no matching option" path in
-    _validate_pricing_model_selection → PRICING_ERROR.
+    The seller cannot hold an option with neither a fixed price nor a floor
+    (check_fixed_has_rate, check_auction_has_price_guidance), so the state a buyer can
+    produce is an id the product does not offer: INVALID_PRICING_OPTION.
     """
     kwargs = _ensure_request_defaults(ctx)
     assert kwargs.get("packages"), "No packages in request — cannot assign neither-set pricing option"
-    # Use a pricing_option_id that matches no existing option (neither fixed nor auction)
     kwargs["packages"][0]["pricing_option_id"] = "cpm_usd_neither"
 
 
@@ -1156,21 +1130,7 @@ def given_pricing_option_configuration(ctx: dict, config: str) -> None:
         _setup_auction_pricing(ctx)
 
     elif config == "cpa_model":
-        # CPA pricing model — create a fixed CPA option (valid from production's view)
-        env = ctx["env"]
-        cpa_po = PricingOptionFactory(
-            product=ctx["default_product"],
-            pricing_model="cpa",
-            currency="USD",
-            is_fixed=True,
-            rate=10.00,
-        )
-        env._commit_factory_data()
-        kwargs = _ensure_request_defaults(ctx)
-        assert kwargs.get("packages"), (
-            "No packages in request — pricing option configuration 'cpa_model' requires at least one package"
-        )
-        kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(cpa_po)
+        _select_new_pricing_option(ctx, pricing_model="cpa", currency="USD", is_fixed=True, rate=10.00)
 
     elif config in ("both_set", "fixed+floor"):
         _setup_both_pricing(ctx)
@@ -1195,43 +1155,66 @@ def given_pricing_option_configuration(ctx: dict, config: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _setup_multi_package_request(ctx: dict, currencies: list[str]) -> None:
-    """Create a request with N packages, each using a pricing option with the given currency.
+def _set_packages(ctx: dict, selections: list[tuple[str, str]]) -> None:
+    """Replace the request's packages: one per ``(product_id, currency)``.
 
-    Also ensures a CurrencyLimit row exists for each currency that should be
-    in the tenant's table.
+    Each package selects a fixed CPM option in that currency. The default product and
+    its seeded option are reused, and every other row is created ONCE: a product named
+    twice is one product, and one option per (product, currency) -- a second
+    ``cpm_<currency>_fixed`` row on the same product violates
+    ``uq_pricing_options_option_id``.
     """
     env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
+    default_product = ctx["default_product"]
+    default_option = ctx["default_pricing_option"]
+    products = {default_product.product_id: default_product}
+    options = {(default_product.product_id, default_option.currency): default_option}
     packages = []
-
-    for i, currency in enumerate(currencies):
-        if i == 0:
-            # Re-use the default product for the first package
-            product = ctx["default_product"]
-        else:
-            product = ProductFactory(
-                tenant=ctx["tenant"],
-                product_id=f"product_{currency.lower()}_{i}",
-                property_tags=["all_inventory"],
+    for product_id, currency in selections:
+        if product_id not in products:
+            products[product_id] = ProductFactory(
+                tenant=ctx["tenant"], product_id=product_id, property_tags=["all_inventory"]
             )
-        po = PricingOptionFactory(
-            product=product,
-            pricing_model="cpm",
-            currency=currency,
-            is_fixed=True,
-            rate=5.00,
-        )
-        env._commit_factory_data()
-        packages.append(
-            {
-                "product_id": product.product_id,
-                "budget": 5000.0,
-                "pricing_option_id": pricing_option_id(po),
-            }
-        )
-
+        if (product_id, currency) not in options:
+            options[(product_id, currency)] = PricingOptionFactory(
+                product=products[product_id], pricing_model="cpm", currency=currency, is_fixed=True, rate=5.00
+            )
+            env._commit_factory_data()
+        option = options[(product_id, currency)]
+        packages.append({"product_id": product_id, "budget": 5000.0, "pricing_option_id": pricing_option_id(option)})
     kwargs["packages"] = packages
+
+
+def _setup_multi_package_request(ctx: dict, currencies: list[str]) -> None:
+    """One package per currency: the default product first, a fresh product for each other."""
+    default_pid = ctx["default_product"].product_id
+    _set_packages(ctx, [(default_pid if i == 0 else f"product_{c.lower()}_{i}", c) for i, c in enumerate(currencies)])
+
+
+def _select_currency_option(ctx: dict, currency: str) -> None:
+    """Select a fixed CPM option in ``currency`` on the default product's single package."""
+    _select_new_pricing_option(ctx, pricing_model="cpm", currency=currency, is_fixed=True, rate=5.00)
+
+
+def _setup_ad_server_currencies(ctx: dict, currency: str, *, secondary: list[str]) -> None:
+    """A tenant that accepts ``currency`` but whose ad-server network is USD-primary.
+
+    ``currency`` goes into the tenant's CurrencyLimit table so the tenant gate passes and
+    the ad-server gate (``AdapterConfig.gam_network_currency`` plus
+    ``gam_secondary_currencies``) is the one graded. ``secondary`` lists the network's
+    enabled secondary currencies. Written through the AdapterConfig upsert the e2e server
+    reads as well.
+    """
+    from tests.factories.core import set_adapter_type
+
+    env = ctx["env"]
+    CurrencyLimitFactory(tenant=ctx["tenant"], currency_code=currency)
+    row = set_adapter_type(env, ctx["tenant"].tenant_id, "mock")
+    row.gam_network_currency = "USD"
+    row.gam_secondary_currencies = secondary
+    env._commit_factory_data()
+    _select_currency_option(ctx, currency)
 
 
 @given(parsers.parse("the currency scenario is {partition}"))
@@ -1242,10 +1225,11 @@ def given_currency_scenario(ctx: dict, partition: str) -> None:
     - single_package: 1 package, USD (trivially valid — only 1 currency)
     - all_same_currency: 2 packages, both USD
     - currency_in_tenant_table: 1 package, EUR (tenant has EUR in CurrencyLimit)
+    - currency_in_ad_server: 1 package, JPY; tenant has JPY, network secondary has JPY
     - mixed_currencies: 2 packages, USD + EUR (cross-package mismatch)
     - currency_not_in_tenant: 1 package, XYZ (not in tenant's CurrencyLimit table)
+    - currency_not_in_ad_server: 1 package, JPY; tenant has JPY, network is USD only
     """
-    env = ctx["env"]
     partition = partition.strip()
 
     if partition == "single_package":
@@ -1256,44 +1240,20 @@ def given_currency_scenario(ctx: dict, partition: str) -> None:
         _setup_multi_package_request(ctx, ["USD", "USD"])
 
     elif partition == "currency_in_tenant_table":
-        # Add EUR to tenant's CurrencyLimit table, then use EUR pricing option
         CurrencyLimitFactory(tenant=ctx["tenant"], currency_code="EUR")
-        env._commit_factory_data()
-        kwargs = _ensure_request_defaults(ctx)
-        po_eur = PricingOptionFactory(
-            product=ctx["default_product"],
-            pricing_model="cpm",
-            currency="EUR",
-            is_fixed=True,
-            rate=5.00,
-        )
-        env._commit_factory_data()
-        assert kwargs.get("packages"), (
-            "No packages in request — currency_in_tenant_table partition requires packages to assign EUR PO"
-        )
-        kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(po_eur)
+        _select_currency_option(ctx, "EUR")
+
+    elif partition == "currency_in_ad_server":
+        _setup_ad_server_currencies(ctx, "JPY", secondary=["JPY"])
 
     elif partition == "mixed_currencies":
-        # 2 packages with different currencies — production derives currency from
-        # the first package's pricing option, so the second package's currency
-        # mismatch may or may not trigger an error depending on production logic.
         _setup_multi_package_request(ctx, ["USD", "EUR"])
 
     elif partition == "currency_not_in_tenant":
-        # Use a currency not in tenant's CurrencyLimit table
-        kwargs = _ensure_request_defaults(ctx)
-        po_xyz = PricingOptionFactory(
-            product=ctx["default_product"],
-            pricing_model="cpm",
-            currency="XYZ",
-            is_fixed=True,
-            rate=5.00,
-        )
-        env._commit_factory_data()
-        assert kwargs.get("packages"), (
-            "No packages in request — currency_not_in_tenant partition requires packages to assign XYZ PO"
-        )
-        kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(po_xyz)
+        _select_currency_option(ctx, "XYZ")
+
+    elif partition == "currency_not_in_ad_server":
+        _setup_ad_server_currencies(ctx, "JPY", secondary=[])
 
     else:
         raise ValueError(f"Unknown currency partition: {partition}")
@@ -1305,35 +1265,29 @@ def given_currency_configuration(ctx: dict, config: str) -> None:
 
     Boundary values:
     - 1 pkg USD: single package, USD
-    - 2 pkg USD+USD: two packages, same currency
-    - 2 pkg USD+EUR: two packages, different currencies
-    - 1 pkg XYZ: single package, unsupported currency
+    - 2 pkg USD+USD / 2 pkg same pricing_option_id currency: two packages, same currency
+    - 2 pkg USD+EUR / 2 pkg divergent pricing_option_id currency: two packages, different
+      currencies. The pin carries currency on the selected pricing option only, so the two
+      spellings of each pair are one request.
+    - 1 pkg XYZ: single package, currency the tenant does not hold
+    - 1 pkg JPY (GAM no JPY): tenant holds JPY, the ad-server network does not
     """
-    env = ctx["env"]
     config = config.strip()
 
     if config == "1 pkg USD":
-        # Default request already has 1 package with USD
         _ensure_request_defaults(ctx)
 
-    elif config == "2 pkg USD+USD":
+    elif config in ("2 pkg USD+USD", "2 pkg same pricing_option_id currency"):
         _setup_multi_package_request(ctx, ["USD", "USD"])
 
-    elif config == "2 pkg USD+EUR":
+    elif config in ("2 pkg USD+EUR", "2 pkg divergent pricing_option_id currency"):
         _setup_multi_package_request(ctx, ["USD", "EUR"])
 
     elif config == "1 pkg XYZ":
-        kwargs = _ensure_request_defaults(ctx)
-        po_xyz = PricingOptionFactory(
-            product=ctx["default_product"],
-            pricing_model="cpm",
-            currency="XYZ",
-            is_fixed=True,
-            rate=5.00,
-        )
-        env._commit_factory_data()
-        assert kwargs.get("packages"), "No packages in request — '1 pkg XYZ' config requires packages to assign XYZ PO"
-        kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(po_xyz)
+        _select_currency_option(ctx, "XYZ")
+
+    elif config == "1 pkg JPY (GAM no JPY)":
+        _setup_ad_server_currencies(ctx, "JPY", secondary=[])
 
     else:
         raise ValueError(f"Unknown currency boundary config: {config}")
@@ -1345,49 +1299,8 @@ def given_currency_configuration(ctx: dict, config: str) -> None:
 
 
 def _setup_multi_product_request(ctx: dict, product_ids: list[str]) -> None:
-    """Create a request with N packages, each using the given product_id.
-
-    All packages use USD/CPM/fixed pricing — currency is not the variable under test.
-    Duplicate product_ids are intentional for testing the uniqueness constraint.
-    """
-    env = ctx["env"]
-    kwargs = _ensure_request_defaults(ctx)
-    packages = []
-
-    for _i, pid in enumerate(product_ids):
-        default_product = ctx.get("default_product")
-        if default_product is not None and pid == default_product.product_id:
-            product = default_product
-        else:
-            # Check if product already exists in the session (dedup for same pid)
-            existing = ctx.get(f"_product_{pid}")
-            if existing is not None:
-                product = existing
-            else:
-                product = ProductFactory(
-                    tenant=ctx["tenant"],
-                    product_id=pid,
-                    property_tags=["all_inventory"],
-                )
-                ctx[f"_product_{pid}"] = product
-
-        po = PricingOptionFactory(
-            product=product,
-            pricing_model="cpm",
-            currency="USD",
-            is_fixed=True,
-            rate=5.00,
-        )
-        env._commit_factory_data()
-        packages.append(
-            {
-                "product_id": product.product_id,
-                "budget": 5000.0,
-                "pricing_option_id": pricing_option_id(po),
-            }
-        )
-
-    kwargs["packages"] = packages
+    """One USD package per product_id. A repeated id is the uniqueness violation under test."""
+    _set_packages(ctx, [(pid, "USD") for pid in product_ids])
 
 
 @given(parsers.parse("the product scenario is {partition}"))
@@ -1453,41 +1366,19 @@ def _set_min_spend(ctx: dict, *, product_min: float | None, tenant_min: float | 
     CurrencyLimit.min_package_budget (tenant-level), then adjusts
     the request package budget.
     """
-    from decimal import Decimal
-
     env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
 
-    # Product-level minimum: update the default pricing option IN PLACE.
-    #
-    # This is the one place that writes to the seeded ``default_pricing_option`` row
-    # rather than creating a sibling through ``PricingOptionFactory`` like every other
-    # pricing Given here, and the asymmetry is forced, not an oversight. A
-    # ``PricingOption`` has no id COLUMN: production derives its id as
-    # ``{pricing_model}_{currency}_{fixed|auction}`` and selects the FIRST row whose
-    # derived id matches (``media_buy_create._validate_pricing_model_selection``,
-    # mirrored by ``database/product_pricing.get_product_pricing_options``). A second
-    # cpm/USD/fixed row therefore carries the SAME id as the seeded one and is shadowed
-    # by it — the package would keep resolving to the row without ``min_spend_per_package``
-    # and the "budget below product min" examples would stop being exercised while
-    # staying green. Editing the identified row is the only way to say "the cpm/USD/fixed
-    # option now has a minimum". Safe because the row is this scenario's own: ``_harness_env``
-    # is function-scoped and seeds a fresh tenant/product/option per scenario.
+    # Product-level minimum: update the default pricing option IN PLACE -- the one row
+    # the package already selects. A sibling cpm/USD/fixed row cannot be added instead:
+    # ``uq_pricing_options_option_id`` refuses a second ``cpm_usd_fixed`` on the product.
+    # Safe because the row is this scenario's own: ``_harness_env`` is function-scoped
+    # and seeds a fresh tenant/product/option per scenario.
     po = ctx["default_pricing_option"]
     po.min_spend_per_package = Decimal(str(product_min)) if product_min is not None else None
-    env._commit_factory_data()
 
-    # Tenant-level minimum: update the existing CurrencyLimit row
-    from sqlalchemy import select
-
-    from src.core.database.models import CurrencyLimit
-
-    cl = env._session.scalars(
-        select(CurrencyLimit).filter_by(
-            tenant_id=ctx["tenant"].tenant_id,
-            currency_code="USD",
-        )
-    ).one()
+    # Tenant-level minimum: the tenant's existing USD CurrencyLimit row.
+    cl = env.get_currency_limit("USD")
     cl.min_package_budget = Decimal(str(tenant_min)) if tenant_min is not None else None
     env._commit_factory_data()
 
@@ -1573,12 +1464,6 @@ def _set_daily_spend_cap(ctx: dict, *, cap: float | None, budget: float, flight_
 
     Daily spend = budget / max(flight_days, 1).
     """
-    from decimal import Decimal
-
-    from sqlalchemy import select
-
-    from src.core.database.models import CurrencyLimit
-
     env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
 
@@ -1591,12 +1476,7 @@ def _set_daily_spend_cap(ctx: dict, *, cap: float | None, budget: float, flight_
         kwargs["packages"][0]["budget"] = budget
 
     # Set cap on CurrencyLimit
-    cl = env._session.scalars(
-        select(CurrencyLimit).filter_by(
-            tenant_id=ctx["tenant"].tenant_id,
-            currency_code="USD",
-        )
-    ).one()
+    cl = env.get_currency_limit("USD")
     cl.max_daily_package_spend = Decimal(str(cap)) if cap is not None else None
     env._commit_factory_data()
 
@@ -3204,34 +3084,15 @@ def given_request_passes_validation(ctx: dict) -> None:
 
     Includes creative_ids with matching DB records so scenarios that test
     creative assignment persistence (INV-020-1) have actual creatives.
-    """
-    from tests.factories.creative import CreativeFactory
 
-    kwargs = _ensure_request_defaults(ctx)
-    env = ctx["env"]
-    # Create a creative in the DB and add its ID to the first package
-    creative = CreativeFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        creative_id="cr-all-validation",
-        format="display_300x250",
-        status="approved",
-        data={
-            "assets": {
-                "primary": {
-                    "url": "https://cdn.example.com/cr-all-validation.png",
-                    "width": 300,
-                    "height": 250,
-                }
-            }
-        },
-    )
-    env._commit_factory_data()
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["creative_ids"] = [creative.creative_id]
-    # Register expected creative IDs for Then steps (Given→Then contract)
-    ctx.setdefault("expected_creative_ids", set())
-    ctx["expected_creative_ids"].add(creative.creative_id)
+    Through ``_create_approved_creative``, so the creative carries a format the pinned
+    capture SERVES and the product accepts. It was hand-built on ``display_300x250``, an id
+    absent from the capture, so the create's format resolution refused it and a request this
+    sentence calls valid failed validation (``given_adapter_error`` strips the ids for
+    exactly that reason).
+    """
+    creative = _create_approved_creative(ctx, "cr-all-validation")
+    _add_creative_ids_to_package(ctx, [creative.creative_id])
 
 
 @given("a create_media_buy request that fails validation")
@@ -3431,8 +3292,6 @@ def given_catalog_boundary(ctx: dict, config: str) -> None:
 # Format ID structure partition / boundary
 # ═══════════════════════════════════════════════════════════════════════
 
-_VALID_FORMAT_ID = {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}
-
 
 def _set_format_ids(ctx: dict, format_ids: list[dict[str, Any] | str] | None) -> None:
     """Set format_ids on the first package of the request."""
@@ -3443,65 +3302,51 @@ def _set_format_ids(ctx: dict, format_ids: list[dict[str, Any] | str] | None) ->
         kwargs["packages"][0]["format_ids"] = format_ids
 
 
+#: The boundary outline's spellings of the partition outline's cases. One request per case.
+_FORMAT_ID_BOUNDARY_CASES = {
+    "valid FormatId": "valid_format_id",
+    '"banner_300x250"': "plain_string",
+    "no agent_url": "missing_agent_url",
+    "bad agent_url": "unregistered_agent",
+    "unknown format": "unknown_format",
+}
+
+
+def _format_ids_for(ctx: dict, case: str) -> list[dict[str, Any] | str]:
+    """The package ``format_ids`` for one format-ID-structure case.
+
+    Every case is derived from the seeded product's own format reference, so the valid
+    case is one the product actually accepts and each invalid case differs from it in
+    exactly the one dimension it names. A literal ``display_300x250`` here was refused by
+    the product (which carries ``display_300x250_image``), so "valid" was never valid.
+    """
+    valid = dict(ctx["default_product"].format_ids[0])
+    if case == "valid_format_id":
+        return [valid]
+    if case == "plain_string":
+        return ["banner_300x250"]
+    if case == "missing_agent_url":
+        return [{"id": valid["id"]}]
+    if case == "missing_id":
+        return [{"agent_url": valid["agent_url"]}]
+    if case == "unregistered_agent":
+        return [{**valid, "agent_url": "https://unknown-agent.example.com"}]
+    if case == "unknown_format":
+        return [{**valid, "id": "nonexistent_format_999"}]
+    raise ValueError(f"Unknown format ID case: {case}")
+
+
 @given(parsers.parse("the format ID scenario is {partition}"))
 def given_format_id_partition(ctx: dict, partition: str) -> None:
-    """Set up format_ids for partition scenarios (format ID structure).
-
-    SPEC-PRODUCTION GAP: Production validates format_id structure via Pydantic
-    (FormatId model), so plain strings and missing fields raise ValidationError.
-    However, unregistered agent and unknown format pass Pydantic validation and
-    are only caught later (or not at all) by format compatibility checks.
-    """
-    partition = partition.strip()
-
-    if partition == "valid_format_id":
-        _set_format_ids(ctx, [_VALID_FORMAT_ID])
-
-    elif partition == "plain_string":
-        _set_format_ids(ctx, ["banner_300x250"])
-
-    elif partition == "missing_agent_url":
-        _set_format_ids(ctx, [{"id": "display_300x250"}])
-
-    elif partition == "missing_id":
-        _set_format_ids(ctx, [{"agent_url": "https://creative.adcontextprotocol.org"}])
-
-    elif partition == "unregistered_agent":
-        _set_format_ids(ctx, [{"agent_url": "https://unknown-agent.example.com", "id": "display_300x250"}])
-
-    elif partition == "unknown_format":
-        _set_format_ids(ctx, [{"agent_url": "https://creative.adcontextprotocol.org", "id": "nonexistent_format_999"}])
-
-    else:
-        raise ValueError(f"Unknown format ID partition: {partition}")
+    """Set up format_ids for partition scenarios (format ID structure)."""
+    _set_format_ids(ctx, _format_ids_for(ctx, partition.strip()))
 
 
 @given(parsers.parse("the format ID scenario is: {config}"))
 def given_format_id_boundary(ctx: dict, config: str) -> None:
-    """Set up format_ids for boundary scenarios (format ID structure).
-
-    SPEC-PRODUCTION GAP: same as partition — Pydantic catches structural issues,
-    but agent registration and format existence are not fully validated.
-    """
+    """Set up format_ids for boundary scenarios (format ID structure)."""
     config = config.strip()
-
-    if config == "valid FormatId":
-        _set_format_ids(ctx, [_VALID_FORMAT_ID])
-
-    elif config == '"banner_300x250"':
-        _set_format_ids(ctx, ["banner_300x250"])
-
-    elif config == "no agent_url":
-        _set_format_ids(ctx, [{"id": "display_300x250"}])
-
-    elif config == "bad agent_url":
-        _set_format_ids(ctx, [{"agent_url": "https://unknown-agent.example.com", "id": "display_300x250"}])
-
-    elif config == "unknown format":
-        _set_format_ids(ctx, [{"agent_url": "https://creative.adcontextprotocol.org", "id": "nonexistent_format_999"}])
-
-    else:
-        raise ValueError(f"Unknown format ID boundary config: {config}")
+    _set_format_ids(ctx, _format_ids_for(ctx, _FORMAT_ID_BOUNDARY_CASES.get(config, config)))
 
 
 # ═══════════════════════════════════════════════════════════════════════

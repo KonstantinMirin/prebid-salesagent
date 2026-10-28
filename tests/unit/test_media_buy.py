@@ -27,8 +27,10 @@ from src.adapters.base import AdapterCreateRequest, AdapterUpdateResult
 from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
+    AdCPBudgetTooLowError,
     AdCPCreativeNotFoundError,
     AdCPGoneError,
+    AdCPInvalidPricingOptionError,
     AdCPProductNotFoundError,
     AdCPValidationError,
 )
@@ -669,11 +671,12 @@ class TestCreateMediaBuyValidation:
         package.bid_price = None
         package.pricing_model = None
 
-        with pytest.raises(AdCPValidationError):
+        with pytest.raises(AdCPInvalidPricingOptionError):
             _validate_pricing_model_selection(
                 package=package,
                 product=product,
                 campaign_currency="USD",
+                package_index=0,
             )
 
     def test_bid_price_below_floor_rejected(self):
@@ -710,6 +713,7 @@ class TestCreateMediaBuyValidation:
                 package=package,
                 product=product,
                 campaign_currency="USD",
+                package_index=0,
             )
         # The identifier is STRUCTURED now: details/field, not prose.
 
@@ -738,11 +742,12 @@ class TestCreateMediaBuyValidation:
         package.pricing_model = None
         package.budget = 500.0  # below min_spend of 1000
 
-        with pytest.raises(AdCPValidationError) as _ei:
+        with pytest.raises(AdCPBudgetTooLowError) as _ei:
             _validate_pricing_model_selection(
                 package=package,
                 product=product,
                 campaign_currency="USD",
+                package_index=0,
             )
         # The identifier is STRUCTURED now: details/field, not prose.
 

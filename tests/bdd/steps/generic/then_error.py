@@ -1318,6 +1318,23 @@ def then_field_matches_iso4217(ctx: dict, field: str) -> None:
     )
 
 
+# ── Correctable / transient failure ─────────────────────────────────
+
+
+@then(parsers.re(r"the response should indicate a (?P<recovery>correctable|transient) failure"))
+def then_recoverable_failure(ctx: dict, recovery: str) -> None:
+    """Assert the wire error's recovery is ``recovery``, on both envelope layers.
+
+    The code is read from the wire because the sentence names none; what it claims is the
+    recovery class, which ``assert_wire_error`` pins against the envelope. Wire only: a
+    dispatch that produced no envelope fails here rather than grading a reconstruction.
+    """
+    result = ctx.get("result")
+    code = result.wire_error_code() if result is not None else None
+    assert code is not None, f"Expected a {recovery} failure on the wire, but no wire error was captured: {result!r}"
+    result.assert_wire_error(code, recovery=recovery)
+
+
 # ── Terminal failure ────────────────────────────────────────────────
 
 

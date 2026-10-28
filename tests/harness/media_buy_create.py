@@ -60,6 +60,9 @@ def _live_ad_server_on_the_live_stack(self: MediaBuyCreateEnv, adapter_type: str
 #: ``"<adapter_name>.<operation>"`` — so the lookup below is a substring match.
 _CREATIVE_PUSH_OPERATION = "add_creative_assets"
 
+#: Audit operation ``MockAdServer`` writes once per ``create_media_buy`` it is handed.
+_ADAPTER_CREATE_OPERATION = "create_media_buy"
+
 
 def _adapter_operation_receipts(self: MediaBuyCreateEnv, operation: str) -> list[dict[str, Any]]:
     """The ``details`` of every audit row the server's ad server wrote for *operation*.
@@ -82,13 +85,41 @@ def _adapter_operation_receipts(self: MediaBuyCreateEnv, operation: str) -> list
     ``expire_all`` first, and ordered by ``log_id``: the server committed through its own
     session, so rows written since this session last read are otherwise served from the
     identity map, and ``find_by_operation`` imposes no order of its own.
+
+    ONLY THE AD SERVER'S OWN ROWS ARE RECEIPTS. The tool audits itself as
+    ``AdCP.create_media_buy`` and a failed call is audited again as
+    ``<TRANSPORT>.create_media_buy`` (``src/core/tool_error_logging.py``), so a bare
+    substring match would count that bookkeeping as an ad-server call. The adapter writes
+    under its own ``adapter_name`` (``AdServerAdapter.__init__``), which is the prefix kept.
     """
+    from src.adapters.mock_ad_server import MockAdServer
     from src.core.database.repositories.audit_log import AuditLogRepository
 
     session = self.get_session()
     session.expire_all()
-    rows = AuditLogRepository(session, self.tenant_id).find_by_operation(operation)
+    rows = [
+        row
+        for row in AuditLogRepository(session, self.tenant_id).find_by_operation(operation)
+        if (row.operation or "").startswith(f"{MockAdServer.adapter_name}.")
+    ]
     return [row.details or {} for row in sorted(rows, key=lambda r: r.log_id)]
+
+
+def _adapter_create_receipts_on_the_live_stack(self: MediaBuyCreateEnv) -> int:
+    """How many media buys the SERVER's ad server was handed, read off its receipts."""
+    return len(_adapter_operation_receipts(self, _ADAPTER_CREATE_OPERATION))
+
+
+def _inject_create_failure_on_the_live_stack(self: MediaBuyCreateEnv, error: Exception, **behavior: Any) -> None:
+    """Realize ``fail_adapter_create`` on the live stack: the ``test_behavior`` row.
+
+    The live server runs the real ``MockAdServer``, which reads injected faults from
+    ``AdapterConfig.config_json["test_behavior"]``. *error* is the in-process carrier and has
+    no meaning in another process; *behavior* names the same fault in the adapter's knobs.
+    """
+    from tests.factories.core import set_adapter_test_behavior
+
+    set_adapter_test_behavior(self, self.tenant_id, fail_on_create=True, manual_approval_required=False, **behavior)
 
 
 def _uploaded_assets_from_the_audit_trail(self: MediaBuyCreateEnv) -> list[dict[str, Any]]:
@@ -155,7 +186,6 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
 
     EXTERNAL_PATCHES = {
         "adapter": "src.core.tools.media_buy_create.get_adapter",
-        "audit": "src.core.tools.media_buy_create.get_audit_logger",
         "slack": "src.core.tools.media_buy_create.get_slack_notifier",
         "context_mgr": "src.core.tools.media_buy_create.get_context_manager",
         "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
@@ -418,11 +448,9 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         mock_adapter.manual_approval_operations = []
         self.mock["adapter"].return_value = mock_adapter
 
-        # Audit logger: no-op
-        mock_audit = MagicMock()
-        mock_audit.log_operation.return_value = None
-        mock_audit.log_security_violation.return_value = None
-        self.mock["audit"].return_value = mock_audit
+        # The audit logger is NOT patched: it is our own code, and the audit trail it writes
+        # (the audit_logs table) is what the audit scenarios grade on every transport --
+        # the live e2e_rest server writes the same rows.
 
         # Slack notifier: no-op
         mock_slack = MagicMock()
@@ -524,6 +552,31 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             uploaded.extend(assets or [])
         return uploaded
 
+    @realize_e2e(_adapter_create_receipts_on_the_live_stack)
+    def adapter_create_calls(self) -> int:
+        """How many times the create path handed the ad server a media buy.
+
+        The fourth-transport answer is the receipt the server's ``MockAdServer`` writes per
+        ``create_media_buy`` it is handed, for the reason ``uploaded_adapter_assets`` reads
+        one: a mock in this process cannot see a call made in the server container, so a
+        scenario asserting the ad server was NOT reached would pass vacuously over e2e_rest.
+
+        One asymmetry, so a caller does not lean on it: ``MockAdServer`` raises a
+        ``test_behavior`` fault BEFORE it writes the receipt, so after ``fail_adapter_create``
+        the live count is 0 where the in-process count is 1. Count only creates that reached
+        the ad server unfaulted.
+        """
+        return int(self.mock["adapter"].return_value.create_media_buy.call_count)
+
+    @realize_e2e(_inject_create_failure_on_the_live_stack)
+    def fail_adapter_create(self, error: Exception, **behavior: Any) -> None:
+        """Make the ad server refuse ``create_media_buy`` with *error*.
+
+        *behavior* is the same fault spelled in ``MockAdServer``'s ``test_behavior`` knobs,
+        which is how the live stack's real adapter is told to raise it.
+        """
+        self.mock["adapter"].return_value.create_media_buy.side_effect = error
+
     @realize_e2e(_live_ad_server_on_the_live_stack)
     def run_ad_server(self, adapter_type: str) -> None:
         """Give the tenant a REAL ad-server configuration of *adapter_type*.
@@ -561,6 +614,19 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
 
         self._write_adapter_config(adapter_type)
         self.mock["adapter"].side_effect = get_adapter
+
+    def get_currency_limit(self, currency: str) -> Any:
+        """The tenant's ``CurrencyLimit`` row for ``currency``. Raises when there is none.
+
+        The row the create path reads for the tenant's minimum package budget and daily
+        cap, so a Given that changes either edits this row rather than adding one.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import CurrencyLimit
+
+        stmt = select(CurrencyLimit).filter_by(tenant_id=self._tenant_id, currency_code=currency)
+        return self.get_session().scalars(stmt).one()
 
     def _write_adapter_config(self, adapter_type: str) -> None:
         """The ``adapter_config`` row naming *adapter_type*, committed."""

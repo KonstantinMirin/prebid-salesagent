@@ -147,5 +147,10 @@ def _check_status(account_id: str, status: str | None) -> None:
         )
     if status == "suspended":
         raise AdCPAccountSuspendedError(details=EntityRefDetails(account_id=account_id))
+    if status in ("rejected", "closed"):
+        # Terminal states (enums/account-status.json). docs/accounts/overview.mdx: "Sellers MUST
+        # reject operations on accounts in terminal states with ACCOUNT_NOT_FOUND or an
+        # appropriate error" -- the account can never be used again, so it resolves as absent.
+        raise AdCPAccountNotFoundError(details=EntityRefDetails(account_id=account_id))
     if status == "payment_required":
         raise AdCPAccountPaymentRequiredError(details=EntityRefDetails(account_id=account_id))

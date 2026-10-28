@@ -119,23 +119,13 @@ def then_no_adapter_calls(ctx: dict) -> None:
 
 @then("the error should indicate minimum spend requirement")
 def then_error_minimum_spend(ctx: dict) -> None:
-    """Assert the error message mentions minimum spend enforcement."""
-    error = ctx.get("error")
-    resp = payload_or_none(ctx)
+    """Assert the wire refusal is BUDGET_TOO_LOW, pointed at the refused package budget.
 
-    error_str = ""
-    if error is not None:
-        error_str = str(error).lower()
-    elif resp is not None:
-        # Some transports wrap errors in the response
-        from tests.bdd.steps.generic.then_media_buy import _get_response_field
-
-        msg = _get_response_field(resp, "message") or _get_response_field(resp, "error") or ""
-        error_str = str(msg).lower()
-
-    assert "minimum" in error_str or "min" in error_str or "spend" in error_str, (
-        f"Expected error to indicate minimum spend requirement, got: {error or resp}"
-    )
+    enums/error-code.json: BUDGET_TOO_LOW is "Budget is below the seller's minimum". The
+    code is the assertion; the buyer-facing sentence is a function of it through
+    CODE_TABLE, so reading the message for "minimum" graded the table, not the seller.
+    """
+    ctx["result"].assert_wire_error("BUDGET_TOO_LOW", field="packages[0].budget")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -493,9 +483,8 @@ def given_observe_high_value_alerts(ctx: dict) -> None:
     """Make the >$10k high-value audit alert observable at the Seller boundary.
 
     The high-value alert fires inside the REAL AuditLogger (notify_audit_log),
-    which the create harness no-ops by default. This swaps in the real audit
-    logger so the budget gate actually runs, and spies its external Slack
-    boundary (the same Slack-boundary idiom as 'a Slack notification should be
+    which the create harness runs unpatched, so the budget gate runs for real. This
+    spies its external Slack boundary (the same Slack-boundary idiom as 'a Slack notification should be
     sent to the Seller', which asserts notify_media_buy_event). The spy is
     registered on the env's patcher list so it is torn down on env __exit__.
 
@@ -509,11 +498,7 @@ def given_observe_high_value_alerts(ctx: dict) -> None:
 
     from unittest import mock
 
-    from src.core.audit_logger import get_audit_logger
-
     env = ctx["env"]
-    # Real audit logger -> the high-value notification gate executes for real.
-    env.mock["audit"].side_effect = get_audit_logger
     # Spy the audit logger's external Slack boundary; tie teardown to env lifecycle.
     patcher = mock.patch("src.services.slack_notifier.get_slack_notifier")
     notifier_factory = patcher.start()
