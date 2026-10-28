@@ -1630,9 +1630,9 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And controller-driven simulated delivery emitted vendor_metric_values for that vendor metric
     When the Buyer Agent calls get_media_buy_delivery for the media buy
     Then the response is compliant with the get_media_buy_delivery spec
-    And the per-package vendor_metric_values should carry one row per (vendor.domain, vendor.brand_id, metric_id)
+    And the per-package vendor_metric_values should carry one row per (vendor.domain, vendor.brand_id, metric_id, qualifier)
     And the row for vendor "attentionvendor.example" should include metric_id "attention_units"
-    And the seller should NOT emit duplicate rows for the same (vendor.domain, vendor.brand_id, metric_id) within a single reporting period
+    And the seller should NOT emit duplicate rows for the same (vendor.domain, vendor.brand_id, metric_id, qualifier) within a single reporting period
     # vendor_metric_accountability storyboard: vendor-defined metrics (attention
     # scores, emissions, panel demographics) flow through the lifecycle:
     #   1. reporting_capabilities.vendor_metrics on the product -- pointer
@@ -1642,10 +1642,12 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     #      seller silently excludes products that don't match (filter-not-fail).
     #      At least one of vendor or metric_id must be pinned per entry.
     #   3. by_package[].vendor_metric_values on get_media_buy_delivery -- one row
-    #      per (vendor.domain, vendor.brand_id, metric_id) per reporting period;
-    #      seller MUST de-duplicate before emission.
+    #      per (vendor.domain, vendor.brand_id, metric_id, qualifier) per reporting
+    #      period; the same vendor metric MAY appear in several rows only when each
+    #      carries a distinct qualifier; seller MUST de-duplicate before emission.
     # vendor_metric_accountability: declaration -> filter -> emission contract
-    # @source repo=adcp ref=v3.2.3 path=static/compliance/source/protocols/media-buy/scenarios/vendor_metric_accountability.yaml phase=simulate_and_validate_vendor_metrics step=get_delivery_with_vendor_metrics
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/vendor_metric_accountability.yaml phase=simulate_and_validate_vendor_metrics step=get_delivery_with_vendor_metrics
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/delivery-metrics.json pointer=/properties/vendor_metric_values
 
   @T-UC-004-aggr-scope-standard @invariant @BR-RULE-220 @metric-aggregates
   Scenario: Standard-scope aggregate row draws metric_id from the closed enum
