@@ -14,9 +14,21 @@ from decimal import Decimal
 
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
-from enum import StrEnum
+from enum import Enum, StrEnum
 from functools import cache
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, NewType, Self, TypeAlias, cast, get_args
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    ClassVar,
+    Literal,
+    NewType,
+    Self,
+    TypeAlias,
+    cast,
+    get_args,
+    get_origin,
+)
 
 from src.core.enum_helpers import enum_value
 
@@ -228,8 +240,10 @@ from pydantic import (
     ConfigDict,
     Discriminator,
     Field,
+    FieldSerializationInfo,
     Tag,
     TypeAdapter,
+    field_serializer,
     model_serializer,
     model_validator,
 )
@@ -2172,6 +2186,79 @@ class Format(LibraryFormat):
             'https://creative.adcontextprotocol.org/|display_300x250'
         """
         return f"{self.format_id.agent_url}|{self.format_id.id}"
+
+
+def _closed_enum_list_fields(model: type[BaseModel]) -> dict[str, type[Enum]]:
+    """Every top-level field of *model* typed ``list[<Enum>]`` (optionally ``| None``), with its enum.
+
+    Derived from the pinned model rather than listed, so an enum list the next pin adds is
+    covered the day it lands and one the pin opens up (``UniversalMacro | str``) drops out.
+    """
+    fields: dict[str, type[Enum]] = {}
+    for name, info in model.model_fields.items():
+        annotation = info.annotation
+        for arm in (annotation,) if get_origin(annotation) is list else get_args(annotation):
+            if get_origin(arm) is list:
+                (item,) = get_args(arm)
+                if isinstance(item, type) and issubclass(item, Enum):
+                    fields[name] = item
+    return fields
+
+
+#: The closed-enum list fields of the pinned ``Format``, each with the enum it is closed over.
+_PEER_FORMAT_ENUM_LISTS = _closed_enum_list_fields(LibraryFormat)
+
+
+class PeerFormat(Format):
+    """A :class:`Format` as a PEER creative agent publishes it.
+
+    The pin makes every enum additive and tells a reader to tolerate a value it does not
+    know (``docs/reference/versioning.mdx``, the Enums row: "Clients must tolerate unknown
+    values"). A creative agent on a newer release can therefore publish a closed-enum list
+    member this pin does not model, and strict :class:`Format` would refuse the whole entry
+    for it. This class is the reader the pin asks for, and ``Format`` stays strict for the
+    formats this seller authors.
+
+    Tolerance is declared HERE, on the type, as a ``mode="before"`` validator, so every
+    caller that ingests a peer payload gets it and there is no call site to forget. The
+    validator partitions each closed-enum list into the members the pin models, which
+    validate as usual, and the rest, which go to :attr:`unmodeled_values`. The serializer
+    re-emits the union, so the peer's value reaches the buyer as the peer sent it: an
+    ``accepts_parameters`` holding only an unmodeled member must not be republished as
+    ``[]``, which ``core/format.json`` reads as "a concrete format with fixed parameters".
+
+    Only string members are diverted. A non-string member is a type error, not an unknown
+    enum value, and still fails validation.
+    """
+
+    unmodeled_values: dict[str, list[str]] = Field(
+        default_factory=dict,
+        exclude=True,
+        description="Internal: closed-enum list members the pin does not model, keyed by field name",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _divert_unmodeled_enum_members(cls, data: Any) -> Any:
+        if not isinstance(data, Mapping):
+            return data
+        accepted = dict(data)
+        unmodeled: dict[str, list[str]] = {}
+        for name, enum_cls in _PEER_FORMAT_ENUM_LISTS.items():
+            values = data.get(name)
+            if not isinstance(values, list):
+                continue
+            modeled = {member.value for member in enum_cls}
+            accepted[name] = [v for v in values if not isinstance(v, str) or v in modeled]
+            if diverted := [v for v in values if isinstance(v, str) and v not in modeled]:
+                unmodeled[name] = diverted
+        accepted["unmodeled_values"] = unmodeled
+        return accepted
+
+    @field_serializer(*_PEER_FORMAT_ENUM_LISTS)
+    def _reemit_unmodeled_enum_members(self, value: list[Any] | None, info: FieldSerializationInfo) -> list[Any] | None:
+        diverted = self.unmodeled_values.get(info.field_name, [])
+        return [*(value or []), *diverted] if diverted else value
 
 
 # FORMAT_REGISTRY removed - now using dynamic format discovery via CreativeAgentRegistry

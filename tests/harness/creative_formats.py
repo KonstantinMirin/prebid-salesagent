@@ -1,7 +1,9 @@
 """CreativeFormatsEnv — integration test environment for _list_creative_formats_impl.
 
 Patches: creative agent registry, audit logger.
-Real: format processing logic (no direct DB access in this _impl).
+Real: format processing logic (no direct DB access in this _impl). A scenario that
+calls ``set_peer_format_payload`` swaps the registry stand-in for production's own
+registry, which dials a real peer endpoint.
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
 
@@ -23,11 +25,14 @@ from __future__ import annotations
 
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 from src.core.schemas import FormatKey, ListCreativeFormatsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import E2EUnsupportedSetup, realize_e2e
+from tests.harness.egress import EgressHatchMixin
 from tests.harness.transport import DeliverResult
+from tests.helpers.tls_material import start_tls_capture_service, trust_test_ca
 
 
 def _format_identity_key(fmt: Any) -> FormatKey:
@@ -98,7 +103,23 @@ def _validate_registry_formats(env: Any, formats: list[Any]) -> None:
         )
 
 
-class CreativeFormatsEnv(IntegrationEnv):
+def _serve_peer_catalog_on_the_live_stack(env: CreativeFormatsEnv, payload: list[dict[str, Any]]) -> None:
+    """E2E realization of set_peer_format_payload: the compose stack's capture service is the peer.
+
+    The live server cannot reach a socket in the runner, so the peer it dials is the
+    webhook-capture service, which already sits behind the shared TLS front and answers
+    ``list_creative_formats`` over MCP for a key a test programs. The tenant's
+    ``creative_agents`` row names that endpoint; the factory writes it to the live
+    server's own database, as every e2e factory row is written.
+    """
+    from tests.e2e._webhook_capture import peer_agent_url, serve_peer_catalog
+
+    key = f"peer-{uuid4().hex}"
+    serve_peer_catalog(key, {"formats": payload})
+    env.configure_peer_agent(peer_agent_url(key))
+
+
+class CreativeFormatsEnv(EgressHatchMixin, IntegrationEnv):
     """Integration test environment for _list_creative_formats_impl.
 
     Mocks creative agent registry (external service) and audit logger.
@@ -183,6 +204,41 @@ class CreativeFormatsEnv(IntegrationEnv):
         self.mock["registry"].return_value.list_all_formats_with_errors = AsyncMock(
             return_value=FormatFetchResult(formats=list(formats), errors=[])
         )
+
+    @realize_e2e(_serve_peer_catalog_on_the_live_stack)
+    def set_peer_format_payload(self, payload: list[dict[str, Any]]) -> None:
+        """A creative agent configured on the tenant answers ``list_creative_formats`` with *payload*.
+
+        *payload* is the agent's ``formats`` array as raw JSON, served verbatim, so an
+        entry the pinned schema cannot validate reaches the seller's OWN parse. Nothing
+        here is a stand-in for that parse: the agent is a real MCP endpoint over TLS (the
+        same capture service the e2e stack runs, started in this process), the tenant row
+        is a real ``creative_agents`` row, and the registry is production's testing-mode
+        ``ReferenceFormatsRegistry``, which answers the default agent from the reference
+        catalog and dials the tenant's configured agents.
+
+        In process that means trusting the shared test CA and opening the private-range
+        hatch, because the endpoint listens on loopback; the live stack's posture is
+        already open.
+        """
+        from src.core.creative_agent_registry import ReferenceFormatsRegistry
+        from tests.e2e.webhook_capture_service import peer_path
+
+        trust_test_ca(self._guard)
+        self.set_egress_hatches(private=True)
+        peer = start_tls_capture_service(self._guard, "peer_creative_agent")
+        key = f"peer-{uuid4().hex}"
+        peer.store.serve_peer_catalog(key, {"formats": payload})
+        self.configure_peer_agent(f"https://127.0.0.1:{peer.server_address[1]}{peer_path(key)}")
+        self.mock["registry"].return_value = ReferenceFormatsRegistry()
+
+    def configure_peer_agent(self, agent_url: str) -> None:
+        """Configure *agent_url* as one of the tenant's creative agents -- one row, both worlds."""
+        from tests.factories import CreativeAgentFactory
+
+        tenant, _principal = self.setup_default_data()
+        CreativeAgentFactory(tenant=tenant, agent_url=agent_url, name="Peer Creative Agent")
+        self._commit_factory_data()
 
     def call_impl(self, **kwargs: Any) -> ListCreativeFormatsResponse:
         """Call _list_creative_formats_impl.

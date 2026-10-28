@@ -86,7 +86,16 @@ async def _capture_formats(url: str):
     # Construct our own CreativeAgent rather than rely on DEFAULT_AGENT (which reads
     # CREATIVE_AGENT_URL at import time and may not match --url).
     agent = CreativeAgent(agent_url=url, name="Pinned Reference Creative Agent", enabled=True, priority=1)
-    return await registry.get_formats_for_agent(agent, force_refresh=True)
+    catalog = await registry._fetch_formats_operator(agent)
+    # The serving path discards an entry that does not validate and keeps the rest. A
+    # capture must not: a fixture silently missing a format the agent serves would make
+    # every test agree with a catalog the agent does not have.
+    if catalog.discarded:
+        sys.exit(
+            "Capture discarded entries that do not validate against the pinned schema: "
+            + "; ".join(f"{dropped.label}: {dropped.error}" for dropped in catalog.discarded)
+        )
+    return catalog.formats
 
 
 def _build_fixture(formats, source_url: str) -> dict:

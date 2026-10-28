@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import ssl
 import threading
 from collections.abc import Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -118,7 +119,7 @@ def mcp_capabilities_post(raw_body: bytes, documents: Mapping[str, dict]) -> tup
     walk dies as ``request_signature_capabilities_unreachable`` — the transport
     bucket — masking whatever signature verdict was being graded.
 
-    Three methods, which is the whole surface one bootstrap session touches:
+    Four methods, which is the whole surface one session touches:
 
     * ``initialize`` — answered with the client's OWN ``protocolVersion`` echoed
       back. Negotiating rather than naming a version is what keeps this fixture
@@ -126,6 +127,8 @@ def mcp_capabilities_post(raw_body: bytes, documents: Mapping[str, dict]) -> tup
       version outside its ``HANDSHAKE_PROTOCOL_VERSIONS``, so a literal here would
       be a time bomb set to the next pin.
     * ``notifications/*`` — 202 with no body, per the streamable-HTTP binding.
+    * ``tools/list`` — every served document's name, which ``ClientSession.call_tool``
+      asks for before it returns.
     * ``tools/call`` — the named document, as BOTH ``structuredContent`` and a
       JSON text part. The SDK's ``_extract_strict_mcp_capabilities`` prefers the
       structured field and falls back to parsing the text part, and serving both
@@ -168,6 +171,15 @@ def mcp_capabilities_post(raw_body: bytes, documents: Mapping[str, dict]) -> tup
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "e2e-capabilities-origin", "version": "0"},
             },
+        )
+
+    if method == "tools/list":
+        # An ``mcp`` ``ClientSession.call_tool`` lists the tools once before it returns a
+        # result, to learn the tool's output schema; a method-not-found here fails the
+        # call. Every served document is listed with an open input schema and no output
+        # schema, so the client validates nothing the document did not already say.
+        return 200, _jsonrpc_result(
+            request_id, {"tools": [{"name": name, "inputSchema": {"type": "object"}} for name in documents]}
         )
 
     if method == "tools/call":
@@ -220,6 +232,7 @@ def serve_forever_in_thread(
     host: str,
     port: int,
     server_attrs: dict[str, object],
+    ssl_context: ssl.SSLContext | None = None,
 ) -> ThreadingHTTPServer:
     """Bind and start serving on a daemon thread; the caller owns teardown.
 
@@ -235,6 +248,10 @@ def serve_forever_in_thread(
     server = server_class((host, port), handler_class)
     for name, value in server_attrs.items():
         setattr(server, name, value)
+    if ssl_context is not None:
+        # Wrapped before the serving thread starts, so every accepted connection is
+        # already negotiated -- the in-process stand-in for the compose TLS front.
+        server.socket = ssl_context.wrap_socket(server.socket, server_side=True)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 

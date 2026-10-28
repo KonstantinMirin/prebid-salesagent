@@ -146,6 +146,18 @@ class AppErrorCode(StrEnum):
             status=502,
         ),
     )
+    AGENT_FORMATS_DISCARDED = (
+        "AGENT_FORMATS_DISCARDED",
+        CodeEntry(
+            recovery=Recovery.TERMINAL,
+            suggestion=(
+                "Use the formats that were returned; the omitted ones stay unavailable until the "
+                "creative agent publishes them in a valid form"
+            ),
+            message="A configured creative agent published formats that do not validate; those formats were not included",
+            status=502,
+        ),
+    )
     INTERNAL_ERROR = (
         "INTERNAL_ERROR",
         CodeEntry(

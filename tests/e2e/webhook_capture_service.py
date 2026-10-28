@@ -36,6 +36,14 @@ neither may be dropped:
   200 — so without it the deployed server's circuit breaker and the egress refusal
   path are never exercised against anything real.
 
+It also stands in for a PEER CREATIVE AGENT (#1333), because it is the one
+compose origin the deployed server can already reach and a test can program. A
+test stores a ``list_creative_formats`` answer under a key with
+``POST /control/peer/<key>``, configures ``/peer/<key>/mcp`` as a tenant's
+creative agent, and the server dials it over MCP through the TLS front exactly as
+it dials a real agent. The answer is served verbatim, so a catalog entry the
+pinned schema cannot validate reaches the server's own parse.
+
 Storage is keyed by an opaque per-test token (never a single global list) — the
 isolation mechanism concurrent e2e modules under xdist depend on.
 ``ThreadingHTTPServer`` serves each request on its own thread, so the store guards
@@ -69,15 +77,27 @@ import contextlib
 import json
 import os
 import re
+import ssl
 import threading
 import time
 from collections.abc import Iterator
+from http.server import ThreadingHTTPServer
 from urllib.parse import parse_qs
 
-from tests.e2e._stdlib_json_http import JsonRequestHandler, compose_project_name, serve_forever_in_thread
+from tests.e2e._stdlib_json_http import (
+    JsonRequestHandler,
+    compose_project_name,
+    mcp_capabilities_post,
+    serve_forever_in_thread,
+)
 
 _WEBHOOK_PATH_RE = re.compile(r"^/webhook/(?P<key>[^/]+)/?$")
 _CONTROL_PATH_RE = re.compile(r"^/control/(?P<key>[^/]+)/?$")
+_PEER_PATH_RE = re.compile(r"^/peer/(?P<key>[^/]+)/mcp/?$")
+_PEER_CONTROL_PATH_RE = re.compile(r"^/control/peer/(?P<key>[^/]+)/?$")
+
+#: The one tool a peer creative agent serves here: the catalog a seller lists.
+PEER_CATALOG_TOOL = "list_creative_formats"
 
 #: The query parameter that puts one delivery into ECHO mode (salesagent-mp53.4).
 _ECHO_PARAM = "echo"
@@ -106,6 +126,16 @@ def webhook_path(key: str, *, echo: str | None = None) -> str:
     return f"/webhook/{key}" if echo is None else f"/webhook/{key}?{_ECHO_PARAM}={echo}"
 
 
+def peer_path(key: str) -> str:
+    """The MCP endpoint of the peer creative agent served under *key*."""
+    return f"/peer/{key}/mcp"
+
+
+def peer_control_path(key: str) -> str:
+    """Where a test stores the catalog ``peer_path(key)`` answers with."""
+    return f"/control/peer/{key}"
+
+
 class _CaptureStore:
     """Thread-safe per-key storage of BOTH the parsed payload and the raw wire.
 
@@ -131,6 +161,7 @@ class _CaptureStore:
         self._parsed: dict[str, list[dict]] = {}
         self._raw: dict[str, list[dict]] = {}
         self._programmes: dict[str, tuple[int, int]] = {}
+        self._peer_catalogs: dict[str, dict] = {}
 
     def _snapshot(self, key: str) -> dict[str, list[dict]]:
         """Both sides of *key*, copied. The caller MUST already hold ``self._lock``."""
@@ -183,6 +214,15 @@ class _CaptureStore:
         with self._lock:
             return self._snapshot(key)
 
+    def serve_peer_catalog(self, key: str, document: dict) -> None:
+        """Answer ``list_creative_formats`` on ``/peer/<key>/mcp`` with *document*, verbatim."""
+        with self._lock:
+            self._peer_catalogs[key] = document
+
+    def peer_catalog(self, key: str) -> dict | None:
+        with self._lock:
+            return self._peer_catalogs.get(key)
+
     def drain(self, key: str) -> dict[str, list[dict]]:
         """Atomically read-and-clear both capture sides of ``key`` in one round trip.
 
@@ -196,7 +236,7 @@ class _CaptureStore:
 
 
 class _CaptureRequestHandler(JsonRequestHandler):
-    """Route ``/health``, ``/control/<key>`` and ``/webhook/<key>`` against ``self.server``'s store."""
+    """Route ``/health``, ``/control/...``, ``/peer/<key>/mcp`` and ``/webhook/<key>`` against ``self.server``'s store."""
 
     @property
     def _store(self) -> _CaptureStore:
@@ -256,6 +296,15 @@ class _CaptureRequestHandler(JsonRequestHandler):
             if control:
                 self._handle_control(control.group("key"))
                 return
+            peer_control = _PEER_CONTROL_PATH_RE.match(path)
+            if peer_control:
+                self._store.serve_peer_catalog(peer_control.group("key"), self._read_json_body())
+                self._write_json(200, {"served": PEER_CATALOG_TOOL})
+                return
+            peer = _PEER_PATH_RE.match(path)
+            if peer:
+                self._handle_peer(peer.group("key"))
+                return
 
         match = _WEBHOOK_PATH_RE.match(path)
         if not match:
@@ -274,6 +323,21 @@ class _CaptureRequestHandler(JsonRequestHandler):
             return
         self._store.program(key, status, count)
         self._write_json(200, {"programmed": {"status": status, "count": count}})
+
+    def _handle_peer(self, key: str) -> None:
+        """Speak MCP for one peer key: the stored catalog is the ``list_creative_formats`` result.
+
+        A key with nothing stored serves no tool, so a call reaches the server as a tool
+        error rather than as an invented empty catalog.
+        """
+        document = self._store.peer_catalog(key)
+        status, body = mcp_capabilities_post(
+            self._read_raw_body(), {PEER_CATALOG_TOOL: document} if document is not None else {}
+        )
+        if body is None:
+            self._write_empty(status)
+        else:
+            self._write_json(status, body)
 
     def _handle_webhook(self, method: str, key: str, query: str) -> None:
         if method == "POST":
@@ -365,6 +429,23 @@ def header_value(entry: dict, name: str) -> str | None:
     return None
 
 
+def start_capture_service(*, host: str, port: int, ssl_context: ssl.SSLContext | None = None) -> ThreadingHTTPServer:
+    """Start the service on a daemon thread and return the server; the caller owns its shutdown.
+
+    The server's ``store`` is the programming surface for a caller in the SAME process:
+    an in-process scenario serves a peer catalog through ``store.serve_peer_catalog``
+    where an e2e one goes through ``POST /control/peer/<key>``. With ``ssl_context`` the
+    service speaks TLS itself, standing in for the compose front.
+    """
+    return serve_forever_in_thread(
+        _CaptureRequestHandler,
+        host=host,
+        port=port,
+        server_attrs={"store": _CaptureStore(), "compose_project_name": compose_project_name()},
+        ssl_context=ssl_context,
+    )
+
+
 @contextlib.contextmanager
 def run_capture_service(*, host: str = "0.0.0.0", port: int = 8080) -> Iterator[str]:  # noqa: S104
     """Run the webhook-capture service, yielding its base URL (``http://host:port``).
@@ -381,12 +462,7 @@ def run_capture_service(*, host: str = "0.0.0.0", port: int = 8080) -> Iterator[
     Reads ``COMPOSE_PROJECT_NAME`` once at start so ``GET /health`` can report
     which compose stack this instance belongs to.
     """
-    server = serve_forever_in_thread(
-        _CaptureRequestHandler,
-        host=host,
-        port=port,
-        server_attrs={"store": _CaptureStore(), "compose_project_name": compose_project_name()},
-    )
+    server = start_capture_service(host=host, port=port)
     try:
         yield f"http://{host}:{server.server_address[1]}"
     finally:

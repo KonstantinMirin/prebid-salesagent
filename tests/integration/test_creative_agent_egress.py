@@ -208,18 +208,18 @@ class TestParsing:
         allow_local_origin(monkeypatch)
         local_origin_tls.respond_with(200, body=_jsonrpc_body())
 
-        formats = await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
+        catalog = await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
 
-        assert [fmt.format_id.id for fmt in formats] == ["display_image"]
+        assert [fmt.format_id.id for fmt in catalog.formats] == ["display_image"]
 
     async def test_an_sse_response_parses_formats(self, registry, local_origin_tls, monkeypatch):
         """``text/event-stream`` is read off the same body, one ``data:`` line at a time."""
         allow_local_origin(monkeypatch)
         local_origin_tls.respond_with(200, body=_sse_body(), content_type="text/event-stream")
 
-        formats = await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
+        catalog = await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
 
-        assert [fmt.format_id.id for fmt in formats] == ["display_image"]
+        assert [fmt.format_id.id for fmt in catalog.formats] == ["display_image"]
 
 
 class TestTaxonomy:

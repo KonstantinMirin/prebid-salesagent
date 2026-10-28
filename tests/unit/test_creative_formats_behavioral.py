@@ -527,7 +527,7 @@ def _call_impl_raw(
 class TestPartialAgentFailureReturnsFormatsAndErrors:
     """UC-005-EXT-C-01: Partial agent failure returns formats from healthy agents plus errors.
 
-    Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-01)
+    Decision: docs/design/error-architecture.md, "Worked case: format discovery" (FD-ERR-01)
     """
 
     def test_partial_agent_failure_returns_formats_and_errors(self):
@@ -573,7 +573,7 @@ class TestPartialAgentFailureReturnsFormatsAndErrors:
 class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
     """UC-005-EXT-C-02: All agents fail returns empty formats plus errors.
 
-    Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-02)
+    Decision: docs/design/error-architecture.md, "Worked case: format discovery" (FD-ERR-02)
     """
 
     def test_all_agents_fail_returns_empty_formats_and_errors(self):
@@ -636,7 +636,7 @@ class TestRegistryCreationFailureRaisesServiceUnavailable:
 class TestErrorEntriesFollowAdCPSchema:
     """UC-005-EXT-C-04: Error entries follow AdCP error.json schema.
 
-    Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-04)
+    Decision: docs/design/error-architecture.md, "Worked case: format discovery" (FD-ERR-04)
     """
 
     def test_error_entries_have_code_and_message(self):
@@ -664,7 +664,7 @@ class TestErrorEntriesFollowAdCPSchema:
 class TestSuccessfulDiscoveryHasNoErrors:
     """UC-005-EXT-C-05: Successful discovery has no errors.
 
-    Decision: docs/design/error-propagation-in-format-discovery.md (FD-ERR-05)
+    Decision: docs/design/error-architecture.md, "Worked case: format discovery" (FD-ERR-05)
     """
 
     def test_successful_discovery_has_no_errors(self):
