@@ -335,6 +335,14 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     "foreign_agent_display_300x250": {
         "format_ids": [{"agent_url": "https://another-creative-agent.example", "id": "display_300x250"}]
     },
+    # The creative agent's host with TWO trailing dots. docs/reference/url-canonicalization,
+    # step 2: "More than one trailing dot creates an empty DNS label rather than a root-label
+    # spelling and MUST be rejected", and comparers MUST reject a malformed authority. The
+    # wire accepts it (``format: uri``), so the refusal is the seller's: it names no agent and
+    # so no format. It used to raise out of the comparison and answer INTERNAL_ERROR.
+    "malformed_agent_display_300x250": {
+        "format_ids": [{"agent_url": f"https://{_AGENT_HOST}..", "id": "display_300x250"}]
+    },
     # M2's refusal half: a selector satisfying NEITHER image declaration ``two_image_options``
     # publishes, so the two M2 accept rows cannot be passed by accepting every image.
     "mismatched_160x600": {"format_kind": "image", "params": {"width": 160, "height": 600}},

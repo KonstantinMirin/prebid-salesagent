@@ -626,10 +626,12 @@ def _legacy_route(
 
     assertion = identity.assertion
     assert assertion is not None, "the legacy route is reached only for a claim asserting a reference"
+    # ``None`` is a reference whose agent_url the canonicalizer refused (FormatSelector.of_legacy).
+    # It must not equal an unusable v1_format_ref, which ``format_identity_or_none`` also maps to None.
     asserted = identity.legacy
     for declaration in declarations:
         refs = declaration.v1_format_ref or []
-        if any(format_identity_or_none(ref) == asserted for ref in refs):
+        if asserted is not None and any(format_identity_or_none(ref) == asserted for ref in refs):
             return _graded(declaration, params, exact=True)
 
     # Canonically addressed first: the SDK upgrades a size-encoded id only for the reference
@@ -943,11 +945,18 @@ def _reference_display(reference: LibraryFormatId) -> str:
     accepts (display_image)" names the same string twice and tells the buyer nothing. The
     parameter names come off the model, not a list, for the reason
     ``_FORMAT_ID_PARAMETERS`` exists.
+
+    A buyer's reference whose ``agent_url`` the canonicalizer refuses has no identity to
+    render, so it is shown as sent: the refusal it appears in is the reason it was refused.
     """
     from src.core.format_resolver import format_display
     from src.core.schemas._base import _FORMAT_ID_PARAMETERS, format_id_identity
+    from src.core.signing.canonical import TargetUriMalformedError
 
-    shown = format_display(format_id_identity(reference))
+    try:
+        shown = format_display(format_id_identity(reference))
+    except TargetUriMalformedError:
+        shown = f"{reference.agent_url}/{reference.id}"
     parameters = sorted(
         (name, value) for name in _FORMAT_ID_PARAMETERS if (value := getattr(reference, name)) is not None
     )

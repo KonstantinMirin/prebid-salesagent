@@ -48,6 +48,7 @@ from src.core.schemas import (
     format_key_parts,
 )
 from src.core.security.outbound_http import UrlProvenance
+from src.core.signing.canonical import TargetUriMalformedError
 from src.core.validation_helpers import run_async_in_sync_context
 
 # What callers may hand the identity helpers: a structured reference, a bare
@@ -352,6 +353,10 @@ def format_reference_or_none(entry: Any) -> LibraryFormatId | None:
     documents, stopping one step earlier so a caller can have the reference rather than its
     key. Everything that docstring says about ``None`` and about absent fields applies here
     and is not restated.
+
+    An entry whose ``agent_url`` the canonicalizer refuses is dropped here too, the way
+    :func:`format_identity_or_none` already drops it when it computes the key: kept, it
+    would reach every comparison against the product as a reference no agent can match.
     """
     try:
         ref: Any = entry
@@ -362,7 +367,9 @@ def format_reference_or_none(entry: Any) -> LibraryFormatId | None:
             ref.pop("format_id", None)
             if "id" not in ref:
                 return None
-        return format_reference(ref)
+        reference = format_reference(ref)
+        canonical_agent_url(reference.agent_url)  # TargetUriMalformedError is a ValueError
+        return reference
     except (ValidationError, ValueError, TypeError, AttributeError):
         logger.warning("Unusable stored format reference, ignored: %r", entry)
         return None
@@ -1005,9 +1012,19 @@ def canonically_addressed(ref: FormatRef) -> LibraryFormatId:
     For a COMPARISON only: a reference that is stored or echoed keeps the buyer's
     bytes (see :data:`src.core.schemas.FormatKey`). ``model_copy`` rather than a
     constructor, so the reference keeps its own type and every parameter it carries.
+
+    An ``agent_url`` the algorithm refuses to canonicalize (``TargetUriMalformedError``,
+    for example a host with two trailing dots, which ``AnyUrl`` accepts) is returned as
+    sent. It cannot name the same agent as any well-formed URL, so the comparison fails
+    closed and the caller answers its own correctable refusal, the policy #1291 set for a
+    malformed agent_url, instead of the exception escaping as INTERNAL_ERROR.
     """
     reference = format_reference(ref)
-    return reference.model_copy(update={"agent_url": canonical_agent_url(reference.agent_url)})
+    try:
+        canonical = canonical_agent_url(reference.agent_url)
+    except TargetUriMalformedError:
+        return reference
+    return reference.model_copy(update={"agent_url": canonical})
 
 
 def find_format(formats: Iterable[Format], format_id: FormatRef) -> Format | None:

@@ -169,8 +169,10 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | duration_range       | exact_duration_outside_range     | format_kind        |
       | fixed_300x250        | legacy_unsized_template          | format_ids         |
       | fixed_300x250        | foreign_agent_display_300x250    | format_ids         |
+      | fixed_300x250        | malformed_agent_display_300x250  | format_ids         |
 
-    # THE LAST TWO ROWS are legacy references that normalize to the kind and nothing else:
+    # legacy_unsized_template and foreign_agent_display_300x250 are legacy references that
+    # normalize to the kind and nothing else:
     # the unsized display_image template, and display_300x250 at an agent the registry's
     # size upgrade does not cover. Neither states the fixed size, so each is the legacy
     # spelling of bare_image_kind, and core/product-format-declaration.json refuses it the
@@ -179,6 +181,12 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # by satisfaction and then refused VALIDATION_ERROR by a raw (agent_url, id) gate -- the
     # comparison the same document forbids -- so removing that gate needed the satisfaction
     # rule to refuse them for the reason the pin gives.
+    #
+    # malformed_agent_display_300x250 names the creative agent's host with two trailing dots.
+    # docs/reference/url-canonicalization step 2: "More than one trailing dot creates an empty
+    # DNS label rather than a root-label spelling and MUST be rejected". It names no agent, so
+    # the registry's size upgrade does not apply and it is the third kind-only reference,
+    # refused for the same reason. It used to raise out of the comparison as INTERNAL_ERROR.
 
     # bare_image_kind IS the storyboard's reject_bare_image_selector_for_fixed_mrec, and
     # mismatched_728x90 is formats.mdx's fifth rule stated as an input: the two selectors
@@ -889,6 +897,18 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   Scenario: a legacy-only product refuses a legacy selector normalizing to another size
     Given the seller publishes only a deprecated format sized 300x250
     And the buyer's package selects "legacy_display_728x90"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused VALIDATION_ERROR naming the 300x250 it accepts
+
+  # The deprecated lane's half of malformed_agent_display_300x250 in the refusal outline above:
+  # the same id the product publishes, at the creative agent's host spelled with two trailing
+  # dots, which docs/reference/url-canonicalization step 2 says "MUST be rejected". The
+  # comparison fails closed and the lane's own refusal answers, where the canonicalizer's
+  # exception used to escape it as INTERNAL_ERROR.
+  @T-UC-FORMAT-SATISFACTION-legacy-only-malformed-agent @format_satisfaction @requires_db
+  Scenario: a legacy-only product refuses a legacy selector whose agent_url cannot be canonicalized
+    Given the seller publishes only a deprecated format sized 300x250
+    And the buyer's package selects "malformed_agent_display_300x250"
     When the Buyer Agent sends the create_media_buy request
     Then the buyer is refused VALIDATION_ERROR naming the 300x250 it accepts
 
