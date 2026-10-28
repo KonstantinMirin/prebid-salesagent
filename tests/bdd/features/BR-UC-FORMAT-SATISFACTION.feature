@@ -723,11 +723,11 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   # media-buy/package-request.json states its four receiver steps with no mode condition
   # either.
   #
-  # THESE SCENARIOS ARE RED ON PURPOSE. They are the instrument three beads have been
-  # missing, and each one is red for the obligation it names rather than for a reason it
-  # inherits: salesagent-gz86t (the gate does not run), salesagent-1dcfo (so no snapshot is
-  # recorded), salesagent-zoo82 (so C8 has nothing to read). They land WITHOUT the
-  # behaviour change that greens them, which is a different commit and a different scope.
+  # The ordering has since been fixed: the selector gate (_resolve_package_selectors) runs
+  # ABOVE both approval branches, so these scenarios grade that it stays there. They were
+  # landed red first, as the instrument for salesagent-gz86t (the gate did not run),
+  # salesagent-1dcfo (so no snapshot was recorded) and salesagent-zoo82 (so C8 had nothing
+  # to read).
   #
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/formats_to_provide/description
@@ -753,7 +753,6 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # same tool — the selectors differ in exactly whether the product accepts them, which
     # is the dimension being judged. A seller that refused every selector on the approval
     # path would redden this row; one that accepts every selector reddens the row above.
-    # This row passes today; the one above does not.
 
   @T-UC-FORMAT-SATISFACTION-approval-snapshot-recorded @format_satisfaction @requires_db
   Scenario: a parked buy records the declaration its selector selected
