@@ -362,11 +362,16 @@ Feature: BR-UC-002 Create Media Buy
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
-    And the response should indicate a validation error
     And the error code should be "INVALID_REQUEST"
     And the error should reference the unresolvable asset_type discriminator
     And the error should include "suggestion" field
     # BR-RULE-015 INV-6: assets value lacking asset_type or carrying an unregistered value (not one of the 14 AssetVariant types) -> INVALID_REQUEST
+    # The line "the response should indicate a validation error" is gone: its step asserts
+    # VALIDATION_ERROR, which contradicts the INVALID_REQUEST line beside it. Each asset slot
+    # value is a oneOf over asset-union.json selected by its asset_type, so a value without
+    # one violates the schema, which is INVALID_REQUEST.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-asset.json pointer=/properties/assets
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_REQUEST
     # --- ext-h: Format ID Validation Failure ---
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
@@ -392,8 +397,16 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
-    And the error code should be "REFERENCE_NOT_FOUND"
+    And the error code should be "UNSUPPORTED_FEATURE"
     And the error should include "suggestion" field
+    # A legacy format_id the seller cannot normalize, or one that resolves and satisfies
+    # nothing the product declares, is coded by the package selector contract:
+    # UNSUPPORTED_FEATURE in both cases. REFERENCE_NOT_FOUND is the generic fallback "when
+    # no resource-specific not-found code applies", and this contract names one. Same
+    # code as the unregistered_agent rows of @T-UC-002-partition-format-id-structure.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_ids/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/REFERENCE_NOT_FOUND
     # --- ext-i: Authentication Error ---
 
   @T-UC-002-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3

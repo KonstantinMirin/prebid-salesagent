@@ -168,6 +168,30 @@ def given_inline_creative_discriminator(ctx: dict, boundary_point: str) -> None:
     pkg["creatives"] = [mark(creative)]
 
 
+@given('a create_media_buy request with an inline creative whose assets map value lacks an "asset_type" field')
+def given_inline_creative_missing_asset_type(ctx: dict) -> None:
+    """The invariant's wording of the boundary row that drops the discriminator (BR-RULE-015 INV-6)."""
+    given_inline_creative_discriminator(ctx, "asset slot value with missing asset_type discriminator")
+
+
+@then("the error should reference the unresolvable asset_type discriminator")
+def then_error_references_asset_slot(ctx: dict) -> None:
+    """The refusal points into the inline creative's ``assets`` map, at the broken slot.
+
+    ``core/error.json`` asks ``field`` to locate the offending value; the offending value is
+    the slot whose ``asset_type`` the oneOf over ``asset-union.json`` could not select by.
+    Graded as a prefix because the slot key is whatever the inline creative builder chose
+    (``_add_inline_creatives``), and the subject here is that the pointer lands inside the
+    creative's assets rather than on the package or the request.
+    """
+    result = ctx["result"]
+    result.assert_wire_error("INVALID_REQUEST")
+    located = (result.wire_error_object() or {}).get("field") or ""
+    assert located.startswith("packages[0].creatives[0].assets."), (
+        f"expected the refusal to locate the broken slot under packages[0].creatives[0].assets, got field={located!r}"
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Package terms: committed_metrics, measurement_terms, catalogs
 # ═══════════════════════════════════════════════════════════════════════

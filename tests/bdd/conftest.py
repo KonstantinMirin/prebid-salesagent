@@ -7078,11 +7078,14 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
         seed=_seed_media_buy_chain,
     ),
+    # Wired, not parked: the scenario needs what the uc002-ext rows need -- the create chain
+    # plus dispatch_mode="create", so the shared When dispatches the request its Given broke
+    # -- and its refusal is the transport boundary's, which every transport reaches.
     EnvRoute(
         tag="uc002-inv-015-6",
         when=_uc("UC-002", lambda m: "T-UC-002-inv-015-6" in m),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
-        xfail_reason="T-UC-002-inv-015-6 create_media_buy harness wiring is tracked in #1652",
+        seed=_seed_media_buy_chain_create_dispatch,
     ),
     # The sandbox-isolation pair (@T-UC-002-sandbox-no-live-ad-server and its
     # instrument check @T-UC-002-live-ad-server-reached). A row of its own, ABOVE the
