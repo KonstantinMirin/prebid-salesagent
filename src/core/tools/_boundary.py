@@ -265,6 +265,22 @@ async def serve(
     are: sourced from the transport, never re-derived here. A transport that is not serving
     an HTTP request passes none, which is a request presenting no signature.
     """
+    # THE ORDER BELOW IS CORRECT AND DELIBERATE: validate the body first, refuse an invalid
+    # body, and only then resolve the caller (where the request signature is verified).
+    #
+    # - The body is read and parsed ONCE, here. Verifying first would mean a second read.
+    # - Whether a signature is needed at all is only known from the parsed request: the
+    #   operation, and the account it names, decide which signing bucket applies. That cannot
+    #   be decided before the body is read and validated.
+    # - So an invalid body is refused as INVALID_REQUEST without reaching the verifier.
+    #
+    # Do not move signature verification ahead of validation, not even for invalid bodies, to
+    # satisfy a conformance vector. A vector that grades signature correctness must send a
+    # VALID payload with the faulty signature. One that sends an invalid payload AND a faulty
+    # signature carries two refusals and grades the order of checks, not the signature: that
+    # is a defect in the vector (e.g. request-signing profile-3.2/negative/001-base64url-sf-binary,
+    # whose stub body is not a valid create_media_buy request), raised with the grader, not
+    # fixed here. Reordering was tried once and reverted (salesagent-c7dz1).
     return await invoke_tool(tool_name, validated_request(tool_name, raw, protocol), headers, protocol, exchange)
 
 
