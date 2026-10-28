@@ -501,9 +501,10 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
     )
 
     def _map_portfolio_channels() -> None:
-        # portfolio.primary_channels is "Primary advertising channels in this
-        # PORTFOLIO" (get-adcp-capabilities-response.json), and the portfolio is the
-        # tenant's product catalog -- the same thing its sibling publisher_domains
+        # portfolio.primary_channels is the "Complete list of AdCP media channels for which
+        # this sales agent accepts and can meaningfully answer product-discovery briefs"
+        # (get-adcp-capabilities-response.json), and what this seller answers briefs from is
+        # the tenant's product catalog -- the same thing its sibling publisher_domains
         # already summarizes from a real per-tenant table. So the channels are the
         # union of what each product effectively offers, under the ONE rule
         # get_products applies per product (channel_helpers). The adapter CLASS's
@@ -532,11 +533,13 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         mapped = {CHANNEL_MAPPING[name] for name in names if name in CHANNEL_MAPPING}
         primary_channels.extend(channel for channel in MediaChannel if channel in mapped)
 
+    # No channel evidence (no catalog channel and no adapter default inside the channels enum,
+    # or the lookup failed) leaves primary_channels EMPTY, and the portfolio then omits it.
+    # Omission is the pin's spelling of unknown scope: "When present, this is an exhaustive
+    # brief-routing allowlist ... Omission means channel scope is unknown"
+    # (get-adcp-capabilities-response.json, portfolio.primary_channels). A guessed default
+    # would be a display-only allowlist that sends buyers away for every other channel.
     _resolve_or_degrade(advisories, "portfolio channels", _map_portfolio_channels, default=None)
-
-    # Default to display if we couldn't determine from adapter
-    if not primary_channels:
-        primary_channels = [MediaChannel.display]
 
     # supported_pricing_models: pre-flight buyer signal, sorted+deterministic.
     # Same source as the per-product "supported" annotation (products.py:721) --
