@@ -381,6 +381,7 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
         ErrorCode.MEDIA_BUY_NOT_FOUND: 404,
         ErrorCode.PACKAGE_NOT_FOUND: 404,
         ErrorCode.PRODUCT_NOT_FOUND: 404,
+        ErrorCode.PROPOSAL_NOT_FOUND: 404,
         ErrorCode.INVALID_PRICING_OPTION: 404,
         ErrorCode.REFERENCE_NOT_FOUND: 404,
         ErrorCode.SESSION_NOT_FOUND: 404,

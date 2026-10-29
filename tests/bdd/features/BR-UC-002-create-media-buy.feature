@@ -1024,10 +1024,28 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     And the request supplies no buyer packages array
     When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy spec
-    And the product-uniqueness check should have no applicable buyer input
-    And the request should not be rejected on the product-uniqueness rule
+    Then the response is compliant with the create_media_buy error spec
+    And the operation should fail
+    And the error code should be "PROPOSAL_NOT_FOUND"
+    And the error recovery should be "correctable"
+    And the error should include "field" field with value "proposal_id"
     # BR-RULE-010 INV-3 (v3.1): uniqueness binds the buyer-supplied manual packages array, absent in proposal mode
+    # Corrected to the pin. The request is the "Committed proposal execution" shape of
+    # create-media-buy-request.json (proposal_id + total_budget, no packages), and the
+    # proposal_id names nothing this seller issued: it declares no supports_proposals
+    # (default false) and issues no proposals, so the pin's answer is PROPOSAL_NOT_FOUND --
+    # "not recognized by the seller -- ... was never issued" (enums/error-code.json).
+    # The field line is what grades INV-3. The uniqueness rule refuses on the packages
+    # array, and so does every other packages-array check; a seller that ran them against
+    # this request answered on `packages` (this one answered VALIDATION_ERROR there,
+    # asking for the field the shape forbids). Answering on proposal_id is the request
+    # being judged on what it carries. The two lines this replaces -- "the product-
+    # uniqueness check should have no applicable buyer input" and "the request should not
+    # be rejected on the product-uniqueness rule" -- asserted the same thing with nothing to
+    # read it from: no response field reports which checks ran.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/packages
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/PROPOSAL_NOT_FOUND
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/supports_proposals
     # --- BR-RULE-012: Maximum Daily Spend Cap ---
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 

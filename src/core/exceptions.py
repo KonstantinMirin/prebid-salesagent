@@ -1314,6 +1314,18 @@ class AdCPProductNotFoundError(AdCPNotFoundError[ProductRefDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.PRODUCT_NOT_FOUND
 
 
+class AdCPProposalNotFoundError(AdCPNotFoundError[EntityRefDetails]):
+    """A ``proposal_id`` this seller never issued (404, PROPOSAL_NOT_FOUND).
+
+    ``enums/error-code.json`` (AdCP) PROPOSAL_NOT_FOUND: "The referenced proposal_id is
+    not recognized by the seller -- it belongs to a different tenant, was never issued, or
+    was evicted from the seller's session cache before consumption." Recovery comes from
+    the code (correctable): the buyer requests a fresh proposal, or sends packages.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PROPOSAL_NOT_FOUND
+
+
 class AdCPContextNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     """Buyer-supplied context_id does not resolve (404, SESSION_NOT_FOUND).
 
