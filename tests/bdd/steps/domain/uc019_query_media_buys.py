@@ -3627,14 +3627,10 @@ def given_publisher_approved_parked_buy(ctx: dict) -> None:
     with no deadline for a reason that has nothing to do with keeping one, so the outcome
     is checked here rather than left for the Then to misreport.
     """
-    from src.core.tools.media_buy_create import ApprovalOutcome
-    from tests.bdd.steps.domain.uc_format_satisfaction import when_publisher_approves
+    from tests.bdd.steps.domain.uc_format_satisfaction import assert_approval_executed, when_publisher_approves
 
     when_publisher_approves(ctx)
-    approval = ctx["approval_result"]
-    assert approval.outcome is ApprovalOutcome.EXECUTED, (
-        f"the approval did not execute the order: outcome={approval.outcome!r}, error={approval.error_msg!r}"
-    )
+    assert_approval_executed(ctx)
 
 
 @when("the Buyer Agent calls get_media_buys for the approved buy")
