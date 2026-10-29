@@ -1162,6 +1162,11 @@ class CreativeAssignment(Base):
     weight: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
     # adcp#208: placement-specific targeting within package
     placement_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    # Whether the assignment came in through a package's inline ``creatives``. The two
+    # package arrays replace different sets (update_media_buy.mdx): ``creatives`` "Replace
+    # assigned inline creative bodies", ``creative_assignments`` "Replace assigned library
+    # creatives", so the inline replacement drops only rows marked here.
+    inline: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     # Relationships
