@@ -547,7 +547,7 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
         """Set up happy-path defaults for external mocks."""
         #: {format_id: declaration} for every format this env has been told to serve, so a
         #: step that seeds a row in one can reach the declaration the sync path resolves
-        #: against (``served_format_spec``). Reset per env, with the mocks.
+        #: against (``published_format_spec``). Reset per env, with the mocks.
         self._served_formats: dict[str, Format] = {}
         # The registry is PRODUCTION's testing-mode registry, serving the committed
         # capture through its own override hook -- the same bytes the e2e server reads.
@@ -1165,24 +1165,36 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
         """
         return format_id in self._served_formats
 
-    def served_format_spec(self, format_id: str) -> Format:
-        """The declaration this env already configured for *format_id*.
+    def published_format_spec(self, agent_url: str, format_id: str) -> Format | None:
+        """The declaration a sync naming ``(agent_url, format_id)`` resolves against, or None.
 
-        For a step that SEEDS an existing row in a format this env serves, so the seed and
-        the sync resolve the same declaration. Since :meth:`served_format` now reads the
-        shared capture, this answers the SAME ``Format`` ``CreativeFactory`` would find on
-        its own -- which is the point: the two agreeing is no longer something the harness
-        has to arrange.
+        For a step that SEEDS a library row through ``CreativeFactory``, which projects the
+        row's legacy reference to its canonical kind exactly as the sync path does
+        (``creative_identity_of``) and needs the same declaration to do it. In order:
 
-        Raises rather than answering None for an id no step configured: a silent None
-        would hide a Given that never ran.
+        1. a format a Given configured this env to serve (:meth:`served_format`);
+        2. an entry the tenant's hosted agent publishes (:meth:`host_reference_format`) --
+           on e2e the agent :meth:`catalog_agent_url` names;
+        3. the reference capture the standard agent answers from, which is the factory's
+           own lookup (``served_format_spec``).
+
+        Step 2 is why this exists. The factory reads only the capture, whose entries all name
+        ``https://creative.adcontextprotocol.org``, so on e2e it found nothing at the hosted
+        agent's URL and fell back to the bare id. The SDK maps ``display_300x250_image`` to a
+        kind only at the reference agent's origin, so every seeded row in the catalog format
+        was refused in the TEST process while the server, which reads the hosted agent's
+        declaration and its ``canonical.kind``, resolved the identical sync. None leaves the
+        factory to its own lookup, whose refusal is production's.
         """
-        if format_id not in self._served_formats:
-            raise KeyError(
-                f"{format_id!r} is not a format this env serves. Call setup_generative_build() or "
-                f"configure_agent_served_creative() for it first; configured: {sorted(self._served_formats)}"
-            )
-        return self._served_formats[format_id]
+        from src.core.format_resolver import find_format
+        from tests.factories.creative import served_format_spec
+
+        if format_id in self._served_formats:
+            return self._served_formats[format_id]
+        hosted = [Format.model_validate(entry) for entry in (self._hosted_formats or {}).values()]
+        return find_format(hosted, FormatId(agent_url=agent_url, id=format_id)) or served_format_spec(
+            agent_url, format_id
+        )
 
     #: The capture's generative format a scenario gets when it does not name one. A
     #: CAPTURED id, not an invented one: the seven generative formats the reference agent
