@@ -604,11 +604,14 @@ class CreativeAssignmentRepository:
     def package_creative_set(self, media_buy_id: str, package_id: str) -> list[tuple[Creative, list[str] | None]]:
         """The creatives assigned to one package of one media buy, each with its ``placement_ids``.
 
-        The package's whole creative set as the session holds it, pending writes included
-        (the session autoflushes before the select), which is what the placement-coverage
-        rule grades once a request's assignments are in place. Joined on the assignment's
-        composite FK, so each creative is the assigning principal's own row.
+        The package's whole creative set as the session holds it, pending writes included,
+        which is what the placement-coverage rule grades once a request's assignments are in
+        place. The flush is explicit: an assignment the caller added and has not flushed is
+        invisible to the select on a session that does not autoflush, and the rule would
+        then grade the set without it. Joined on the assignment's composite FK, so each
+        creative is the assigning principal's own row.
         """
+        self._session.flush()
         rows = self._session.execute(
             select(Creative, CreativeAssignment.placement_ids)
             .join(

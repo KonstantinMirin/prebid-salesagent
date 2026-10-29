@@ -20,6 +20,16 @@
 # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/media-buy-features.json pointer=/properties/inline_creative_management
 Feature: UC-003 update_media_buy — inline creatives replace the package's inline creatives (local)
 
+  # BR-UC-003's Background, unchanged: these scenarios run in that flow, and its last Given
+  # is what maps the label "mb_existing" to the seeded buy. Without it the update names the
+  # literal id and the seller answers MEDIA_BUY_NOT_FOUND before reaching the package.
+  Background:
+    Given a Seller Agent is operational and accepting requests
+    And a tenant exists with completed setup checklist
+    And the Buyer is authenticated
+    And the Buyer owns an existing media buy with media_buy_id "mb_existing"
+    And the media buy is in "active" status
+
   @T-UC-003-local-inline-creatives-replace @creatives-inline @post-s1 @post-s2
   Scenario: inline creatives on a package update replace the inline creatives assigned before
     Given the tenant is configured for auto-approval
