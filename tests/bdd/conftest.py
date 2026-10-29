@@ -1889,14 +1889,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         #   the last_a2a_task guard is Transport.A2A-gated and inert on e2e_rest.
         # No UC-003 entries remain in e2e_rest_known_failures.txt — no sibling conflict.
 
-        # Graduated: the whole _UC005_E2E_FIXTURE_INJECTION_TAGS set that stood here, a
-        # strict=False xfail on e2e_rest over twelve scenarios: inv-031-1-holds,
-        # inv-031-2-holds, inv-049-2-holds, inv-049-2-violated, inv-049-3-holds,
-        # inv-049-3-group, inv-049-4-holds, inv-049-5-holds, inv-049-6-holds,
-        # inv-049-7-holds, inv-049-7-violated and dim-boundary. All twelve XPASSED on
-        # e2e_rest in box run innet_291026_0257 and passed on a2a, mcp and rest in the
-        # same run. The reason ("set_registry_formats has no sidecar mock") stopped being
-        # true when the format Givens began seeding through
+        # Graduated: eleven of the twelve scenarios of the _UC005_E2E_FIXTURE_INJECTION_TAGS
+        # set that stood here, a strict=False xfail on e2e_rest: inv-031-1-holds,
+        # inv-031-2-holds, inv-049-2-violated, inv-049-3-holds, inv-049-3-group,
+        # inv-049-4-holds, inv-049-5-holds, inv-049-6-holds, inv-049-7-holds,
+        # inv-049-7-violated and dim-boundary. All eleven XPASSED on e2e_rest in box run
+        # innet_291026_0257 and passed on a2a, mcp and rest in the same run. The twelfth,
+        # inv-049-2-holds, stays routed below. The set's reason ("set_registry_formats has
+        # no sidecar mock") stopped being true when the format Givens began seeding through
         # CreativeFormatsEnv.set_registry_formats -> seed_own_creative_agent: the tenant's
         # own peer creative agent (the compose stack's capture service on e2e) serves
         # exactly the Given's formats and use_default_creative_agent is off, so the live
@@ -1906,6 +1906,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # The exclusion Thens ("no formats" / "X should not be returned") and
         # inv-049-2-violated's "no error should be raised" now require a successful
         # response on the wire, so a refusal can no longer satisfy them.
+        #
+        # E2E_REST: T-UC-005-inv-049-2-holds is not graduated yet. The scenario that
+        # XPASSED in innet_291026_0257 varied only the id, so a seller matching format_ids
+        # on id alone passed it. It now also seeds "foreign-leaderboard" under the same id
+        # from another agent, which grades the (agent_url, id) pair identity of
+        # core/format-id.json @ 3.2.7. No e2e_rest run has graded that scenario yet; remove
+        # this route once a bdd-in-network run shows it passing on all four transports.
+        if is_e2e_rest and "T-UC-005-inv-049-2-holds" in marker_names:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="E2E: pair-identity Given added after innet_291026_0257; not yet graded on e2e_rest",
+                    strict=False,
+                )
+            )
 
         # FIXME(#1291, #2098): E2E_REST — these Thens observe env.mock['post'],
         # the in-process local origin, or CircuitBreaker state, none of which is

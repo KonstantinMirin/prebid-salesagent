@@ -175,11 +175,15 @@ Feature: BR-UC-005 Discover Creative Formats
   Scenario: BR-RULE-049 INV-2 holds - Format IDs filter matches on the (agent_url, id) pair
     Given the registry has format "leaderboard" with format_id id "fmt-001"
     And the registry has format "pre-roll" with format_id id "fmt-002"
+    And the registry has format "foreign-leaderboard" with format_id id "fmt-001" declared by agent "https://creative.other-agent.example"
     When the Buyer Agent requests formats with format_ids filter ["fmt-001"]
     Then the response is compliant with the list_creative_formats spec
     And only "leaderboard" should be returned
     # BR-RULE-049 INV-2: format_ids matches on the (agent_url, id) federation pair
-    # (core/format-id.json requires [agent_url, id]; list_formats step match_keys [agent_url, id])
+    # (core/format-id.json @ 3.2.7 identifies a format "by its declaring agent and local
+    # slug"; list_formats step match_keys [agent_url, id]). "foreign-leaderboard" shares
+    # the requested id under another agent, so a seller matching on id alone returns two
+    # formats and fails "only".
 
   @T-UC-005-inv-049-2-violated @UC-005-MAIN-MCP-06 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-2 violated - Non-matching format IDs silently excluded
