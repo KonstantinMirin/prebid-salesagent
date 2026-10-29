@@ -1626,20 +1626,36 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Boundary values
       | boundary_point                                                            | kw_value                                                                     | outcome                  |
-      | array length 0 (empty)                                                    | []                                                                            | error with suggestion    |
-      | array length 1 (minimum valid)                                            | [{"keyword": "laptop", "match_type": "phrase"}]                               | success                  |
-      | keyword length 0 (empty string)                                           | [{"keyword": "", "match_type": "broad"}]                                      | error with suggestion    |
-      | keyword length 1 (single char)                                            | [{"keyword": "a", "match_type": "broad"}]                                     | success                  |
-      | match_type = 'broad'                                                      | [{"keyword": "shoes", "match_type": "broad"}]                                 | success                  |
-      | match_type = 'phrase'                                                     | [{"keyword": "shoes", "match_type": "phrase"}]                                | success                  |
-      | match_type = 'exact'                                                      | [{"keyword": "shoes", "match_type": "exact"}]                                 | success                  |
-      | match_type = 'unknown'                                                    | [{"keyword": "shoes", "match_type": "unknown"}]                               | error with suggestion    |
-      | bid_price = -0.01                                                         | [{"keyword": "shoes", "match_type": "exact", "bid_price": -0.01}]             | error with suggestion    |
-      | bid_price = 0                                                             | [{"keyword": "shoes", "match_type": "broad", "bid_price": 0}]                 | success                  |
-      | bid_price = 0.01                                                          | [{"keyword": "shoes", "match_type": "exact", "bid_price": 0.01}]              | success                  |
-      | keyword_targets_add WITH targeting_overlay.keyword_targets                | <with overlay present>                                                        | error with suggestion    |
-      | keyword_targets_add WITHOUT targeting_overlay.keyword_targets             | [{"keyword": "shoes", "match_type": "broad"}]                                 | success                  |
-      | keyword_targets_add WITH targeting_overlay.negative_keywords (cross-dimension) | [{"keyword": "shoes", "match_type": "broad"}]                           | success                  |
+      | array length 0 (empty)                                                    | []                                                                            | error INVALID_REQUEST on packages[0].keyword_targets_add with suggestion |
+      | array length 1 (minimum valid)                                            | [{"keyword": "laptop", "match_type": "phrase"}]                               | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword length 0 (empty string)                                           | [{"keyword": "", "match_type": "broad"}]                                      | error INVALID_REQUEST on packages[0].keyword_targets_add[0].keyword with suggestion |
+      | keyword length 1 (single char)                                            | [{"keyword": "a", "match_type": "broad"}]                                     | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'broad'                                                      | [{"keyword": "shoes", "match_type": "broad"}]                                 | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'phrase'                                                     | [{"keyword": "shoes", "match_type": "phrase"}]                                | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'exact'                                                      | [{"keyword": "shoes", "match_type": "exact"}]                                 | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'unknown'                                                    | [{"keyword": "shoes", "match_type": "unknown"}]                               | error INVALID_REQUEST on packages[0].keyword_targets_add[0].match_type with suggestion |
+      | bid_price = -0.01                                                         | [{"keyword": "shoes", "match_type": "exact", "bid_price": -0.01}]             | error INVALID_REQUEST on packages[0].keyword_targets_add[0].bid_price with suggestion |
+      | bid_price = 0                                                             | [{"keyword": "shoes", "match_type": "broad", "bid_price": 0}]                 | error UNSUPPORTED_FEATURE with suggestion |
+      | bid_price = 0.01                                                          | [{"keyword": "shoes", "match_type": "exact", "bid_price": 0.01}]              | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword_targets_add WITH targeting_overlay.keyword_targets                | <with overlay present>                                                        | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword_targets_add WITHOUT targeting_overlay.keyword_targets             | [{"keyword": "shoes", "match_type": "broad"}]                                 | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword_targets_add WITH targeting_overlay.negative_keywords (cross-dimension) | <with targeting_overlay.negative_keywords present>                     | error UNSUPPORTED_FEATURE with suggestion |
+    # REGROUNDED to the pin for this seller, which declares no keyword targeting.
+    # targeting.mdx: "Seller must declare execution.targeting.keyword_targets in
+    # get_adcp_capabilities"; core/targeting.json: a fresh create/update "MUST be applied
+    # exactly or rejected". So every schema-valid keyword_targets_add is refused with
+    # UNSUPPORTED_FEATURE (the rows that said success), the same answer
+    # @T-UC-003-alt-keyword-ops gives. Each schema-invalid row is refused earlier, by the
+    # request schema, as INVALID_REQUEST on the member that broke it (minItems 1, keyword
+    # minLength 1, match-type enum, bid_price minimum 0); the bare "error with suggestion"
+    # these rows carried was satisfied by the UNSUPPORTED_FEATURE refusal too, so it could
+    # not tell the two apart. Both overlay rows now send their overlay (the cross-dimension
+    # row used to send none). targeting.mdx's SHOULD-level conflict check for
+    # targeting_overlay.keyword_targets beside keyword_targets_add is not reachable on a
+    # seller that applies neither, so the WITH row is refused as unsupported too.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/keyword_targets_add
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/targeting.mdx section="keyword_targets"
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/targeting.mdx section="Managing keywords after launch"
 
   @T-UC-003-partition-keyword-targets-remove @partition @keyword_targets_remove
   Scenario Outline: Keyword targets remove partition validation - <partition>
@@ -1692,18 +1708,24 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Boundary values
       | boundary_point                                                                | kw_value                                           | outcome                  |
-      | array length 0 (empty)                                                        | []                                                  | error with suggestion    |
-      | array length 1 (minimum valid)                                                | [{"keyword": "laptop", "match_type": "phrase"}]     | success                  |
-      | keyword length 0 (empty string)                                               | [{"keyword": "", "match_type": "broad"}]             | error with suggestion    |
-      | keyword length 1 (single char)                                                | [{"keyword": "a", "match_type": "broad"}]            | success                  |
-      | match_type = 'broad'                                                          | [{"keyword": "shoes", "match_type": "broad"}]        | success                  |
-      | match_type = 'phrase'                                                         | [{"keyword": "shoes", "match_type": "phrase"}]       | success                  |
-      | match_type = 'exact'                                                          | [{"keyword": "shoes", "match_type": "exact"}]        | success                  |
-      | match_type = 'unknown'                                                        | [{"keyword": "shoes", "match_type": "unknown"}]      | error with suggestion    |
-      | keyword_targets_remove WITH targeting_overlay.keyword_targets                 | <with overlay present>                               | error with suggestion    |
-      | keyword_targets_remove WITHOUT targeting_overlay.keyword_targets              | [{"keyword": "shoes", "match_type": "broad"}]        | success                  |
-      | remove pair that exists in current list                                       | [{"keyword": "shoes", "match_type": "broad"}]        | success                  |
-      | remove pair that does NOT exist in current list (no-op)                       | [{"keyword": "nonexistent", "match_type": "exact"}]  | success                  |
+      | array length 0 (empty)                                                        | []                                                  | error INVALID_REQUEST on packages[0].keyword_targets_remove with suggestion |
+      | array length 1 (minimum valid)                                                | [{"keyword": "laptop", "match_type": "phrase"}]     | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword length 0 (empty string)                                               | [{"keyword": "", "match_type": "broad"}]             | error INVALID_REQUEST on packages[0].keyword_targets_remove[0].keyword with suggestion |
+      | keyword length 1 (single char)                                                | [{"keyword": "a", "match_type": "broad"}]            | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'broad'                                                          | [{"keyword": "shoes", "match_type": "broad"}]        | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'phrase'                                                         | [{"keyword": "shoes", "match_type": "phrase"}]       | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'exact'                                                          | [{"keyword": "shoes", "match_type": "exact"}]        | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'unknown'                                                        | [{"keyword": "shoes", "match_type": "unknown"}]      | error INVALID_REQUEST on packages[0].keyword_targets_remove[0].match_type with suggestion |
+      | keyword_targets_remove WITH targeting_overlay.keyword_targets                 | <with overlay present>                               | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword_targets_remove WITHOUT targeting_overlay.keyword_targets              | [{"keyword": "shoes", "match_type": "broad"}]        | error UNSUPPORTED_FEATURE with suggestion |
+      | remove pair that exists in current list                                       | [{"keyword": "shoes", "match_type": "broad"}]        | error UNSUPPORTED_FEATURE with suggestion |
+      | remove pair that does NOT exist in current list (no-op)                       | [{"keyword": "nonexistent", "match_type": "exact"}]  | error UNSUPPORTED_FEATURE with suggestion |
+    # REGROUNDED on the grounds given under @T-UC-003-boundary-keyword-targets-add: removal
+    # is as unsupported as addition on this seller (@T-UC-003-alt-keyword-remove), so a
+    # schema-valid keyword_targets_remove is UNSUPPORTED_FEATURE and a schema-invalid one is
+    # INVALID_REQUEST on the broken member. The exists / no-op pair is the SHOULD of a seller
+    # that holds a keyword list, which this one does not; both rows are refused alike.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/keyword_targets_remove
 
   @T-UC-003-partition-negative-keywords-add @partition @negative_keywords_add
   Scenario Outline: Negative keywords add partition validation - <partition>
@@ -1756,18 +1778,27 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Boundary values
       | boundary_point                                                                  | nk_value                                             | outcome                  |
-      | array length 0 (empty)                                                          | []                                                    | error with suggestion    |
-      | array length 1 (minimum valid)                                                  | [{"keyword": "discount", "match_type": "exact"}]      | success                  |
-      | keyword length 0 (empty string)                                                 | [{"keyword": "", "match_type": "broad"}]               | error with suggestion    |
-      | keyword length 1 (single char)                                                  | [{"keyword": "x", "match_type": "broad"}]              | success                  |
-      | match_type = 'broad'                                                            | [{"keyword": "cheap", "match_type": "broad"}]          | success                  |
-      | match_type = 'phrase'                                                           | [{"keyword": "cheap", "match_type": "phrase"}]         | success                  |
-      | match_type = 'exact'                                                            | [{"keyword": "cheap", "match_type": "exact"}]          | success                  |
-      | match_type = 'unknown'                                                          | [{"keyword": "cheap", "match_type": "unknown"}]        | error with suggestion    |
-      | negative_keywords_add WITH targeting_overlay.negative_keywords                  | <with overlay present>                                 | error with suggestion    |
-      | negative_keywords_add WITHOUT targeting_overlay.negative_keywords               | [{"keyword": "cheap", "match_type": "broad"}]          | success                  |
-      | add pair that already exists in list (duplicate no-op)                          | [{"keyword": "cheap", "match_type": "broad"}]          | success                  |
-      | negative_keywords_add WITH targeting_overlay.keyword_targets (cross-dimension)  | [{"keyword": "cheap", "match_type": "broad"}]          | success                  |
+      | array length 0 (empty)                                                          | []                                                    | error INVALID_REQUEST on packages[0].negative_keywords_add with suggestion |
+      | array length 1 (minimum valid)                                                  | [{"keyword": "discount", "match_type": "exact"}]      | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword length 0 (empty string)                                                 | [{"keyword": "", "match_type": "broad"}]               | error INVALID_REQUEST on packages[0].negative_keywords_add[0].keyword with suggestion |
+      | keyword length 1 (single char)                                                  | [{"keyword": "x", "match_type": "broad"}]              | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'broad'                                                            | [{"keyword": "cheap", "match_type": "broad"}]          | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'phrase'                                                           | [{"keyword": "cheap", "match_type": "phrase"}]         | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'exact'                                                            | [{"keyword": "cheap", "match_type": "exact"}]          | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'unknown'                                                          | [{"keyword": "cheap", "match_type": "unknown"}]        | error INVALID_REQUEST on packages[0].negative_keywords_add[0].match_type with suggestion |
+      | negative_keywords_add WITH targeting_overlay.negative_keywords                  | <with overlay present>                                 | error UNSUPPORTED_FEATURE with suggestion |
+      | negative_keywords_add WITHOUT targeting_overlay.negative_keywords               | [{"keyword": "cheap", "match_type": "broad"}]          | error UNSUPPORTED_FEATURE with suggestion |
+      | add pair that already exists in list (duplicate no-op)                          | [{"keyword": "cheap", "match_type": "broad"}]          | error UNSUPPORTED_FEATURE with suggestion |
+      | negative_keywords_add WITH targeting_overlay.keyword_targets (cross-dimension)  | <with targeting_overlay.keyword_targets present>       | error UNSUPPORTED_FEATURE with suggestion |
+    # REGROUNDED to the pin for this seller, which declares no negative-keyword support
+    # (targeting.mdx: "Seller must declare execution.targeting.negative_keywords"), on the
+    # grounds given under @T-UC-003-boundary-keyword-targets-add: schema-valid adds are
+    # refused UNSUPPORTED_FEATURE, as @T-UC-003-alt-negative-keywords is; schema-invalid
+    # ones are INVALID_REQUEST on the broken member (minItems 1, keyword minLength 1,
+    # match-type enum). The duplicate no-op is the SHOULD of a seller that applies the
+    # list, which this one does not. The cross-dimension row now sends its overlay.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/negative_keywords_add
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/targeting.mdx section="negative_keywords"
 
   @T-UC-003-partition-negative-keywords-remove @partition @negative_keywords_remove
   Scenario Outline: Negative keywords remove partition validation - <partition>
@@ -1820,18 +1851,23 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Boundary values
       | boundary_point                                                                      | nk_value                                              | outcome                  |
-      | array length 0 (empty)                                                              | []                                                     | error with suggestion    |
-      | array length 1 (minimum valid)                                                      | [{"keyword": "discount", "match_type": "exact"}]       | success                  |
-      | keyword length 0 (empty string)                                                     | [{"keyword": "", "match_type": "broad"}]                | error with suggestion    |
-      | keyword length 1 (single char)                                                      | [{"keyword": "x", "match_type": "broad"}]               | success                  |
-      | match_type = 'broad'                                                                | [{"keyword": "cheap", "match_type": "broad"}]           | success                  |
-      | match_type = 'phrase'                                                               | [{"keyword": "cheap", "match_type": "phrase"}]          | success                  |
-      | match_type = 'exact'                                                                | [{"keyword": "cheap", "match_type": "exact"}]           | success                  |
-      | match_type = 'unknown'                                                              | [{"keyword": "cheap", "match_type": "unknown"}]         | error with suggestion    |
-      | negative_keywords_remove WITH targeting_overlay.negative_keywords                   | <with overlay present>                                  | error with suggestion    |
-      | negative_keywords_remove WITHOUT targeting_overlay.negative_keywords                | [{"keyword": "cheap", "match_type": "broad"}]           | success                  |
-      | remove pair that exists in current list                                             | [{"keyword": "cheap", "match_type": "broad"}]           | success                  |
-      | remove pair that does NOT exist in current list (no-op)                             | [{"keyword": "nonexistent", "match_type": "exact"}]     | success                  |
+      | array length 0 (empty)                                                              | []                                                     | error INVALID_REQUEST on packages[0].negative_keywords_remove with suggestion |
+      | array length 1 (minimum valid)                                                      | [{"keyword": "discount", "match_type": "exact"}]       | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword length 0 (empty string)                                                     | [{"keyword": "", "match_type": "broad"}]                | error INVALID_REQUEST on packages[0].negative_keywords_remove[0].keyword with suggestion |
+      | keyword length 1 (single char)                                                      | [{"keyword": "x", "match_type": "broad"}]               | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'broad'                                                                | [{"keyword": "cheap", "match_type": "broad"}]           | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'phrase'                                                               | [{"keyword": "cheap", "match_type": "phrase"}]          | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'exact'                                                                | [{"keyword": "cheap", "match_type": "exact"}]           | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'unknown'                                                              | [{"keyword": "cheap", "match_type": "unknown"}]         | error INVALID_REQUEST on packages[0].negative_keywords_remove[0].match_type with suggestion |
+      | negative_keywords_remove WITH targeting_overlay.negative_keywords                   | <with overlay present>                                  | error UNSUPPORTED_FEATURE with suggestion |
+      | negative_keywords_remove WITHOUT targeting_overlay.negative_keywords                | [{"keyword": "cheap", "match_type": "broad"}]           | error UNSUPPORTED_FEATURE with suggestion |
+      | remove pair that exists in current list                                             | [{"keyword": "cheap", "match_type": "broad"}]           | error UNSUPPORTED_FEATURE with suggestion |
+      | remove pair that does NOT exist in current list (no-op)                             | [{"keyword": "nonexistent", "match_type": "exact"}]     | error UNSUPPORTED_FEATURE with suggestion |
+    # REGROUNDED on the grounds given under @T-UC-003-boundary-negative-keywords-add:
+    # a schema-valid negative_keywords_remove is UNSUPPORTED_FEATURE on this seller
+    # (@T-UC-003-alt-negative-keywords) and a schema-invalid one is INVALID_REQUEST on the
+    # broken member; the exists / no-op pair is refused alike.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/negative_keywords_remove
 
   @T-UC-003-partition-targeting-overlay @partition @targeting_overlay
   Scenario Outline: Targeting overlay partition validation - <partition>
