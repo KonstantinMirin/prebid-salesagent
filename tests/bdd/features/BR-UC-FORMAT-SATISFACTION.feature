@@ -320,13 +320,13 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Given the seller declares a canonical format option "<declaration>"
     And the buyer's package selects "<selector>"
     When the Buyer Agent sends the create_media_buy request
-    Then the buyer is refused CONFLICTING_SELECTORS naming the package
+    Then the buyer is refused CONFLICTING_SELECTORS naming the package, the format_ids route selecting "<legacy_selects>"
 
     Examples:
-      | declaration      | selector                                |
-      | two_mrec_options | option_plus_projectable_legacy          |
-      | two_mrec_options | second_mrec_option_plus_legacy          |
-      | fixed_15s_video  | option_plus_conflicting_duration_legacy |
+      | declaration      | selector                                | legacy_selects                                      |
+      | two_mrec_options | option_plus_projectable_legacy          | satisfaction_image_mrec,satisfaction_image_mrec_gif |
+      | two_mrec_options | second_mrec_option_plus_legacy          | satisfaction_image_mrec,satisfaction_image_mrec_gif |
+      | fixed_15s_video  | option_plus_conflicting_duration_legacy |                                                     |
 
     # media-buy/package-request.json step (2): "derive the product format_options[] entries
     # selected by each route using directional product satisfaction, and require the
@@ -341,7 +341,10 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # ref selects one. The sets differ whichever option the ref names, so both rows are
     # refused -- the verdict does not depend on declaration order. option_plus_projectable_legacy
     # is accepted against fixed_300x250 above, where the product publishes one option: the
-    # rows differ in the product and in nothing else.
+    # rows differ in the product and in nothing else. legacy_selects states the legacy
+    # route's set exactly, because "the refs arm names its refs" and "the sets differ" also
+    # admit an empty or one-entry legacy set -- the answer of a seller that declines to choose
+    # between two narrowing declarations, or keeps the first.
     #
     # THE DURATION ROW. A legacy reference states duration as duration_ms
     # (core/format-id.json); the declaration states duration_ms_exact. The legacy route's

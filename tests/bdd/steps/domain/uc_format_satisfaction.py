@@ -1654,6 +1654,35 @@ def _assert_accepted_size_named(ctx: dict, width: int, height: int) -> None:
 
 @then("the buyer is refused CONFLICTING_SELECTORS naming the package")
 def then_refused_conflicting_selectors(ctx: dict) -> None:
+    """Assert the equivalence refusal; see :func:`_assert_conflicting_selectors`."""
+    _assert_conflicting_selectors(ctx)
+
+
+@then(
+    parsers.re(
+        r'the buyer is refused CONFLICTING_SELECTORS naming the package, the format_ids route selecting "(?P<legacy_selects>[^"]*)"'
+    )
+)
+def then_refused_conflicting_selectors_legacy_selecting(ctx: dict, legacy_selects: str) -> None:
+    """Assert the equivalence refusal, and the EXACT set the legacy route selected.
+
+    The scenario states the set, because the shared checks bound it only from above: they
+    pin the option-ref arm and require the arms to differ, which against a product
+    publishing two options a legacy id narrows admits several legacy sets -- among them
+    the empty one a seller answers when it refuses to choose between two narrowing
+    declarations. The pin decides it: media-buy/package-request.json step (2) says
+    "derive the product ``format_options[]`` entries selected by each route using
+    directional product satisfaction", so a legacy route selects every entry that narrows
+    it, not none and not the first. An empty value is a route that selected nothing.
+    """
+    arms = _assert_conflicting_selectors(ctx)
+    expected = {option_id for option_id in legacy_selects.split(",") if option_id}
+    assert arms["format_ids"] == expected, (
+        f"the format_ids route selected {sorted(arms['format_ids'])}; the scenario states {sorted(expected)}"
+    )
+
+
+def _assert_conflicting_selectors(ctx: dict) -> dict[str, set[str]]:
     """Assert the equivalence refusal: the code, its pinned recovery, and the PACKAGE pointer.
 
     The pointer is ``packages[0]`` and not ``packages[0].<arm>``, which is this refusal's
@@ -1683,9 +1712,9 @@ def then_refused_conflicting_selectors(ctx: dict) -> None:
       refusal that says they differ.
 
     Against a product publishing one option, those four leave the other arm exactly one
-    answer -- it selected nothing -- so the single-option rows are graded as tightly as a
-    literal would grade them, without one Then hardcoding a declaration the other outline
-    does not store.
+    answer -- it selected nothing. Against a product publishing more, they do not, so the
+    outline storing such a product states the remaining arm's set in its Examples and
+    grades it exactly. Returns each arm's selected set for that.
     """
     result = ctx["result"]
     result.assert_wire_error("CONFLICTING_SELECTORS", field="packages[0]")
@@ -1720,6 +1749,7 @@ def then_refused_conflicting_selectors(ctx: dict) -> None:
     assert len({frozenset(selected) for selected in arms.values()}) > 1, (
         f"every arm's summary selected the same set, yet the routes were refused as differing -- got {summarized!r}"
     )
+    return arms
 
 
 @then(parsers.parse('the package snapshots the "{option_id}" declaration fixed at {width:d}x{height:d}'))
