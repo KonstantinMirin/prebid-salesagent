@@ -24,8 +24,7 @@ class TestAIReviewCreative:
         """Create a mock tenant with AI review configuration."""
         tenant = Mock(spec=Tenant)
         tenant.tenant_id = "test_tenant"
-        tenant.gemini_api_key = "test-api-key"
-        tenant.ai_config = None  # Explicitly set to None to use gemini_api_key fallback
+        tenant.ai_config = {"provider": "gemini", "api_key": "test-api-key"}
         tenant.creative_review_criteria = "Approve if creative is brand-safe and follows guidelines."
         tenant.ai_policy = {
             "auto_approve_threshold": 0.90,
@@ -263,13 +262,12 @@ class TestAIReviewCreative:
         assert result["policy_triggered"] == "uncertain"
         assert "could not make confident decision" in result["reason"].lower()
 
-    # Edge Case: Missing Gemini API key (and no ai_config)
+    # Edge Case: no AI configuration on the tenant
     @patch("src.services.ai.AIServiceFactory")
     def test_missing_gemini_api_key(self, mock_factory_class, mock_db_session, mock_tenant):
         """Test behavior when AI is not configured."""
         from src.admin.blueprints.creatives import _ai_review_creative_impl
 
-        mock_tenant.gemini_api_key = None
         mock_tenant.ai_config = None
 
         mock_factory = MagicMock()

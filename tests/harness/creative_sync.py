@@ -579,8 +579,9 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
         self.ai_review_commit_observations = {}
         self.mock[self._AI_REVIEW_PATCH_NAME].submit.side_effect = self._observe_at_ai_review_submit
 
-        # No Gemini key is configured here: the generative build reads the TENANT's key,
-        # and a tenant row carries none until a scenario sets one (set_gemini_api_key).
+        # No Gemini key is configured here: the generative build reads the TENANT's AI
+        # configuration, and a tenant row carries none until a scenario sets one
+        # (set_gemini_api_key).
 
     def _observe_at_ai_review_submit(self, *args: Any, **kwargs: Any) -> MagicMock:
         """Stand in for ``_ai_review_executor.submit`` and record DB visibility.
@@ -1239,22 +1240,25 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
     def set_gemini_api_key(self, value: str | None) -> None:
         """Configure (or clear, with ``None``) the TENANT's Gemini API key, on every transport.
 
-        The generative build reads the key off the tenant
-        (``TenantContext.gemini_api_key``, src/core/tools/creatives/_processing.py), so
-        "is the key configured" is a column this env writes, through the env-owned
-        writer both caller paths read (:meth:`configure_tenant_field`): the identity a
-        direct ``call_impl`` hands over, and the row the wire legs' resolver -- the e2e
-        server's included -- reads. It used to be the server's environment, which a test
-        cannot set for another process, and this method was declared unrealizable over
-        e2e_rest for exactly that reason (CLAUDE.md pattern 11: a real input a deployment
-        can set, seeded like any other state).
+        The generative build reads the key from the tenant's AI configuration
+        (``tenant.ai_config`` through ``src.services.ai.config.tenant_google_api_key``),
+        so "is the key configured" is that column, seeded in the shape the admin AI
+        settings form writes it (``settings.update_ai``: a provider and its key). The
+        write goes through the env-owned writer both caller paths read
+        (:meth:`configure_tenant_field`): the identity a direct ``call_impl`` hands
+        over, and the row the wire legs' resolver -- the e2e server's included -- reads.
+        It used to be the server's environment, which a test cannot set for another
+        process, and this method was declared unrealizable over e2e_rest for exactly
+        that reason (CLAUDE.md pattern 11: a real input a deployment can set, seeded
+        like any other state).
 
         ``None`` is a real state, not a missing argument -- it is the
         "GEMINI_API_KEY not configured" precondition BR-RULE-036 grades -- which is
-        why the type admits it and there is no default. An empty string is the same state.
+        why the type admits it and there is no default. An empty string is the same
+        state: the tenant has no AI configuration at all.
         """
         self.ensure_tenant()
-        self.configure_tenant_field("gemini_api_key", value or None)
+        self.configure_tenant_field("ai_config", {"provider": "gemini", "api_key": value} if value else None)
 
     def set_served_catalogue(self, formats: list[Format]) -> None:
         """The seller's catalog is exactly *formats*, on every transport.

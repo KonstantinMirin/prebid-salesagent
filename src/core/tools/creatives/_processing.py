@@ -39,6 +39,7 @@ from src.core.schemas import Error as AdCPErrorDetail
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError
 from src.core.tenant_context import TenantContext
 from src.core.validation_helpers import run_async_in_sync_context
+from src.services.ai.config import tenant_google_api_key
 
 from ._assets import (
     ASSET_MAP,
@@ -605,19 +606,22 @@ def _generative_build_key(tenant: TenantContext, creative_format: Any) -> str:
     """The Gemini API key a generative build sends the creative agent: the TENANT's own.
 
     The creative agent bills the caller's key, not its own
-    (``CreativeAgentRegistry.build_creative``), and the caller is this tenant -- the same
-    ``gemini_api_key`` the AI review and the policy check read off it. A tenant without
-    one cannot build, which is this seller's configuration and nothing the buyer can
+    (``CreativeAgentRegistry.build_creative``), and the caller is this tenant. The key is
+    read from the tenant's AI configuration (``tenant.ai_config``, which the admin AI
+    settings write and the creative AI review reads) through
+    :func:`src.services.ai.config.tenant_google_api_key`. A tenant with no Google key
+    there cannot build, which is this seller's configuration and nothing the buyer can
     correct: CONFIGURATION_ERROR, on the create and the update path alike.
     """
-    if not tenant.gemini_api_key:
+    api_key = tenant_google_api_key(tenant.ai_config)
+    if not api_key:
         logger.error(
             "[sync_creatives] Cannot build generative creative %s: tenant %s has no Gemini API key",
             creative_format,
             tenant.tenant_id,
         )
         raise AdCPConfigurationError()
-    return tenant.gemini_api_key
+    return api_key
 
 
 def _apply_approval_mode(
