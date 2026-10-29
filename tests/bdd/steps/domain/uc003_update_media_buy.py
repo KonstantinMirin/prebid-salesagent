@@ -470,7 +470,7 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
     # reaches production. AdCPPackageUpdate forbids it (extra=forbid), so it is
     # rejected — currently as VALIDATION_ERROR rather than the spec-expected
     # INVALID_REQUEST (BR-RULE-198), so T-UC-003-ext-w is xfailed (#1417).
-    _supported_pkg_fields = {"package_id", "budget", "paused", "targeting_overlay", "product_id"}
+    _supported_pkg_fields = {"package_id", "budget", "paused", "targeting_overlay", "catalogs", "product_id"}
     kwargs = _ensure_update_defaults(ctx)
     pkg_update: dict[str, Any] = {}
     # Skip header row if present (pytest-bdd datatables include header as first row)
@@ -488,8 +488,8 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
             pkg_update["budget"] = float(value)
         elif field == "paused":
             pkg_update["paused"] = as_bool(value)
-        elif field == "targeting_overlay":
-            pkg_update["targeting_overlay"] = json.loads(value)
+        elif field in ("targeting_overlay", "catalogs"):
+            pkg_update[field] = json.loads(value)
         elif field == "product_id":
             pkg_update["product_id"] = value
     assert pkg_update, "Datatable produced empty package update — check table format"
@@ -1448,7 +1448,7 @@ def _approved_display_creative(ctx: dict, creative_id: str) -> None:
 
 
 def _send_earlier_update(ctx: dict, package_label: str, **package_fields: Any) -> None:
-    """Put the package's prior creatives on the record the way a buyer does: an update.
+    """Put the package's prior state (creatives, catalogs) on the record the way a buyer does: an update.
 
     Sent over the scenario's own transport, through ``env.call_via`` rather than
     ``dispatch_request``: that is the one writer of ``ctx["result"]``, and this update is
@@ -1484,6 +1484,35 @@ def given_earlier_library_assignment(ctx: dict, creative_id: str, package_id: st
     _approved_display_creative(ctx, creative_id)
     ctx["env"]._commit_factory_data()
     _send_earlier_update(ctx, package_id, creative_assignments=[{"creative_id": creative_id, "weight": 1.0}])
+
+
+@given(parsers.parse('an earlier update gave package "{package_id}" the catalogs {catalogs}'))
+def given_earlier_catalogs(ctx: dict, package_id: str, catalogs: str) -> None:
+    """The package's stored catalogs arrived the way a buyer sets them: a catalogs replacement.
+
+    media-buy/package-update.json catalogs: "the provided array replaces the current list".
+    A refusal that leaves these in place is distinguishable from one that clears them.
+    """
+    import json
+
+    _send_earlier_update(ctx, package_id, catalogs=json.loads(catalogs))
+
+
+@then(parsers.parse('the stored catalogs of package "{package_id}" should be {catalogs}'))
+def then_stored_catalogs(ctx: dict, package_id: str, catalogs: str) -> None:
+    """The persisted package's catalogs are exactly *catalogs*.
+
+    Read off the row, not the response: after a refusal there is no package on the wire, and
+    the claim is what the seller kept (update-media-buy-response.json's error arm: "operation
+    failed, no changes applied").
+    """
+    import json
+
+    _budget, config = _stored_package(ctx, package_id)
+    expected = json.loads(catalogs)
+    assert config.get("catalogs") == expected, (
+        f"package {package_id!r} stores catalogs {config.get('catalogs')!r}, expected {expected!r}"
+    )
 
 
 @when(parsers.parse('the Buyer Agent reads media buy "{media_buy_id}" back with get_media_buys'))
