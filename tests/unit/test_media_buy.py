@@ -24,13 +24,14 @@ import pytest
 from pydantic import ValidationError
 
 from src.adapters.base import AdapterCreateRequest, AdapterUpdateResult
+from src.core.errors.details import EntityRefDetails
 from src.core.exceptions import (
-    AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPCreativeNotFoundError,
     AdCPGoneError,
     AdCPInvalidPricingOptionError,
+    AdCPMediaBuyNotFoundError,
     AdCPProductNotFoundError,
     AdCPValidationError,
 )
@@ -2381,11 +2382,7 @@ class TestUpdateMediaBuyIdentification:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            from src.core.exceptions import AdCPMediaBuyNotFoundError
-
-            with pytest.raises(
-                (AdCPMediaBuyNotFoundError, AdCPAuthorizationError),
-            ):
+            with pytest.raises(AdCPMediaBuyNotFoundError):
                 _update_media_buy_impl(req=req, identity=identity)
 
     def test_update_request_requires_media_buy_id(self):
@@ -2409,9 +2406,11 @@ class TestUpdateMediaBuyOwnership:
     """UC-003 ext-c: ownership verification."""
 
     def test_ownership_mismatch_rejected(self):
-        """UC-003-OW01: non-owner gets permission error.
+        """UC-003-OW01: a non-owner gets the absent-buy answer, MEDIA_BUY_NOT_FOUND.
 
-        Spec: UNSPECIFIED (implementation-defined security boundary)
+        Spec: L1/security.mdx (3.2.7) "Agent and Account Isolation": the body MUST NOT
+        distinguish "unauthorized" from "not found". The refusal carries exactly what the
+        repository's not-found refusal carries, so nothing in it says the buy exists.
         Priority: P0
         Type: unit
         Source: UC-003 ext-c
@@ -2455,8 +2454,10 @@ class TestUpdateMediaBuyOwnership:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            with pytest.raises(AdCPAuthorizationError):
+            with pytest.raises(AdCPMediaBuyNotFoundError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
+
+            assert exc_info.value.details == EntityRefDetails(media_buy_id="mb_1")
 
 
 class TestUpdateMediaBuyManualApproval:

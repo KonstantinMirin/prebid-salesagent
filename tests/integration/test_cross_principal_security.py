@@ -17,7 +17,7 @@ import pytest
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import MediaBuy, Principal
-from src.core.exceptions import AdCPAuthorizationError
+from src.core.exceptions import AdCPMediaBuyNotFoundError
 from src.core.schemas import ListCreativesResponse, UpdateMediaBuyRequest
 from src.core.schemas.creative import ListCreativesRequest
 from tests.factories import stamp_format_identity
@@ -160,8 +160,9 @@ class TestCrossPrincipalSecurity:
         )
 
         # Principal B tries to update Principal A's media buy
-        # _verify_principal should raise AdCPAuthorizationError
-        with pytest.raises(AdCPAuthorizationError):
+        # _verify_principal answers as if the buy were absent: L1/security.mdx (3.2.7)
+        # forbids a body that distinguishes "unauthorized" from "not found".
+        with pytest.raises(AdCPMediaBuyNotFoundError):
             req = UpdateMediaBuyRequest(
                 account={"account_id": "acct_test"},
                 idempotency_key="test-idem-key-0001",

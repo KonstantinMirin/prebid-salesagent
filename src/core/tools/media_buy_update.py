@@ -30,7 +30,6 @@ from sqlalchemy import select
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAmbiguousBiddingPolicyError,
-    AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
@@ -38,6 +37,7 @@ from src.core.exceptions import (
     AdCPCreativeNotFoundError,
     AdCPGoneError,
     AdCPInvalidRequestError,
+    AdCPMediaBuyNotFoundError,
     AdCPNotCancellableError,
     AdCPValidationError,
 )
@@ -627,8 +627,7 @@ def _verify_principal(
         repo: Tenant-scoped MediaBuyRepository for DB lookups
 
     Raises:
-        AdCPMediaBuyNotFoundError: Media buy not found
-        AdCPAuthorizationError: Principal doesn't own media buy
+        AdCPMediaBuyNotFoundError: Media buy not found, or owned by another principal
     """
     principal_id = identity.principal.principal_id
     tenant = identity.tenant
@@ -645,9 +644,11 @@ def _verify_principal(
             resource_id=media_buy_id,
             reason=f"Principal does not own media buy (owner: {media_buy.principal_id})",
         )
-        raise AdCPAuthorizationError(
-            details=EntityRefDetails(principal_id=principal_id, media_buy_id=media_buy_id),
-        )
+        # The buyer gets the absent-buy answer, byte for byte: L1/security.mdx (3.2.7)
+        # "the body MUST NOT distinguish 'unauthorized' from 'not found'", and
+        # enums/error-code.json MEDIA_BUY_NOT_FOUND covers a buy "not accessible to the
+        # requesting agent". Same class and details as get_by_id_or_raise above.
+        raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
 
 
 def _update_media_buy_impl(

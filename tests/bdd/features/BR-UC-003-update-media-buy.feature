@@ -566,8 +566,8 @@ Feature: BR-UC-003 Update Media Buy
     # resolve_identity() nulls it on a failed token->principal lookup, and the
     # BDD harness's identity_for() now mirrors that — salesagent-z9e0). So
     # require_principal_id fires FIRST with AUTH_MISSING, before
-    # update_media_buy's ownership check (AdCPAuthorizationError /
-    # PERMISSION_DENIED, salesagent-otc5) is ever reached — that check only
+    # update_media_buy's ownership check (MEDIA_BUY_NOT_FOUND, see
+    # @T-UC-003-ext-c) is ever reached — that check only
     # fires for a principal_id that resolved but doesn't own the media buy, a
     # genuinely different case from "principal_id never resolved". This now
     # matches the scenario's own title on every transport.
@@ -593,19 +593,32 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-c @extension @ext-c @error @post-f1 @post-f2 @post-f3
   Scenario: Ownership mismatch -- principal does not own media buy
-    Given the Buyer is authenticated as principal "principal_other"
-    And the media buy "mb_existing" is owned by principal "principal_owner"
-    And a valid update_media_buy request with:
+    Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
+    And the media buy "mb_existing" exists with owner principal_owner
+    And the authenticated principal is principal_other
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
-    And the error code should be "ACCOUNT_NOT_FOUND"
+    And the error code should be "MEDIA_BUY_NOT_FOUND"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error explains ownership mismatch
     # POST-F3: Suggestion for recovery
+    # LOCAL CORRECTION (mirror upstream in adcp-req), two parts:
+    # 1. The generated line asserted ACCOUNT_NOT_FOUND. The pin answers a buy owned by
+    #    another principal exactly as an absent buy (@T-UC-003-ext-b): "the body MUST NOT
+    #    distinguish 'unauthorized' from 'not found'", and MEDIA_BUY_NOT_FOUND is the code
+    #    for a buy that "does not exist or is not accessible to the requesting agent".
+    #    The caller's account resolves, so ACCOUNT_NOT_FOUND would name the wrong object.
+    # 2. The generated Givens authenticated as a principal with no row, which the resolver
+    #    refuses with AUTH_MISSING before ownership is ever checked (the same mechanism
+    #    @T-UC-003-ext-a-unknown grades). They now use the ownership outlines' Givens: the
+    #    caller exists and can reach the request's account, so ownership is the only
+    #    difference from the Background's buyer.
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx section="Agent and Account Isolation"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/MEDIA_BUY_NOT_FOUND
 
   @T-UC-003-ext-d @extension @ext-d @error @post-f1 @post-f2 @post-f3
   Scenario: Budget validation -- campaign budget zero
@@ -2252,7 +2265,12 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition       | owner       | principal   | outcome                                        |
-      | owner_mismatch  | buyer_001   | buyer_999   | error "PERMISSION_DENIED" with suggestion      |
+      | owner_mismatch  | buyer_001   | buyer_999   | error "MEDIA_BUY_NOT_FOUND" with suggestion    |
+    # LOCAL CORRECTION (mirror upstream in adcp-req): the generated row asserted
+    # PERMISSION_DENIED, which tells the caller the buy exists. The pin forbids that
+    # answer: a buy the caller cannot access is answered as an absent one (@T-UC-003-ext-b).
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx section="Agent and Account Isolation"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/MEDIA_BUY_NOT_FOUND
 
   @T-UC-003-boundary-principal-ownership @boundary @principal_ownership
   Scenario Outline: Principal ownership boundary validation - <boundary_point>
@@ -2268,7 +2286,10 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Boundary values
       | boundary_point                    | owner       | principal   | outcome                                        |
       | principal matches owner           | buyer_001   | buyer_001   | success                                        |
-      | principal differs from owner      | buyer_001   | buyer_999   | error "PERMISSION_DENIED" with suggestion      |
+      | principal differs from owner      | buyer_001   | buyer_999   | error "MEDIA_BUY_NOT_FOUND" with suggestion    |
+    # LOCAL CORRECTION (mirror upstream in adcp-req): PERMISSION_DENIED -> MEDIA_BUY_NOT_FOUND,
+    # for the reason given on @T-UC-003-partition-principal-ownership.
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx section="Agent and Account Isolation"
 
   @T-UC-003-v31-error-budget-too-low @extension @ext-d @error @v3.1 @error-details @post-f1 @post-f2 @post-f3
   Scenario: BUDGET_TOO_LOW error carries v3.1 details shape (minimum_budget + currency)
