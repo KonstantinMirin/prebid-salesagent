@@ -309,21 +309,30 @@ Feature: BR-UC-003 Update Media Buy
     # BR-RULE-022 INV-1: Field present → updated
     # BR-RULE-022 INV-2: Field omitted → unchanged
 
-  @T-UC-003-empty-update @invariant @BR-RULE-022 @error
+  @T-UC-003-empty-update @invariant @BR-RULE-022
   Scenario: Empty update -- no updatable fields specified
-    Given a valid update_media_buy request with:
+    Given the tenant is configured for auto-approval
+    And the existing media buy has start_time "2026-04-01T00:00:00Z" and end_time "2026-06-30T23:59:59Z"
+    And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
     And the request does not include any updatable fields
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy error spec
-    And the operation should fail
-    And the error code should be "INVALID_REQUEST"
-    And the error should include "suggestion" field
-    # BR-RULE-022 INV-3: No updatable fields → rejected
-    # POST-F1: System state unchanged
-    # POST-F2: Error code explains failure
-    # POST-F3: Suggestion for recovery
+    Then the response is compliant with the update_media_buy success spec
+    And the response should contain media_buy_id "mb_existing"
+    And the response should list no affected packages
+    And the existing start_time and end_time should remain unchanged
+    # BR-RULE-022 INV-2: Field omitted → unchanged
+    # LOCAL CORRECTION: the generated scenario refused this request with INVALID_REQUEST
+    # (BR-RULE-022 INV-3, "No updatable fields → rejected"). The pin requires no updatable
+    # field: update-media-buy-request.json lists only idempotency_key, account and
+    # media_buy_id in /required and has no anyOf/minProperties over the rest, so a request
+    # carrying just those three is valid and nothing in the pin refuses it. What the pin
+    # does say about such an update is graded instead: an omitted field leaves the buy as
+    # it was, and affected_packages names "each modified package" ("Campaign-level updates
+    # that do not modify packages may return an empty array"), so it names none here.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/required
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json pointer=/oneOf/0/properties/affected_packages
 
   @T-UC-003-idempotency-valid @invariant @BR-RULE-081
   Scenario: Idempotency key -- valid key accepted
@@ -1943,7 +1952,8 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-start-time @partition @start_time
   Scenario Outline: Start time partition validation - <partition>
-    Given a valid update_media_buy request with:
+    Given the existing media buy has start_time "2026-01-01T00:00:00Z"
+    And a valid update_media_buy request with:
     | field        | value        |
     | media_buy_id | mb_existing  |
     | start_time   | <start_value> |
@@ -1953,24 +1963,41 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition              | start_value              | outcome |
-      | asap_literal           | asap                     | success |
-      | future_iso_datetime    | 2026-05-01T00:00:00Z     | success |
+      | partition              | start_value              | outcome                   |
+      | asap_literal           | asap                     | start_time stored as now  |
+      | future_iso_datetime    | {7 days from now}        | start_time stored as sent |
+      | past_datetime          | 2020-01-01T00:00:00Z     | start_time stored as sent |
 
     Examples: Invalid partitions
-      | partition             | start_value          | outcome                                 |
-      | past_datetime         | 2020-01-01T00:00:00Z | error with suggestion                   |
-      | wrong_case_asap       | ASAP                 | error with suggestion                   |
-      | future_naive_datetime | 2026-05-01T00:00:00  | error "INVALID_REQUEST" with suggestion |
+      | partition             | start_value          | outcome                                               |
+      | wrong_case_asap       | ASAP                 | error "INVALID_REQUEST" on start_time with suggestion |
+      | future_naive_datetime | 2026-05-01T00:00:00  | error "INVALID_REQUEST" with suggestion               |
     # LOCAL CORRECTION: future_naive_datetime sat with the valid partitions and expected
     # success. The pinned core/start-timing.json admits the const "asap" or a string of
     # format date-time, which is RFC 3339 and requires a UTC offset, so a naive timestamp
     # is a schema violation: INVALID_REQUEST.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/start-timing.json
+    # LOCAL CORRECTION (start time on UPDATE), shared with @T-UC-003-boundary-start-time:
+    # - past_datetime expected a refusal. The pin's past-start refusal is scoped to new buys
+    #   (create_media_buy.mdx "Flight date validation": "For new media buys, the top-level
+    #   start_time MUST be either "asap" or a date-time that is not in the past"), and
+    #   update_media_buy.mdx lists no such refusal: start_time is "Updated campaign start
+    #   time" and a start shift is the update_flight_dates action. A schema-valid start_time
+    #   the pin does not refuse is applied, so the row grades that it was.
+    # - the valid rows said only "success", which a seller that dropped start_time passes.
+    #   They now read the stored buy: "asap" is resolved to the instant the update was
+    #   applied, and a concrete date-time is stored as sent. The Given seeds a start far
+    #   from either, so an ignored start_time cannot match. The future value is relative,
+    #   because a fixed date expires (2026-05-01 had).
+    # - wrong_case_asap names its code and field: "ASAP" is neither the const "asap" nor a
+    #   date-time, which is a schema violation on start_time.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx
 
   @T-UC-003-boundary-start-time @boundary @start_time
   Scenario Outline: Start time boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
+    Given the existing media buy has start_time "2026-01-01T00:00:00Z"
+    And a valid update_media_buy request with:
     | field        | value        |
     | media_buy_id | mb_existing  |
     | start_time   | <start_value> |
@@ -1978,14 +2005,18 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: see @T-UC-003-partition-start-time for the success rows and the past
+    # row. The row that read "absent (null)" sent an empty string (the table cell is empty),
+    # so it is named for what it sends; "" is neither "asap" nor a date-time.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/start-timing.json
 
     Examples: Boundary values
-      | boundary_point          | start_value              | outcome                  |
-      | literal 'asap'          | asap                     | success                  |
-      | future ISO datetime     | 2026-05-01T00:00:00Z     | success                  |
-      | past datetime           | 2020-01-01T00:00:00Z     | error with suggestion    |
-      | 'ASAP' wrong case       | ASAP                     | error with suggestion    |
-      | absent (null)           |                          | error with suggestion    |
+      | boundary_point          | start_value              | outcome                                               |
+      | literal 'asap'          | asap                     | start_time stored as now                              |
+      | future ISO datetime     | {7 days from now}        | start_time stored as sent                             |
+      | past datetime           | 2020-01-01T00:00:00Z     | start_time stored as sent                             |
+      | 'ASAP' wrong case       | ASAP                     | error "INVALID_REQUEST" on start_time with suggestion |
+      | empty string            |                          | error "INVALID_REQUEST" on start_time with suggestion |
 
   @T-UC-003-partition-end-time @partition @end_time
   Scenario Outline: End time partition validation - <partition>

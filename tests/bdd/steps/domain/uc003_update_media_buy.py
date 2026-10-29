@@ -9,7 +9,8 @@ conftest's _harness_env.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
@@ -1122,6 +1123,21 @@ def then_affected_packages_include(ctx: dict, package_id: str) -> None:
     ]
     resolved = _resolve_package_id(ctx, package_id)
     assert resolved in pkg_ids, f"Expected '{resolved}' (label '{package_id}') in affected_packages, got {pkg_ids}"
+
+
+@then("the response should list no affected packages")
+def then_no_affected_packages(ctx: dict) -> None:
+    """Assert the WIRE names no package as modified: ``affected_packages`` absent or ``[]``.
+
+    update-media-buy-response.json ``/oneOf/0/properties/affected_packages`` holds "each
+    modified package" and is optional; "Campaign-level updates that do not modify packages
+    may return an empty array". So an update that modifies no package lists none, in
+    either spelling, and any entry is a package the seller claims to have changed.
+    """
+    affected = wire_lookup(ctx, "affected_packages")
+    assert affected is WIRE_MISSING or affected == [], (
+        f"the update modified no package, but the wire lists affected_packages {affected!r}"
+    )
 
 
 @then("the response should contain affected_packages")
@@ -3278,6 +3294,38 @@ def _assert_assignment_routing_persisted(ctx: dict) -> None:
     assert stored == requested, f"the seller stored the assignments {stored!r}, not the requested {requested!r}"
 
 
+def _stored_existing_buy(ctx: dict) -> SimpleNamespace:
+    """Synchronous success, then the seller's record of the existing buy.
+
+    Read through ``MediaBuyUoW`` (the live server's database on e2e_rest), because the
+    claim is what the seller RECORDED.
+    """
+    from tests.bdd.steps.domain.uc002_invariants import _stored_buy
+
+    _assert_synchronous_success(ctx)
+    return _stored_buy(ctx, _existing_media_buy(ctx).media_buy_id)
+
+
+def _assert_start_time_stored_as_now(ctx: dict) -> None:
+    """``asap`` was resolved to the instant the update wrote the row (``updated_at``), not ignored."""
+    from tests.bdd.steps.domain.uc002_invariants import _assert_start_resolved_to
+
+    stored = _stored_existing_buy(ctx)
+    _assert_start_resolved_to(stored.start_time, stored.updated_at, "the update")
+
+
+def _assert_start_time_stored_as_sent(ctx: dict) -> None:
+    """The concrete date-time the update sent is the start_time the seller stored."""
+    from tests.bdd.steps.domain.uc002_invariants import _as_utc
+
+    sent = ctx["update_kwargs"]["start_time"]
+    expected = datetime.fromisoformat(sent.replace("Z", "+00:00")).astimezone(UTC)
+    stored = _stored_existing_buy(ctx).start_time
+    assert stored is not None and _as_utc(stored) == expected, (
+        f"the update sent start_time {sent!r}, but the seller stored {stored}"
+    )
+
+
 _UPDATE_OUTCOMES = {
     "accepted": _assert_synchronous_success,
     "accepted with the frequency cap stored": _assert_frequency_cap_stored,
@@ -3285,6 +3333,8 @@ _UPDATE_OUTCOMES = {
     "success with persisted records": _assert_persisted_success,
     "success with pending status": _assert_submitted,
     "submitted task envelope (awaiting approval)": _assert_submitted,
+    "start_time stored as now": _assert_start_time_stored_as_now,
+    "start_time stored as sent": _assert_start_time_stored_as_sent,
 }
 
 
