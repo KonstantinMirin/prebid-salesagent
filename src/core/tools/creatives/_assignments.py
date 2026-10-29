@@ -5,6 +5,7 @@ from contextlib import ExitStack
 from typing import Any
 
 from src.core.database.models import PersistedMediaBuyStatus
+from src.core.database.repositories.creative import CreativeAssignmentRepository
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import CreativeRefDetails, EntityRefDetails, ValidationDetails
 from src.core.exceptions import (
@@ -13,7 +14,7 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPValidationError,
 )
-from src.core.format_satisfaction import FormatRefusal, creative_refusal, creative_satisfies
+from src.core.format_satisfaction import FormatRefusal, creative_refusal, creative_satisfies, require_covered
 from src.core.logging_config import log_safe
 from src.core.schemas import SyncCreativeResult
 from src.core.tenant_context import TenantContext
@@ -86,6 +87,35 @@ def _normalise_assignments(entries: list[Any]) -> AssignmentMap:
     return coerced
 
 
+def require_package_covered(
+    assignment_repo: CreativeAssignmentRepository,
+    media_buy_id: str,
+    package_id: str,
+    product: Any,
+    *,
+    field: str,
+) -> None:
+    """Refuse when a package's creative set, as the session now holds it, leaves an included placement uncovered.
+
+    Asked once a request's assignment writes for the package are in place, of the WHOLE set:
+    the creatives already assigned and the ones the request added or kept, each with the
+    ``placement_ids`` its assignment routes it to
+    (:func:`~src.core.format_satisfaction.require_covered`). Shared by ``sync_creatives``
+    assignments and ``update_media_buy``'s two replace-the-package's-creatives branches, which
+    is every gate that changes an existing package's creatives. The caller's unit of work rolls
+    back on the raise. No product means no format restriction, as at every creative gate.
+    """
+    if product is None:
+        return
+    require_covered(
+        assignment_repo.package_creative_set(media_buy_id, package_id),
+        product,
+        field=field,
+        package_id=package_id,
+        product_id=product.product_id,
+    )
+
+
 def _process_assignments(
     assignments: dict | list | None,
     results: list[SyncCreativeResult],
@@ -124,6 +154,10 @@ def _process_assignments(
     not_found_creative_ids: set[str] = set()  # creative_ids whose library lookup returned None
     packages_not_found_by_creative: dict[str, set[str]] = {}  # creative_id -> package_ids that do not exist
     media_buys_with_new_assignments: dict[str, Any] = {}  # media_buy_id -> MediaBuy object
+    # (media_buy_id, package_id) -> the package's product, for every package this request
+    # assigned to: its whole creative set is graded for placement coverage once the
+    # request's assignments are in place.
+    packages_to_cover: dict[tuple[str, str], Any] = {}
 
     # AdCP v3 spec defines assignments as list[{creative_id, package_id, weight?,
     # placement_ids?}]; normalise to {creative_id: {package_id: (weight, placement_ids)}}
@@ -246,11 +280,9 @@ def _process_assignments(
 
                     # Get product_id from package_config
                     product_id = db_package.package_config.get("product_id") if db_package.package_config else None
+                    product = assignment_repo.get_product_by_id(product_id) if product_id else None
 
                     if db_creative_result and product_id:
-                        # Get product formats
-                        product = assignment_repo.get_product_by_id(product_id)
-
                         if product:
                             # THE ONE creative validator, which the two create gates and
                             # update_media_buy also ask -- so no two of the four can disagree
@@ -348,6 +380,9 @@ def _process_assignments(
                             )
                         )
 
+                    if product is not None:
+                        packages_to_cover[(media_buy_id, actual_package_id)] = product
+
                     # Track media buy for potential status update (for any assignment, new or existing)
                     if media_buy_id and db_media_buy and media_buy_id not in media_buys_with_new_assignments:
                         media_buys_with_new_assignments[media_buy_id] = db_media_buy
@@ -365,6 +400,16 @@ def _process_assignments(
                     # Track successful assignment
                     if actual_package_id is not None:
                         assignments_by_creative[creative_id].append(actual_package_id)
+
+            # core/product.json format_options: "the selected creative set MUST cover every
+            # included placement; uncovered inventory MUST be rejected or refined, never
+            # silently omitted". Asked of each package's WHOLE set -- the creatives already
+            # assigned and the ones this request added, each with the placement_ids that
+            # routes it -- because coverage is a property of the set, not of one creative.
+            # Raised in both validation modes, for the reason the canonical refusal above
+            # gives: there is no partial assignment that would leave the inventory served.
+            for (mb_id, pkg_id), pkg_product in packages_to_cover.items():
+                require_package_covered(assignment_repo, mb_id, pkg_id, pkg_product, field="assignments")
 
             # Update media buy status if needed (draft -> pending_creatives).
             assert uow.media_buys is not None

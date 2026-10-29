@@ -643,6 +643,236 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/format_options/description
 
+  # ── Coverage through the DEPRECATED arm: a legacy-only product's placements ───────────
+  #
+  # core/placement.json format_ids at the pin: "When present on a product placement, this
+  # field narrows the product-level format_ids contract and MUST NOT introduce formats the
+  # product does not accept." A legacy-only product's placements narrow through that arm and
+  # no other, so the coverage rule reads it, projected through the SDK exactly as the
+  # product's own deprecated arm is. legacy_split is `split` spelled in the deprecated arm:
+  # the product sells display_300x250 and display_728x90, and each included placement
+  # narrows to one of them.
+  #
+  # The refusal names the reference the buyer sent: a legacy-only product published no
+  # option ids, and the ones the SDK's projection mints would name options the buyer was
+  # never shown.
+  #
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/format_ids/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
+
+  @T-UC-FORMAT-SATISFACTION-legacy-placements-covered @format_satisfaction @requires_db
+  Scenario Outline: a deprecated selection that covers every legacy-narrowed placement is accepted - <selector> <manifests>
+    Given the seller publishes only the deprecated 300x250 and 728x90 formats across placements "legacy_split"
+    And the buyer's package selects "<selector>"
+    And the buyer assigns canonical "image" creatives carrying the "<manifests>" manifests
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+    Examples:
+      | selector          | manifests                  |
+      | no_selector       | image_300x250,image_728x90 |
+      | legacy_both_sizes | image_300x250,image_728x90 |
+
+  @T-UC-FORMAT-SATISFACTION-legacy-placements-uncovered @format_satisfaction @requires_db
+  Scenario Outline: a deprecated selection that leaves a legacy-narrowed placement uncovered is refused - <selector>
+    Given the seller publishes only the deprecated 300x250 and 728x90 formats across placements "legacy_split"
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "format_ids" selector for an uncovered placement of "<selected>"
+
+    Examples:
+      | selector               | selected                                               |
+      | legacy_display_300x250 | https://creative.adcontextprotocol.org/display_300x250 |
+      | legacy_display_728x90  | https://creative.adcontextprotocol.org/display_728x90  |
+
+    # Each row's accept control is legacy_both_sizes above: the same arm naming both sizes.
+    # A seller that skipped a placement stating only format_ids accepts both rows, which is
+    # what this seller did before the deprecated arm was read as a narrowing.
+
+  # ── Coverage by the package's CREATIVES ───────────────────────────────────────────────
+  #
+  # The same rule asked of the creatives rather than the selector. core/product.json
+  # format_options at the pin: "For a product or package containing multiple included
+  # placements, a single creative intended for every placement MUST lie in the intersection
+  # of every selected placement's effective set. Distinct per-placement creatives MAY use
+  # the union, but the selected creative set MUST cover every included placement; uncovered
+  # inventory MUST be rejected or refined, never silently omitted." This seller rejects.
+  #
+  # A creative covers a placement when its assignment routes it there and its manifest
+  # satisfies the placement's effective set. A create package routes no creative, so each is
+  # "eligible for all placements" (sync-creatives-request.json placement_ids). The packages
+  # here name no selector, so the selector rule accepts them and the refusal is the creative
+  # set's. The code is CREATIVE_VALIDATION_FAILED_GENERIC, the pinned enum's code for a
+  # buyer-correctable creative failure no more specific code names, and the refusal names
+  # the uncovered placement.
+  #
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json pointer=/properties/assignments/items/properties/placement_ids/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
+
+  @T-UC-FORMAT-SATISFACTION-creatives-covered @format_satisfaction @requires_db
+  Scenario Outline: a package whose creatives cover every included placement is accepted - <placements> <manifests>
+    Given the seller declares canonical format options "two_image_options" across placements "<placements>"
+    And the buyer assigns canonical "image" creatives carrying the "<manifests>" manifests
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+    Examples:
+      | placements                   | manifests                  |
+      | split                        | image_300x250,image_728x90 |
+      | shared                       | image_300x250              |
+      | split_leaderboard_targetable | image_300x250              |
+      | unnarrowed                   | image_300x250              |
+
+  @T-UC-FORMAT-SATISFACTION-creatives-uncovered @format_satisfaction @requires_db
+  Scenario Outline: a package whose creatives leave an included placement uncovered is refused - <placements> <manifests>
+    Given the seller declares canonical format options "two_image_options" across placements "<placements>"
+    And the buyer assigns canonical "image" creatives carrying the "<manifests>" manifests
+    When the Buyer Agent sends the create_media_buy request
+    Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "packages" for leaving placement "<placement>" uncovered
+
+    Examples:
+      | placements | manifests     | placement                     |
+      | split      | image_300x250 | satisfaction_leaderboard_slot |
+      | split      | image_728x90  | satisfaction_mrec_slot        |
+      | shared     | image_728x90  | satisfaction_mrec_slot        |
+
+    # Every creative here satisfies the PRODUCT on its own -- two_image_options publishes
+    # both sizes -- so a seller grading creatives one at a time accepts every row. Each row
+    # has an accept control differing in one thing: split | image_300x250,image_728x90 adds
+    # the creative for the other placement, shared | image_300x250 swaps the size for the
+    # one both placements take, and split_leaderboard_targetable | image_300x250 makes the
+    # uncovered placement targetable, which a package does not buy. unnarrowed is the
+    # control for a seller that refused every product with included placements.
+
+  @T-UC-FORMAT-SATISFACTION-legacy-placements-creatives-uncovered @format_satisfaction @requires_db
+  Scenario Outline: creatives that leave a legacy-narrowed placement uncovered are refused - <manifests>
+    Given the seller publishes only the deprecated 300x250 and 728x90 formats across placements "legacy_split"
+    And the buyer assigns canonical "image" creatives carrying the "<manifests>" manifests
+    When the Buyer Agent sends the create_media_buy request
+    Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "packages" for leaving placement "<placement>" uncovered
+
+    Examples:
+      | manifests     | placement                     |
+      | image_300x250 | satisfaction_leaderboard_slot |
+      | image_160x600 | satisfaction_mrec_slot        |
+
+    # The accept control is legacy-placements-covered | no_selector, the same product with
+    # both sizes assigned. image_160x600 is a canonical image a legacy-only product accepts
+    # on its own -- the product publishes no canonical declaration to hold it to a size --
+    # and it fits neither placement, so the first included placement is the one reported.
+
+  # ── Coverage on a legacy-only product the SDK cannot project ──────────────────────────
+  #
+  # core/product.json format_options at the pin: "An omitted optional layer is
+  # unconstrained". An included placement that narrows nothing therefore admits exactly what
+  # the product admits, and a legacy-only product admits what its deprecated arm accepts,
+  # whether or not the SDK can project that arm. The product here sells
+  # display_300x250_image_2x and display_728x90_image_2x, two ids the pinned agent serves and
+  # the SDK projects to nothing. A coverage rule built from the projection alone has an empty
+  # set for every placement and refuses every creative the product accepts.
+  #
+  # The deprecated arm narrows by reference: core/placement.json format_ids "narrows the
+  # product-level format_ids contract". A creative claiming a reference is compared with the
+  # placement's references the way the product's own arm compares it.
+  #
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/format_ids/description
+
+  @T-UC-FORMAT-SATISFACTION-unprojectable-placements-creatives-covered @format_satisfaction @requires_db
+  Scenario Outline: creatives a legacy-only product accepts cover its placements that narrow nothing - <placements>
+    Given the seller publishes only deprecated formats the SDK cannot project across placements "<placements>"
+    And the buyer assigns canonical "image" creatives carrying the "image_300x250" manifests
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+    Examples:
+      | placements |
+      | none       |
+      | unnarrowed |
+
+    # `none` is the control: the same product and creative with no included placement. A
+    # seller grading an unconstrained placement against the projection refuses `unnarrowed`
+    # CREATIVE_VALIDATION_FAILED_GENERIC and accepts `none`.
+
+  @T-UC-FORMAT-SATISFACTION-update-creatives-covered @format_satisfaction @requires_db
+  Scenario Outline: update_media_buy accepts creative assignments that cover every included placement - <routing>
+    Given the seller declares canonical format options "two_image_options" across placements "split"
+    And the buyer already holds a media buy for that product
+    And canonical "image" creatives carrying the "<manifests>" manifests exist
+    When the Buyer Agent assigns those creatives through update_media_buy routed to "<routing>"
+    Then the update is accepted
+
+    Examples:
+      | manifests                  | routing                                              |
+      | image_300x250,image_728x90 | satisfaction_mrec_slot,satisfaction_leaderboard_slot |
+      | image_300x250,image_728x90 | any,any                                              |
+
+  @T-UC-FORMAT-SATISFACTION-update-creatives-uncovered @format_satisfaction @requires_db
+  Scenario Outline: update_media_buy refuses creative assignments that leave an included placement uncovered - <routing>
+    Given the seller declares canonical format options "two_image_options" across placements "split"
+    And the buyer already holds a media buy for that product
+    And canonical "image" creatives carrying the "<manifests>" manifests exist
+    When the Buyer Agent assigns those creatives through update_media_buy routed to "<routing>"
+    Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "packages[0].creative_assignments" for leaving placement "<placement>" uncovered
+
+    Examples:
+      | manifests                  | routing                                              | placement                     |
+      | image_300x250,image_728x90 | satisfaction_leaderboard_slot,satisfaction_mrec_slot | satisfaction_mrec_slot        |
+      | image_300x250              | any                                                  | satisfaction_leaderboard_slot |
+
+    # The ROUTING is what the first row grades: the same two creatives as the accept rows,
+    # each routed by placement_ids to the placement it does not fit. A seller that pooled the
+    # creatives across placements accepts it. The second row is the single creative meant
+    # for every placement, which "MUST lie in the intersection of every selected placement's
+    # effective set" -- and split's two placements share nothing.
+
+  @T-UC-FORMAT-SATISFACTION-sync-creatives-covered @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives accepts an assignment whose creative covers every included placement
+    Given a packaged product whose placements "shared" narrow canonical format options "two_image_options"
+    And the buyer syncs a canonical "image" creative carrying the "image_300x250" manifest
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+  @T-UC-FORMAT-SATISFACTION-sync-creatives-uncovered @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives refuses an assignment that leaves an included placement uncovered
+    Given a packaged product whose placements "split" narrow canonical format options "two_image_options"
+    And the buyer syncs a canonical "image" creative carrying the "image_300x250" manifest
+    When the Buyer Agent assigns it to that package
+    Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "assignments" for leaving placement "satisfaction_leaderboard_slot" uncovered
+
+    # The pair differs only in the stored placements. The refusal is raised whatever the
+    # validation mode: lenient skips a creative the product will not take, and here every
+    # creative is one the product takes -- what fails is the package's set.
+
+  @T-UC-FORMAT-SATISFACTION-sync-unprojectable-placements-covered @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives accepts a deprecated creative the SDK cannot project on placements that admit it - <placements>
+    Given a packaged product selling only deprecated formats the SDK cannot project across placements "<placements>"
+    And the buyer syncs a creative identified by format_id "display_300x250_image_2x"
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+    Examples:
+      | placements         |
+      | none               |
+      | unnarrowed         |
+      | unprojectable_mrec |
+
+  @T-UC-FORMAT-SATISFACTION-sync-unprojectable-placements-uncovered @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives refuses a deprecated creative the SDK cannot project that leaves a placement uncovered
+    Given a packaged product selling only deprecated formats the SDK cannot project across placements "unprojectable_split"
+    And the buyer syncs a creative identified by format_id "display_300x250_image_2x"
+    When the Buyer Agent assigns it to that package
+    Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "assignments" for leaving placement "satisfaction_leaderboard_slot" uncovered
+
+    # The rule of the create-path outline above, asked of a creative CLAIMING a deprecated
+    # reference, which reaches the seller only through sync. unprojectable_mrec narrows to the
+    # creative's own reference; unprojectable_split adds a placement narrowing to the 728x90
+    # one, which the creative does not fill, and the refusal names that placement. A seller
+    # grading the placements through the projection refuses the unnarrowed and
+    # unprojectable_mrec rows and names satisfaction_mrec_slot in the refusal; one that
+    # ignored a narrowing it cannot project accepts the refusal row. `none` is the control.
+
   # ── The CREATIVE side of the same function ────────────────────────────────────────────
   #
   # The two scenarios above grade a PACKAGE SELECTOR. The ones below grade a stored CREATIVE
