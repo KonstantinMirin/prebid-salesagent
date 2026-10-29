@@ -125,7 +125,7 @@ def adcp_error_for_status(
     # text is a function of the code, resolved from CODE_TABLE (ADR-010). The
     # caller logs the name at the call site, where the original exception is.
     if status == 429:
-        return AdCPRateLimitError(retry_after=clamp_retry_after(retry_after) if retry_after is not None else None)
+        return AdCPRateLimitError(retry_after=clamp_retry_after(retry_after))
     if status is not None and 400 <= status < 500:
         return AdCPConfigurationError()
     return AdCPServiceUnavailableError()

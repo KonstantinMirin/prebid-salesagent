@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast, overload
 
 from adcp.signing.errors import SignatureVerificationError
 from adcp.types import ErrorCode
@@ -122,17 +122,27 @@ if TYPE_CHECKING:
 RETRY_AFTER_MAX = 3600
 
 
-def clamp_retry_after(seconds: float) -> int:
+@overload
+def clamp_retry_after(seconds: float) -> int: ...
+@overload
+def clamp_retry_after(seconds: None) -> None: ...
+def clamp_retry_after(seconds: float | None) -> int | None:
     """Clamp a raw retry_after to the spec Error model's [1, RETRY_AFTER_MAX] bound.
 
     The single home for the floor/ceiling every emitter shares — the idempotency
     policy's rejection branches and the egress seam's Retry-After passthrough.
     Callers layer any context-specific cap (e.g. an insert-rate window) on top.
 
+    ``None`` passes through as ``None``: a counterparty that named no wait yields an
+    error with no ``retry_after``, and every passthrough emitter has exactly that
+    case, so it is answered here once rather than by a conditional at each of them.
+
     It lives here rather than beside either caller because this module already
     owns ``AdCPSalesAgentError.retry_after`` and the spec Error shape, so neither
     emitter ends up importing the other.
     """
+    if seconds is None:
+        return None
     return min(max(1, math.ceil(seconds)), RETRY_AFTER_MAX)
 
 

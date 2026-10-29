@@ -51,6 +51,8 @@ Key features:
   egress Attempts machine — connect AND tool-call failures share ONE
   attempt sequence, so a transient tool-level failure is genuinely retried,
   not just classified after the fact
+- An HTTP 429 from the agent ends the call at once as RATE_LIMITED, with the
+  agent's requested wait as ``retry_after``, instead of being retried
 - Proper error handling and logging
 - Testable in isolation
 
@@ -68,7 +70,8 @@ Usage:
 """
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import Any, NoReturn, Protocol
 
 # All three bound PRIVATELY: a plain import would publish `mcp_client.Client`,
@@ -93,7 +96,7 @@ from fastmcp.client.transports import (
 )
 
 from src.core.errors.details import AdapterFailureDetails, ConfigurationDetails
-from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError
+from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPRateLimitError, clamp_retry_after
 from src.core.security.egress.attempts import Attempts
 from src.core.security.outbound_http import (
     _SIGNER_RESERVED_HEADERS,
@@ -101,6 +104,7 @@ from src.core.security.outbound_http import (
     OutboundError,
     find_wrapped,
     guarded_client_factory,
+    retry_after_seconds,
     sleep_backoff,
     validate_url,
 )
@@ -287,26 +291,67 @@ def _install_signing_hook(client: _httpx2.AsyncClient, sign: SignMcpAttempt) -> 
                 request=request,
             )
 
+    _add_event_hook(client, "request", _sign_hook)
+
+
+def _add_event_hook(client: _httpx2.AsyncClient, event: str, hook: Callable[..., Awaitable[None]]) -> None:
+    """Append *hook* to *client*'s *event* hooks, keeping any already installed."""
     hooks = dict(client.event_hooks)
-    hooks["request"] = [*(hooks.get("request") or []), _sign_hook]
+    hooks[event] = [*(hooks.get(event) or []), hook]
     client.event_hooks = hooks
 
 
-def _mcp_client_factory(url: str, sign: SignMcpAttempt | None) -> McpClientFactory:
-    """The pinned client factory for *url*, teaching it to sign when asked.
+@dataclass
+class _Throttle:
+    """What one attempt's HTTP responses said about being rate-limited.
+
+    ``observed`` and ``retry_after`` are separate because a 429 with no usable
+    ``Retry-After``/``RateLimit-Reset`` is still a 429: ``observed`` is the verdict,
+    ``retry_after`` the wait the agent named, if it named one.
+    """
+
+    observed: bool = False
+    retry_after: float | None = None
+
+
+def _install_throttle_observer(client: _httpx2.AsyncClient, throttle: _Throttle) -> None:
+    """Record on *throttle* any HTTP 429 *client* receives. Observes; never raises.
+
+    The status has to be read HERE, on the response, because nothing downstream
+    keeps it: mcp 2.x's streamable-HTTP transport turns every ``>= 400`` answer to a
+    POST into a JSON-RPC error (``_handle_post_request``) -- the server's own error
+    body when it sent one, ``INTERNAL_ERROR`` otherwise -- and fastmcp raises that as
+    an ``MCPError`` with no status and no headers on it. By the time
+    :func:`call_mcp_tool`'s ``except`` runs, a counterparty saying "too many requests,
+    come back in 30s" and one that fell over are the same exception.
+
+    A response hook rather than a raise, so the transport's own handling of the
+    response is untouched; :func:`call_mcp_tool` reads the record once the attempt has
+    failed. A 429 on an attempt that still SUCCEEDED (an optional event-stream GET,
+    say) is ignored there, because the call returned.
+    """
+
+    async def _observe(response: _httpx2.Response) -> None:
+        if response.status_code == 429:
+            throttle.observed = True
+            throttle.retry_after = retry_after_seconds(response.status_code, response.headers)
+
+    _add_event_hook(client, "response", _observe)
+
+
+def _mcp_client_factory(url: str, sign: SignMcpAttempt | None, throttle: _Throttle) -> McpClientFactory:
+    """The pinned client factory for *url*, observing 429s and signing when asked.
 
     Wraps :func:`~src.core.security.outbound_http.guarded_client_factory` rather than
     replacing it, so every SSRF guarantee is untouched and unrestated: the resolve-once
     IP pin, ``follow_redirects=False``, ``trust_env=False``, the port and scheme policy
     and the refusal are all still decided in the egress seam, on the same ``url`` the
-    transport is constructed to dial. Signing is strictly additive to the client that
-    function already built — this adds a header hook and nothing else. Returned
-    unwrapped when there is nothing to sign, so an unsigned dial is byte-for-byte the
-    call it was before this parameter existed.
+    transport is constructed to dial. Both additions are hooks on the client that
+    function already built and nothing else: a response observer, always (see
+    :func:`_install_throttle_observer`), and a signing request hook when *sign* is
+    given.
     """
     guarded = guarded_client_factory(url)
-    if sign is None:
-        return guarded
 
     def factory(
         headers: dict[str, str] | None = None,
@@ -315,7 +360,9 @@ def _mcp_client_factory(url: str, sign: SignMcpAttempt | None) -> McpClientFacto
         follow_redirects: bool | None = None,
     ) -> _httpx2.AsyncClient:
         client = guarded(headers, timeout, auth, follow_redirects)
-        _install_signing_hook(client, sign)
+        _install_throttle_observer(client, throttle)
+        if sign is not None:
+            _install_signing_hook(client, sign)
         return client
 
     return factory
@@ -437,6 +484,10 @@ async def call_mcp_tool(
         MCPSigningError: If ``sign`` was given and a request could not be signed.
             Propagates UNRETRIED, and is raised before the request reaches the
             transport, so nothing was sent unsigned.
+        AdCPRateLimitError: If the agent answered HTTP 429 on an attempt that then
+            failed. Propagates UNRETRIED (no further attempt, no ``/mcp`` fallback),
+            carrying the agent's ``Retry-After`` / ``RateLimit-Reset`` as
+            ``retry_after`` when it sent one.
         MCPConnectionError: If connection or the tool call fails after all retries
         MCPCompatibilityError: If MCP SDK version incompatibility detected
 
@@ -485,6 +536,9 @@ async def call_mcp_tool(
         attempts = Attempts(candidate_attempts)
 
         for attempt in attempts.next_attempt():
+            # One record per attempt: a 429 seen on an earlier attempt says nothing
+            # about why this one failed.
+            throttle = _Throttle()
             try:
                 # Create transport and client. The httpx_client_factory pins the
                 # connection to current_url's validated IP and refuses redirects:
@@ -496,7 +550,7 @@ async def call_mcp_tool(
                 transport = _StreamableHttpTransport(
                     url=current_url,
                     headers=headers,
-                    httpx_client_factory=_mcp_client_factory(current_url, sign),
+                    httpx_client_factory=_mcp_client_factory(current_url, sign, throttle),
                 )
                 client = _Client(transport=transport)
 
@@ -539,6 +593,27 @@ async def call_mcp_tool(
                 unsignable = find_wrapped(e, MCPSigningError)
                 if unsignable is not None:
                     raise unsignable from e
+
+                # A 429 is TERMINAL too, and is RATE_LIMITED rather than the
+                # SERVICE_UNAVAILABLE exhaustion would report: the agent answered, and
+                # what it answered is "not now, and not from you". Retrying on this
+                # loop's 1s/2s/4s schedule only spends the caller's limit faster -- a
+                # limiter counts every POST of a session -- and the ``/mcp`` fallback
+                # is a second path to the same limiter. The wait the agent named rides
+                # out as the pinned top-level ``retry_after`` (core/error.json), so the
+                # buyer is told when to come back instead of being retried for.
+                if throttle.observed:
+                    logger.warning(
+                        "MCP agent %s rate-limited attempt %s/%s (HTTP 429, retry_after=%s); not retrying",
+                        current_url,
+                        attempt,
+                        candidate_attempts,
+                        throttle.retry_after,
+                    )
+                    raise AdCPRateLimitError(
+                        retry_after=clamp_retry_after(throttle.retry_after),
+                        internal_detail=e,
+                    ) from e
 
                 last_exception = e
                 error_msg = str(e)
