@@ -1068,6 +1068,17 @@ def then_features_boolean_flags(ctx: dict, flags: str) -> None:
         assert isinstance(value, bool), f"features.{key} not a boolean: {value!r}"
 
 
+@then(parsers.parse("media_buy.features.{flag} should equal {expected}"))
+def then_feature_flag_equals(ctx: dict, flag: str, expected: str) -> None:
+    """Exact value of one media-buy-features.json flag on the wire.
+
+    The shape Then above deliberately leaves the value ungraded because the value is a
+    production choice; a scenario that names a value does so because the flag is a
+    commitment ("If a seller declares a feature as true, they MUST honor requests using
+    that feature") and the scenario pairs it with the behaviour it promises."""
+    _assert_wire_equals(ctx, f"media_buy.features.{flag}", expected)
+
+
 @then("media_buy.supported_pricing_models should be a non-empty unique array of pricing-model enum values")
 def then_pricing_models_shape(ctx: dict) -> None:
     """supported_pricing_models: minItems 1, uniqueItems, items ∈ pricing-model enum.
