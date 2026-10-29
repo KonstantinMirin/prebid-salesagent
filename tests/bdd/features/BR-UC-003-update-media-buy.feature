@@ -2751,19 +2751,42 @@ Feature: BR-UC-003 Update Media Buy
     # invalid_transitions: re-cancel of terminal canceled buy is NOT_CANCELLABLE, not silent success
     # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/invalid_transitions.yaml phase=double_cancel step=second_cancel
 
-  # REMOVED: T-UC-003-storyboard-creative-fate-after-cancellation ("Canceling a media buy
-  # releases package-creative assignments but leaves creatives in the library with review
-  # state intact"). It graded a creative-LIBRARY obligation, and the pin attaches that
-  # obligation to a declaration this seller does not make. creative-libraries.mdx: "A
-  # creative library is hosted by any agent that declares has_creative_library: true in its
-  # capabilities", and "Inline package creatives from a seller that does not advertise a
-  # creative library are not library creatives ... does not advertise independent library
-  # management or cross-buy reuse". The storyboard it came from is gated on the same
-  # declaration (requires_capability creative.has_creative_library equals true) and grades a
-  # non-declaring seller not_applicable, so for this seller the pin has no answer to grade.
-  # Restore it from that storyboard if salesagent-o1wxm declares the capability.
-  # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-libraries.mdx
-  # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/creative_fate_after_cancellation.yaml
+  @T-UC-003-storyboard-creative-fate-after-cancellation @v3-1 @cancellation @creatives
+  Scenario: Canceling a media buy releases its package-creative assignments from the get_media_buys readback
+    Given the tenant is configured for auto-approval
+    And the package "pkg_001" has existing creative assignments [cr_001, cr_002]
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    | canceled     | true        |
+    When the Buyer Agent reads media buy "mb_existing" back with get_media_buys
+    Then the package "pkg_001" should report creative approvals for exactly ["cr_001", "cr_002"]
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy success spec
+    And the wire media_buy_status should be "canceled"
+    When the Buyer Agent reads media buy "mb_existing" back with get_media_buys
+    Then the package "pkg_001" should report creative approvals for exactly []
+    # LOCAL CORRECTION, to the pin's answer for a seller that declares no creative library.
+    # The release of assignments on cancel binds every seller: specification.mdx, media buy
+    # state transitions, "When a media buy transitions to `rejected` or `canceled`, all
+    # package-creative assignments on that media buy are released", and the buyer observes
+    # it through get_media_buys: "Released assignments no longer appear in `get_media_buys`
+    # responses for that buy." The has_creative_library flag scopes only what happens to the
+    # creatives afterwards, so the generated list_creatives and library-reuse Thens are
+    # dropped: creative-libraries.mdx, "The decoupled library lifecycle applies when the
+    # seller also advertises `creative.has_creative_library: true`", which this seller does
+    # not. The storyboard this came from is gated on that flag, so no storyboard grades the
+    # non-declaring case and the scenario carries no storyboard tag.
+    # The first readback proves the assignments are on the wire before the cancel, so the
+    # empty set after it cannot pass on a seller that never reports them. The cancel goes
+    # through update_media_buy rather than a seeded canceled row: the release is a property
+    # of the transition, and a seeded canceled buy that still holds assignments is a state
+    # a conforming seller never reaches.
+    # Production applies no buyer cancellation yet: update_media_buy reads `canceled` only to
+    # refuse a re-cancel of a terminal buy, so no path moves a buy to `canceled` or releases
+    # its assignments. Tracked by prebid/salesagent#1261, which names this release.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/specification.mdx section="Media Buy State Transitions"
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-libraries.mdx section="Path 2: Inline creatives on the package"
 
   @T-UC-003-partition-revision @partition @revision @schema-v3.1
   Scenario Outline: Revision optimistic-concurrency partition validation - <partition>
