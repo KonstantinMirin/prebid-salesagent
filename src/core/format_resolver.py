@@ -1054,6 +1054,42 @@ def find_format(formats: Iterable[Format], format_id: FormatRef) -> Format | Non
     return next((fmt for fmt in formats if format_identity(fmt.format_id) == wanted), None)
 
 
+def find_operator_format_of_kind(formats: Iterable[Format], kind: str) -> Format | None:
+    """The ONE format the operator's creative agent declares as canonical *kind*, or None.
+
+    The canonical counterpart of :func:`find_format`. A creative identified by
+    ``format_kind`` names no format and so no agent; the agent that previews it is the one
+    this deployment stands behind (``is_operator_agent``: CREATIVE_AGENT_ORIGIN, dialled at
+    CREATIVE_AGENT_URL). Its catalogue's own ``canonical`` declarations are its claims about
+    which kinds it renders -- docs/creative/specification.mdx (v3.2.7): creative agents "own
+    claims about what they can build, validate, or preview".
+
+    EXACTLY ONE, or None. creative/preview-creative-request.json (v3.2.7) lets a request omit
+    ``target_capability_id`` and says the agent "MAY resolve the renderer only if exactly one
+    advertised preview capability satisfies the manifest's canonical declaration; zero
+    matches or multiple matches MUST be rejected with FORMAT_NOT_SUPPORTED". This seller does
+    not read the agent's ``get_adcp_capabilities``, so it cannot name a capability; a kind
+    the operator serves through several formats is therefore not one this seller can route
+    a preview for, and it is treated like a format no agent is dialled for (BR-RULE-035
+    INV-2: processed with no external validation and no preview fetched). DELIBERATE
+    CEILING: selecting ``target_capability_id`` from the agent's advertised
+    ``creative.supported_formats[]`` is the upgrade that would preview those kinds too.
+
+    PURE, like :func:`find_format`: it reads the pre-fetched catalogue and nothing else.
+    """
+    from src.core.creative_agent_registry import is_operator_agent
+
+    declaring = [
+        fmt
+        for fmt in formats
+        if fmt.canonical is not None
+        and str(fmt.canonical.kind) == kind
+        and fmt.agent_url is not None
+        and is_operator_agent(fmt.agent_url)
+    ]
+    return declaring[0] if len(declaring) == 1 else None
+
+
 def is_agent_backed(fmt: Format) -> bool:
     """Whether this format is served by a creative agent.
 

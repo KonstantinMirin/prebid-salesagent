@@ -980,7 +980,7 @@ class CreativeAgentRegistry:
     async def preview_creative(
         self,
         agent_url: str,
-        format_id: str,
+        format_id: str | None,
         creative_manifest: dict[str, Any],
         *,
         tenant_id: str | None = None,
@@ -989,9 +989,13 @@ class CreativeAgentRegistry:
 
         Args:
             agent_url: URL of the creative agent
-            format_id: Format ID for the creative
+            format_id: The legacy format id the creative names, or ``None`` for a creative
+                identified by ``format_kind``. ``None`` sends no deprecated route at all; the
+                manifest then carries the canonical identity itself.
             creative_manifest: Complete creative manifest with all required assets, without
-                its ``format_id`` (this method writes the ``{agent_url, id}`` object there).
+                its ``format_id`` (this method writes the ``{agent_url, id}`` object there
+                for a legacy creative). A canonical creative's manifest carries
+                ``format_kind`` and, when it has one, ``format_option_ref``.
                 Assets MUST be a dictionary keyed by asset_id from format's asset_requirements.
                 Example: {
                     "creative_id": "c123",
@@ -1036,13 +1040,28 @@ class CreativeAgentRegistry:
         # The MANIFEST names the same object. core/creative-manifest.json (v3.2.7) puts
         # ``format_id`` on its named arm as a core/format-id.json object, so the bare id string
         # callers used to write into the manifest satisfied neither arm.
-        format_ref = FormatId(agent_url=agent_url, id=format_id).model_dump(mode="json")
+        #
+        # A CANONICAL creative sends no route of either generation. creative/preview-creative-
+        # request.json (v3.2.7) marks ``format_id`` deprecated and says new requests "carry
+        # portable format identity in creative_manifest.format_kind plus optional
+        # creative_manifest.format_option_ref". Writing a format_id for one would synthesize
+        # a legacy reference from a kind, which registries/v1-canonical-mapping.json forbids.
+        # ``target_capability_id`` is omitted as well, which the same schema permits: the
+        # agent then resolves the renderer only when exactly one advertised capability matches.
+        route = (
+            {}
+            if format_id is None
+            else {"format_id": FormatId(agent_url=agent_url, id=format_id).model_dump(mode="json")}
+        )
         return await call_operator_mcp_tool(
             _connection_agent_url(agent_url),
             "preview_creative",
             {
-                "format_id": format_ref,
-                "creative_manifest": {**creative_manifest, "format_id": format_ref},
+                # REQUIRED at the pin (preview-creative-request.json ``required: [request_type]``);
+                # this seller previews one creative per call.
+                "request_type": "single",
+                **route,
+                "creative_manifest": {**creative_manifest, **route},
             },
             label="the creative agent",
             sign=request_signer_for_tenant(tenant_id=tenant_id),
