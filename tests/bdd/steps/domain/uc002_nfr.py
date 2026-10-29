@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 
-from pytest_bdd import given, then
+from pytest_bdd import given, parsers, then
 
 from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload
 from tests.bdd.steps.generic._dispatch import dispatch_request
@@ -353,58 +353,29 @@ def then_adapter_execution_logged(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@then("the response should be returned within 15 seconds (p95)")
-def then_response_within_sla(ctx: dict) -> None:
-    """Assert the request-path architecture supports the 15s p95 SLA.
+@then(parsers.parse("the response should be returned within {seconds:d} seconds (p95)"))
+def then_response_within_sla(ctx: dict, seconds: int) -> None:
+    """NFR-004: the create answered as a completed synchronous success, inside the bound.
 
-    A single-call BDD harness cannot measure p95 latency. The controllable
-    latency risk is synchronous adapter I/O (GAM SOAP, etc.) blocking the
-    request thread. This step asserts:
-    1. The request completed successfully (full pipeline ran).
-    2. The adapter was not called synchronously on the request thread
-       (the actual SLA risk). Currently xfailed because production DOES
-       call adapter I/O in-line.
+    The answer must be the created buy, not a fast refusal: the synchronous success with
+    ``media_buy_id`` and the requested ``packages``, whose wire status is ``completed``, the
+    pinned task status for "Done immediately" (create_media_buy.mdx, "Asynchronous
+    Operations"). ``success`` is not a member of enums/task-status.json.
 
-    True p95 enforcement belongs in production monitoring/alerting.
+    One dispatch is one sample, so this grades that sample against the bound rather than a
+    percentile: a create that takes longer than the p95 bound on its own fails here. The
+    time is the When's wall time from dispatch to the recorded result, on the scenario's
+    transport.
 
-    FIXME: Move adapter I/O to background workers
-    so latency SLA is enforceable at the application layer.
+    The step used to assert instead that the adapter was not called on the request thread.
+    That is a design the pin does not require, measured no time at all, and failed a seller
+    that answers in milliseconds.
     """
+    from tests.bdd.steps.domain.uc002_invariants import then_media_buy_created
 
-    from src.core.schemas._base import CreateMediaBuySuccess
-
-    env = ctx["env"]
-
-    # --- Part 1: Verify the original request completed successfully ---
-    error = ctx.get("error")
-    assert error is None, f"Expected a successful response to verify SLA, got error: {error}"
-    result = require_payload(ctx)
-    assert result.status == "success", f"Expected status='success' (full pipeline completed), got '{result.status}'"
-    assert isinstance(result, CreateMediaBuySuccess), f"Expected CreateMediaBuySuccess, got {type(result).__name__}"
-
-    # Production-computed: media_buy_id proves the pipeline completed end-to-end
-    assert result.media_buy_id, "media_buy_id is empty — pipeline did not complete (fast error is not SLA compliance)"
-    # Production-computed: packages prove adapter + persistence completed
-    assert result.packages, "packages list is empty — adapter/persistence did not complete"
-
-    # --- Part 2: Assert no synchronous adapter I/O on request thread ---
-    # The controllable latency risk for p95 SLA is synchronous external
-    # calls (GAM SOAP, Kevel API) blocking the request thread. When
-    # adapters run in background workers, the adapter mock should NOT be
-    # called during the request cycle.
-    mock_adapter = env.mock["adapter"].return_value
-    adapter_called_sync = mock_adapter.create_media_buy.called
-
-    # The xfail that stood here was `if adapter_called_sync: pytest.xfail(...)` directly
-    # above this assert — so the assert was UNREACHABLE in the only case it was written
-    # for, and the step reported an expected failure instead of the finding.
-    # Adapter I/O still runs synchronously on the request thread; the
-    # architecture direction is background workers returning 201 pending, and until then
-    # this assertion is the thing that says so out loud.
-    assert not adapter_called_sync, (
-        "Adapter.create_media_buy was called on the request thread — "
-        "synchronous adapter I/O is the primary latency risk for SLA compliance"
-    )
+    then_media_buy_created(ctx)
+    elapsed = ctx["create_response_seconds"]
+    assert elapsed <= seconds, f"the create took {elapsed:.2f}s, over the {seconds}s NFR-004 bound"
 
 
 # ═══════════════════════════════════════════════════════════════════════

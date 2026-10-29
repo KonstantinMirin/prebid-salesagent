@@ -11,6 +11,7 @@ and emits the outcome on the wire (#1417).
 
 from __future__ import annotations
 
+import time
 import uuid
 from functools import lru_cache
 from typing import Any
@@ -672,6 +673,17 @@ def given_request_natural_key_sandbox(ctx: dict) -> None:
 @when("the Buyer Agent sends the create_media_buy request")
 @when("the Buyer Agent sends create_media_buy with the unworkable measurement_terms")
 def when_send_create_media_buy(ctx: dict) -> None:
+    """Send the create_media_buy request and record how long the answer took.
+
+    ``ctx["create_response_seconds"]`` is the wall time from dispatch to the recorded
+    result, on the scenario's transport; NFR-004 grades it.
+    """
+    started = time.perf_counter()
+    _send_create_media_buy(ctx)
+    ctx["create_response_seconds"] = time.perf_counter() - started
+
+
+def _send_create_media_buy(ctx: dict) -> None:
     """Send the create_media_buy request and capture the result or error.
 
     Four dispatch modes share this step text — every one routes a full
