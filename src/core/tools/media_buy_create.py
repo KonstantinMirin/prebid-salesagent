@@ -1443,7 +1443,14 @@ def execute_approved_media_buy(
 
                     # Convert formats to FormatId objects with comprehensive validation
                     format_ids_list: list[FormatId] = []
-                    formats: Sequence[Any] = asserted or ([] if recorded else product.format_ids or [])
+                    # A package that recorded no snapshot (its request named no format
+                    # selector) is placed on the product's CONTRACT
+                    # (``Product.format_contract``): a profile-linked product is served its
+                    # profile's arms, and a canonical one the projection its declarations
+                    # assert. The product's own ``format_ids`` column is never read: a row
+                    # moved onto ``format_options`` has it cleared, so reading it refused the
+                    # approval of every such buy as "no valid formats".
+                    formats: Sequence[Any] = asserted or ([] if recorded else product.format_contract.format_ids)
 
                     logger.debug(
                         f"[APPROVAL] Converting {len(formats)} formats for package {package_id} "
