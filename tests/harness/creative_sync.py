@@ -68,12 +68,11 @@ Available mocks via env.mock:
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 from adcp.types import AccountReferenceById
@@ -85,6 +84,7 @@ from src.core.creative_agent_registry import (
     _get_reference_formats,
 )
 from src.core.schemas import Format, FormatId, SyncCreativesRequest, SyncCreativesResponse
+from tests.e2e.webhook_capture_service import PEER_BUILD_TOOL, PEER_PREVIEW_TOOL
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
@@ -92,6 +92,7 @@ from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 from tests.harness.peer_agent import PeerCreativeAgentMixin
 from tests.harness.transport import DeliverResult
 from tests.helpers.creative_test_helpers import creative_payload
+from tests.helpers.peer_creative_agent import single_preview_document
 
 # Kwargs ``IntegrationEnv._run_a2a_handler`` consumes itself (identity mock, protocol-level
 # push config, request model) rather than forwarding as skill parameters — see
@@ -160,6 +161,56 @@ _SLACK_CREATIVE_ID_FIELD = re.compile(r"\*Creative ID:\*\n`([^`]+)`")
 #: Matches ``await_ai_review``'s bound, which joins the same job in process.
 _AI_REVIEW_WAIT_SECONDS = 30.0
 _AI_REVIEW_POLL_SECONDS = 0.25
+
+#: How often the e2e notification observer asks the capture service whether the held
+#: Slack delivery has arrived. Short: the server is blocked on it for as long as this
+#: takes, up to the service's ``HOLD_MAX_SECONDS``.
+_HELD_DELIVERY_POLL_SECONDS = 0.05
+
+
+def _observe_at_the_held_slack_delivery(self: CreativeSyncEnv) -> None:
+    """The e2e leg of :meth:`CreativeSyncEnv.observe_effects_at_notification`.
+
+    In process the observer runs inside ``_send_creative_notifications``. Over e2e_rest
+    that function runs in the server, so the observation is taken where its effect
+    lands instead: the tenant's Slack webhook is pointed at a fresh capture-service key
+    whose next delivery is HELD, and a thread in this process waits for that delivery
+    to arrive, reads what an independent connection to the server's database sees
+    while the server is still blocked on the send, then releases it. The read is the
+    same one the in-process observer takes (:meth:`_record_visibility_at_notification`),
+    taken while the notification is in flight rather than at its entry -- nothing the
+    sync writes runs between the two.
+
+    No delivery means no observation, and the Thens refuse a missing one; the thread
+    stops at teardown either way.
+    """
+    import threading
+
+    from tests.e2e import _webhook_capture
+
+    key, received = _webhook_capture.register_capture_key()
+    self.configure_tenant_field("slack_webhook_url", _webhook_capture.delivery_url_for(key))
+    _webhook_capture.hold_next_delivery(key)
+    stop = threading.Event()
+
+    def _observe() -> None:
+        try:
+            while not stop.is_set():
+                if received:
+                    self._record_visibility_at_notification()
+                    return
+                stop.wait(_HELD_DELIVERY_POLL_SECONDS)
+        finally:
+            _webhook_capture.release_held_delivery(key)
+
+    observer = threading.Thread(target=_observe, name=f"slack-hold-{key}", daemon=True)
+    observer.start()
+
+    def _stop_observing() -> None:
+        stop.set()
+        observer.join()
+
+    self._guard("slack_hold_observer", _stop_observing)
 
 
 def _slack_creative_ids(payload: Any) -> list[str]:
@@ -274,6 +325,27 @@ def _the_tenants_hosted_agent_publishes_it(self: CreativeSyncEnv, format_id: str
     from it and previews against it, as it does for any agent a seller configured.
     """
     return self.host_reference_format(format_id)
+
+
+def _the_hosted_agent_answers(self: CreativeSyncEnv, tool: str, document: dict[str, Any]) -> None:
+    """The e2e leg of :meth:`CreativeSyncEnv.answer_creative_agent`: the hosted agent serves it.
+
+    The server dials the agent a format's identity names, and on e2e that is the tenant's
+    hosted agent (:func:`_the_tenants_hosted_agent_publishes_it`), so its answer to *tool*
+    is the one production reads -- through its own MCP client and payload extraction.
+    """
+    self.serve_hosted_tool(tool, document)
+
+
+def _the_hosted_agent_received(self: CreativeSyncEnv, tool: str) -> list[dict[str, Any]]:
+    """The e2e leg of :meth:`CreativeSyncEnv.creative_agent_requests`: what the hosted agent recorded.
+
+    The registry's recorders are in THIS process and the sync runs in the server, so they
+    would report no request on every branch -- a "no agent request" invariant would pass
+    vacuously. The agent's side of the wire is where the server's request lands, and the
+    hosted agent records each tool call it answers.
+    """
+    return self.hosted_agent_calls(tool)
 
 
 class HarnessCreativeAgentRegistry(ReferenceFormatsRegistry):
@@ -507,32 +579,9 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
         self.ai_review_commit_observations = {}
         self.mock[self._AI_REVIEW_PATCH_NAME].submit.side_effect = self._observe_at_ai_review_submit
 
-        # Gemini key: default None (safe for static creatives). Production reads it off
-        # the typed settings, and a composition root rebuilds those from the ENVIRONMENT
-        # whenever it starts -- the REST leg imports src.app, which mounts the admin app,
-        # which calls load_settings() -- so pinning the settings object would be undone
-        # by the first REST dispatch. The environment is what gets pinned, and the
-        # settings are rebuilt from it on every change and again on release, which is
-        # the contract load_settings() documents for a test that changes the environment.
-        self._gemini_env = patch.dict(os.environ)
-        self._gemini_env.start()
-        self._guard("gemini_api_key_env", self._release_gemini_env)
-        self._apply_gemini_api_key(None)
-
-    def _apply_gemini_api_key(self, value: str | None) -> None:
-        from src.core.config import load_settings
-
-        if value is None:
-            os.environ.pop("GEMINI_API_KEY", None)
-        else:
-            os.environ["GEMINI_API_KEY"] = value
-        load_settings()
-
-    def _release_gemini_env(self) -> None:
-        from src.core.config import load_settings
-
-        self._gemini_env.stop()
-        load_settings()
+        # No Gemini key is configured here: the generative build reads the TENANT's AI
+        # configuration, and a tenant row carries none until a scenario sets one
+        # (set_gemini_api_key).
 
     def _observe_at_ai_review_submit(self, *args: Any, **kwargs: Any) -> MagicMock:
         """Stand in for ``_ai_review_executor.submit`` and record DB visibility.
@@ -551,26 +600,56 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
         )
         return MagicMock()
 
-    @staticmethod
+    @realize_e2e(
+        e2e_unsupported(
+            "each observation is taken INSIDE the submit, by this env's stand-in for the AI-review "
+            "executor, at the instant production hands the job over. Under e2e_rest the submit "
+            "happens in the server process, where no stand-in runs, and what the real job read is "
+            "not observable afterwards: on the update branch it commits the same verdict whether it "
+            "read the row as the sync committed it or as it was before. Observing it e2e needs a "
+            "read taken at the submit inside the server, which is its own build"
+        )
+    )
+    def ai_review_observations(self) -> dict[str, tuple[str, str] | None]:
+        """{creative_id: fingerprint-or-None} an independent connection saw at each AI-review submit.
+
+        See :attr:`ai_review_commit_observations`. An accessor rather than the attribute,
+        so the one Then that reads it declares where it cannot be graded instead of reading
+        an empty dict over e2e_rest.
+        """
+        return dict(self.ai_review_commit_observations)
+
     def _committed_creative_fingerprint(
-        *, creative_id: str, tenant_id: str, principal_id: str
+        self, *, creative_id: str, tenant_id: str, principal_id: str
     ) -> tuple[str, str] | None:
         """The creative as a SEPARATE connection sees it, or None if not committed.
 
         Deliberately not ``get_db_session()``: that returns the thread's SCOPED
         session, which inside a request IS the transaction under test -- it would
-        see the caller's own uncommitted writes and grade nothing. Binding a new
-        Session to the engine takes a second pooled connection, which is the same
-        isolation the background job gets.
+        see the caller's own uncommitted writes and grade nothing. A second pooled
+        connection (:meth:`_independent_session`) is the same isolation the
+        background job gets.
         """
-        from sqlalchemy.orm import Session as SQLAlchemySession
-
-        from src.core.database.database_session import get_engine
         from src.core.database.repositories.creative import CreativeRepository
 
-        with SQLAlchemySession(bind=get_engine()) as independent_session:
+        with self._independent_session() as independent_session:
             row = CreativeRepository(independent_session, tenant_id).get_by_id(creative_id, principal_id)
             return None if row is None else creative_fingerprint(row)
+
+    def committed_creative_fingerprints(self) -> dict[str, tuple[str, str]]:
+        """{creative_id: fingerprint} for every creative of this env's principal, as committed now.
+
+        The library-wide twin of :meth:`_committed_creative_fingerprint`, on the same
+        independent connection, so a step comparing the library before and after a
+        request reads both sides from the database the request wrote, on every transport.
+        """
+        from src.core.database.repositories.creative import CreativeRepository
+
+        with self._independent_session() as session:
+            return {
+                row.creative_id: creative_fingerprint(row)
+                for row in CreativeRepository(session, self._tenant_id).list_by_principal(self._principal_id)
+            }
 
     # --- the workflow-step / assignment oracle (GH #2002) ---
     #
@@ -582,17 +661,21 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
     # from "written and about to be rolled back", which is the entire question a
     # preview asks.
 
-    @staticmethod
-    def _independent_session() -> Any:
-        """A Session on its OWN pooled connection -- never the scoped one."""
+    def _independent_session(self) -> Any:
+        """A Session on its OWN pooled connection -- never the scoped one.
+
+        Bound to the engine THIS env's session writes through, which is the database the
+        request under test commits to on every transport: production's engine in process,
+        and the live server's database over e2e_rest (``IntegrationEnv`` binds the env's
+        session there, so the factories' rows are the server's rows). Binding to
+        ``get_engine()`` instead made the over-e2e answer depend on whether this process's
+        cached settings had followed the BDD route's repoint of ``DATABASE_URL``.
+        """
         from sqlalchemy.orm import Session as SQLAlchemySession
 
-        from src.core.database.database_session import get_engine
+        return SQLAlchemySession(bind=self.get_session().get_bind())
 
-        return SQLAlchemySession(bind=get_engine())
-
-    @staticmethod
-    def _committed_workflow_rows(*, tenant_id: str) -> tuple[list[str], list[str]]:
+    def _committed_workflow_rows(self, *, tenant_id: str) -> tuple[list[str], list[str]]:
         """``(step_ids, mapped object_ids)`` COMMITTED for *tenant_id*, both sorted.
 
         WorkflowStep carries no tenant_id column, so tenant scoping goes through
@@ -603,7 +686,7 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
 
         from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 
-        with CreativeSyncEnv._independent_session() as session:
+        with self._independent_session() as session:
             step_ids = sorted(
                 session.scalars(
                     select(WorkflowStep.step_id).join(WorkflowStep.context).where(Context.tenant_id == tenant_id)
@@ -620,8 +703,7 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
             )
             return step_ids, object_ids
 
-    @staticmethod
-    def _committed_context_ids(*, tenant_id: str) -> list[str]:
+    def _committed_context_ids(self, *, tenant_id: str) -> list[str]:
         """Context rows COMMITTED for *tenant_id*, sorted.
 
         The third row the write path creates. Graded separately from the steps
@@ -632,17 +714,16 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
 
         from src.core.database.models import Context
 
-        with CreativeSyncEnv._independent_session() as session:
+        with self._independent_session() as session:
             return sorted(session.scalars(select(Context.context_id).where(Context.tenant_id == tenant_id)).all())
 
-    @staticmethod
-    def _committed_assignment_count(*, tenant_id: str) -> int:
+    def _committed_assignment_count(self, *, tenant_id: str) -> int:
         """creative_assignments rows COMMITTED for *tenant_id*."""
         from sqlalchemy import func, select
 
         from src.core.database.models import CreativeAssignment
 
-        with CreativeSyncEnv._independent_session() as session:
+        with self._independent_session() as session:
             return int(
                 session.scalar(
                     select(func.count())
@@ -652,14 +733,13 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
                 or 0
             )
 
-    @staticmethod
-    def _committed_creatives_awaiting_approval(*, tenant_id: str, principal_id: str) -> list[str]:
+    def _committed_creatives_awaiting_approval(self, *, tenant_id: str, principal_id: str) -> list[str]:
         """creative_ids COMMITTED at ``pending_review`` for *tenant_id*, sorted."""
         from sqlalchemy import select
 
         from src.core.database.models import Creative
 
-        with CreativeSyncEnv._independent_session() as session:
+        with self._independent_session() as session:
             return sorted(
                 session.scalars(
                     select(Creative.creative_id).where(
@@ -803,25 +883,23 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
                 error=data.get("ai_review_error"),
             )
 
-    @realize_e2e(
-        e2e_unsupported(
-            "the notification observer is a side_effect installed on an in-process mock of "
-            "_send_creative_notifications. Under e2e_rest the sync runs in the Docker server "
-            "process, where that mock does not exist and the real notifier answers -- nothing "
-            "would ever be recorded and the ordering assertions would read None. Observing it "
-            "e2e needs effect capture at the server (a notification sink the test can poll), "
-            "which is its own build"
-        )
-    )
+    @realize_e2e(_observe_at_the_held_slack_delivery)
     def observe_effects_at_notification(self) -> None:
         """Install the Slack-notification observer for this scenario.
 
         Ordering between an escaping effect and the writes it refers to is only
         observable AT the effect: after the request both are done and every
         ordering looks alike. The observer records what a separate connection
-        could see the moment ``_send_creative_notifications`` was entered.
+        could see the moment ``_send_creative_notifications`` was entered; over
+        e2e_rest, while the server's Slack delivery is held in flight
+        (:func:`_observe_at_the_held_slack_delivery`).
         """
         self.mock["send_notifications"].side_effect = self._observe_at_notification
+
+    def _record_visibility_at_notification(self) -> None:
+        """What an independent connection sees committed now: the workflow rows and the assignments."""
+        self.workflow_rows_at_notification = self._committed_workflow_rows(tenant_id=self._tenant_id)
+        self.assignment_count_at_notification = self._committed_assignment_count(tenant_id=self._tenant_id)
 
     def _observe_at_notification(self, *args: Any, **kwargs: Any) -> None:
         """Record DB visibility at the notification, then let the notification run.
@@ -840,29 +918,22 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
         """
         from src.core.tools.creatives._workflow import _send_creative_notifications
 
-        self.workflow_rows_at_notification = self._committed_workflow_rows(tenant_id=self._tenant_id)
-        self.assignment_count_at_notification = self._committed_assignment_count(tenant_id=self._tenant_id)
+        self._record_visibility_at_notification()
         _send_creative_notifications(*args, **kwargs)
 
-    @realize_e2e(
-        e2e_unsupported(
-            "every field of this snapshot is read over a second pooled connection to the engine "
-            "THIS process is bound to. Under e2e_rest the request runs in the Docker server "
-            "process against its own database, so the read answers about the wrong database -- it "
-            "would report zero rows on every branch and grade nothing, which is strictly worse than "
-            "not grading. Observing it e2e needs a server-side read-back surface (a tenant-scoped "
-            "admin endpoint over workflow_steps / object_workflow_mapping / creative_assignments), "
-            "which is its own build"
-        )
-    )
     def committed_sync_effects(self) -> CommittedSyncEffects:
         """Everything this tenant has COMMITTED right now, in ONE snapshot.
 
         One accessor rather than four: the scenarios compare these fields
         against each other (mappings against persisted creatives, the
         notification-time read against the final one), and four independently
-        timed reads could not be compared -- besides multiplying the
-        e2e-unrealizability declaration by four for one reason.
+        timed reads could not be compared.
+
+        The same read on every transport. The second pooled connection is on the
+        engine this env's session writes through (:meth:`_independent_session`),
+        which over e2e_rest is the live server's database -- the one the server
+        committed to. Read after the request has returned, so what it sees is
+        exactly what the server left committed.
         """
         step_ids, object_ids = self._committed_workflow_rows(tenant_id=self._tenant_id)
         return CommittedSyncEffects(
@@ -875,22 +946,14 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
             ),
         )
 
-    @realize_e2e(
-        e2e_unsupported(
-            "the out-of-transaction effects this configures are observed as CALLS on in-process mocks "
-            "(registry.build_creative / preview_creative, and the _ai_review_executor submit). Over real "
-            "HTTP those objects live in the server process, so the assertions have nothing to read and the "
-            "real creative agent answers for itself -- the scenario would grade the agent, not the gates. "
-            "Observing them e2e needs effect capture at the server (a request sink + a review-verdict "
-            "read-back), which is its own build"
-        )
-    )
     def configure_agent_served_creative(self, *, generative: bool, format_id: str) -> dict[str, str]:
         """Configure a format the creative agent actually serves, generative or not.
 
-        ONE seam for both cells of the dry_run out-of-transaction outline, so the
-        e2e-unrealizability is declared once, at the env method, rather than
-        re-derived in a step body.
+        ONE seam for both cells of the dry_run out-of-transaction outline. The format is
+        named at :meth:`catalog_agent_url`, so on e2e_rest it is the tenant's hosted agent
+        that lists it, answers its preview or build, and records what the seller asked of
+        it (:meth:`creative_agent_requests`); in process it is the standard agent this
+        env's registry answers from the capture, with the two outbound calls recorded.
 
         ``generative`` is the scenario's DECLARATION and is checked against the capture
         rather than imposed on it: ``served_format`` refuses when the two disagree. The
@@ -902,27 +965,62 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
             return self.setup_generative_build(format_id=format_id)
 
         self.served_format(format_id, generative=False)
-        self.mock["registry"].return_value.preview_creative = AsyncMock(
-            return_value={"previews": [{"url": "https://preview.example.com/p.html"}]}
-        )
-        return {"agent_url": self.DEFAULT_AGENT_URL, "id": format_id}
+        agent_url = self.catalog_agent_url(format_id)
+        self.answer_creative_agent(PEER_PREVIEW_TOOL, single_preview_document("agent-served"))
+        return {"agent_url": agent_url, "id": format_id}
 
-    @realize_e2e(
-        e2e_unsupported(
-            "a live creative agent answers a preview request for itself; it cannot be told to answer "
-            "with no previews, which is the rejection this configures"
-        )
-    )
     def configure_agent_no_preview(self, *, format_id: str) -> dict[str, str]:
         """A served static format whose preview request the agent answers with nothing.
 
         With no image or video asset on the creative there is then no media_url to fall
         back on, which production classifies as CREATIVE_REJECTED with ``reasons``
-        (src/core/tools/creatives/_processing.py).
+        (src/core/tools/creatives/_processing.py). Over e2e_rest the agent answering is
+        the tenant's hosted agent, which serves whatever answer it is given -- the same
+        empty document the in-process registry hands back.
         """
         fmt = self.configure_agent_served_creative(generative=False, format_id=format_id)
-        self.mock["registry"].return_value.preview_creative = AsyncMock(return_value={})
+        self.answer_creative_agent(PEER_PREVIEW_TOOL, {})
         return fmt
+
+    @realize_e2e(_the_hosted_agent_answers)
+    def answer_creative_agent(self, tool: str, document: dict[str, Any]) -> None:
+        """The creative agent answers every *tool* request with *document* from now on.
+
+        *tool* is ``preview_creative`` or ``build_creative``: the two outbound operations
+        with no capture (see :class:`HarnessCreativeAgentRegistry`). In process the
+        registry's recorder for that operation returns *document*; over e2e_rest the
+        tenant's hosted agent serves it (:func:`_the_hosted_agent_answers`). One document,
+        both legs, so a scenario's agent says the same thing on every transport.
+        """
+        setattr(self.mock["registry"].return_value, tool, AsyncMock(return_value=document))
+
+    @realize_e2e(
+        e2e_unsupported(
+            "the Then this serves asks WHICH format ids the seller looked up with the agent, read "
+            "off a recorder standing in for registry.get_format. Under e2e_rest the lookup runs in "
+            "the server and reaches the hosted agent as a list_creative_formats call, which names no "
+            "format id and may be answered from the catalogue the same request already listed, so "
+            "'looked up THIS format' has no observable there"
+        )
+    )
+    def record_format_lookups(self, *, answering: Format) -> None:
+        """Record every single-format lookup, answering each with *answering*."""
+        self.mock["registry"].return_value.get_format = AsyncMock(return_value=answering)
+
+    @realize_e2e(_the_hosted_agent_received)
+    def creative_agent_requests(self, tool: str) -> list[dict[str, Any]]:
+        """The arguments of every *tool* request the seller made of the creative agent, oldest first.
+
+        *tool* is ``preview_creative`` or ``build_creative``. In process these are the
+        keyword arguments production passed the registry's recorder, minus ``agent_url``
+        (where the request went, which the agent does not receive as an argument); over
+        e2e_rest they are the tool-call arguments the tenant's hosted agent recorded
+        (:func:`_the_hosted_agent_received`). ``registry.build_creative`` forwards
+        ``message`` to the agent verbatim, so a build's ``message`` reads the same on both
+        legs; the other keys are each leg's own spelling and no step compares them.
+        """
+        recorder = getattr(self.mock["registry"].return_value, tool)
+        return [{k: v for k, v in call.kwargs.items() if k != "agent_url"} for call in recorder.call_args_list]
 
     def operator_agent_previews_canonical_identity(self, kind: str, format_option_ref: dict[str, Any] | None) -> None:
         """The operator's creative agent renders a creative identified by *kind*, on every transport.
@@ -1113,14 +1211,18 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
         Neither the catalogue nor ``get_format`` is configured here any more. Both are
         answered by production from the capture, which already carries this format --
         narrowing the catalogue to one entry is what made the in-process seller differ
-        from the server. ``agent_url`` is likewise gone: a captured format has exactly
-        one, and naming another produced a reference ``find_format`` matched nowhere.
+        from the server. The format is named at :meth:`catalog_agent_url`: the standard
+        agent in process, and on e2e_rest the tenant's hosted agent, which publishes the
+        capture's own entry and answers the build -- so the build request the server makes
+        lands where :meth:`creative_agent_requests` reads it, and never on the reference
+        agent, which would spend a real Gemini call on a test key.
         """
         self.served_format(format_id, generative=True)
+        agent_url = self.catalog_agent_url(format_id)
 
-        # Configure build_creative return value. The generated assets are spelled the
-        # way the pinned asset union spells them (core/assets/text-asset.json: asset_type
-        # + content), because production types the agent's output before storing it.
+        # The build answer. The generated assets are spelled the way the pinned asset
+        # union spells them (core/assets/text-asset.json: asset_type + content), because
+        # production types the agent's output before storing it.
         default_build = {
             "status": "draft",
             "context_id": "ctx-test-123",
@@ -1129,45 +1231,34 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
                 "output_format": {"url": "https://generated.example.com/creative.html"},
             },
         }
-        self.mock["registry"].return_value.build_creative = AsyncMock(return_value=build_result or default_build)
+        self.answer_creative_agent(PEER_BUILD_TOOL, build_result or default_build)
 
         self.set_gemini_api_key(gemini_api_key)
 
-        return {"agent_url": self.DEFAULT_AGENT_URL, "id": format_id}
+        return {"agent_url": agent_url, "id": format_id}
 
-    @realize_e2e(
-        e2e_unsupported(
-            "GEMINI_API_KEY is read from the SERVER's own configuration, and e2e_rest talks to "
-            "a process this harness does not configure — there is no surface for setting or "
-            "clearing another process's env-derived config mid-scenario"
-        )
-    )
     def set_gemini_api_key(self, value: str | None) -> None:
-        """Configure (or clear, with ``None``) the generative build's API key.
+        """Configure (or clear, with ``None``) the TENANT's Gemini API key, on every transport.
 
-        A named method rather than four step bodies reaching into
-        ``env.mock["config"].return_value``. "Is the key configured" is a state of
-        the ENVIRONMENT, so the environment should own it: a step that has to know
-        the mock's internal shape to express a precondition is one that breaks when
-        the harness reorganises, and it is invisible to the e2e-escape-hatch guard,
-        whose scan is harness-only (salesagent-b341x.9). Four reaches become zero
-        without moving any behaviour.
+        The generative build reads the key from the tenant's AI configuration
+        (``tenant.ai_config`` through ``src.services.ai.config.tenant_google_api_key``),
+        so "is the key configured" is that column, seeded in the shape the admin AI
+        settings form writes it (``settings.update_ai``: a provider and its key). The
+        write goes through the env-owned writer both caller paths read
+        (:meth:`configure_tenant_field`): the identity a direct ``call_impl`` hands
+        over, and the row the wire legs' resolver -- the e2e server's included -- reads.
+        It used to be the server's environment, which a test cannot set for another
+        process, and this method was declared unrealizable over e2e_rest for exactly
+        that reason (CLAUDE.md pattern 11: a real input a deployment can set, seeded
+        like any other state).
 
         ``None`` is a real state, not a missing argument -- it is the
         "GEMINI_API_KEY not configured" precondition BR-RULE-036 grades -- which is
-        why the type admits it and there is no default.
-
-        DECLARED UNSUPPORTED OVER e2e, which is the point of having moved it here.
-        The docstring above notes the reaches were "invisible to the e2e-escape-hatch
-        guard, whose scan is harness-only" -- routing them in made them visible, and
-        the guard immediately asked the question the step bodies had been dodging: a
-        mock-setter over e2e_rest silently no-ops, so a scenario would assert against
-        unconfigured server state. It cannot be realized (the key belongs to another
-        process's configuration), so it says so rather than pretending.
+        why the type admits it and there is no default. An empty string is the same
+        state: the tenant has no AI configuration at all.
         """
-        # The environment is under the patch.dict started in _configure_mocks, so this
-        # write lives exactly as long as the env and is undone with it.
-        self._apply_gemini_api_key(value)
+        self.ensure_tenant()
+        self.configure_tenant_field("ai_config", {"provider": "gemini", "api_key": value} if value else None)
 
     def set_served_catalogue(self, formats: list[Format]) -> None:
         """The seller's catalog is exactly *formats*, on every transport.

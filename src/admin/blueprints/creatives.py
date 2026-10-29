@@ -1116,15 +1116,10 @@ def _ai_review_creative_impl_inner(
         # Check AI availability - use factory to check tenant + platform config
         factory = AIServiceFactory()
 
-        # Build effective config from tenant settings
-        tenant_ai_config = tenant.ai_config if hasattr(tenant, "ai_config") else None
-
-        # Backward compatibility: use gemini_api_key if no ai_config
-        if not tenant_ai_config and tenant.gemini_api_key:
-            tenant_ai_config = {
-                "provider": "gemini",
-                "api_key": tenant.gemini_api_key,
-            }
+        # The tenant's AI configuration: the column the admin AI settings write and the
+        # generative creative build reads its key from. A legacy gemini_api_key was moved
+        # into it by revision d8b2f4a6c1e3.
+        tenant_ai_config = tenant.ai_config
 
         if not factory.is_ai_enabled(tenant_ai_config):
             return {

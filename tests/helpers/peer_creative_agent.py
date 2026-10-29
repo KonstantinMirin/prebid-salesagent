@@ -65,6 +65,13 @@ def serve_peer_tool(key: str, tool: str, document: dict) -> str:
     return peer_agent_url(key)
 
 
+def peer_tool_calls(key: str, tool: str) -> list[dict]:
+    """The arguments of every *tool* call this process's peer received under *key*, oldest first."""
+    from tests.e2e.webhook_capture_service import tool_calls
+
+    return tool_calls(_shared_peer_agent().store.get(key), tool)
+
+
 def catalog_entry(fmt: Format, agent_url: str | None = None) -> dict[str, Any]:
     """*fmt* as a peer's ``list_creative_formats`` entry, re-homed at *agent_url* when given.
 
