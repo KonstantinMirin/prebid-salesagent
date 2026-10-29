@@ -510,7 +510,7 @@ is worse than none. These we can. A oneOf expressed as a model validator (see
 format_kind is flattened onto one model) rejects for exactly the reason JSON
 Schema spells ``oneOf``. The error type IS the keyword, so a raise site cannot
 name one this table does not carry. ``not`` is the immutable-field refusal on a
-package update (``UpdateMediaBuyRequest._refuse_immutable_package_fields``):
+package update (``UpdateMediaBuyRequest._refuse_forbidden_package_shapes``):
 media-buy/package-update.json rejects those fields through its root ``not`` (an
 ``anyOf`` of ``required``), so ``not`` is the keyword a JSON Schema validator
 reports for that rejection. ``readOnly`` is NOT that keyword and is not in this

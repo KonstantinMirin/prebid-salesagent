@@ -2744,6 +2744,32 @@ Feature: BR-UC-003 Update Media Buy
       | params             |
       | pricing_option_id  |
 
+    # The same root `not` names two more single members, which are not fully-immutable fields
+    # but are refused through the same branch shape (`required: [name]`): the pre-GA
+    # capability_ids ("Pre-GA capability_ids is also rejected rather than accepted as an
+    # extension", package-update.json's description) and budget_cap_timezone. Both were
+    # accepted: neither is a declared property, so the accepted-shape strip dropped them.
+    Examples: the other single members the package-update root `not` forbids
+      | immutable_field     |
+      | capability_ids      |
+      | budget_cap_timezone |
+
+  @T-UC-003-package-update-bidding-with-bid-price @immutable_field_guard @error @schema-v3.1 @post-f2
+  Scenario: a package update carrying a bidding object beside bid_price is refused by the root not
+    Given a valid update_media_buy request for "mb_existing"
+    And the request includes a package update where the payload carries bidding with bid_price
+    When the Buyer Agent sends the update_media_buy request
+    Then the update is refused INVALID_REQUEST naming the package update itself under keyword not
+    # LOCAL ADDITION. package-update.json's root `not` has one branch of two members:
+    # required [bidding, bid_price] with bidding typed object. bid_price's own description:
+    # "A package update MUST NOT supply both a non-null bidding object and bid_price. During
+    # migration, bidding:null MAY accompany bid_price". Both members are declared, so nothing
+    # stripped them and the update reached the capability refusal instead. No single member is
+    # at fault, so the pointer is the package object, where a JSON Schema validator reports a
+    # failed `not`.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/not
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/bid_price
+
   @T-UC-003-partition-immutable-package-field @partition @immutable_field_guard @schema-v3.1
   Scenario Outline: Immutable package-field guard partition validation - <partition>
     Given a valid update_media_buy request with:

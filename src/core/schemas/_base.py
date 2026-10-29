@@ -3480,15 +3480,12 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
         LibraryPackageUpdate, "creatives"
     )
 
-    # Fields that are immutable once a package is created (BR-RULE-198): the pin's own list.
-    # media-buy/package-update.json names "Fully-immutable fields (product_id, format_ids,
-    # format_option_refs, format_kind, params, pricing_option_id)", and its root `not` anyOf
-    # requires each of the six. A selector reaches update_media_buy only on new_packages[],
-    # which carries package-request.json. Refused by the REQUEST, not by this model: see
-    # ``UpdateMediaBuyRequest._refuse_immutable_package_fields`` for why it has to run there.
-    _IMMUTABLE_PACKAGE_FIELDS: ClassVar[frozenset[str]] = frozenset(
-        {"product_id", "format_ids", "format_option_refs", "format_kind", "params", "pricing_option_id"}
-    )
+    # The shapes a package update may not take -- the six fully-immutable fields
+    # (BR-RULE-198), the pre-GA capability_ids, budget_cap_timezone, and bidding beside
+    # bid_price -- are media-buy/package-update.json's root `not`, read off the pin by
+    # ``_pinned_fields.package_update_forbidden_shapes``. Refused by the REQUEST, not by this
+    # model: see ``UpdateMediaBuyRequest._refuse_forbidden_package_shapes`` for why it has to
+    # run there.
 
     @model_validator(mode="before")
     @classmethod
@@ -3651,38 +3648,54 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
 
     @model_validator(mode="before")
     @classmethod
-    def _refuse_immutable_package_fields(cls, data: Any) -> Any:
-        """Refuse every fully-immutable field on a package update, in every extra mode.
+    def _refuse_forbidden_package_shapes(cls, data: Any) -> Any:
+        """Refuse every shape package-update.json's root ``not`` forbids, in every extra mode.
+
+        The shapes are the pin's, read by ``_pinned_fields.package_update_forbidden_shapes``:
+        at the pin the six "Fully-immutable fields (product_id, format_ids,
+        format_option_refs, format_kind, params, pricing_option_id)", the pre-GA
+        ``capability_ids`` ("rejected rather than accepted as an extension"),
+        ``budget_cap_timezone``, and a non-null ``bidding`` object beside ``bid_price`` (whose
+        own description: "A package update MUST NOT supply both a non-null bidding object and
+        bid_price"). The six were a hand-kept list, and the other three were accepted.
 
         HERE, on the request, because it has to run BEFORE the accepted-shape strip
-        (``BuyerRequest._accept_only_declared_fields``). None of the six fields is a declared
-        property of package-update.json, so the strip removes them first: in dev the buyer
-        got the generic ``additionalProperties`` refusal, and in production the field was
-        dropped and the update answered success with nothing changed. The pin does not
-        leave that to the extra mode -- package-update.json says these fields "cannot appear
-        in update payloads", enforced by its root ``not``. A subclass's before-validator runs
-        ahead of the mixin's, which is the ordering this relies on.
+        (``BuyerRequest._accept_only_declared_fields``). Most of these members are not
+        declared properties of package-update.json, so the strip removes them first: in dev
+        the buyer got the generic ``additionalProperties`` refusal, and in production the
+        field was dropped and the update answered success with nothing changed. The pin does
+        not leave that to the extra mode. A subclass's before-validator runs ahead of the
+        mixin's, which is the ordering this relies on.
 
         Raised as a PYDANTIC error with a request-rooted loc, for the reason
         ``AdCPPackageUpdate._validate_package_update_shape`` gives: FastMCP drives this model
         through a TypeAdapter before the tool body, and a pydantic error is the one shape
-        every boundary converts. One entry per field, so ``issues[]`` names every offender
-        and ``field`` derives from ``issues[0]``, as core/error.json requires. The keyword is
-        ``not``, the one in package-update.json that rejects these fields, because
-        core/error.json's ``issues[].keyword`` is "the validator's native keyword name".
+        every boundary converts. One entry per forbidden shape, so ``issues[]`` names every
+        offender and ``field`` derives from ``issues[0]``, as core/error.json requires. The
+        keyword is ``not``, the one in package-update.json that rejects them, because
+        core/error.json's ``issues[].keyword`` is "the validator's native keyword name". The
+        pointer is the one member a single-member shape names; a shape of two members
+        (``bidding`` with ``bid_price``) has no one member at fault, so it names the package,
+        which is where a JSON Schema validator reports a failed ``not``.
         """
+        from src.core.schemas._pinned_fields import package_update_forbidden_shapes
+
         packages = data.get("packages") if isinstance(data, dict) else None
         if not isinstance(packages, list):
             return data
         errors = [
             InitErrorDetails(
-                type=PydanticCustomError("not", "{name} is immutable on a package update", {"name": name}),
-                loc=("packages", index, name),
+                type=PydanticCustomError(
+                    "not", "{name} is forbidden on a package update", {"name": " with ".join(required)}
+                ),
+                loc=("packages", index, required[0]) if len(required) == 1 else ("packages", index),
                 input=package,
             )
             for index, package in enumerate(packages)
             if isinstance(package, dict)
-            for name in sorted(AdCPPackageUpdate._IMMUTABLE_PACKAGE_FIELDS & package.keys())
+            for required, objects in package_update_forbidden_shapes()
+            if all(name in package for name in required)
+            and all(isinstance(package[name], dict) for name in objects if name in package)
         ]
         if errors:
             raise PydanticCoreValidationError.from_exception_data("UpdateMediaBuyRequest", errors)

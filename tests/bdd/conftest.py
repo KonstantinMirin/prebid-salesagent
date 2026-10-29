@@ -4353,7 +4353,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Graduated: T-UC-026-ext-g-product, T-UC-026-ext-g-format,
             # T-UC-026-ext-g-pricing (innet_091026_1343, all four transports xpass).
             # Production refuses each immutable field on update from
-            # UpdateMediaBuyRequest._refuse_immutable_package_fields, which raises one
+            # UpdateMediaBuyRequest._refuse_forbidden_package_shapes, which raises one
             # pydantic `not` error per offending field; adcp_error_for maps a pydantic
             # ValidationError to AdCPInvalidRequestError, so the buyer gets
             # INVALID_REQUEST + recovery=correctable + the CODE_TABLE suggestion with
@@ -6427,6 +6427,13 @@ _UC003_TARGETING_OVERLAY_TAGS = frozenset(
 _UC003_MANUAL_APPROVAL_TAGS = frozenset(
     {"T-UC-003-alt-manual", "T-UC-003-approval-tenant", "T-UC-003-approval-adapter"}
 )
+# The package-update root `not` scenarios (media-buy/package-update.json). Their Givens need
+# exactly the uc003-ext seed -- an existing buy with pkg_001 -- and the refusal they grade is
+# raised by the request model before any of it is read. They sat on the uc003-not-wired
+# catch-all, which xfails at setup, so the outline added with the refusal had never run.
+_UC003_PACKAGE_UPDATE_NOT_TAGS = frozenset(
+    {"T-UC-003-package-update-immutable-keyword", "T-UC-003-package-update-bidding-with-bid-price"}
+)
 # The BR-RULE-215 revision scenarios. They were dormant for a reason that was not
 # "the harness cannot reach them": they had NO step definitions at all, so the
 # not-wired row was standing in for missing work rather than for a production gap.
@@ -7131,6 +7138,7 @@ ENV_ROUTES: list[EnvRoute] = [
             lambda m: (
                 any(t.startswith("T-UC-003-ext-") for t in m)
                 or bool(m & _UC003_TARGETING_OVERLAY_TAGS)
+                or bool(m & _UC003_PACKAGE_UPDATE_NOT_TAGS)
                 or "T-UC-003-partition-creative-state" in m
                 or "T-UC-003-boundary-creative-state" in m
             ),

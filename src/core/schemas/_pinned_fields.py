@@ -35,6 +35,32 @@ def _schema_root() -> Path:
 
 
 @cache
+def package_update_forbidden_shapes() -> tuple[tuple[tuple[str, ...], frozenset[str]], ...]:
+    """The shapes ``media-buy/package-update.json``'s root ``not`` forbids, as the pin states them.
+
+    Each ``anyOf`` branch of that ``not`` is one forbidden shape: the members it ``required``s,
+    and the subset of them its ``properties`` additionally constrain to ``type: object``. At the
+    pin that is six fully-immutable fields, the pre-GA ``capability_ids``,
+    ``budget_cap_timezone``, and ``bidding`` (an object) together with ``bid_price``. Read here
+    so the list moves with the ``adcp`` pin instead of with a hand-kept copy -- the hand-kept
+    copy named three of the nine.
+
+    Raises:
+        UnderivablePinnedSchema: a branch uses a keyword other than ``required`` and an
+            object-typed ``properties`` member. Refused rather than skipped, so a branch this
+            reader cannot evaluate is never mistaken for a branch that forbids nothing.
+    """
+    schema = json.loads((_schema_root() / "media-buy" / "package-update.json").read_text())
+    shapes = []
+    for branch in schema["not"]["anyOf"]:
+        members = branch.get("properties", {})
+        if set(branch) - {"required", "properties"} or any(spec != {"type": "object"} for spec in members.values()):
+            raise UnderivablePinnedSchema(f"package-update.json root not branch {branch!r}")
+        shapes.append((tuple(branch["required"]), frozenset(members)))
+    return tuple(shapes)
+
+
+@cache
 def revision_minimum() -> int:
     """The lower bound the pin puts on ``media_buys[].revision``.
 

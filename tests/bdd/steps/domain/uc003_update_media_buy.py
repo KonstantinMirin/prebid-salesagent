@@ -2651,10 +2651,13 @@ def given_package_update_start_time(ctx: dict, value: str) -> None:
     _ensure_update_defaults(ctx)["packages"] = [{"package_id": "pkg_001", "start_time": value}]
 
 
-#: A protocol-valid value for each field package-update.json's root ``not`` forbids. Valid
-#: shapes on purpose: the only defect in the request is that the field is present. The
-#: last three are package-request.json's canonical selector arms, which the same ``not``
-#: names beside ``format_ids``.
+#: A protocol-valid value for each member package-update.json's root ``not`` forbids. Valid
+#: shapes on purpose: the only defect in the request is that the member is present. The
+#: canonical selector arms (format_option_refs, format_kind, params) are named beside
+#: ``format_ids``; ``capability_ids`` is the pre-GA field the schema's description says "is
+#: also rejected rather than accepted as an extension"; ``bidding`` and ``bid_price`` are
+#: forbidden only TOGETHER, ``bidding`` being a non-null object (core/bidding-policy.json's
+#: ``{automatic: true}``).
 _IMMUTABLE_PACKAGE_VALUES: dict[str, Any] = {
     "product_id": "prod_other",
     "format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}],
@@ -2662,6 +2665,10 @@ _IMMUTABLE_PACKAGE_VALUES: dict[str, Any] = {
     "format_option_refs": [{"scope": "product", "format_option_id": "opt_other"}],
     "format_kind": "image",
     "params": {"width": 300, "height": 250},
+    "capability_ids": ["cap_other"],
+    "budget_cap_timezone": "America/New_York",
+    "bidding": {"automatic": True},
+    "bid_price": 5.0,
 }
 
 #: What the generated rows mean by "all three immutable fields": the three they were
@@ -2712,6 +2719,20 @@ def then_package_update_field_refused_by_keyword(ctx: dict, name: str, keyword: 
         "INVALID_REQUEST",
         field=f"packages[0].{name}",
         issues=[{"pointer": f"/packages/0/{name}", "keyword": keyword}],
+    )
+
+
+@then(parsers.parse("the update is refused INVALID_REQUEST naming the package update itself under keyword {keyword}"))
+def then_package_update_refused_by_keyword(ctx: dict, keyword: str) -> None:
+    """The refusal names the PACKAGE, with the schema keyword *keyword*.
+
+    For a forbidden shape of two members no one member is at fault, so the pointer is where
+    a JSON Schema validator reports a failed root ``not``: the package-update object itself.
+    """
+    ctx["result"].assert_wire_error(
+        "INVALID_REQUEST",
+        field="packages[0]",
+        issues=[{"pointer": "/packages/0", "keyword": keyword}],
     )
 
 
