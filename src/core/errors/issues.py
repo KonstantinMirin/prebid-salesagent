@@ -159,20 +159,40 @@ class JsonPointer:
         A ``document`` that is not a container at all (``None`` from a call site holding no
         buyer payload, or a body that never parsed) leaves every segment unjudgeable, and
         the loc passes through. Dropping on no evidence would erase real paths.
+
+        Membership alone is not enough when a synthesized segment COLLIDES with a real
+        member, which is the tag-value case above: an optimization goal
+        ``{"kind": "metric", "metric": "clicks", "priority": 0}`` fails at
+        ``(..., 0, "metric", "priority")``, where ``"metric"`` is the tag and also a member
+        whose value is ``"clicks"``. Keeping it descends into the string and loses
+        ``priority``, so the pointer named the one member that was valid. So each segment
+        that resolves is tried both kept and dropped, and the reading that resolves the
+        DEEPEST segment of the loc wins -- the failing leaf is the last segment pydantic
+        names -- with a tie kept, which is the reading a document without a collision
+        always had. Each resolvable segment doubles the readings, which a loc of a dozen
+        segments bounds well below any cost worth caching.
         """
         if not isinstance(document, Mapping | Sequence) or isinstance(document, str | bytes):
             return cls(tuple(loc))
         segments = tuple(loc)
-        kept: list[str | int] = []
-        node: Any = document
-        for position, segment in enumerate(segments):
+        last = len(segments) - 1
+
+        def resolve(node: Any, position: int) -> tuple[int, tuple[str | int, ...]]:
+            """``(deepest loc position resolved, kept segments)`` for ``segments[position:]``."""
+            if position > last:
+                return -1, ()
+            segment = segments[position]
+            dropped = resolve(node, position + 1)
             child = _member(node, segment)
-            if child is not _ABSENT:
-                kept.append(segment)
-                node = child
-            elif names_absent_member and position == len(segments) - 1:
-                kept.append(segment)
-        return cls(tuple(kept))
+            if child is _ABSENT:
+                if names_absent_member and position == last:
+                    return position, (segment,)
+                return dropped
+            deeper, below = resolve(child, position + 1)
+            kept = (max(position, deeper), (segment, *below))
+            return kept if kept[0] >= dropped[0] else dropped
+
+        return cls(resolve(document, 0)[1])
 
     @staticmethod
     def _escape(token: str) -> str:

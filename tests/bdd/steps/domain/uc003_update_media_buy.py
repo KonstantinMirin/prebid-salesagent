@@ -722,38 +722,44 @@ def given_creatives_in_valid_state(ctx: dict) -> None:
             )
 
 
+def ensure_product_declares_placements(ctx: dict, product: Any, placement_ids: list[str]) -> None:
+    """Give *product* a seller-inline placement per id in *placement_ids*, if it declares none.
+
+    A placement id is valid for a product only when the product declares that placement:
+    core/creative-assignment.json calls ``placement_ids`` "routing IDs within
+    already-purchased inventory", and core/product.json's ``placements`` is that
+    inventory ("Creative assignments route creatives only after placement inventory is
+    purchased"). A product declaring no placements offers none to route to. A product that
+    already declares some is left as it is, so the caller judges ids against what it holds.
+    """
+    from tests.factories import StoredPlacementFactory
+
+    if not product.placements:
+        product.placements = [StoredPlacementFactory(placement_id=pid) for pid in placement_ids]
+        ctx["env"]._commit_factory_data()
+
+
 @given("all placement_ids are valid for the product")
 def given_placement_ids_valid(ctx: dict) -> None:
-    """Declarative guard — verifies placement_ids are valid for the product.
+    """The product declares every placement the assignments route to.
 
-    The guaranteed_display product created by setup_update_data() does not
-    restrict placements, so any placement_id is valid. When a product has
-    explicit placement restrictions, this step verifies compatibility.
+    The harness product declares no placements, which makes every placement id invalid for
+    it, so the sentence is made true here rather than assumed.
     """
     pids = ctx.get("referenced_placement_ids")
-    assert pids is not None, "No referenced placement_ids — missing prior step"
-    assert isinstance(pids, list), f"Expected placement_ids to be a list, got {type(pids).__name__}"
-    assert len(pids) > 0, "placement_ids list is empty — step claims placements are 'valid for the product'"
-    # Step claims 'valid for the product' — product must be present to validate against
+    assert pids, "No referenced placement_ids — missing prior step"
     product = ctx.get("default_product")
     assert product is not None, (
         "No product in ctx under 'default_product' — "
         "step claims placements are 'valid for the product' but no product exists to validate against"
     )
-    # Verify product does not have restrictive placement config that would reject these.
-    # The model column is `placements` (list of dicts with placement_id); when set it
-    # restricts the valid placement ids, when None/empty all placements are allowed.
-    placements = getattr(product, "placements", None)
-    allowed = {p.get("placement_id") for p in placements if isinstance(p, dict)} if placements else None
-    if allowed is not None:
-        invalid = [p for p in pids if p not in allowed]
-        assert not invalid, (
-            f"Placement IDs {invalid} are not in product's allowed placements {allowed} — "
-            "step claims 'all placement_ids are valid for the product'"
-        )
-    # When product has no placements restriction, all placements are
-    # valid by definition — this is correct AdCP semantics (no restriction = all allowed).
-    # Log which path was taken for debugging.
+    ensure_product_declares_placements(ctx, product, pids)
+    allowed = {p.get("placement_id") for p in product.placements}
+    invalid = [p for p in pids if p not in allowed]
+    assert not invalid, (
+        f"Placement IDs {invalid} are not in product's placements {allowed} — "
+        "step claims 'all placement_ids are valid for the product'"
+    )
 
 
 @given("the package update includes inline creatives with valid content")
@@ -2253,6 +2259,12 @@ def given_request_includes_fields(ctx: dict, update_fields: str) -> None:
     - '1 package with budget and targeting'
     - 'packages with all updatable fields'
     - 'no updatable fields in request'
+
+    Every package budget is :data:`_UPDATED_BUDGET`, never the 5000 the Background seeds,
+    so "success with persisted records" can tell a written budget from an untouched row.
+    The all-fields request pauses the buy (``paused: true``): the Background's buy is
+    ``active``, where update_media_buy.mdx maps ``paused: false`` to ``resume``, an action
+    that state does not offer. Its flight moves to dates still ahead of the clock.
     """
     kwargs = _ensure_update_defaults(ctx)
     stripped = update_fields.strip()
@@ -2263,27 +2275,28 @@ def given_request_includes_fields(ctx: dict, update_fields: str) -> None:
         kwargs.clear()
         kwargs["media_buy_id"] = mid
     elif "budget update only" in stripped:
-        kwargs["packages"] = [{"package_id": "pkg_001", "budget": 5000.0}]
+        kwargs["packages"] = [{"package_id": "pkg_001", "budget": _UPDATED_BUDGET}]
     elif "budget and targeting" in stripped:
         kwargs["packages"] = [
             {
                 "package_id": "pkg_001",
-                "budget": 5000.0,
+                "budget": _UPDATED_BUDGET,
                 "targeting_overlay": {"geo_countries": ["US"]},
             }
         ]
     elif "all updatable fields" in stripped:
+        clock = ctx["env"].clock
         kwargs["packages"] = [
             {
                 "package_id": "pkg_001",
-                "budget": 5000.0,
+                "budget": _UPDATED_BUDGET,
                 "targeting_overlay": {"geo_countries": ["US"]},
                 "paused": False,
             }
         ]
-        kwargs["paused"] = False
-        kwargs["start_time"] = "2026-05-01T00:00:00Z"
-        kwargs["end_time"] = "2026-07-01T00:00:00Z"
+        kwargs["paused"] = True
+        kwargs["start_time"] = clock.future_iso(1)
+        kwargs["end_time"] = clock.future_iso(60)
     else:
         raise ValueError(f"Unknown update_fields pattern: {stripped}")
 
@@ -3129,6 +3142,12 @@ def then_media_buy_status_not(ctx: dict, status: str) -> None:
 #: The account phrases the sandbox outlines use -> whether the named account is a sandbox.
 _ACCOUNT_CONTEXTS: dict[str, bool] = {"a sandbox account": True, "a production account": False}
 
+#: ``(code, errors[0].field)`` of the refusal the terminal-failure shape provokes: a package
+#: budget of 0 refused by the seller's positivity rule (sandbox.mdx: "Sandbox errors are real
+#: validation errors. If a buyer sends an invalid budget using a sandbox account, return a
+#: real error").
+_TERMINAL_FAILURE_REFUSAL = ("BUDGET_TOO_LOW", "packages[0].budget")
+
 
 def _name_account(ctx: dict, *, sandbox: bool) -> None:
     """Seed an account with the given sandbox flag and make it the one the update names.
@@ -3165,12 +3184,17 @@ def given_update_response_shape(ctx: dict, shape: str, trigger: str | None = Non
     """Arrange the request and the approval path so the update answers with *shape*.
 
     synchronous success: auto-approval and a valid package budget change. terminal
-    failure: a negative package budget, which the budget rule rejects
-    (@T-UC-003-partition-budget-amount). submitted task: manual approval of a valid change.
+    failure: auto-approval and a package budget of 0, which the schema admits
+    (package-update.json budget ``minimum: 0``) and the seller's own budget rule refuses
+    with :data:`_TERMINAL_FAILURE_REFUSAL`. That refusal is made inside the update, after
+    the boundary resolved the account, so a sandbox account is in hand when the error is
+    built; the negative budget this sent before was refused by the request schema before
+    the account was resolved at all. submitted task: manual approval of a valid change.
     """
     kwargs = _ensure_update_defaults(ctx)
     if shape == "terminal failure":
-        kwargs["packages"] = [{"package_id": "pkg_001", "budget": -50.0}]
+        kwargs["packages"] = [{"package_id": "pkg_001", "budget": 0.0}]
+        given_tenant_human_review_flag(ctx, "false")
         return
     kwargs.setdefault("packages", [{"package_id": "pkg_001", "budget": _UPDATED_BUDGET}])
     if shape == "synchronous success":
@@ -3198,15 +3222,27 @@ def _assert_sandbox_flag_not_true(ctx: dict) -> None:
     )
 
 
-def _assert_real_rejection(ctx: dict) -> None:
-    """A conformant AdCP error came back, and no success member did (not a silent ok)."""
+def _assert_terminal_failure_refusal(ctx: dict) -> None:
+    """The conformant refusal the terminal-failure Given provokes: its code, on its field.
+
+    Named, not "any error": an account-resolution failure for the sandbox account is also
+    a conformant error, and it would satisfy both rows below without the sandbox account
+    ever reaching the seller's own validation.
+    """
+    code, field = _TERMINAL_FAILURE_REFUSAL
     ctx["result"].assert_wire_error_is_schema_conformant()
+    ctx["result"].assert_wire_error(code, field=field)
+
+
+def _assert_real_rejection(ctx: dict) -> None:
+    """The seller's real budget refusal came back, and no success member did (not a silent ok)."""
+    _assert_terminal_failure_refusal(ctx)
     then_response_not_contain_field(ctx, "media_buy_id")
 
 
 def _assert_sandbox_forbidden(ctx: dict) -> None:
     """The terminal-failure arm forbids sandbox (update-media-buy-response.json oneOf/1 `not`)."""
-    ctx["result"].assert_wire_error_is_schema_conformant()
+    _assert_terminal_failure_refusal(ctx)
     then_response_not_contain_field(ctx, "sandbox")
 
 
@@ -3248,12 +3284,62 @@ def _assert_synchronous_success(ctx: dict) -> None:
 
 
 def _assert_persisted_success(ctx: dict) -> None:
-    """Synchronous success, and the requested package budget is what the seller stored."""
+    """Synchronous success, and the requested package budget is what the seller stored.
+
+    When the package update also carried a ``targeting_overlay``, every dimension it sent
+    must be stored with the value sent: a seller that applied the budget and dropped the
+    overlay answered the same success. Campaign-level fields sent beside the packages are
+    graded by :func:`_assert_campaign_fields_applied`.
+    """
     _assert_synchronous_success(ctx)
-    stored, _config = _stored_package(ctx, "pkg_001")
+    stored, config = _stored_package(ctx, "pkg_001")
     assert stored is not None and float(stored) == _requested_budget(ctx), (
         f"update succeeded but the stored budget is {stored!r}, not the requested {_requested_budget(ctx)}"
     )
+    sent_overlay = ctx["update_kwargs"]["packages"][0].get("targeting_overlay")
+    if sent_overlay is not None:
+        stored_overlay = config.get("targeting_overlay") or {}
+        unapplied = {dim: value for dim, value in sent_overlay.items() if stored_overlay.get(dim) != value}
+        assert not unapplied, (
+            f"update succeeded but the stored targeting_overlay {stored_overlay!r} does not hold {unapplied!r}"
+        )
+    _assert_campaign_fields_applied(ctx)
+
+
+def _assert_campaign_fields_applied(ctx: dict) -> None:
+    """Every campaign-level field the request carried is what the seller stored.
+
+    update_media_buy.mdx § Compatibility transaction boundary: one request is one atomic
+    mutation, so a pause or a flight change sent beside package changes is applied with
+    them. A seller that applied the packages and dropped the pause or the dates answered
+    the same success. A request carrying none of these fields leaves nothing to check.
+    """
+    sent = ctx["update_kwargs"]
+    sent_paused = sent.get("paused")
+    sent_times = {field: sent[field] for field in ("start_time", "end_time") if field in sent}
+    if sent_paused is None and not sent_times:
+        return
+    stored = _stored_existing_buy(ctx)
+    if sent_paused is not None:
+        assert stored.is_paused is sent_paused, (
+            f"update succeeded but the stored is_paused is {stored.is_paused!r}, not {sent_paused!r}"
+        )
+        if sent_paused:
+            # lifecycle.mdx: a paused buy reports media_buy_status "paused".
+            _assert_wire_field_equals(ctx, "media_buy_status", "paused")
+    for field, value in sent_times.items():
+        _assert_instant_stored_as_sent(field, value, getattr(stored, field))
+
+
+def _assert_accepted_unmodified(ctx: dict) -> None:
+    """Synchronous success that reports no package modified.
+
+    For a request carrying no updatable field: the pinned request requires none, and
+    update-media-buy-response.json lists in ``affected_packages`` only "each modified
+    package", so the array is absent or empty.
+    """
+    _assert_synchronous_success(ctx)
+    then_no_affected_packages(ctx)
 
 
 def _assert_frequency_cap_stored(ctx: dict) -> None:
@@ -3314,22 +3400,27 @@ def _assert_start_time_stored_as_now(ctx: dict) -> None:
     _assert_start_resolved_to(stored.start_time, stored.updated_at, "the update")
 
 
-def _assert_start_time_stored_as_sent(ctx: dict) -> None:
-    """The concrete date-time the update sent is the start_time the seller stored."""
+def _assert_instant_stored_as_sent(field: str, sent: str, stored: datetime | None) -> None:
+    """The concrete date-time the update sent for *field* is the instant the seller stored."""
     from tests.bdd.steps.domain.uc002_invariants import _as_utc
 
-    sent = ctx["update_kwargs"]["start_time"]
     expected = datetime.fromisoformat(sent.replace("Z", "+00:00")).astimezone(UTC)
-    stored = _stored_existing_buy(ctx).start_time
     assert stored is not None and _as_utc(stored) == expected, (
-        f"the update sent start_time {sent!r}, but the seller stored {stored}"
+        f"the update sent {field} {sent!r}, but the seller stored {stored}"
     )
+
+
+def _assert_start_time_stored_as_sent(ctx: dict) -> None:
+    """The concrete date-time the update sent is the start_time the seller stored."""
+    sent = ctx["update_kwargs"]["start_time"]
+    _assert_instant_stored_as_sent("start_time", sent, _stored_existing_buy(ctx).start_time)
 
 
 _UPDATE_OUTCOMES = {
     "accepted": _assert_synchronous_success,
     "accepted with the frequency cap stored": _assert_frequency_cap_stored,
     "success with each assignment's placement_ids stored as requested": _assert_assignment_routing_persisted,
+    "accepted with no package modified": _assert_accepted_unmodified,
     "success with persisted records": _assert_persisted_success,
     "success with pending status": _assert_submitted,
     "submitted task envelope (awaiting approval)": _assert_submitted,

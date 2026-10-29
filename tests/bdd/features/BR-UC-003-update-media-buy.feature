@@ -125,10 +125,17 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy success spec
     And the response status should be "completed"
     And the response should contain affected_packages including "pkg_001"
+    And the package "pkg_001" should have creative assignments [cr_001, cr_002]
     # POST-S1: Buyer knows creatives updated
     # POST-S2: Buyer sees affected packages
     # POST-S4: Unambiguous success
     # POST-S5: Request completed
+    # "all placement_ids are valid for the product" now makes the product declare plc_a and
+    # plc_b: placement_ids are "routing IDs within already-purchased inventory", and a
+    # product declaring no placements has none to route to. The last Then reads the stored
+    # assignment set, which is what "replacement semantics" names.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-assignment.json pointer=/properties/placement_ids
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/creative_assignments
 
   @T-UC-003-alt-creatives-inline @alt-flow @creatives-inline @post-s1 @post-s2 @post-s4
   Scenario: Upload inline creatives and assign to package
@@ -1590,29 +1597,50 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
 
+    # LOCAL CORRECTION. Each row now names where the request stops, so the boundary it
+    # names is what is graded. Below a schema boundary the request schema refuses the goal:
+    # INVALID_REQUEST ("violates schema constraints") on the member the constraint sits on
+    # (optimization_goals minItems 1; kind the discriminator; priority minimum 1;
+    # target.value and view_duration_seconds exclusiveMinimum 0; event_sources minItems 1).
+    # At or above it the goal is well-formed and reaches the seller, which refuses it:
+    # core/product.json makes optimization support a product declaration ("Presence
+    # indicates the product supports optimization_goals with kind: 'metric'", and the same
+    # for conversion_tracking and kind: 'event'), the seeded product declares neither, and
+    # this seller applies no goals, so an update replacing them is answered
+    # UNSUPPORTED_FEATURE, as @T-UC-003-alt-keyword-ops answers keyword targeting. These
+    # rows asserted "success" for a seller that supports goals and "error with suggestion"
+    # for any refusal, so the capability refusal satisfied every error row whatever the goal.
+    # The omitted row sends a package update without goals, which nothing refuses and which
+    # modifies no package.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/optimization-goal.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/optimization_goals
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/metric_optimization
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/conversion_tracking
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/UNSUPPORTED_FEATURE
+
     Examples: Boundary values
       | boundary_point                                          | goals_value                                                                                                                                                                         | outcome                  |
-      | empty array (0 items)                                   | []                                                                                                                                                                                   | error with suggestion    |
-      | single goal (1 item — boundary min)                     | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | success                  |
-      | many goals (no maxItems)                                | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase"}], "priority": 2}]                   | success                  |
-      | kind = 'metric'                                         | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | success                  |
-      | kind = 'event'                                          | [{"kind": "event", "event_sources": [{"event_source_id": "pixel-1", "event_type": "purchase"}]}]                                                                                    | success                  |
-      | kind omitted                                            | [{"metric": "clicks"}]                                                                                                                                                               | error with suggestion    |
-      | kind = unknown string                                   | [{"kind": "custom"}]                                                                                                                                                                 | error with suggestion    |
-      | priority = 0                                            | [{"kind": "metric", "metric": "clicks", "priority": 0}]                                                                                                                             | error with suggestion    |
-      | priority = 1 (boundary min)                             | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "metric", "metric": "views", "priority": 2}]                                                                      | success                  |
-      | priority omitted                                        | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | success                  |
-      | duplicate priorities (same value on two goals)          | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "metric", "metric": "views", "priority": 1}]                                                                      | success                  |
-      | target.value = 0 (exclusive minimum)                    | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0}}]                                                                                                | error with suggestion    |
-      | target.value = 0.001 (just above zero)                  | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0.001}}]                                                                                            | success                  |
-      | target omitted                                          | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | success                  |
-      | event_sources empty array                               | [{"kind": "event", "event_sources": []}]                                                                                                                                             | error with suggestion    |
-      | event_sources single entry (boundary min)               | [{"kind": "event", "event_sources": [{"event_source_id": "pixel-1", "event_type": "purchase"}]}]                                                                                    | success                  |
-      | event_sources multiple entries                          | [{"kind": "event", "event_sources": [{"event_source_id": "pixel", "event_type": "purchase", "value_field": "value"}, {"event_source_id": "api", "event_type": "purchase", "value_field": "order_total", "value_factor": 0.01}]}] | success |
-      | view_duration_seconds = 0                               | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 0}]                                                                                                       | error with suggestion    |
-      | view_duration_seconds = 0.001 (just above zero)         | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 0.001}]                                                                                                   | success                  |
-      | optimization_goals present — replaces all               | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | success                  |
-      | optimization_goals omitted — preserves existing         | <not provided>                                                                                                                                                                       | success                  |
+      | empty array (0 items)                                   | []                                                                                                                                                                                   | error "INVALID_REQUEST" on packages[0].optimization_goals with suggestion |
+      | single goal (1 item — boundary min)                     | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | error "UNSUPPORTED_FEATURE" with suggestion |
+      | many goals (no maxItems)                                | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase"}], "priority": 2}]                   | error "UNSUPPORTED_FEATURE" with suggestion |
+      | kind = 'metric'                                         | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | error "UNSUPPORTED_FEATURE" with suggestion |
+      | kind = 'event'                                          | [{"kind": "event", "event_sources": [{"event_source_id": "pixel-1", "event_type": "purchase"}]}]                                                                                    | error "UNSUPPORTED_FEATURE" with suggestion |
+      | kind omitted                                            | [{"metric": "clicks"}]                                                                                                                                                               | error "INVALID_REQUEST" on packages[0].optimization_goals[0] with suggestion |
+      | kind = unknown string                                   | [{"kind": "custom"}]                                                                                                                                                                 | error "INVALID_REQUEST" on packages[0].optimization_goals[0] with suggestion |
+      | priority = 0                                            | [{"kind": "metric", "metric": "clicks", "priority": 0}]                                                                                                                             | error "INVALID_REQUEST" on packages[0].optimization_goals[0].priority with suggestion |
+      | priority = 1 (boundary min)                             | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "metric", "metric": "views", "priority": 2}]                                                                      | error "UNSUPPORTED_FEATURE" with suggestion |
+      | priority omitted                                        | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | error "UNSUPPORTED_FEATURE" with suggestion |
+      | duplicate priorities (same value on two goals)          | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "metric", "metric": "views", "priority": 1}]                                                                      | error "UNSUPPORTED_FEATURE" with suggestion |
+      | target.value = 0 (exclusive minimum)                    | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0}}]                                                                                                | error "INVALID_REQUEST" on packages[0].optimization_goals[0].target.value with suggestion |
+      | target.value = 0.001 (just above zero)                  | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0.001}}]                                                                                            | error "UNSUPPORTED_FEATURE" with suggestion |
+      | target omitted                                          | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | error "UNSUPPORTED_FEATURE" with suggestion |
+      | event_sources empty array                               | [{"kind": "event", "event_sources": []}]                                                                                                                                             | error "INVALID_REQUEST" on packages[0].optimization_goals[0].event_sources with suggestion |
+      | event_sources single entry (boundary min)               | [{"kind": "event", "event_sources": [{"event_source_id": "pixel-1", "event_type": "purchase"}]}]                                                                                    | error "UNSUPPORTED_FEATURE" with suggestion |
+      | event_sources multiple entries                          | [{"kind": "event", "event_sources": [{"event_source_id": "pixel", "event_type": "purchase", "value_field": "value"}, {"event_source_id": "api", "event_type": "purchase", "value_field": "order_total", "value_factor": 0.01}]}] | error "UNSUPPORTED_FEATURE" with suggestion |
+      | view_duration_seconds = 0                               | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 0}]                                                                                                       | error "INVALID_REQUEST" on packages[0].optimization_goals[0].view_duration_seconds with suggestion |
+      | view_duration_seconds = 0.001 (just above zero)         | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 0.001}]                                                                                                   | error "UNSUPPORTED_FEATURE" with suggestion |
+      | optimization_goals present — replaces all               | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | error "UNSUPPORTED_FEATURE" with suggestion |
+      | optimization_goals omitted — preserves existing         | <not provided>                                                                                                                                                                       | accepted with no package modified |
 
   @T-UC-003-partition-keyword-targets-add @partition @keyword_targets_add
   Scenario Outline: Keyword targets add partition validation - <partition>
@@ -2267,14 +2295,24 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
 
-    Examples: Valid partitions
-      | partition            | update_fields                          | outcome |
-      | single_field_update  | 1 package with budget update only      | success |
-      | multi_field_update   | 1 package with budget and targeting    | success |
+    # LOCAL CORRECTION, two kinds. (1) The valid rows asserted bare "success", which a seller
+    # that dropped the update also earns; they now read the stored package back ("success
+    # with persisted records": the requested budget, and every targeting dimension sent).
+    # (2) empty_update expected INVALID_REQUEST, which the pin does not require: the request
+    # schema's required list is idempotency_key, account and media_buy_id, with no anyOf or
+    # minProperties over the updatable fields. A request carrying none is accepted, and
+    # modifies no package ("affected_packages ... for each modified package").
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/required
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json pointer=/oneOf/0/properties/affected_packages
 
-    Examples: Invalid partitions
-      | partition     | update_fields                    | outcome                                 |
-      | empty_update  | no updatable fields in request   | error "INVALID_REQUEST" with suggestion    |
+    Examples: Valid partitions
+      | partition            | update_fields                          | outcome                        |
+      | single_field_update  | 1 package with budget update only      | success with persisted records |
+      | multi_field_update   | 1 package with budget and targeting    | success with persisted records |
+
+    Examples: A request carrying no updatable field
+      | partition     | update_fields                    | outcome                           |
+      | empty_update  | no updatable fields in request   | accepted with no package modified |
 
   @T-UC-003-boundary-adapter-dispatch @boundary @adapter_dispatch
   Scenario Outline: Adapter dispatch boundary validation - <boundary_point>
@@ -2288,11 +2326,21 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
 
+    # LOCAL CORRECTION, for the reasons @T-UC-003-partition-adapter-dispatch states: the
+    # success rows read the stored package back, and the zero-field row is accepted
+    # without a package modified. The all-fields request pauses the active buy rather than
+    # resuming it: the action table maps paused false to resume, which an active buy does
+    # not offer, and maps paused true to pause, which it does. One request carrying the
+    # pause with the package and flight changes is one atomic mutation, so every change in
+    # it is applied.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx (Action vocabulary and field mapping; Compatibility transaction boundary)
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/media-buys/lifecycle.mdx (Discovering valid actions at runtime)
+
     Examples: Boundary values
-      | boundary_point                              | update_config                          | outcome                                 |
-      | request with exactly one updatable field    | 1 package with budget update only      | success                                 |
-      | request with all updatable fields           | packages with all updatable fields     | success                                 |
-      | request with zero updatable fields          | no updatable fields in request         | error "INVALID_REQUEST" with suggestion    |
+      | boundary_point                              | update_config                          | outcome                           |
+      | request with exactly one updatable field    | 1 package with budget update only      | success with persisted records    |
+      | request with all updatable fields           | packages with all updatable fields     | success with persisted records    |
+      | request with zero updatable fields          | no updatable fields in request         | accepted with no package modified |
 
   @T-UC-003-partition-persistence-timing @partition @persistence_timing
   Scenario Outline: Persistence timing partition validation - <partition>
@@ -3039,8 +3087,14 @@ Feature: BR-UC-003 Update Media Buy
     # reading UC-005's sandbox outline gives the same row. (2) "sandbox present on
     # update_media_buy submitted task envelope" is removed: the submitted arm does not forbid
     # sandbox (its `not` lists only media_buy_id and warnings; additionalProperties true).
+    # The two terminal-failure rows grade the seller's own budget refusal (BUDGET_TOO_LOW on
+    # packages[0].budget, for a budget of 0 the schema admits), made after the sandbox
+    # account was resolved: "Sandbox errors are real validation errors. If a buyer sends an
+    # invalid budget using a sandbox account, return a real error". A refusal the request
+    # schema makes is answered before the account is resolved, so it cannot show either.
     # ---------- start_time package-scope boundary (start_time.yaml) ----------
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/sandbox.mdx
 
     Examples: sandbox response semantics (BR-UC-003)
       | boundary                                                            | account_context    | response_shape      | outcome                              |

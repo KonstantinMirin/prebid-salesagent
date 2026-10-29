@@ -1023,76 +1023,6 @@ def _update_media_buy_impl(
                                     budget_limit=currency_limit.max_daily_package_spend,
                                 )
 
-            # Handle campaign-level updates
-            if req.paused is not None:
-                # the pinned SDK+: paused=True means pause, paused=False means resume
-                action = "pause_media_buy" if req.paused else "resume_media_buy"
-                result = adapter.update_media_buy(
-                    media_buy_id=req.media_buy_id,
-                    action=action,
-                    package_id=None,
-                    budget=None,
-                    today=utc_flight_start(today),
-                )
-                # An adapter reports failure by raising; a returned result is the success.
-                media_buy_id = result.media_buy_id
-                affected_pkgs = result.affected_packages
-
-                # Derive post-action status from the DB (date-refined for parity
-                # with get_media_buys — see _adcp_status_and_actions) so
-                # valid_actions reflects what the buyer can actually do next.
-                # Fall back to the current state-machine target only if the DB
-                # row is missing (e.g., adapter deleted it under us) — no row
-                # means no dates to refine.
-                # Persist the pause/resume OURSELVES. The adapter call above changes the
-                # ad server, not our row -- and this branch wrote nothing, so two things
-                # were silently lost. ``is_paused`` is read by _adcp_status_and_actions
-                # to derive the status we report, so a paused buy kept reporting as
-                # un-paused; and ``revision`` is the buyer's optimistic-concurrency
-                # token, which update-media-buy-response.json defines as "Revision
-                # number after this update", so the response returned the value from
-                # BEFORE the write. update_fields sets the column, bumps the revision and
-                # flushes, so the read below sees both.
-                uow.media_buys.update_fields(media_buy_id, is_paused=bool(req.paused))
-
-                _post_action_mb = uow.media_buys.get_by_id_or_raise(media_buy_id)
-                _post_action_revision = _post_action_mb.revision
-                _post_action_mbs, _post_action_actions = _adcp_status_and_actions(_post_action_mb)
-                success_response = UpdateMediaBuySuccess(
-                    media_buy_id=media_buy_id,
-                    message=f"Media buy {media_buy_id} updated successfully.",
-                    revision=_post_action_revision,
-                    media_buy_status=_post_action_mbs,  # AdCP: mirrors `status`
-                    # This branch IS the applied one, so it carries the instant it took
-                    # effect; _applied_instant states what the pinned field means and why
-                    # the row's updated_at is not it.
-                    implementation_date=_applied_instant(),
-                    affected_packages=affected_pkgs,
-                    valid_actions=_post_action_actions,
-                    errors=property_list_unsupported_advisories(req.packages, adapter),
-                )
-                # Log successful update_media_buy (pause/resume)
-                audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
-                audit_logger.log_operation(
-                    operation="update_media_buy",
-                    principal_name=principal_id or "anonymous",
-                    principal_id=principal_id or "anonymous",
-                    adapter_id="mcp_server",
-                    success=True,
-                    details={
-                        "media_buy_id": req.media_buy_id,
-                        "action": action,
-                        "affected_packages_count": len(affected_pkgs),
-                    },
-                )
-                ctx_manager.audit_workflow_step_result(step.step_id, success_response)
-                # No status assignment: UpdateMediaBuySuccess IS the completed branch of
-                # update-media-buy-response.json's oneOf, so its ``status`` is the const
-                # ``Literal["completed"]`` with that default. The line here set it to the
-                # same value through the TaskStatus enum, which the pinned SDK types as the enum
-                # member rather than the bare string -- a no-op that did not type-check.
-                return success_response
-
             # Handle package-level updates
             if req.packages:
                 # enumerate so a per-package rejection can name WHICH package failed:
@@ -1658,6 +1588,33 @@ def _update_media_buy_impl(
                     )
                     logger.warning("GAM sync NOT implemented - GAM still has old dates")
 
+            # Campaign-level pause/resume, applied LAST so every package and date change in
+            # the same request is validated and applied first. update_media_buy.mdx
+            # § Compatibility transaction boundary: "One update_media_buy request is one
+            # atomic mutation", whose payload can carry "budget, targeting, catalog, pause,
+            # and billing changes" together. This branch used to answer the pause and
+            # RETURN, so every package and date change sent beside it was dropped while the
+            # buyer was told the update completed.
+            if req.paused is not None:
+                # paused=True means pause, paused=False means resume.
+                pause_result = adapter.update_media_buy(
+                    media_buy_id=req.media_buy_id,
+                    action="pause_media_buy" if req.paused else "resume_media_buy",
+                    package_id=None,
+                    budget=None,
+                    today=utc_flight_start(today),
+                )
+                # A package the adapter paused with the buy goes through the one assembly
+                # point below like any other modified package, so it is reported as a full
+                # post-update snapshot rather than the adapter's package_id-and-paused stub.
+                for reported in pause_result.affected_packages:
+                    _package_changes(changes_by_package, reported.package_id).paused = req.paused
+                # Persist the pause/resume OURSELVES: the adapter changes the ad server, not
+                # our row. ``is_paused`` is what _adcp_status_and_actions derives the
+                # reported status from, and update_fields bumps the revision the response
+                # reports ("Revision number after this update").
+                uow.media_buys.update_fields(req.media_buy_id, is_paused=bool(req.paused))
+
             # After every write above, so the coverage and the flight window it reads are
             # this update's result, and before the response reads the status back.
             assert uow.assignments is not None
@@ -1700,6 +1657,10 @@ def _update_media_buy_impl(
                 affected_packages=affected_packages_list,
                 valid_actions=_final_actions,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
+                # sandbox.mdx: sellers "SHOULD include `sandbox: true` in success responses
+                # when processing a sandbox account request", as create_media_buy does. The
+                # same predicate get_adapter's sandbox selection reads (identity.in_sandbox).
+                sandbox=identity.sandbox_echo,
             )
 
             # Log successful update_media_buy call
@@ -1723,7 +1684,9 @@ def _update_media_buy_impl(
             # Use mode="json" to ensure enums are serialized as strings for JSONB storage
             ctx_manager.audit_workflow_step_result(step.step_id, final_response)
 
-        # No status assignment, for the reason the pause/resume branch above states.
+        # No status assignment: UpdateMediaBuySuccess IS the completed branch of
+        # update-media-buy-response.json's oneOf, so its ``status`` is the const
+        # ``Literal["completed"]`` with that default.
         return final_response
 
 

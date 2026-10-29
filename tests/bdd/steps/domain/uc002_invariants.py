@@ -99,6 +99,8 @@ def _stored_buy(ctx: dict, media_buy_id: str) -> SimpleNamespace:
             status=buy.status,
             principal_id=buy.principal_id,
             start_time=buy.start_time,
+            end_time=buy.end_time,
+            is_paused=buy.is_paused,
             created_at=buy.created_at,
             updated_at=buy.updated_at,
             package_ids=sorted(p.package_id for p in uow.media_buys.get_packages(media_buy_id)),

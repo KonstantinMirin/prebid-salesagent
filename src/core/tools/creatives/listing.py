@@ -773,7 +773,7 @@ def _list_creatives_impl(
         # response that is not simulated makes no claim either way. list_creatives calls no
         # ad platform at all, so sandbox mode has nothing to suppress here (INV-2); what the
         # flag reports is the mode of the account whose library the buyer is reading.
-        sandbox=True if identity.account is not None and identity.account.sandbox else None,
+        sandbox=identity.sandbox_echo,
         errors=unreadable_status_advisories or None,
         message=(
             f"Found {len(creatives)} creative{'s' if len(creatives) != 1 else ''}."
