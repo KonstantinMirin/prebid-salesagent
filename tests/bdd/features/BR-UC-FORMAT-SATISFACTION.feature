@@ -98,6 +98,17 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | fixed_300x250        | legacy_display_300x250_image        |
       | fixed_300x250        | option_plus_equivalent_legacy_image |
       | two_image_options    | both_option_refs                    |
+      | any_audio            | legacy_audio_standard_30s           |
+
+    # legacy_audio_standard_30s is the ONE row a package's legacy reference resolves through
+    # the creative agent's own declaration and nothing else. registries/v1-canonical-mapping.json
+    # (3.2.7) "Resolution order", step 2: "if the v1 format declaration carries an explicit
+    # canonical field, use it"; canonical-formats.mdx § Format matching vs product satisfaction:
+    # "Sellers and SDKs MUST normalize legacy named formats ... through the explicit canonical
+    # annotation, v1_format_ref, or the canonical mapping registry". No glob names
+    # audio_standard_30s and the any_audio declaration carries no v1_format_ref, so a package
+    # route that skips step 2 refuses it UNSUPPORTED_FEATURE while sync_creatives accepts it.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json pointer=/description
 
     # both_option_refs names BOTH of two_image_options' options on one format_option_refs
     # arm. That arm is one route selecting a set (package-request.json: "Each reference
@@ -851,23 +862,64 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   # before writing from one that wrote and then errored, and the second leaves the NULL
   # behind for every later reader.
   #
-  # THE PAIR DIFFERS IN ONE THING -- whether the claimed id has a canonical projection.
-  # Both ids are SERVED by the pinned agent, so neither row can pass or fail on
-  # resolvability over the wire, which is what makes the projection the only variable.
-  # Measured against the capture (71 formats) with the spec supplied as the live path
-  # supplies it: 64 project, 7 do not, and the 7 are the card/product-card variants.
-  # `product_card_standard` is one of them; `display_300x250_image` projects to `image`.
-  # The control id has to be SERVED as well as projectable -- `display_300x250` is projectable
-  # but ABSENT from the capture, so the authoring door refuses it before the gate is reached.
+  # THE REFUSAL NEEDS A FORMAT NO STEP OF THE ORDER PROJECTS, and the reference capture has
+  # none. registries/v1-canonical-mapping.json (3.2.7) "Resolution order" projects a v1
+  # format through (2) its own canonical, (3) a format_id_glob, (4) a structural entry --
+  # "Set of asset_type values that must appear in the format's slots (in any order, any
+  # count)" -- and only then (6) fails closed. Every one of the 71 captured formats reaches
+  # one of those: 64 declare canonical, and the 7 card formats that do not all carry a `url`
+  # asset, which the structural `url` entry maps to display_tag. `product_card_standard`
+  # used to stand here as "unprojectable"; that was true only of a seller that stopped
+  # after step 3. So the refused format is a publisher's own, served by the tenant's peer
+  # agent: image and text slots, no canonical, an id no glob names -- no step reaches it.
+  #
+  # Every row below is SERVED, so none can pass or fail on resolvability over the wire,
+  # which is what makes the projection the only variable. `display_300x250_image` projects
+  # to `image` through the capture's canonical.
   #
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json
 
   @T-UC-FORMAT-SATISFACTION-upsert-unprojectable @creative_library_upsert @requires_db
   Scenario: a creative whose format resolves to no canonical kind is refused, not stored
     Given a packaged product declaring only the deprecated format_ids
-    And the buyer syncs a creative identified by format_id "product_card_standard"
+    And the seller's creative agent serves "publisher_bespoke_takeover_unit" with assets "image, text" declaring no canonical kind
+    And the buyer syncs a creative identified by that served format
     When the Buyer Agent syncs it into the library
     Then the buyer is refused UNSUPPORTED_FEATURE and nothing is stored
+
+  # STEP 4, graded on its own: a publisher format that declares no canonical and that no
+  # glob names, whose one slot is a hosted video. The registry's structural entry
+  # {"asset_types": ["video"]} -> video_hosted is the only step that reaches it, so a seller
+  # whose order stops at the glob refuses it and the row reddens.
+  @T-UC-FORMAT-SATISFACTION-upsert-structural @creative_library_upsert @requires_db
+  Scenario: a creative whose format only a registry structural entry matches is stored with that family's kind
+    Given a packaged product declaring only the deprecated format_ids
+    And the seller's creative agent serves "publisher_hosted_spot" with assets "video" declaring no canonical kind
+    And the buyer syncs a creative identified by that served format
+    When the Buyer Agent syncs it into the library
+    Then the creative is stored carrying canonical kind "video_hosted"
+
+  # THE ORDER BETWEEN STEPS 2 AND 3. The publisher calls its HTML5 banner `display_300x250`,
+  # which the registry's literal glob maps to image, and its own declaration says html5.
+  # Step 2 -- "if the v1 format declaration carries an explicit canonical field, use it" --
+  # comes first, so the stored kind is html5. A seller consulting the glob first stores
+  # image, and so does a seller ignoring the declaration: either inversion reddens this row.
+  @T-UC-FORMAT-SATISFACTION-upsert-declared-outranks-glob @creative_library_upsert @requires_db
+  Scenario: a format's own canonical projection outranks a registry glob naming its id
+    Given a packaged product declaring only the deprecated format_ids
+    And the seller's creative agent serves "display_300x250" with assets "html" declaring canonical kind "html5"
+    And the buyer syncs a creative identified by that served format
+    When the Buyer Agent syncs it into the library
+    Then the creative is stored carrying canonical kind "html5"
+
+  # THE ORDER BETWEEN STEPS 3 AND 4 has no row here. It differs only for a size-encoded id
+  # at the STANDARD agent's URL whose served declaration carries no canonical: the SDK's
+  # upgrade_legacy_format_id puts it under the display_image glob, and only that agent's
+  # namespace is upgraded. set_served_catalogue re-homes every format at the tenant's peer,
+  # where the raw slug matches no literal glob and the structural `url` entry answers
+  # display_tag under either order; the capture annotates every image format, so step 2
+  # answers first. Naming the standard agent on e2e_rest dials the pinned reference agent
+  # (see host_reference_format). tests/unit/test_format_resolver.py grades it instead.
 
   @T-UC-FORMAT-SATISFACTION-upsert-projectable @creative_library_upsert @requires_db
   Scenario: a creative whose format does resolve is stored with its canonical kind

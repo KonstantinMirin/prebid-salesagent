@@ -165,4 +165,9 @@ def _build_creative_data(creative: CreativeAsset, url: str | None) -> dict[str, 
     provenance = getattr(creative, "provenance", None)
     if provenance is not None:
         data["provenance"] = provenance
+    # The selection lineage the buyer sent, kept whole: list_creatives "returns the exact
+    # current selection lineage while that execution remains current" (sync_creatives.mdx,
+    # v3.2.7), and an upsert that carries none replaces the execution, so its lineage goes.
+    if creative.representation_selection is not None:
+        data["representation_selection"] = creative.representation_selection
     return data

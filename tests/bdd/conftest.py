@@ -6351,6 +6351,13 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-canonical-changed-resync-enters-review",
         # A rename on resync is metadata: "updated", review state kept.
         "T-UC-006-canonical-renamed-resync-keeps-review",
+        # representation_selection on sync: the lineage verified against its item, stored,
+        # listed back, and the execution-vs-revision review split. The same sync and
+        # readback the canonical-identity rows above use, and the same tenant writer.
+        "T-UC-006-representation-selection-readback",
+        "T-UC-006-representation-selection-refused",
+        "T-UC-006-representation-reselection-enters-review",
+        "T-UC-006-representation-new-revision-keeps-review",
     }
 )
 

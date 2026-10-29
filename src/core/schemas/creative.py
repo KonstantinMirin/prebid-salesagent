@@ -28,11 +28,13 @@ from adcp.types import (
 # not of the SDK bump.
 from adcp.types.domains.core.creative_asset import CreativeAsset as LibraryCreativeAsset
 from adcp.types.domains.core.creative_filters import CreativeFilters as LibraryCreativeFilters
+from adcp.types.domains.core.creative_revision_id import CreativeRevisionId
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from adcp.types.domains.core.provenance import Provenance as LibraryProvenance
 from adcp.types.domains.creative.list_creatives_response import (
     Creative as LibraryCreative,
 )
+from adcp.types.domains.creative.sync_creatives_request import Creative as LibrarySyncCreative
 from adcp.types.domains.creative.sync_creatives_response import (
     SyncCreativesResponse1 as LibrarySyncCreativesSuccess,
 )
@@ -79,7 +81,7 @@ from src.core.schemas._base import (
     SalesAgentBaseModel,
     Targeting,
 )
-from src.core.schemas._dependencies import as_local, narrowed_from
+from src.core.schemas._dependencies import as_local, build_as_local, narrowed_from
 from src.core.schemas.notification import PushNotificationConfig
 
 #: IPTC Digital Source Type, for AI provenance under EU AI Act Article 50.
@@ -319,6 +321,29 @@ _NON_TRACKING_EVENTS: frozenset[str] = frozenset(
 )
 
 
+class SyncCreativeAsset(CreativeAssetRequest):
+    """The item ``sync_creatives`` accepts: core/creative-asset.json plus the sync request's ``revision_id``.
+
+    creative/sync-creatives-request.json (v3.2.7) declares ``creatives[]`` as creative-asset.json
+    AND an object adding ``revision_id``, and says of it: "Buyers may send it to any 3.2 peer;
+    creative.supports_revisions gates reliance on immutability, echo, readback, and delivery
+    correlation, not whether the open request shape may carry the field." So the field is
+    accepted here, as the pin declares it (``narrowed_from`` keeps the pin's own declaration),
+    and only on the sync item: a package's inline creative is creative-asset.json alone.
+
+    This seller does not advertise ``creative.supports_revisions``, so the id is neither
+    echoed nor read back. Its one reader is the representation-selection identity check
+    (``check_representation_selection``): "When an item carries ``representation_selection``,
+    its ``creative_id`` and ``revision_id`` must equal the selection lineage"
+    (docs/creative/task-reference/sync_creatives.mdx).
+
+    ``localization``, the item's other member, stays undeclared: this seller does not advertise
+    ``creative.localization``, which the pin makes a precondition of accepting it.
+    """
+
+    revision_id: CreativeRevisionId | None = narrowed_from(LibrarySyncCreative, "revision_id")
+
+
 # --- Creative Lifecycle ---
 class Creative(LibraryCreative):
     """Individual creative asset - extends listing Creative with internal workflow fields.
@@ -508,9 +533,10 @@ class SyncCreativesRequest(BuyerRequest, LibrarySyncCreativesRequest):
     inherited from AdCP spec.
 
     Local overrides:
-    - creatives: list[CreativeAssetRequest] -- the SPEC's request item type. This used to be
-      list[Creative], the response model, on the reasoning that it was "richer"; it is richer
-      in response fields while missing seven request ones. See CreativeAssetRequest.
+    - creatives: list[SyncCreativeAsset] -- the SPEC's request item type (creative-asset.json
+      plus the sync item's revision_id). This used to be list[Creative], the response model,
+      on the reasoning that it was "richer"; it is richer in response fields while missing
+      seven request ones. See CreativeAssetRequest.
     """
 
     TAGS: ClassVar[tuple[str, ...]] = (
@@ -535,9 +561,27 @@ class SyncCreativesRequest(BuyerRequest, LibrarySyncCreativesRequest):
     # A server-generated key differs on every retry, so it provides no at-most-once guarantee
     # at all, and a sync retried after a timeout creates the creatives twice.
 
-    creatives: list[CreativeAssetRequest] = Field(
+    creatives: list[SyncCreativeAsset] = Field(
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"
     )  # type: ignore[assignment]
+
+    @field_validator("creatives", mode="before")
+    @classmethod
+    def _creatives_as_sync_items(cls, value: Any) -> Any:
+        """Build an in-process caller's ``CreativeAssetRequest`` as the sync item, by its SUPPLIED fields.
+
+        ``create_media_buy`` and ``update_media_buy`` hand a package's inline creatives over as
+        ``CreativeAssetRequest`` instances. ``from_attributes`` alone would read every attribute,
+        marking each default as sent; ``build_as_local`` reads ``model_fields_set``, so a creative
+        means here what it meant on the instance (``selected_output_digest`` digests exactly what
+        was sent).
+        """
+        if not isinstance(value, list):
+            return value
+        return [
+            build_as_local(SyncCreativeAsset, item) if isinstance(item, CreativeAssetRequest) else item
+            for item in value
+        ]
 
     @model_validator(mode="after")
     def _delete_missing_needs_the_whole_library(self):

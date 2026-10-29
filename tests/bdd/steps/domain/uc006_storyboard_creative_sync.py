@@ -41,6 +41,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import (
     assert_listed_on_canonical_kind,
+    assert_sync_entry_refused_and_not_stored,
     is_e2e,
     payload_or_none,
     stored_creative_column,
@@ -797,6 +798,165 @@ def then_listed_back_with_canonical_identity(ctx: dict, kind: str) -> None:
     """
     entry = _listed_back(ctx, latest_creative_id(ctx))
     assert_listed_on_canonical_kind(entry, kind, option_ref=ctx["sent_format_option_ref"])
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN / THEN steps — representation_selection lineage on sync
+# (creative-manifests.mdx § Libraries and trafficking; representation-sets.mdx
+# § Sync, review, and readback; sync_creatives.mdx, all v3.2.7)
+# ═══════════════════════════════════════════════════════════════════════
+
+#: The pin's own list of what the seller-bound manifest projection drops, quoted from
+#: core/representation-selection.json ``selected_output_digest`` rather than imported from
+#: production: an oracle built from the code it grades agrees with it by construction.
+_PROJECTION_DROPS = frozenset(
+    "$schema, representation_selection, creative_id, revision_id, name, tags, status, weight, "
+    "placement_refs, placement_ids, inputs".split(", ")
+)
+
+#: The pin's worked example (representation-sets.mdx § Seller-bound resolution, v3.2.7): the
+#: paired-redirect manifest and the ``selected_output_digest`` the pin publishes for it. The
+#: oracle below must reproduce it before any scenario trusts a digest it computes.
+_PIN_EXAMPLE_MANIFEST = {
+    "$schema": "https://adcontextprotocol.org/schemas/v3/core/creative-manifest.json",
+    "format_kind": "display_tag",
+    "format_option_ref": {"scope": "product", "format_option_id": "acme_internal_redirect_300x250"},
+    "assets": {
+        "serving_tag": {
+            "asset_type": "display_tag",
+            "delivery_type": "paired_redirect",
+            "ad_request_url": "https://ads.acme-example.com/ad?slot=42",
+            "clickthrough_url": "https://click.acme-example.com/redirect",
+        }
+    },
+}
+_PIN_EXAMPLE_DIGEST = "sha256:02735eb8341dc1c2c25b63d20a0a675577407f7500084a67a6ad71ac1bd0e4c3"
+
+
+def _output_digest(item: dict[str, Any]) -> str:
+    """``selected_output_digest`` of the wire item *item*: SHA-256 over RFC 8785 JCS of its projection."""
+    import hashlib
+
+    import rfc8785
+
+    projection = {key: value for key, value in item.items() if key not in _PROJECTION_DROPS}
+    return f"sha256:{hashlib.sha256(rfc8785.dumps(projection)).hexdigest()}"
+
+
+def _source_digest(revision_id: str) -> str:
+    """A ``revision_content_digest`` for the source set named *revision_id*.
+
+    The complete set never reaches this seller -- "A downstream seller that receives only
+    the selected manifest ... cannot claim it independently inspected hidden source
+    representations" -- so any well-formed value distinct per revision stands in for it.
+    """
+    import hashlib
+
+    return f"sha256:{hashlib.sha256(revision_id.encode()).hexdigest()}"
+
+
+def _send_selection(ctx: dict, *, revision_id: str, representation_id: str) -> None:
+    """Put the lineage on the pending item: its ``revision_id`` and a selection describing it."""
+    item = ctx["creatives"][-1]
+    item["revision_id"] = revision_id
+    item["representation_selection"] = {
+        "creative_id": item["creative_id"],
+        "revision_id": revision_id,
+        "revision_content_digest": _source_digest(revision_id),
+        "selected_representation_id": representation_id,
+        "strategy": "representation_order",
+        "selected_output_digest": _output_digest(item),
+        "resolved_by": "buyer",
+    }
+    ctx["sent_representation_selection"] = item["representation_selection"]
+
+
+@given(
+    parsers.parse('the buyer syncs a creative identified by canonical kind "{kind}" selected from a representation set')
+)
+def given_sync_selected_creative(ctx: dict, kind: str) -> None:
+    """A canonical creative the buyer resolved from a representation set, carrying its lineage.
+
+    The output is an ordinary manifest (the kind's required slots, a product-scope option
+    ref); what makes it a selected output is ``representation_selection`` naming this
+    ``creative_id`` and ``revision_id`` and the digest of exactly these bytes. The digest
+    comes from :func:`_output_digest`, which is first held to the pin's published example.
+    """
+    assert _output_digest(_PIN_EXAMPLE_MANIFEST) == _PIN_EXAMPLE_DIGEST, (
+        "the test's digest oracle does not reproduce the pin's worked example, so no digest it computes can grade"
+    )
+    _sync_canonical_creative(ctx, kind, "product", assets=canonical_assets(kind))
+    _send_selection(ctx, revision_id="rev_launch_1", representation_id="source-hosted")
+
+
+@given(parsers.parse("the creative's representation_selection disagrees with the item on {member}"))
+def given_selection_disagrees(ctx: dict, member: str) -> None:
+    """Make ONE lineage member describe something other than the item that carries it.
+
+    ``creative_id`` and ``revision_id`` must equal the item's (sync_creatives.mdx); the
+    ``selected_output_digest`` must be the digest of the item's own projection, so the
+    disagreeing one is the digest of different output bytes -- the same manifest without
+    its ``format_option_ref``.
+    """
+    item = ctx["creatives"][-1]
+    selection = item["representation_selection"]
+    if member == "creative_id":
+        selection["creative_id"] = f"{item['creative_id']}_other"
+    elif member == "revision_id":
+        selection["revision_id"] = "rev_other"
+    elif member == "selected_output_digest":
+        other_bytes = {key: value for key, value in item.items() if key != "format_option_ref"}
+        selection["selected_output_digest"] = _output_digest(other_bytes)
+    else:
+        raise AssertionError(f"no disagreement is defined for lineage member {member!r}")
+
+
+@given("the resync selects another representation of the same source revision")
+def given_resync_selects_another_representation(ctx: dict) -> None:
+    """A different selected execution, with the source revision and the output bytes unchanged.
+
+    Only ``selected_representation_id`` moves, so the one thing that differs from the stored
+    creative is the execution review fingerprint (representation-sets.mdx § Sync, review,
+    and readback).
+    """
+    stored = ctx["sent_representation_selection"]
+    _send_selection(ctx, revision_id=str(stored["revision_id"]), representation_id="source-alternate")
+    assert ctx["sent_representation_selection"]["selected_output_digest"] == stored["selected_output_digest"]
+
+
+@given("the resync carries a new source revision that selects the same output")
+def given_resync_new_revision_same_output(ctx: dict) -> None:
+    """A new buyer revision of the source set that pins the same execution.
+
+    The ``revision_id`` and its digest move; the selected representation and the output
+    bytes do not, so the execution fingerprint is the stored one.
+    """
+    stored = ctx["sent_representation_selection"]
+    _send_selection(ctx, revision_id="rev_launch_2", representation_id=str(stored["selected_representation_id"]))
+    assert ctx["sent_representation_selection"]["selected_output_digest"] == stored["selected_output_digest"]
+
+
+@then("listing the library returns the creative carrying the representation_selection the buyer last sent")
+def then_listed_with_selection(ctx: dict) -> None:
+    """The lineage read back over the scenario's own transport, as a whole document.
+
+    list-creatives-response.json ``representation_lineage_readback``: "must_equal":
+    "last_accepted_current_representation_selection". Equality, not a subset, because every
+    member is lineage: a seller that kept the first revision, or dropped the strategy,
+    lists a different selection.
+    """
+    entry = _listed_back(ctx, latest_creative_id(ctx))
+    listed = entry.get("representation_selection")
+    assert listed == ctx["sent_representation_selection"], (
+        f"the listed representation_selection is not the one the buyer last sent: "
+        f"{listed!r} != {ctx['sent_representation_selection']!r}"
+    )
+
+
+@then(parsers.parse('the creative is reported failed with {code:w} at "{field}" and nothing is stored'))
+def then_selected_creative_refused(ctx: dict, code: str, field: str) -> None:
+    """The batch entry refused with *code* naming *field*, and the creative not stored."""
+    assert_sync_entry_refused_and_not_stored(ctx, latest_creative_id(ctx), code, field=field)
 
 
 @then("the stored creative carries the preview the operator's creative agent returned")

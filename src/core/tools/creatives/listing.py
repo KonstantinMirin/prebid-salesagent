@@ -673,6 +673,11 @@ def _list_creatives_impl(
                     else None
                 ),
                 items=_items_from_assets(coerced_assets) if req.include_items else None,
+                # list-creatives-response.json (v3.2.7) representation_lineage_readback:
+                # "required_when_current_creative_was_resolved_from_representation_set",
+                # "must_equal": "last_accepted_current_representation_selection". The sync
+                # stores the lineage the buyer sent whole, and only while it is current.
+                representation_selection=data_blob.get("representation_selection"),
                 # Internal field (our extension)
                 principal_id=db_creative.principal_id,
             )

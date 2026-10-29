@@ -754,6 +754,7 @@ def _resolve_package_selectors(
     req: CreateMediaBuyRequest,
     declared_format_arms: dict[str, tuple[list[Any], list[Any]]],
     declared_placements: dict[str, list[Any]],
+    tenant_id: str,
 ) -> dict[int, "SelectorResolution"]:
     """Resolve every package's format selector, and refuse before any state is persisted.
 
@@ -783,6 +784,9 @@ def _resolve_package_selectors(
         declared_placements: per product_id, the stored ``placements`` documents, for the
             pin's coverage rule: the selected format set must cover every included
             placement (``docs/creative/formats.mdx`` § Matching and satisfaction).
+        tenant_id: whose catalogue a package's deprecated ``format_ids`` are looked up in,
+            so their projection reads the served declaration as a creative's does. Fetched
+            only when some package names one: no other route reads it.
 
     Raises:
         AdCPConflictingSelectorsError: co-present routes resolved and selected different
@@ -792,6 +796,7 @@ def _resolve_package_selectors(
             route selected nothing, or the selected declaration leaves an included
             placement uncovered. The pointer names the ARM the verdict came from.
     """
+    from src.core.format_resolver import seller_format_catalogue
     from src.core.format_satisfaction import (
         canonical_refusal,
         conflicting_selectors,
@@ -799,6 +804,7 @@ def _resolve_package_selectors(
         selector_routes,
     )
 
+    catalogue = seller_format_catalogue(tenant_id) if any(pkg.format_ids for pkg in req.packages or []) else []
     resolutions: dict[int, SelectorResolution] = {}
     for pkg_index, pkg in enumerate(req.packages or []):
         # A package naming a product this tenant does not hold is already refused above by
@@ -812,6 +818,7 @@ def _resolve_package_selectors(
                 format_option_refs=pkg.format_option_refs,
                 params=pkg.params,
                 format_ids=pkg.format_ids,
+                catalogue=catalogue,
             ),
             declarations,
             legacy_catalog=legacy_catalog,
@@ -3203,7 +3210,9 @@ async def _create_media_buy_impl(
         # ... REGARDLESS OF THE TENANT'S APPROVAL MODE, BEFORE any media-buy state is
         # persisted". The selector gate arrived later and did not follow suit; this is it
         # following suit.
-        selector_resolutions = _resolve_package_selectors(req, declared_format_arms, declared_placements)
+        selector_resolutions = _resolve_package_selectors(
+            req, declared_format_arms, declared_placements, tenant.tenant_id
+        )
 
         # No tenant field declares auto-creation; the dict shim this replaced always
         # answered its default, so the tenant never disables it.

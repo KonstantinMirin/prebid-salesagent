@@ -30,8 +30,8 @@ from urllib.parse import urlsplit
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import (
+    assert_sync_entry_refused_and_not_stored,
     parked_media_buy,
-    payload_or_none,
     stored_package_config,
     wire_absent,
     wire_entry,
@@ -214,6 +214,17 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "format_kind": "video_hosted",
             "format_option_id": "satisfaction_video_15s",
             "params": {"duration_ms_exact": 15000},
+        }
+    ],
+    # A hosted-audio option with no constraint of its own. It exists for a legacy reference
+    # the registry has no glob for -- the reference agent's ``audio_standard_30s`` -- so the
+    # only step of registries/v1-canonical-mapping.json's order that projects it is step 2,
+    # the served declaration's own ``canonical.kind``.
+    "any_audio": [
+        {
+            "format_kind": "audio_hosted",
+            "format_option_id": "satisfaction_audio",
+            "params": {},
         }
     ],
     # A 300x250 image declaration with no other constraint, and the same declaration
@@ -517,6 +528,14 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     # storyboard's create_media_buy_with_legacy_mrec_format step sends.
     "legacy_display_300x250_image": {
         "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250_image"}]
+    },
+    # A legacy id NO registry glob names and the SDK's upgrade does not rewrite, which the
+    # reference agent serves declaring ``canonical.kind = audio_hosted``. So it resolves only
+    # through step 2 of the registry's order -- the served declaration -- and a seller that
+    # skips that step on the package route refuses it LEGACY_UNPROJECTABLE while
+    # ``sync_creatives`` accepts the same id.
+    "legacy_audio_standard_30s": {
+        "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "audio_standard_30s"}]
     },
     # The storyboard's create_media_buy_with_equivalent_dual_emission: the product-local
     # option ref and ``display_300x250_image`` "normalize to the same declaration", so the
@@ -1518,6 +1537,66 @@ def given_sync_legacy_creative_density(ctx: dict, format_id: str, width: int, he
     _sync_legacy_claim(ctx, format_id, width=width, height=height, pixel_ratio=pixel_ratio)
 
 
+def _serve_publisher_format(ctx: dict, format_id: str, asset_types: str, kind: str | None) -> None:
+    """The seller's catalogue is ONE publisher format, served by its own creative agent.
+
+    For a scenario whose subject is what the registry's resolution order does with a format
+    the reference agent does not carry: the format's declared asset types, and whether it
+    declares a ``canonical`` projection at all, are the two inputs steps 2 and 4 read. It is
+    served for real by the tenant's peer agent (``set_served_catalogue``), so every
+    transport resolves the creative against the same served declaration.
+    """
+    from adcp.types import CanonicalProjectionReference
+
+    from tests.factories.format import FormatFactory, FormatIdFactory, make_asset
+
+    fmt = FormatFactory(
+        format_id=FormatIdFactory(id=format_id),
+        assets=[make_asset(t, asset_id=f"{t}_{i}") for i, t in enumerate(asset_types.split(", "))],
+        canonical=CanonicalProjectionReference(kind=kind) if kind is not None else None,
+    )
+    ctx["env"].set_served_catalogue([fmt])
+
+
+@given(
+    parsers.parse(
+        'the seller\'s creative agent serves "{format_id}" with assets "{asset_types}" declaring canonical kind "{kind}"'
+    )
+)
+def given_served_publisher_format(ctx: dict, format_id: str, asset_types: str, kind: str) -> None:
+    """A publisher format whose own declaration names its canonical kind (registry step 2)."""
+    _serve_publisher_format(ctx, format_id, asset_types, kind)
+
+
+@given(
+    parsers.parse(
+        'the seller\'s creative agent serves "{format_id}" with assets "{asset_types}" declaring no canonical kind'
+    )
+)
+def given_served_unannotated_publisher_format(ctx: dict, format_id: str, asset_types: str) -> None:
+    """A publisher format that leaves its projection to the registry (steps 3 and 4)."""
+    _serve_publisher_format(ctx, format_id, asset_types, None)
+
+
+@given("the buyer syncs a creative identified by that served format")
+def given_sync_served_format_creative(ctx: dict) -> None:
+    """The legacy claim naming the format the peer publishes, at the URL it publishes it under.
+
+    Not through ``resolvable_format_ref``: that door checks the REFERENCE capture, and this
+    format is the peer's own. The identity is the one the env hands over, so no step spells
+    an agent URL for a seeded format.
+    """
+    from tests.factories.request import CreativeAssetRequestFactory
+
+    (served,) = ctx["env"].seeded_format_ids()
+    ctx["creatives"] = [
+        CreativeAssetRequestFactory.payload(
+            creative_id=_SYNC_CREATIVE_ID,
+            format_id={"agent_url": str(served.agent_url), "id": served.id},
+        )
+    ]
+
+
 @given("the buyer asks for lenient validation")
 def given_lenient(ctx: dict) -> None:
     """``validation_mode: "lenient"`` -- "skip what this product will not take"."""
@@ -1861,38 +1940,7 @@ def _assert_entry_failed_and_nothing_stored(ctx: dict, code: str) -> None:
     ``CreativeUoW``; the reasons both halves are needed are on
     :func:`then_refused_and_nothing_stored`.
     """
-    from src.core.database.repositories.uow import CreativeUoW
-
-    resp = payload_or_none(ctx)
-    assert resp is not None, (
-        f"the dispatch produced no payload, so the batch never answered about "
-        f"{_SYNC_CREATIVE_ID!r} ({ctx.get('error')!r})"
-    )
-    entries = {entry.creative_id: entry for entry in resp.creatives}
-    assert _SYNC_CREATIVE_ID in entries, f"the batch answered about {sorted(entries)}, not {_SYNC_CREATIVE_ID!r}"
-    entry = entries[_SYNC_CREATIVE_ID]
-    action = entry.action.value if hasattr(entry.action, "value") else str(entry.action)
-    assert action == "failed", (
-        f"the creative was reported {action!r}; the gate is supposed to refuse it, and any "
-        f"other action means it was admitted"
-    )
-    codes = [error.code for error in entry.errors or []]
-    assert codes == [code], (
-        f"expected exactly {code} on the entry, got {codes!r}. The pinned enum classifies it "
-        f"correctable, which is what leaves the buyer a lever to resend a creative this seller takes"
-    )
-    # Values, not rows: a ``Creative`` read past the UoW is detached and raises on attribute
-    # access, which would surface as a DetachedInstanceError instead of this assertion.
-    with CreativeUoW(ctx["tenant"].tenant_id) as uow:
-        assert uow.creatives is not None
-        stored_kinds = {
-            c.creative_id: c.format_kind for c in uow.creatives.list_by_principal(ctx["principal"].principal_id)
-        }
-    assert _SYNC_CREATIVE_ID not in stored_kinds, (
-        f"the seller refused on the wire but STORED {_SYNC_CREATIVE_ID!r} anyway, with "
-        f"format_kind={stored_kinds[_SYNC_CREATIVE_ID]!r}. The ruling is to gate at the "
-        f"write, so a refusal that leaves the row behind is the defect rather than the fix."
-    )
+    assert_sync_entry_refused_and_not_stored(ctx, _SYNC_CREATIVE_ID, code)
 
 
 @then(parsers.parse("the creative is refused {code:w} naming the packages field"))

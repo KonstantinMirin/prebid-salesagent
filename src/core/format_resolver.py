@@ -12,13 +12,12 @@ import json
 import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from fnmatch import fnmatch
 from typing import Any
 
 from adcp.canonical_formats import (
     CANONICAL_CREATIVE_AGENT_URL,
     format_is_supported,
-    load_default_registry,
+    project_v1_format_to_declaration,
     upgrade_legacy_format_id,
 )
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
@@ -26,7 +25,6 @@ from adcp.types.domains.core.package_format_snapshot import PackageFormatSnapsho
 from adcp.types.domains.core.product_format_declaration import (
     ProductFormatDeclaration as LibraryFormatDeclaration,
 )
-from adcp.types.domains.registries.v1_canonical_mapping import V1Pattern as LibraryV1GlobPattern
 from pydantic import TypeAdapter, ValidationError
 
 from src.core.database.database_session import get_db_session
@@ -148,20 +146,10 @@ def format_reference(ref: FormatRef) -> LibraryFormatId:
     return ref
 
 
-def _glob_canonical(legacy_id: str) -> str | None:
-    """The canonical kind a registry glob maps ``legacy_id`` to, or ``None`` if none matches.
-
-    The registry's ``v1_pattern`` is a closed two-arm union, and the arms ARE two of the
-    normative steps: ``format_id_glob`` is step 3 (38 of the 45 mappings), ``structural`` is
-    step 4 (the other 7). Discriminated by type rather than by ``getattr``, so the untried
-    arm is a visible skip instead of a silent miss -- a structural entry needs the format's
-    declared shape, which an id alone does not carry.
-    """
-    for mapping in load_default_registry().mappings:
-        pattern = mapping.v1_pattern
-        if isinstance(pattern, LibraryV1GlobPattern) and fnmatch(legacy_id, pattern.format_id_glob):
-            return str(mapping.v2.canonical)
-    return None
+def _sdk_projected_kind(v1_format: Format | Mapping[str, Any]) -> str | None:
+    """The kind the SDK's v1 -> v2 projection gives *v1_format*, or ``None`` when it fails closed."""
+    projected = project_v1_format_to_declaration(v1_format).declaration
+    return None if projected is None else str(projected.format_kind)
 
 
 def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
@@ -174,71 +162,60 @@ def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
     single literal to invert to. That asymmetry is why the canonical kind -- not the
     legacy reference -- is the identity everything inside this seller shares.
 
-    Two of the normative six steps are implementable from what a seller holds today, and
-    they are tried in the spec's order:
+    THE ORDER IS THE SDK'S, not this module's. The registry's normative "Resolution order"
+    (registries/v1-canonical-mapping.json @ 3.2.7) has six steps. Step 1 -- a product
+    declaration whose ``v1_format_ref`` names this id -- is a property of a PRODUCT, so the
+    package route applies it before it gets here (``format_satisfaction._legacy_route``) and
+    a creative write has no product to consult. Steps 2 to 6 are what
+    ``adcp.canonical_formats.project_v1_format_to_declaration`` implements, in order, and
+    its module docstring says so:
 
-    1. **The agent's own projection.** ``core/format-id.json`` lets a format declare its
-       canonical projection, and ``CanonicalProjectionReference.kind`` is required when it
-       does. An explicit declaration outranks any inference, so it is consulted first.
-    2. **The registry glob**, matched twice. 38 of the 45 mappings carry a
-       ``v1_pattern.format_id_glob`` and a ``v2.canonical``; measured, all 7 distinct targets
-       are members of the pinned vocabulary, so a match yields a usable kind without further
-       checking. The first match is against the id as given. The second is against the id the
-       registry's own parameterized upgrade normalizes it to, because a size-encoded slug is
-       not spelled like the template that covers it: ``display_300x250_image`` is a member of
-       the ``display_image`` mapping, and matching the raw slug alone missed every such id
-       (salesagent-iz7dm -- 101 of 376 nodeids regressed on land). Both matches read the kind
-       off the mapping they hit, so neither infers anything from the slug's shape.
+    2. the v1 format declaration's own ``canonical`` annotation;
+    3. the registry's ``format_id_glob`` entries;
+    4. the registry's ``structural`` entries, matched against the declaration's asset types
+       -- a family-level identification the SDK flags ``FORMAT_DECLARATION_V1_AMBIGUOUS``
+       because it cannot be inverted (step 5), which is no obstacle in this direction;
+    6. fail closed.
 
-    The remaining steps -- structural match and ambiguous-family -- need the format's
-    declared structure rather than its id, and a seller-published
-    ``v1_format_ref[]`` needs ``Product.format_options[]``, which this seller does not
-    carry yet. Until those exist this fails CLOSED, which is the sixth step and the only
-    safe end to the order: a kind guessed from an unmatched id would be a fabricated
-    identity, and every comparison downstream keys on it.
+    This module used to carry its own copy of steps 2 and 3 and stopped there, so a served
+    format with no annotation and no glob hit but a registry-matchable shape was refused
+    where the normative order projects it (salesagent-ol033.20.24).
+
+    The declaration is the fetched *spec* when the caller has one, else the reference alone,
+    so steps 2 and 4 have nothing to read and only the glob can answer. EITHER WAY THE SDK
+    IS HANDED THE UPGRADED ID, once, before the order runs. ``display_300x250_image`` is not
+    spelled like any glob, but it is a member of the ``display_image`` mapping: the SDK's
+    ``upgrade_legacy_format_id`` rewrites it to that template (salesagent-iz7dm). Upgrading
+    only after a failed projection let step 4 answer first whenever a declaration was
+    supplied -- a served v1 image format with no ``canonical`` has the standard ``image`` +
+    ``url`` shape, so the structural ``{asset_types: [url]}`` entry projected it to
+    ``display_tag`` before the glob that names it ``image`` was consulted, and the kind
+    differed with and without the declaration. Normalizing first is what keeps step 3 ahead
+    of step 4, and keeps the id-only answer and the declared answer the same wherever the
+    declaration adds nothing a higher step reads.
 
     Args:
         ref: the deprecated reference, in any shape :func:`format_identity` accepts.
         spec: the fetched format declaration, when the caller already has it. Passing it
-            is what makes step 1 reachable; without it only the registry is consulted.
+            is what makes steps 2 and 4 reachable.
 
     Returns:
         A ``format_kind`` from the pinned vocabulary.
 
     Raises:
-        ValueError: when neither step resolves. The caller decides how to refuse -- this
+        ValueError: when no step resolves. The caller decides how to refuse -- this
             module does not mint an error code for a projection it could not make.
     """
-    declared = getattr(spec, "canonical", None) if spec is not None else None
-    if declared is not None:
-        kind = getattr(declared, "kind", None)
-        if kind is not None:
-            return str(kind)
-
-    legacy_id = format_ref_id(ref)
-    if legacy_id is not None:
-        kind = _glob_canonical(legacy_id)
-        if kind is not None:
-            return kind
-
-        # The glob is matched against the raw slug, and a size-encoded id is not spelled
-        # like the template it belongs to: the registry covers ``display_300x250_image``
-        # through ``display_image``'s ``parameter_mappings``, whose own note says the
-        # mapping exists so "one legacy format definition identif[ies] every size/density
-        # combination without retina-specific format ids". So the upgrade is the step that
-        # makes membership visible, and the kind still comes from the matched mapping --
-        # nothing is inferred from the slug's shape.
-        upgraded = upgrade_legacy_format_id(legacy_id)
-        upgraded_id = format_ref_id(upgraded) if upgraded is not None else None
-        if upgraded_id is not None and upgraded_id != legacy_id:
-            kind = _glob_canonical(upgraded_id)
-            if kind is not None:
-                return kind
-
-    raise ValueError(
-        f"no canonical projection for legacy format_id {legacy_id!r}: the agent declares none "
-        "and no registry pattern matches"
-    )
+    reference = format_reference(ref)
+    upgraded = upgrade_legacy_format_id(reference)
+    declaration = spec.model_copy(update={"format_id": upgraded}) if spec is not None else {"format_id": upgraded}
+    kind = _sdk_projected_kind(declaration)
+    if kind is None:
+        raise ValueError(
+            f"no canonical projection for legacy format_id {reference.id!r}: the registry's resolution order "
+            "fails closed for it"
+        )
+    return kind
 
 
 def creative_identity_of(creative: LibraryCreativeAsset, *, spec: Format | None) -> CreativeFormatIdentity:
@@ -275,8 +252,9 @@ def creative_identity_of(creative: LibraryCreativeAsset, *, spec: Format | None)
             duck-read: both declare the two arms, so ``format_id`` is a plain attribute and
             mypy holds every caller to a real model instead of to whatever answers.
         spec: the fetched format declaration, when the caller already has it. Passing it is
-            what makes the agent's own explicit projection (step 1) reachable; without it
-            only the registry glob (step 3) is consulted.
+            what makes the agent's own explicit projection (registry step 2) and the
+            structural match (step 4) reachable; without it only the glob (step 3) is
+            consulted.
     """
     format_id = creative.format_id
     if format_id is None:
@@ -1187,6 +1165,31 @@ def fetch_format_spec(agent_url: str, format_id: str, *, provenance: UrlProvenan
     except Exception as e:
         logger.warning(f"Could not fetch format {format_id} from {agent_url}: {e}")
         return None
+
+
+def seller_format_catalogue(tenant_id: str) -> list[Format]:
+    """Every format a reference this seller receives is resolved against.
+
+    The dialled creative agents PLUS the formats the tenant's own ad-server adapter serves.
+    The registry half is agents only -- an adapter-served format's ``agent_url`` is a
+    pseudo-URL with no host to dial -- so a catalogue built from the registry alone made
+    ``find_format`` answer None for every ``broadstreet_*`` reference, which left the
+    projection with no ``canonical`` declaration to read and refused the reference
+    (salesagent-zthsk). ``list_creative_formats`` composes its catalogue from the same two
+    parts, so a format this seller ADVERTISES is a format a buyer may NAME -- on a creative
+    and on a package alike.
+
+    Fetched once per request and outside any transaction by its callers: the registry's
+    async HTTP must not run inside a database savepoint.
+    """
+    from src.core.creative_agent_registry import get_creative_agent_registry
+    from src.core.helpers.adapter_helpers import adapter_served_creative_formats
+
+    registry = get_creative_agent_registry()
+    return [
+        *run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant_id)),
+        *adapter_served_creative_formats(tenant_id),
+    ]
 
 
 def get_format(
