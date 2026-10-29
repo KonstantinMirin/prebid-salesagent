@@ -470,7 +470,18 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
     # reaches production. AdCPPackageUpdate forbids it (extra=forbid), so it is
     # rejected — currently as VALIDATION_ERROR rather than the spec-expected
     # INVALID_REQUEST (BR-RULE-198), so T-UC-003-ext-w is xfailed (#1417).
-    _supported_pkg_fields = {"package_id", "budget", "paused", "targeting_overlay", "product_id"}
+    # canceled and start_time are package-update.json properties (adcp v3.2.7), sent as
+    # written: start_time's literal "asap" is the value the package-scope row exists to
+    # show refused (``not: {const: asap}``), so it is not resolved as a date token.
+    _supported_pkg_fields = {
+        "package_id",
+        "budget",
+        "paused",
+        "targeting_overlay",
+        "product_id",
+        "canceled",
+        "start_time",
+    }
     kwargs = _ensure_update_defaults(ctx)
     pkg_update: dict[str, Any] = {}
     # Skip header row if present (pytest-bdd datatables include header as first row)
@@ -486,12 +497,12 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
             pkg_update["package_id"] = value
         elif field == "budget":
             pkg_update["budget"] = float(value)
-        elif field == "paused":
-            pkg_update["paused"] = as_bool(value)
+        elif field in ("paused", "canceled"):
+            pkg_update[field] = as_bool(value)
         elif field == "targeting_overlay":
             pkg_update["targeting_overlay"] = json.loads(value)
-        elif field == "product_id":
-            pkg_update["product_id"] = value
+        elif field in ("product_id", "start_time"):
+            pkg_update[field] = value
     assert pkg_update, "Datatable produced empty package update — check table format"
     kwargs["packages"] = [pkg_update]
 
