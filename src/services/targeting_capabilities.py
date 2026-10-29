@@ -26,12 +26,13 @@ the per-dimension table and the apply-exactly-or-reject decision it needs.
 """
 
 from collections import Counter
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
-from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPValidationError
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPInvalidRequestError, AdCPValidationError
 from src.core.schemas import AnyTargeting, Error
 from src.core.validation_helpers import PACKAGES_FIELD, package_field_path
 
@@ -316,6 +317,24 @@ def raise_if_undeclared_overlay_dimension(targeting: AnyTargeting, package_index
                 details=CapabilityRefusalDetails(capability=dimension, package_index=package_index),
                 field=package_field_path(f"targeting_overlay.{dimension}", package_index),
             )
+
+
+def refuse_invalid_package_overlays(overlays: Sequence[AnyTargeting | None]) -> None:
+    """Refuse the packages' overlays, in package order: request faults first, then capability gaps.
+
+    THE one overlay check for create_media_buy and update_media_buy, so the two tools answer
+    the same overlay with the same code. ``overlays[i]`` is package ``i``'s overlay (``None``
+    when it sent none). Every overlay is checked for a request fault before any is asked
+    whether this seller applies what it names, so a request fault outranks a capability gap.
+    The first package with a fault is the one refused, with that package's violations.
+    """
+    sent = [(index, overlay) for index, overlay in enumerate(overlays) if overlay is not None]
+    for _, overlay in sent:
+        violations = collect_targeting_violations(overlay)
+        if violations:
+            raise AdCPInvalidRequestError(details=ValidationDetails(**violations), field="targeting_overlay")
+    for index, overlay in sent:
+        raise_if_undeclared_overlay_dimension(overlay, index)
 
 
 def geo_overlap_conflicts(targeting: AnyTargeting) -> list[dict[str, object]]:

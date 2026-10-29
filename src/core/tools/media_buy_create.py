@@ -142,10 +142,9 @@ from src.core.webhooks.registration import accept_push_notification_config
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.targeting_capabilities import (
-    collect_targeting_violations,
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
-    raise_if_undeclared_overlay_dimension,
+    refuse_invalid_package_overlays,
     validate_property_targeting_allowed,
 )
 
@@ -3210,23 +3209,8 @@ async def _create_media_buy_impl(
                         budget_limit=Decimal(str(currency_limit.max_daily_package_spend)),
                     )
 
-        # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)
-        # Every package's overlay is checked for a malformed request before any is asked
-        # whether this seller applies what it names: a request fault outranks a capability gap.
-        overlays = [
-            (index, pkg.targeting_overlay)
-            for index, pkg in enumerate(req.packages or [])
-            if pkg.targeting_overlay is not None
-        ]
-        for _, overlay in overlays:
-            violations = collect_targeting_violations(overlay)
-            if violations:
-                raise AdCPInvalidRequestError(
-                    details=ValidationDetails(**violations),
-                    field="targeting_overlay",
-                )
-        for index, overlay in overlays:
-            raise_if_undeclared_overlay_dimension(overlay, index)
+        # targeting_overlay is at package level per AdCP spec.
+        refuse_invalid_package_overlays([pkg.targeting_overlay for pkg in req.packages or []])
 
     except (AdCPSalesAgentError, ValueError, PermissionError) as e:
         # Audit-update then re-raise via the shared helper so this early-validation
