@@ -1594,10 +1594,8 @@ def _update_media_buy_impl(
 
             # After every write above, so the coverage and the flight window it reads are
             # this update's result, and before the response reads the status back.
-            assert uow.assignments is not None and uow.creatives is not None
-            advance_past_pending_creatives(
-                uow.media_buys, uow.assignments, uow.creatives, req.media_buy_id or "", principal_id
-            )
+            assert uow.assignments is not None
+            advance_past_pending_creatives(uow.media_buys, uow.assignments, req.media_buy_id or "")
 
             # Create ObjectWorkflowMapping to link media buy update to workflow step
             # This enables webhook delivery when the update completes

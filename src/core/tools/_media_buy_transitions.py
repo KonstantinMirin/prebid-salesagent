@@ -43,11 +43,10 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from src.core.database.models import PersistedMediaBuyStatus
-from src.core.schemas.creative import CreativeStatusEnum
 from src.core.utils.flight_time import utc_flight_end, utc_flight_start
 
 if TYPE_CHECKING:
-    from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
+    from src.core.database.repositories.creative import CreativeAssignmentRepository
     from src.core.database.repositories.media_buy import MediaBuyRepository
 
 
@@ -111,9 +110,7 @@ def resolve_flight_window_status(
 def advance_past_pending_creatives(
     media_buys: MediaBuyRepository,
     assignments: CreativeAssignmentRepository,
-    creatives: CreativeRepository,
     media_buy_id: str,
-    principal_id: str,
 ) -> None:
     """Move a committed ``pending_creatives`` buy on once every package has an approved creative.
 
@@ -130,17 +127,18 @@ def advance_past_pending_creatives(
     (``MediaBuyRepository._stamp_confirmation_if_needed``), and a status change cannot put it
     there. The status it moves to is the flight window's (``resolve_flight_window_status``), so
     a future flight reads ``pending_start`` and one already open reads ``active``.
+
+    Which creatives count as cleared is the approval gate's answer
+    (``CreativeAssignmentRepository.unapproved_creative_ids``), not a second reading of the
+    status column here, so this and the admin approval route cannot disagree about a buy.
     """
     buy = media_buys.get_by_id_or_raise(media_buy_id)
     if buy.status != PersistedMediaBuyStatus.PENDING_CREATIVES or buy.confirmed_at is None:
         return
-    rows = assignments.get_by_media_buy(media_buy_id)
-    approved = {
-        creative.creative_id
-        for creative in creatives.get_by_ids(sorted({row.creative_id for row in rows}), principal_id)
-        if creative.status == CreativeStatusEnum.approved.value
+    unapproved = set(assignments.unapproved_creative_ids(media_buy_id))
+    covered = {
+        row.package_id for row in assignments.get_by_media_buy(media_buy_id) if row.creative_id not in unapproved
     }
-    covered = {row.package_id for row in rows if row.creative_id in approved}
     package_ids = {package.package_id for package in media_buys.get_packages(media_buy_id)}
     if not package_ids or not package_ids <= covered:
         return
