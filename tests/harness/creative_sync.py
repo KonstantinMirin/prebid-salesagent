@@ -87,7 +87,7 @@ from src.core.schemas import Format, FormatId, SyncCreativesRequest, SyncCreativ
 from tests.e2e.webhook_capture_service import PEER_BUILD_TOOL, PEER_PREVIEW_TOOL
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv
-from tests.harness._realize import realize_e2e
+from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 from tests.harness.peer_agent import PeerCreativeAgentMixin
 from tests.harness.transport import DeliverResult
@@ -292,8 +292,6 @@ def _e2e_ai_reviews_taken_up(self: CreativeSyncEnv, *, awaiting: list[str]) -> l
 
 #: The ``data`` keys the background AI reviewer writes: its verdict, or the error it failed
 #: with -- the two branches of ``_ai_review_creative`` (src/admin/blueprints/creatives.py).
-#: Every other key it writes back exactly as it read it (``update_data`` assigns the whole
-#: document), which is what makes its read observable after it ran.
 AI_REVIEWER_DATA_KEYS = ("ai_review", "ai_review_error")
 
 
@@ -303,32 +301,6 @@ def _has_ai_review_outcome(row: Any) -> bool:
     if not isinstance(data, dict):
         return False
     return any(data.get(key) is not None for key in AI_REVIEWER_DATA_KEYS)
-
-
-def _e2e_what_each_ai_review_read(self: CreativeSyncEnv) -> dict[str, tuple[str, str] | None]:
-    """The e2e leg of :meth:`CreativeSyncEnv.ai_review_observations`: read off the reviewer's write-back.
-
-    The submit happens in the server, where no stand-in can take a read at it. What the
-    real job read is still on the row afterwards: it loads the creative in its own unit
-    of work, adds its verdict under :data:`AI_REVIEWER_DATA_KEYS` and writes the WHOLE
-    ``data`` document back (``CreativeRepository.update_data``). So the row with those
-    keys removed is the ``data`` the job read -- the sync's update if it ran after the
-    commit, and the row as it was before the sync if it ran inside the transaction,
-    whose update its write-back then overwrites. On the create branch a job that ran
-    early found no row and wrote nothing, so the creative is absent here.
-
-    ``status`` cannot be recovered this way (the job overwrites it with its verdict), so
-    over e2e the comparison against the committed row is equal by construction and the
-    update branch is graded by the Then's pre-update comparison on ``data``. Only
-    creatives the reviewer took up are returned, read after the control Then has waited
-    for them (:meth:`ai_reviews_taken_up`).
-    """
-    reviewed = set(self._committed_ai_review_outcomes())
-    return {
-        creative_id: fingerprint
-        for creative_id, fingerprint in self.committed_creative_fingerprints(without=AI_REVIEWER_DATA_KEYS).items()
-        if creative_id in reviewed
-    }
 
 
 #: Where the in-process stand-in for the operator agent says its canonical render lives.
@@ -473,7 +445,7 @@ class HarnessCreativeAgentRegistry(ReferenceFormatsRegistry):
         self._format_fetch_error = exc
 
 
-def creative_fingerprint(creative: Any, *, without: tuple[str, ...] = ()) -> tuple[str, str]:
+def creative_fingerprint(creative: Any) -> tuple[str, str]:
     """The per-row state comparison every creative-effect oracle uses.
 
     ONE definition, because two callers compare the same thing for two different
@@ -483,16 +455,8 @@ def creative_fingerprint(creative: Any, *, without: tuple[str, ...] = ()) -> tup
     for either -- the update branch re-writes ``data`` while leaving ``status`` at
     ``pending_review``, so a status-only fingerprint reads a stale row and a
     freshly-updated one as identical.
-
-    ``without`` drops those ``data`` keys first: :data:`AI_REVIEWER_DATA_KEYS`, for the
-    post-commit oracle, so the row reads as the sync left it once the reviewer has added
-    its verdict. The dry_run oracle passes nothing, because a verdict appearing IS an
-    effect it exists to see.
     """
-    data = creative.data
-    if without and isinstance(data, dict):
-        data = {key: value for key, value in data.items() if key not in without}
-    return (creative.status, repr(data))
+    return (creative.status, repr(creative.data))
 
 
 class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
@@ -641,14 +605,25 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
         )
         return MagicMock()
 
-    @realize_e2e(_e2e_what_each_ai_review_read)
+    @realize_e2e(
+        e2e_unsupported(
+            "each observation is taken INSIDE the submit, by this env's stand-in for the AI-review "
+            "executor, at the instant production hands the job over. Under e2e_rest the submit "
+            "happens in the server process, where no stand-in runs. The job's write-back does keep "
+            "what it read (it writes the whole data document back with its verdict added), but that "
+            "read comes only after the review itself runs, so a job submitted from inside the open "
+            "transaction almost always reads after the sync has committed anyway: the e2e answer "
+            "would catch an early hand-off only when the job's read wins that race, and would pass "
+            "the regression this scenario names otherwise. Grading it e2e needs a read taken at the "
+            "submit inside the server, which is its own build"
+        )
+    )
     def ai_review_observations(self) -> dict[str, tuple[str, str] | None]:
         """{creative_id: fingerprint-or-None} an independent connection saw at each AI-review submit.
 
         See :attr:`ai_review_commit_observations`. An accessor rather than the attribute,
-        so the one Then that reads it gets the e2e_rest answer too: there the submit runs in
-        the server, and what the job read is recovered from its write-back
-        (:func:`_e2e_what_each_ai_review_read`) instead of an empty dict.
+        so the one Then that reads it declares where it cannot be graded instead of reading
+        an empty dict over e2e_rest.
         """
         return dict(self.ai_review_commit_observations)
 
@@ -667,21 +642,20 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
 
         with self._independent_session() as independent_session:
             row = CreativeRepository(independent_session, tenant_id).get_by_id(creative_id, principal_id)
-            return None if row is None else creative_fingerprint(row, without=AI_REVIEWER_DATA_KEYS)
+            return None if row is None else creative_fingerprint(row)
 
-    def committed_creative_fingerprints(self, *, without: tuple[str, ...] = ()) -> dict[str, tuple[str, str]]:
+    def committed_creative_fingerprints(self) -> dict[str, tuple[str, str]]:
         """{creative_id: fingerprint} for every creative of this env's principal, as committed now.
 
         The library-wide twin of :meth:`_committed_creative_fingerprint`, on the same
         independent connection, so a step comparing the library before and after a
         request reads both sides from the database the request wrote, on every transport.
-        ``without`` is :func:`creative_fingerprint`'s.
         """
         from src.core.database.repositories.creative import CreativeRepository
 
         with self._independent_session() as session:
             return {
-                row.creative_id: creative_fingerprint(row, without=without)
+                row.creative_id: creative_fingerprint(row)
                 for row in CreativeRepository(session, self._tenant_id).list_by_principal(self._principal_id)
             }
 

@@ -56,7 +56,6 @@ from tests.factories.creative_asset import (
 from tests.factories.malformed import malformed
 from tests.factories.principal import PrincipalFactory
 from tests.factories.request import OMIT, CreativeAssetRequestFactory
-from tests.harness.creative_sync import AI_REVIEWER_DATA_KEYS
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 from tests.helpers.account_seeding import seed_account_with_access, seed_natural_key_matches
 
@@ -3379,18 +3378,20 @@ def then_ai_review_observes_committed_creative(ctx: dict) -> None:
     submit stays inside the transaction: the create branch's row is not there at all
     (``None``), the update branch's is there carrying its PRE-update state.
 
-    Over e2e_rest the job really runs in the server, and what it read is recovered from
-    the ``data`` it writes back (``_e2e_what_each_ai_review_read``). Its verdict keys are
-    dropped from both sides, so the equality is by construction there, and the update
-    branch is graded by the second assertion: the ``data`` the job saw differs from the
-    row as seeded before the request. A job that read early wrote the seeded ``data``
-    back over the sync's update, and fails it; in process it holds because the resync
-    changes the creative's content (the Given seeds different assets).
+    The second assertion keeps the update branch from passing vacuously: if the resync
+    left the row's ``data`` as seeded, a pre-update read and a post-commit read would
+    fingerprint alike and the equality would hold either way. The Given seeds different
+    assets, so ``data`` the job saw that still equals the row as seeded before the
+    request is a read taken before the update committed.
+
+    Not graded over e2e_rest: the submit runs in the server, where the job's own read
+    comes after the review and so races the sync's commit (see the ``e2e_unsupported``
+    declaration on ``CreativeSyncEnv.ai_review_observations``).
     """
     _assert_success_response(ctx)
     observed = ctx["env"].ai_review_observations()
     expected_ids = [c["creative_id"] for c in ctx["creatives"]]
-    committed = _persisted_creative_fingerprints(ctx, without=AI_REVIEWER_DATA_KEYS)
+    committed = _persisted_creative_fingerprints(ctx)
 
     assert sorted(observed) == sorted(expected_ids), (
         f"expected an AI-review observation for each of {expected_ids}, got {sorted(observed)}"
@@ -3473,7 +3474,7 @@ def given_generative_creative_served_by_agent(ctx: dict) -> None:
     ctx["creative_agent_url"] = fmt["agent_url"]
 
 
-def _persisted_creative_fingerprints(ctx: dict, *, without: tuple[str, ...] = ()) -> dict[str, tuple]:
+def _persisted_creative_fingerprints(ctx: dict) -> dict[str, tuple]:
     """A per-row FINGERPRINT of the tenant's library: {creative_id: (status, data)}.
 
     Not the id SET. An id set can only see a row being ADDED, so a preview that
@@ -3483,9 +3484,9 @@ def _persisted_creative_fingerprints(ctx: dict, *, without: tuple[str, ...] = ()
     generative_build_result / preview_response and an id-set oracle still passed.
 
     Read by the env, on the database the request wrote on every transport
-    (``CreativeSyncEnv.committed_creative_fingerprints``); ``without`` is its parameter.
+    (``CreativeSyncEnv.committed_creative_fingerprints``).
     """
-    return ctx["env"].committed_creative_fingerprints(without=without)
+    return ctx["env"].committed_creative_fingerprints()
 
 
 @given(parsers.parse("a {creative_state} creative on a {format_kind} format served by a creative agent"))
