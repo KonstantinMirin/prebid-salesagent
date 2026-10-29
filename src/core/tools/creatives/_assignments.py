@@ -102,8 +102,9 @@ def require_package_covered(
     the creatives already assigned and the ones the request added or kept, each with the
     ``placement_ids`` its assignment routes it to
     (:func:`~src.core.format_satisfaction.require_covered`). Shared by ``sync_creatives``
-    assignments and ``update_media_buy``'s two replace-the-package's-creatives branches, which
-    is every gate that changes an existing package's creatives. The caller's unit of work rolls
+    assignments and ``update_media_buy``'s three replace-the-package's-creatives branches
+    (``creative_ids``, ``creative_assignments`` and the inline ``creatives``), which is every
+    gate that changes an existing package's creatives. The caller's unit of work rolls
     back on the raise. No product means no format restriction, as at every creative gate.
     """
     if product is None:
@@ -140,8 +141,9 @@ def _process_assignments(
     of opening one. sync_creatives passes its own under ``dry_run`` so the
     creative writes and these assignment writes share a single transaction that
     is rolled back as a unit — which is also what lets this stage read those
-    creatives as flushed rows. Passing nothing opens (and commits) a transaction
-    of its own, the live behavior.
+    creatives as flushed rows — and passes its caller's when it joined one, so
+    both commit or roll back with that caller. Passing nothing opens (and
+    commits) a transaction of its own, the live behavior.
 
     Returns:
         List of ``CreativeAssignment`` schema objects created or updated.

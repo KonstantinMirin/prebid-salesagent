@@ -23,6 +23,7 @@ carrying JSON a reader has to decode.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -1281,6 +1282,63 @@ def when_update_assigns_routed_creatives(ctx: dict, routing: str) -> None:
     )
 
 
+#: How a held package came by a creative: ``inline`` through a package's ``creatives`` array,
+#: ``library`` through ``creative_ids`` / ``creative_assignments``. update_media_buy.mdx gives
+#: the two separate replacement scopes, and ``CreativeAssignment.inline`` is what records it.
+_ASSIGNMENT_ORIGINS = {"inline": True, "library": False}
+
+
+@given(
+    parsers.parse(
+        'the package already carries {origin:w} canonical "{kind}" creatives carrying the "{manifests}" manifests'
+    )
+)
+def given_package_carries_creatives(ctx: dict, origin: str, kind: str, manifests: str) -> None:
+    """Assign one stored canonical creative per manifest to the held package, from *origin*.
+
+    Each assignment names no ``placement_ids``, so each creative is eligible for every
+    placement, and the set covers what its manifests fill. Each seeded ``(creative_id,
+    inline)`` pair is kept in ``ctx["seeded_assignments"]``, the package's state before the
+    When, which a Then compares the persisted rows against.
+    """
+    from tests.factories.creative import CreativeAssignmentFactory
+
+    assert origin in _ASSIGNMENT_ORIGINS, f"no assignment origin {origin!r}; have {sorted(_ASSIGNMENT_ORIGINS)}"
+    seeded = ctx.setdefault("seeded_assignments", set())
+    for creative in _seed_canonical_creatives(ctx, kind, manifests):
+        CreativeAssignmentFactory(
+            creative=creative,
+            media_buy=ctx["existing_media_buy"],
+            package_id=ctx["existing_package"].package_id,
+            inline=_ASSIGNMENT_ORIGINS[origin],
+        )
+        seeded.add((creative.creative_id, _ASSIGNMENT_ORIGINS[origin]))
+    ctx["env"]._commit_factory_data()
+
+
+@when(
+    parsers.parse(
+        "the Buyer Agent replaces the package's inline creatives through update_media_buy "
+        'with canonical "{kind}" creatives carrying the "{manifests}" manifests'
+    )
+)
+def when_update_replaces_inline_creatives(ctx: dict, kind: str, manifests: str) -> None:
+    """Dispatch update_media_buy whose package ``creatives`` carry one NEW body per manifest.
+
+    package-update.json ``creatives``: "Replace this package's inline creative assets". Each
+    body has a fresh ``creative_id``, so none of the held inline creatives is kept and the
+    array replaces them all. The ids sent are kept in ``ctx["uploaded_creative_ids"]``.
+    """
+    ctx["uploaded_creative_ids"] = [f"satisfaction_inline_{uuid.uuid4().hex[:12]}" for _ in manifests.split(",")]
+    _dispatch_package_update(
+        ctx,
+        creatives=[
+            _canonical_claim(creative_id, kind, assets=_manifest(name.strip()))
+            for creative_id, name in zip(ctx["uploaded_creative_ids"], manifests.split(","), strict=True)
+        ],
+    )
+
+
 def _dispatch_package_update(ctx: dict, **package_members: Any) -> None:
     """One update_media_buy against the held buy's package, carrying *package_members*."""
     from tests.bdd.steps.generic._dispatch import dispatch_package_update
@@ -1541,6 +1599,12 @@ def given_sync_canonical_creative_with_manifest_and_option(ctx: dict, kind: str,
 
 
 def _sync_canonical_claim(ctx: dict, kind: str, **members: Any) -> None:
+    """The sync scenarios' one creative: a :func:`_canonical_claim` under :data:`_SYNC_CREATIVE_ID`."""
+    ctx["creatives"] = [_canonical_claim(_SYNC_CREATIVE_ID, kind, **members)]
+    ctx["manifest_creative_id"] = _SYNC_CREATIVE_ID
+
+
+def _canonical_claim(creative_id: str, kind: str, **members: Any) -> dict[str, Any]:
     """ONE canonical claim on the wire: ``format_kind`` and no ``format_id`` key at all.
 
     ``format_id=OMIT`` is what makes it canonical: ``core/creative-asset.json`` is a oneOf
@@ -1556,15 +1620,12 @@ def _sync_canonical_claim(ctx: dict, kind: str, **members: Any) -> None:
     from tests.factories.creative_asset import canonical_assets
     from tests.factories.request import OMIT, CreativeAssetRequestFactory
 
-    ctx["creatives"] = [
-        CreativeAssetRequestFactory.payload(
-            creative_id=_SYNC_CREATIVE_ID,
-            format_id=OMIT,
-            format_kind=kind,
-            **{"assets": canonical_assets(kind), **members},
-        )
-    ]
-    ctx["manifest_creative_id"] = _SYNC_CREATIVE_ID
+    return CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        format_id=OMIT,
+        format_kind=kind,
+        **{"assets": canonical_assets(kind), **members},
+    )
 
 
 def _mixed_identity_creative(format_id: str, kind: str) -> dict[str, Any]:
@@ -2219,6 +2280,39 @@ def then_creatives_leave_placement_uncovered(ctx: dict, field: str, placement_id
         field=field,
         details={"rejected_value": placement_id, "product_id": ctx["default_product"].product_id},
     )
+
+
+@then("the package keeps the creatives it held and none of the uploaded creatives is stored")
+def then_refused_update_changed_no_creative(ctx: dict) -> None:
+    """The refused update left the package's assignments and the creative library as seeded.
+
+    update_media_buy.mdx § Compatibility transaction boundary: "One update_media_buy request
+    is one atomic mutation" and "No package, assignment, library creative, or MediaBuy field
+    from the rejected update may change". The refusal reads the same on the wire whether or
+    not the upload was written first, so the persisted state is read back: the package's
+    assignments, each with its ``inline`` flag, equal the ones the Givens seeded, and no
+    creative carries an id the update uploaded. Read through the env's own session, which is
+    bound to the database the request wrote on every transport and sees only committed rows.
+    """
+    from src.core.database.models import Creative, CreativeAssignment
+
+    env = ctx["env"]
+    tenant_id = ctx["tenant"].tenant_id
+    held = {
+        (row.creative_id, row.inline)
+        for row in env.query(
+            CreativeAssignment,
+            tenant_id=tenant_id,
+            media_buy_id=ctx["existing_media_buy"].media_buy_id,
+            package_id=ctx["existing_package"].package_id,
+        )
+    }
+    assert held == ctx["seeded_assignments"], (
+        f"the refused update changed the package's assignments: held {sorted(held)}, "
+        f"seeded {sorted(ctx['seeded_assignments'])}"
+    )
+    stored = [cid for cid in ctx["uploaded_creative_ids"] if env.query(Creative, tenant_id=tenant_id, creative_id=cid)]
+    assert stored == [], f"the refused update stored the creatives it uploaded: {stored}"
 
 
 def _assert_creative_refused(ctx: dict, code: str, *, field: str | None) -> None:

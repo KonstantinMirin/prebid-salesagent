@@ -75,6 +75,7 @@ def sync_creatives(
     principal_id: str,
     tenant: TenantContext,
     assigned_by_caller: bool = False,
+    uow: CreativeUoW | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to the centralized creative library.
 
@@ -89,6 +90,15 @@ def sync_creatives(
     service's own gate, and is not held to its kind here: a product may replace the kind's
     slot list (core/product-format-declaration.json), and "assets is keyed by asset_group_id
     from the matched declaration's params.slots[]" (creative-manifests.mdx § Basic structure).
+
+    ``uow`` is the caller's open transaction, joined (``BaseUoW.join``) rather than a unit
+    of this service's own: the creatives, their assignments and the approval steps are
+    written into it and commit or roll back with the caller's other writes, and the audit
+    records wait for that commit. ``update_media_buy``'s inline creatives pass it, because
+    update_media_buy.mdx § Compatibility transaction boundary makes the update "one atomic
+    mutation" and says "No package, assignment, library creative, or MediaBuy field from
+    the rejected update may change". A joined sync is never a preview: the caller's
+    transaction decides whether anything persists.
     """
 
     # ``creatives`` is aliased because it is NARROWED below by the creative_ids filter.
@@ -99,6 +109,8 @@ def sync_creatives(
     # ``bool | None`` -- wider than the pinned {"type": "boolean"} -- so an explicit null is
     # still representable and two callees below want a real bool.
     dry_run = bool(req.dry_run)
+    joined = uow is not None
+    assert not (joined and dry_run), "a joined sync commits with its caller and cannot be a preview"
     validation_mode = enum_value(req.validation_mode)
 
     from pydantic import ValidationError
@@ -182,7 +194,8 @@ def sync_creatives(
     # both stages share the one rolled-back transaction. A second invocation
     # under an `if dry_run:` would re-fork the very seam this collapses.
     with ExitStack() as stack:
-        uow = stack.enter_context(CreativeUoW(tenant.tenant_id, dry_run=dry_run))
+        if uow is None:
+            uow = stack.enter_context(CreativeUoW(tenant.tenant_id, dry_run=dry_run))
         assert uow.creatives is not None
         creative_repo = uow.creatives
 
@@ -504,7 +517,10 @@ def sync_creatives(
         # NOTE: this conditional is the transaction seam itself (the commit-vs-
         # rollback decision), not a hand-placed effect gate — it is deliberately
         # retained, so this file is not literally dry_run-free after prkv.16.
-        if not dry_run:
+        # JOINED: the caller owns the transaction, so it stays open like a preview's and
+        # the assignment stage joins it; the caller's commit or rollback decides both.
+        keep_open = dry_run or joined
+        if not keep_open:
             stack.close()
 
         # Process assignments (spec-compliant: creative_id → package_ids mapping).
@@ -518,26 +534,38 @@ def sync_creatives(
             tenant=tenant,
             validation_mode=validation_mode,
             principal_id=principal_id,
-            uow=uow if dry_run else None,
+            uow=uow if keep_open else None,
         )
 
-    # Audit logging
-    _audit_log_sync(
-        tenant=tenant,
-        principal_id=principal_id,
-        synced_creatives=synced_creatives,
-        failed_creatives=failed_creatives,
-        assignment_list=assignment_list,
-        creative_ids=req.creative_ids,
-        dry_run=dry_run,
-        created_count=created_count,
-        updated_count=updated_count,
-        unchanged_count=unchanged_count,
-        failed_count=failed_count,
-        creatives_needing_approval=creatives_needing_approval,
-    )
+    # The audit writer opens a unit and a session of its own, so it runs only once no unit of
+    # this sync is open: after the caller's commit when the sync joined one, and after this
+    # service's own unit closed otherwise. Run inside a joined transaction it would record a
+    # sync the caller can still roll back, and its own commit could release the caller's
+    # pending writes. The nested-unit-of-work guard reads every call in a function handed a
+    # ``uow`` as made inside it, so the two sites below carry its marker.
+    def _record() -> None:
+        # structural-guard: nested-unit-of-work - runs after commit or close, never in a unit
+        _audit_log_sync(
+            tenant=tenant,
+            principal_id=principal_id,
+            synced_creatives=synced_creatives,
+            failed_creatives=failed_creatives,
+            assignment_list=assignment_list,
+            creative_ids=req.creative_ids,
+            dry_run=dry_run,
+            created_count=created_count,
+            updated_count=updated_count,
+            unchanged_count=unchanged_count,
+            failed_count=failed_count,
+            creatives_needing_approval=creatives_needing_approval,
+        )
+        log_tool_activity(identity, "sync_creatives", start_time)
 
-    log_tool_activity(identity, "sync_creatives", start_time)
+    if joined:
+        creative_repo.after_commit(_record, label="sync_creatives_audit")
+    else:
+        # structural-guard: nested-unit-of-work - this service's own unit closed above
+        _record()
 
     # Build message
     message = f"Synced {created_count + updated_count} creatives"

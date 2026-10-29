@@ -63,6 +63,7 @@ from src.core.database.models import (
     Product as DBProduct,
 )
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
+from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import (
     AdapterFailureDetails,
     CapabilityRefusalDetails,
@@ -494,6 +495,18 @@ def _patched_overlay(package: MediaPackage | None, overlay: TargetingInput) -> T
     stored = (package.package_config.get("targeting_overlay") or {}) if package is not None else {}
     kept = {name: value for name, value in stored.items() if value is not None}
     return TargetingInput.model_validate(kept | {name: getattr(overlay, name) for name in overlay.model_fields_set})
+
+
+def _package_product(uow: "MediaBuyUoW", media_buy_id: str, package_id: str) -> "DBProduct | None":
+    """The product a held package was bought on, or None when its config names none.
+
+    One lookup for the three branches that replace a package's creatives: each grades the
+    creatives against this product and then asks it whether the package is still covered.
+    """
+    assert uow.media_buys is not None and uow.products is not None
+    package = uow.media_buys.get_package(media_buy_id, package_id)
+    product_id = package.package_config.get("product_id") if package and package.package_config else None
+    return uow.products.get_by_id(product_id) if product_id else None
 
 
 def _validate_creatives_for_assignment(
@@ -1201,14 +1214,7 @@ def _update_media_buy_impl(
 
                         # Validate creatives (existence, status, format) via the
                         # shared helper so the rules match the creative_assignments path.
-                        db_package = uow.media_buys.get_package(actual_media_buy_id, pkg_update.package_id)
-                        product_id = (
-                            db_package.package_config.get("product_id")
-                            if db_package and db_package.package_config
-                            else None
-                        )
-                        assert uow.products is not None
-                        product = uow.products.get_by_id(product_id) if product_id else None
+                        product = _package_product(uow, actual_media_buy_id, pkg_update.package_id)
                         _validate_creatives_for_assignment(
                             pkg_update.creative_ids,
                             uow=uow,
@@ -1300,8 +1306,18 @@ def _update_media_buy_impl(
                                 if c.creative_id
                             ],
                         )
+                        # Joined, not a unit of the sync's own: update_media_buy.mdx
+                        # § Compatibility transaction boundary makes this request "one
+                        # atomic mutation" in which "No package, assignment, library
+                        # creative, or MediaBuy field from the rejected update may change".
+                        # A sync that committed on its own exit kept the uploaded creative
+                        # and its assignment when a later check refused the update.
                         sync_response = sync_creatives(
-                            sync_req, identity=identity, principal_id=principal_id, tenant=tenant
+                            sync_req,
+                            identity=identity,
+                            principal_id=principal_id,
+                            tenant=tenant,
+                            uow=uow.join(CreativeUoW),
                         )
 
                         # Check for sync errors
@@ -1333,14 +1349,29 @@ def _update_media_buy_impl(
                         # The sync above assigned the new bodies; the inline ones they
                         # replace are unassigned here, and library assignments -- the
                         # creative_ids / creative_assignments set -- are left as they are.
+                        inline_media_buy_id = uow.media_buys.get_by_id_or_raise(req.media_buy_id).media_buy_id
                         _replace_package_assignments(
                             uow,
-                            uow.media_buys.get_by_id_or_raise(req.media_buy_id).media_buy_id,
+                            inline_media_buy_id,
                             pkg_update.package_id,
                             {c.creative_id for c in pkg_update.creatives},
                             inline=True,
                         )
                         session.flush()
+                        # The sync above asked coverage of the set BEFORE this drop, when the
+                        # replaced inline bodies still covered their placements. The drop can
+                        # leave an included placement with no creative, which core/product.json
+                        # format_options forbids: "the selected creative set MUST cover every
+                        # included placement; uncovered inventory MUST be rejected or refined,
+                        # never silently omitted". So the set is asked again, as it now stands.
+                        assert uow.assignments is not None
+                        require_package_covered(
+                            uow.assignments,
+                            inline_media_buy_id,
+                            pkg_update.package_id,
+                            _package_product(uow, inline_media_buy_id, pkg_update.package_id),
+                            field=package_field_path("creatives", pkg_index),
+                        )
 
                         # Track in affected_packages
                         _package_changes(changes_by_package, pkg_update.package_id)
@@ -1360,14 +1391,7 @@ def _update_media_buy_impl(
                         # building any assignment rows — otherwise a not-found creative_id
                         # would surface as a composite-FK IntegrityError. Same rules as the
                         # creative_ids path via the shared helper.
-                        ca_package = uow.media_buys.get_package(actual_media_buy_id, pkg_update.package_id)
-                        ca_product_id = (
-                            ca_package.package_config.get("product_id")
-                            if ca_package and ca_package.package_config
-                            else None
-                        )
-                        assert uow.products is not None
-                        ca_product = uow.products.get_by_id(ca_product_id) if ca_product_id else None
+                        ca_product = _package_product(uow, actual_media_buy_id, pkg_update.package_id)
                         _validate_creatives_for_assignment(
                             [ca.creative_id for ca in pkg_update.creative_assignments],
                             uow=uow,
