@@ -1649,12 +1649,12 @@ def given_update_request_with_identification(ctx: dict, id_config: str) -> None:
 
 
 @given(parsers.parse("the package targeting_overlay includes frequency_cap: {freq_cap_config}"))
-@given(parsers.parse("the package targeting_overlay includes frequency_cap with suppress: {freq_cap_config}"))
 def given_frequency_cap_config(ctx: dict, freq_cap_config: str) -> None:
     """Set frequency_cap on the first package update's targeting_overlay.
 
-    The parameter is the FULL frequency_cap configuration object (JSON).
-    Examples: {"interval": 60, "unit": "minutes"}, {"suppress": {...}, "max_impressions": 3}.
+    The parameter is the WHOLE core/frequency-cap.json object (JSON), sent as written:
+    ``{"suppress": {"interval": 60, "unit": "minutes"}}``, ``{"suppress_minutes": 60}``.
+    A bare Duration is not a frequency cap, and the step does not wrap one.
     """
     import json
 
@@ -3230,6 +3230,21 @@ def _assert_persisted_success(ctx: dict) -> None:
     )
 
 
+def _assert_frequency_cap_stored(ctx: dict) -> None:
+    """Synchronous success, and pkg_001's stored overlay holds the frequency cap that was sent.
+
+    The members the buyer set must be stored with the values sent; a member the buyer left out
+    may be stored as null, which says the same thing.
+    """
+    _assert_synchronous_success(ctx)
+    sent = ctx["update_kwargs"]["packages"][0]["targeting_overlay"]["frequency_cap"]
+    _budget, config = _stored_package(ctx, "pkg_001")
+    stored = (config.get("targeting_overlay") or {}).get("frequency_cap")
+    assert isinstance(stored, dict), f"update succeeded but pkg_001 stores no frequency_cap: {config!r}"
+    stored_members = {name: value for name, value in stored.items() if value is not None}
+    assert stored_members == sent, f"stored frequency_cap {stored!r} is not the one sent, {sent!r}"
+
+
 def _assert_submitted(ctx: dict) -> None:
     """The submitted task envelope: status submitted, with a task_id to poll."""
     _assert_wire_field_equals(ctx, "status", "submitted")
@@ -3238,6 +3253,7 @@ def _assert_submitted(ctx: dict) -> None:
 
 _UPDATE_OUTCOMES = {
     "accepted": _assert_synchronous_success,
+    "accepted with the frequency cap stored": _assert_frequency_cap_stored,
     "success with persisted records": _assert_persisted_success,
     "success with pending status": _assert_submitted,
     "submitted task envelope (awaiting approval)": _assert_submitted,

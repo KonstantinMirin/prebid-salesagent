@@ -1407,7 +1407,7 @@ Feature: BR-UC-003 Update Media Buy
     And the request includes 1 package update with:
     | field             | value   |
     | package_id        | pkg_001 |
-    And the package targeting_overlay includes frequency_cap with suppress: <suppress_value>
+    And the package targeting_overlay includes frequency_cap: <frequency_cap>
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
@@ -1415,28 +1415,43 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition                     | suppress_value                                                                                                                | outcome |
-      | typical_minutes               | {"interval": 60, "unit": "minutes"}                                                                                          | success |
-      | typical_hours                 | {"interval": 24, "unit": "hours"}                                                                                            | success |
-      | typical_days                  | {"interval": 7, "unit": "days"}                                                                                              | success |
-      | campaign_full_flight          | {"interval": 1, "unit": "campaign"}                                                                                          | success |
-      | boundary_min_interval         | {"interval": 1, "unit": "minutes"}                                                                                           | success |
-      | suppress_with_max_impressions | {"suppress": {"interval": 60, "unit": "minutes"}, "max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}} | success |
-      | deprecated_suppress_minutes   | {"suppress_minutes": 60}                                                                                                     | success |
-      | suppress_only                 | {"suppress": {"interval": 30, "unit": "minutes"}}                                                                            | success |
-      | suppress_minutes_zero         | {"suppress_minutes": 0}                                                                                                      | success |
+      | partition                     | frequency_cap                                                                                                                 | outcome                                |
+      | typical_minutes               | {"suppress": {"interval": 60, "unit": "minutes"}}                                                                            | accepted with the frequency cap stored |
+      | typical_hours                 | {"suppress": {"interval": 24, "unit": "hours"}}                                                                              | accepted with the frequency cap stored |
+      | typical_days                  | {"suppress": {"interval": 7, "unit": "days"}}                                                                                | accepted with the frequency cap stored |
+      | campaign_full_flight          | {"suppress": {"interval": 1, "unit": "campaign"}}                                                                            | accepted with the frequency cap stored |
+      | boundary_min_interval         | {"suppress": {"interval": 1, "unit": "minutes"}}                                                                             | accepted with the frequency cap stored |
+      | suppress_with_max_impressions | {"suppress": {"interval": 60, "unit": "minutes"}, "max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}} | accepted with the frequency cap stored |
+      | deprecated_suppress_minutes   | {"suppress_minutes": 60}                                                                                                     | accepted with the frequency cap stored |
+      | suppress_only                 | {"suppress": {"interval": 30, "unit": "minutes"}}                                                                            | accepted with the frequency cap stored |
+      | suppress_minutes_zero         | {"suppress_minutes": 0}                                                                                                      | accepted with the frequency cap stored |
 
     Examples: Invalid partitions
-      | partition                    | suppress_value                         | outcome                                      |
-      | interval_zero                | {"interval": 0, "unit": "minutes"}     | error with suggestion                        |
-      | interval_negative            | {"interval": -1, "unit": "minutes"}    | error with suggestion                        |
-      | campaign_interval_not_one    | {"interval": 5, "unit": "campaign"}    | error with suggestion                        |
-      | unknown_unit                 | {"interval": 7, "unit": "weeks"}       | error with suggestion                        |
-      | missing_interval             | {"unit": "minutes"}                    | error with suggestion                        |
-      | missing_unit                 | {"interval": 5}                        | error with suggestion                        |
-      | no_frequency_control         | {}                                     | error with suggestion                        |
-      | wrong_type_suppress          | "60"                                   | error with suggestion                        |
-      | suppress_minutes_negative    | {"suppress_minutes": -1}               | error with suggestion                        |
+      | partition                    | frequency_cap                                       | outcome                                                                                              |
+      | interval_zero                | {"suppress": {"interval": 0, "unit": "minutes"}}    | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.interval with suggestion  |
+      | interval_negative            | {"suppress": {"interval": -1, "unit": "minutes"}}   | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.interval with suggestion  |
+      | campaign_interval_not_one    | {"suppress": {"interval": 5, "unit": "campaign"}}   | error "VALIDATION_ERROR" on packages[0].targeting_overlay.frequency_cap.suppress.interval with suggestion |
+      | unknown_unit                 | {"suppress": {"interval": 7, "unit": "weeks"}}      | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.unit with suggestion      |
+      | missing_interval             | {"suppress": {"unit": "minutes"}}                   | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.interval with suggestion  |
+      | missing_unit                 | {"suppress": {"interval": 5}}                       | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.unit with suggestion      |
+      | no_frequency_control         | {}                                                  | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap with suggestion                    |
+      | wrong_type_suppress          | {"suppress": "60"}                                  | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress with suggestion           |
+      | suppress_minutes_negative    | {"suppress_minutes": -1}                            | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress_minutes with suggestion   |
+    # LOCAL CORRECTION (both frequency-cap outlines): the generated rows put a bare Duration
+    # ({"interval": 60, "unit": "minutes"}) in place of the WHOLE frequency_cap, which
+    # core/frequency-cap.json refuses whatever the Duration holds (its anyOf needs suppress,
+    # suppress_minutes or max_impressions, and interval/unit are not its members). The valid
+    # Duration rows therefore failed and the invalid ones passed on that unrelated refusal.
+    # Each row now sends the whole cap with the Duration under suppress, as the column name
+    # always meant. Success rows read the stored cap back; error rows name the code and the
+    # field the pin's own constraint sits on (duration.json interval minimum 1 and unit enum,
+    # frequency-cap.json anyOf and suppress_minutes minimum 0). A campaign Duration whose
+    # interval is not 1 is schema-valid and refused by the rule in duration.json's interval
+    # description, so it is VALIDATION_ERROR, the code get_media_buy_delivery already gives
+    # the same Duration rule (BR-UC-004 campaign_interval_not_one).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/frequency-cap.json pointer=/anyOf
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/duration.json pointer=/properties/interval
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/VALIDATION_ERROR
 
   @T-UC-003-boundary-frequency-cap-suppress @boundary @frequency_cap_suppress
   Scenario Outline: Frequency cap suppress boundary validation - <boundary_point>
@@ -1446,7 +1461,7 @@ Feature: BR-UC-003 Update Media Buy
     And the request includes 1 package update with:
     | field             | value   |
     | package_id        | pkg_001 |
-    And the package targeting_overlay includes frequency_cap with suppress: <suppress_value>
+    And the package targeting_overlay includes frequency_cap: <frequency_cap>
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
     When the Buyer Agent sends the update_media_buy request
@@ -1454,25 +1469,25 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Boundary values
-      | boundary_point                                                    | suppress_value                                                                                                                | outcome                  |
-      | interval = 0 (below minimum)                                     | {"interval": 0, "unit": "minutes"}                                                                                           | error with suggestion    |
-      | interval = 1 (boundary minimum)                                  | {"interval": 1, "unit": "minutes"}                                                                                           | success                  |
-      | interval = -1 (negative)                                         | {"interval": -1, "unit": "minutes"}                                                                                          | error with suggestion    |
-      | unit=campaign, interval=1                                        | {"interval": 1, "unit": "campaign"}                                                                                          | success                  |
-      | unit=campaign, interval=2                                        | {"interval": 2, "unit": "campaign"}                                                                                          | error with suggestion    |
-      | unit = 'minutes'                                                 | {"interval": 60, "unit": "minutes"}                                                                                          | success                  |
-      | unit = 'hours'                                                   | {"interval": 24, "unit": "hours"}                                                                                            | success                  |
-      | unit = 'days'                                                    | {"interval": 7, "unit": "days"}                                                                                              | success                  |
-      | unit = 'campaign'                                                | {"interval": 1, "unit": "campaign"}                                                                                          | success                  |
-      | unit = 'weeks' (unknown)                                         | {"interval": 7, "unit": "weeks"}                                                                                             | error with suggestion    |
-      | suppress present, suppress_minutes absent, max_impressions absent | {"suppress": {"interval": 30, "unit": "minutes"}}                                                                           | success                  |
-      | suppress absent, suppress_minutes=60                             | {"suppress_minutes": 60}                                                                                                     | success                  |
-      | all three absent (empty frequency_cap)                           | {}                                                                                                                            | error with suggestion    |
-      | suppress + max_impressions both present (AND semantics)          | {"suppress": {"interval": 60, "unit": "minutes"}, "max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}} | success        |
-      | suppress_minutes = -1 (below minimum 0)                          | {"suppress_minutes": -1}                                                                                                     | error with suggestion    |
-      | suppress_minutes = 0 (boundary minimum)                          | {"suppress_minutes": 0}                                                                                                      | success                  |
-      | suppress is string '60' (wrong type)                             | "60"                                                                                                                          | error with suggestion    |
-      | suppress = {} (missing both fields)                              | {"suppress": {}}                                                                                                              | error with suggestion    |
+      | boundary_point                                                    | frequency_cap                                                                                                                 | outcome                                                                                              |
+      | interval = 0 (below minimum)                                     | {"suppress": {"interval": 0, "unit": "minutes"}}                                                                             | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.interval with suggestion  |
+      | interval = 1 (boundary minimum)                                  | {"suppress": {"interval": 1, "unit": "minutes"}}                                                                             | accepted with the frequency cap stored                                                               |
+      | interval = -1 (negative)                                         | {"suppress": {"interval": -1, "unit": "minutes"}}                                                                            | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.interval with suggestion  |
+      | unit=campaign, interval=1                                        | {"suppress": {"interval": 1, "unit": "campaign"}}                                                                            | accepted with the frequency cap stored                                                               |
+      | unit=campaign, interval=2                                        | {"suppress": {"interval": 2, "unit": "campaign"}}                                                                            | error "VALIDATION_ERROR" on packages[0].targeting_overlay.frequency_cap.suppress.interval with suggestion |
+      | unit = 'minutes'                                                 | {"suppress": {"interval": 60, "unit": "minutes"}}                                                                            | accepted with the frequency cap stored                                                               |
+      | unit = 'hours'                                                   | {"suppress": {"interval": 24, "unit": "hours"}}                                                                              | accepted with the frequency cap stored                                                               |
+      | unit = 'days'                                                    | {"suppress": {"interval": 7, "unit": "days"}}                                                                                | accepted with the frequency cap stored                                                               |
+      | unit = 'campaign'                                                | {"suppress": {"interval": 1, "unit": "campaign"}}                                                                            | accepted with the frequency cap stored                                                               |
+      | unit = 'weeks' (unknown)                                         | {"suppress": {"interval": 7, "unit": "weeks"}}                                                                               | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.unit with suggestion      |
+      | suppress present, suppress_minutes absent, max_impressions absent | {"suppress": {"interval": 30, "unit": "minutes"}}                                                                           | accepted with the frequency cap stored                                                               |
+      | suppress absent, suppress_minutes=60                             | {"suppress_minutes": 60}                                                                                                     | accepted with the frequency cap stored                                                               |
+      | all three absent (empty frequency_cap)                           | {}                                                                                                                            | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap with suggestion                    |
+      | suppress + max_impressions both present (AND semantics)          | {"suppress": {"interval": 60, "unit": "minutes"}, "max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}} | accepted with the frequency cap stored                                                        |
+      | suppress_minutes = -1 (below minimum 0)                          | {"suppress_minutes": -1}                                                                                                     | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress_minutes with suggestion   |
+      | suppress_minutes = 0 (boundary minimum)                          | {"suppress_minutes": 0}                                                                                                      | accepted with the frequency cap stored                                                               |
+      | suppress is string '60' (wrong type)                             | {"suppress": "60"}                                                                                                            | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress with suggestion           |
+      | suppress = {} (missing both fields)                              | {"suppress": {}}                                                                                                              | error "INVALID_REQUEST" on packages[0].targeting_overlay.frequency_cap.suppress.interval with suggestion  |
 
   @T-UC-003-partition-optimization-goals @partition @optimization_goals
   Scenario Outline: Optimization goals partition validation - <partition>
