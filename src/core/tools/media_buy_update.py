@@ -1472,8 +1472,24 @@ def _update_media_buy_impl(
                         # property_targeting_allowed validation runs earlier (before dry_run gate);
                         # by this point the request is known-valid against that rule.
 
-                        # Store Targeting model directly — engine's pydantic_core.to_json serializer handles it
-                        media_package.package_config["targeting_overlay"] = pkg_update.targeting_overlay
+                        # A per-dimension patch of the stored overlay. update_media_buy.mdx
+                        # (Package Update Object, targeting_overlay): "Omit the overlay or a
+                        # dimension inside it to leave that dimension unchanged; provide a
+                        # non-null value to replace it; provide `null` to clear it." The
+                        # dimensions the buyer sent, an explicit null among them, are the
+                        # overlay's ``model_fields_set``; every other stored dimension is kept.
+                        # The model is stored directly: the engine's pydantic_core.to_json
+                        # serializer handles it.
+                        overlay = pkg_update.targeting_overlay
+                        stored_overlay = media_package.package_config.get("targeting_overlay") or {}
+                        kept = {
+                            name: value
+                            for name, value in stored_overlay.items()
+                            if value is not None and name in type(overlay).model_fields
+                        }
+                        media_package.package_config["targeting_overlay"] = type(overlay).model_validate(
+                            kept | {name: getattr(overlay, name) for name in overlay.model_fields_set}
+                        )
                         # Flag the JSON field as modified so SQLAlchemy persists it
                         attributes.flag_modified(media_package, "package_config")
                         session.flush()
