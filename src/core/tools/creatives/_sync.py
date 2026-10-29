@@ -17,7 +17,7 @@ from src.core.format_resolver import seller_format_catalogue
 from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
-from src.core.schemas.creative import SyncCreativesRequest
+from src.core.schemas.creative import SyncCreativeAsset, SyncCreativesRequest
 from src.core.tenant_context import TenantContext
 from src.core.validation_helpers import format_validation_error
 from src.core.webhook_validator import webhook_url_for_log
@@ -25,7 +25,13 @@ from src.core.webhooks.registration import accept_push_notification_config
 
 from ._assignments import _process_assignments
 from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative, incoming_identity_of
-from ._validation import _get_field, _validate_creative_input, check_provenance_policy, check_unassigned_manifest
+from ._validation import (
+    _get_field,
+    _validate_creative_input,
+    check_provenance_policy,
+    check_representation_selection,
+    check_unassigned_manifest,
+)
 from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creative_notifications
 
 logger = logging.getLogger(__name__)
@@ -266,6 +272,15 @@ def sync_creatives(
                         provenance_policies[0],
                         creative_id=validated_creative.creative_id,
                     )
+
+                # A selected output must be the output its lineage describes, before anything
+                # is written (sync-creatives-request.json ``representation_set_projection``).
+                check_representation_selection(
+                    creative,
+                    revision_id=raw_creative.revision_id if isinstance(raw_creative, SyncCreativeAsset) else None,
+                    index=creative_index,
+                    creative_id=validated_creative.creative_id,
+                )
 
                 # Savepoint per creative: isolates this row's writes AND the effects
                 # queued while processing it, so a creative that fails takes its

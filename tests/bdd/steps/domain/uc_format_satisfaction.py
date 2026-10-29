@@ -30,8 +30,8 @@ from urllib.parse import urlsplit
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import (
+    assert_sync_entry_refused_and_not_stored,
     parked_media_buy,
-    payload_or_none,
     stored_package_config,
     wire_absent,
     wire_entry,
@@ -1938,38 +1938,7 @@ def _assert_entry_failed_and_nothing_stored(ctx: dict, code: str) -> None:
     ``CreativeUoW``; the reasons both halves are needed are on
     :func:`then_refused_and_nothing_stored`.
     """
-    from src.core.database.repositories.uow import CreativeUoW
-
-    resp = payload_or_none(ctx)
-    assert resp is not None, (
-        f"the dispatch produced no payload, so the batch never answered about "
-        f"{_SYNC_CREATIVE_ID!r} ({ctx.get('error')!r})"
-    )
-    entries = {entry.creative_id: entry for entry in resp.creatives}
-    assert _SYNC_CREATIVE_ID in entries, f"the batch answered about {sorted(entries)}, not {_SYNC_CREATIVE_ID!r}"
-    entry = entries[_SYNC_CREATIVE_ID]
-    action = entry.action.value if hasattr(entry.action, "value") else str(entry.action)
-    assert action == "failed", (
-        f"the creative was reported {action!r}; the gate is supposed to refuse it, and any "
-        f"other action means it was admitted"
-    )
-    codes = [error.code for error in entry.errors or []]
-    assert codes == [code], (
-        f"expected exactly {code} on the entry, got {codes!r}. The pinned enum classifies it "
-        f"correctable, which is what leaves the buyer a lever to resend a creative this seller takes"
-    )
-    # Values, not rows: a ``Creative`` read past the UoW is detached and raises on attribute
-    # access, which would surface as a DetachedInstanceError instead of this assertion.
-    with CreativeUoW(ctx["tenant"].tenant_id) as uow:
-        assert uow.creatives is not None
-        stored_kinds = {
-            c.creative_id: c.format_kind for c in uow.creatives.list_by_principal(ctx["principal"].principal_id)
-        }
-    assert _SYNC_CREATIVE_ID not in stored_kinds, (
-        f"the seller refused on the wire but STORED {_SYNC_CREATIVE_ID!r} anyway, with "
-        f"format_kind={stored_kinds[_SYNC_CREATIVE_ID]!r}. The ruling is to gate at the "
-        f"write, so a refusal that leaves the row behind is the defect rather than the fix."
-    )
+    assert_sync_entry_refused_and_not_stored(ctx, _SYNC_CREATIVE_ID, code)
 
 
 @then(parsers.parse("the creative is refused {code:w} naming the packages field"))

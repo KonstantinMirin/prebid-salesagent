@@ -121,7 +121,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from scripts.audit.creative_literal_sites import EXTRA_FORBIDDEN
 from src.core.errors.codes import AppErrorCode, ErrorCode, ErrorCodeT
-from src.core.schemas.creative import CreativeAssetRequest
+from src.core.schemas.creative import SyncCreativeAsset
 from src.core.schemas.pricing import PricingOptionAdapter
 
 #: The vocabulary an obligation may name: THIS REPO'S OWN, both arms of ``ErrorCodeT``
@@ -304,7 +304,7 @@ def malformed(kind: str, why: str, payload: dict[str, Any], *, obligation: Error
 #:
 #: The creative item model is also named on its own below, because a ``TypeAdapter`` does
 #: not expose the type it wraps and the derivation guard asserts identity against it.
-GATED_CREATIVE_ITEM: type[BaseModel] = CreativeAssetRequest
+GATED_CREATIVE_ITEM: type[BaseModel] = SyncCreativeAsset
 
 GATED_ITEMS: dict[str, tuple[TypeAdapter[Any], str, str]] = {
     "creatives": (TypeAdapter(GATED_CREATIVE_ITEM), "creative_id", GATED_CREATIVE_ITEM.__name__),

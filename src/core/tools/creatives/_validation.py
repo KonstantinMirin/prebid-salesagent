@@ -5,13 +5,15 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from adcp.types import ErrorCode
 from adcp.types.canonical_creative import CanonicalFormatKindStr
 from adcp.types.legacy import LegacyCreativeAsset as CreativeAsset
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 
-from src.core.errors.details import EntityRefDetails, ValidationDetails
+from src.core.errors.details import CreativeManifestDetails, EntityRefDetails, ErrorProblem, ValidationDetails
 from src.core.exceptions import (
+    AdCPCreativeValidationFailedError,
     AdCPFormatNotFoundError,
     AdCPProvenanceDigitalSourceTypeMissingError,
     AdCPProvenanceDisclosureMissingError,
@@ -21,6 +23,7 @@ from src.core.exceptions import (
 )
 from src.core.format_resolver import is_dialled_agent_url
 from src.core.format_satisfaction import creative_refusal, kind_manifest_verdict
+from src.core.idempotency_canonical import selected_output_digest
 from src.core.schemas import (
     Creative,
     CreativePolicy,
@@ -233,6 +236,60 @@ def check_unassigned_manifest(creative: CreativeAsset, *, index: int, creative_i
     verdict = kind_manifest_verdict(str(creative.format_kind), creative.assets)
     if not verdict:
         raise creative_refusal(verdict, field=f"creatives[{index}]", creative_id=creative_id)
+
+
+def check_representation_selection(
+    creative: CreativeAsset, *, revision_id: str | None, index: int, creative_id: str
+) -> None:
+    """Refuse a sync item whose ``representation_selection`` does not describe it.
+
+    docs/creative/task-reference/sync_creatives.mdx (v3.2.7): "When an item carries
+    ``representation_selection``, its ``creative_id`` and ``revision_id`` must equal the
+    selection lineage", and "The seller separately verifies ``selected_output_digest``"
+    over the shared manifest projection (``selected_output_digest``). Each is a creative
+    validation the buyer corrects and the pin has no specific code for, so it is
+    CREATIVE_VALIDATION_FAILED_GENERIC, with ``field`` naming the lineage member that
+    disagrees.
+
+    ``revision_id`` is compared when the item states one. A package's inline creative is
+    creative-asset.json alone and cannot, and this seller does not advertise
+    ``creative.supports_revisions``, under which "receiver_may_ignore_revision_id"
+    (sync-creatives-request.json ``revision_identity``). An item that does state one is
+    making a claim about the lineage, and a claim that disagrees is refused.
+
+    Not checked, because this seller receives only the selected output: the
+    ``revision_content_digest`` against the complete set ("the actor that emitted the
+    selection must first verify the digest against the complete set"). Revision reuse across
+    syncs (CREATIVE_REVISION_CONTENT_MISMATCH) belongs to ``creative.supports_revisions``,
+    which this seller does not advertise.
+    """
+    selection = creative.representation_selection
+    if selection is None:
+        return
+    disagreements = (
+        ("creative_id", selection.creative_id, creative.creative_id),
+        ("revision_id", str(selection.revision_id), revision_id),
+        ("selected_output_digest", selection.selected_output_digest, selected_output_digest(creative)),
+    )
+    for member, asserted, actual in disagreements:
+        if actual is None or asserted == actual:
+            continue
+        field = f"creatives[{index}].representation_selection.{member}"
+        raise AdCPCreativeValidationFailedError(
+            field=field,
+            details=CreativeManifestDetails(
+                creative_id=creative_id,
+                problems=[
+                    ErrorProblem(
+                        code=ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC,
+                        subject_type="creative",
+                        subject_id=creative_id,
+                        field=field,
+                        rejected_value=asserted,
+                    )
+                ],
+            ),
+        )
 
 
 def _assets_carry_provenance(creative: CreativeAsset) -> bool:

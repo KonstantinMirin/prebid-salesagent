@@ -1896,6 +1896,116 @@ Feature: BR-UC-006 Sync Creative Assets
     # @source repo=adcp ref=v3.2.7 path=docs/creative/specification.mdx section="Creative Status Lifecycle"
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/creative-action.json
 
+  @T-UC-006-representation-selection-readback @schema-v3.2 @format-kind @representation-selection
+  Scenario: A creative synced with its representation_selection is listed back with that exact lineage
+    Given the Buyer is authenticated
+    And the buyer syncs a creative identified by canonical kind "image" selected from a representation set
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "created"
+    And listing the library returns the creative carrying the representation_selection the buyer last sent
+
+    # creative-manifests.mdx § Libraries and trafficking: "When a manifest was resolved from
+    # a set of equivalent trafficking representations, it carries representation_selection.
+    # That object preserves the durable creative_id, complete source revision_id plus digest,
+    # selected representation_id, applied deterministic strategy, and derived-output digest
+    # used for review." The seller's half of "carries" is the readback:
+    # list-creatives-response.json representation_lineage_readback is
+    # "required_when_current_creative_was_resolved_from_representation_set" and
+    # "must_equal": "last_accepted_current_representation_selection". The sync response
+    # carries no lineage, so the listing is where the buyer observes it.
+    #
+    # The item's selected_output_digest is computed test-side by the pin's projection rule
+    # (remove $schema, representation_selection, creative_id, revision_id, name, tags,
+    # status, weight, placement_refs, placement_ids and inputs; RFC 8785 JCS; SHA-256), and
+    # that oracle is first held to the pin's worked example, so the accepted row is accepted
+    # for the bytes it carries and not for agreeing with the seller's own arithmetic.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-manifests.mdx section="Libraries and trafficking"
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/representation-sets.mdx section="Sync, review, and readback"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-response.json pointer=/properties/creatives/items/properties/representation_selection
+
+  @T-UC-006-representation-selection-refused @schema-v3.2 @format-kind @representation-selection
+  Scenario Outline: A representation_selection that does not describe its item is refused and nothing is stored - <member>
+    Given the Buyer is authenticated
+    And the buyer syncs a creative identified by canonical kind "image" selected from a representation set
+    And the creative's representation_selection disagrees with the item on <member>
+    When the Buyer Agent syncs the creative
+    Then the creative is reported failed with CREATIVE_VALIDATION_FAILED_GENERIC at "creatives[0].representation_selection.<member>" and nothing is stored
+
+    Examples:
+      | member                 |
+      | creative_id            |
+      | revision_id            |
+      | selected_output_digest |
+
+    # sync_creatives.mdx: "When an item carries representation_selection, its creative_id and
+    # revision_id must equal the selection lineage", and "The seller separately verifies
+    # selected_output_digest with the same manifest projection used by build_creative".
+    # sync-creatives-request.json representation_set_projection states the same as
+    # identity_match and selected_output_verification. One row per lineage member, each
+    # perturbing that member alone, so a seller that checks two of the three passes two rows.
+    #
+    # The code is CREATIVE_VALIDATION_FAILED_GENERIC: the pin names no specific code for a
+    # lineage that does not describe its item, and the generic one is "buyer-correctable
+    # validation ... the producer cannot classify ... with a more specific standard code".
+    # CREATIVE_REPRESENTATION_UNRESOLVED is the RESOLVER's refusal when no candidate in a
+    # CreativeRepresentationSet is compatible, and its details require one rejection per
+    # candidate -- a seller receiving only the selected output has no candidates to name.
+    # The refusal is per entry (sync_creatives is a batch tool) and is taken before the
+    # write, so the creative is absent from the library.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/task-reference/sync_creatives.mdx section="Creative revisions"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json pointer=/properties/creatives/items/allOf/1/x-adcp-validation
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json property=CREATIVE_VALIDATION_FAILED_GENERIC
+
+  @T-UC-006-representation-reselection-enters-review @schema-v3.2 @format-kind @representation-selection
+  Scenario: A resync selecting another representation of the same revision is updated and sent back to review
+    Given the Buyer is authenticated
+    And the tenant has approval_mode "auto-approve"
+    And the buyer syncs a creative identified by canonical kind "image" selected from a representation set
+    And the creative already exists with identical data
+    And the tenant has approval_mode "require-human"
+    And the resync selects another representation of the same source revision
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "updated"
+    And the per-creative result should carry advisory status "pending_review"
+    And listing the library returns the creative carrying the representation_selection the buyer last sent
+
+  @T-UC-006-representation-new-revision-keeps-review @schema-v3.2 @format-kind @representation-selection
+  Scenario: A resync carrying a new source revision that selects the same output is updated and keeps its approval
+    Given the Buyer is authenticated
+    And the tenant has approval_mode "auto-approve"
+    And the buyer syncs a creative identified by canonical kind "image" selected from a representation set
+    And the creative already exists with identical data
+    And the tenant has approval_mode "require-human"
+    And the resync carries a new source revision that selects the same output
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "updated"
+    And the per-creative result should carry advisory status "approved"
+    And listing the library returns the creative carrying the representation_selection the buyer last sent
+
+    # The two review invariants of representation-sets.mdx § Sync, review, and readback, one
+    # scenario each, and they differ in which half of the lineage moves. The execution is
+    # (selected_representation_id, selected_output_digest, execution_vast_version,
+    # execution_daast_version): "Changing only the selected execution does not mint a buyer
+    # revision, but it is an updated creative and follows the ordinary re-review lifecycle;
+    # approval never transfers silently to different execution bytes". The first scenario
+    # moves only selected_representation_id, with the same output bytes, so a seller that
+    # decides review on the assets alone keeps it approved and reddens the row.
+    #
+    # The source revision is the other half. core/representation-selection.json
+    # review_identity tracks the execution "separately from the source revision", and
+    # sync-creatives-request.json gives "different_revision_same_current_content" as
+    # "accept_as_updated_make_current_preserve_review_state". The second scenario moves only
+    # revision_id and its digest: the lineage changed, so the creative is "updated" and lists
+    # the new lineage, and the execution did not, so it stays approved. A seller that
+    # re-reviews on any lineage change reddens it; one that ignores the lineage answers
+    # "unchanged" and lists the first revision.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/representation-sets.mdx section="Sync, review, and readback"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/representation-selection.json pointer=/x-adcp-validation/verifier_constraints/derived_output/review_identity
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-request.json pointer=/properties/creatives/items/allOf/1/x-adcp-validation
+
   @T-UC-006-storyboard-creative-reception-stateful-render @uc006-storyboard-routing @schema-v3.1 @v3-1 @stateful-push @creative-reception
   Scenario: Stateful sales agent accepts pushed creatives and exposes them via per-creative status transitions
     Given the Buyer is authenticated

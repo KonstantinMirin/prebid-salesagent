@@ -382,6 +382,42 @@ def stored_creative_column(ctx: dict, creative_id: str, column: str) -> Any:
         return getattr(row, column)
 
 
+def assert_sync_entry_refused_and_not_stored(
+    ctx: dict, creative_id: str, code: str, *, field: str | None = None
+) -> None:
+    """The sync's batch entry for *creative_id* FAILED with exactly *code*, and no row was written.
+
+    sync_creatives is a batch tool: one refused creative is an entry with ``action: failed``
+    and its own ``errors``, while the request completes. So the refusal is read off the
+    typed payload by ``creative_id`` (``payload_or_none`` keeps the value's provenance), and
+    the absence is read back through ``CreativeUoW`` -- the wire alone cannot tell a seller
+    that refused BEFORE writing from one that wrote the row and then answered an error.
+
+    *field*, when given, is the entry error's ``field``: which member the buyer corrects.
+    """
+    from src.core.database.repositories.uow import CreativeUoW
+
+    resp = payload_or_none(ctx)
+    assert resp is not None, (
+        f"the dispatch produced no payload, so the batch never answered about {creative_id!r} ({ctx.get('error')!r})"
+    )
+    entries = {entry.creative_id: entry for entry in resp.creatives}
+    assert creative_id in entries, f"the batch answered about {sorted(entries)}, not {creative_id!r}"
+    entry = entries[creative_id]
+    action = entry.action.value if hasattr(entry.action, "value") else str(entry.action)
+    assert action == "failed", f"the creative was reported {action!r}; any action but failed means it was admitted"
+    errors = entry.errors or []
+    assert [error.code for error in errors] == [code], f"expected exactly {code} on the entry, got {errors!r}"
+    if field is not None:
+        assert errors[0].field == field, f"the refusal names {errors[0].field!r}, expected {field!r}"
+    # Values, not rows: a ``Creative`` read past the UoW is detached and raises on attribute
+    # access, which would surface as a DetachedInstanceError instead of this assertion.
+    with CreativeUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.creatives is not None
+        stored = {c.creative_id for c in uow.creatives.list_by_principal(ctx["principal"].principal_id)}
+    assert creative_id not in stored, f"the seller refused {creative_id!r} on the wire but STORED it anyway"
+
+
 def parked_media_buy(ctx: dict) -> Any:
     """The one media buy the scenario's tenant holds, through the repository.
 

@@ -16,6 +16,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
+from adcp.types.domains.core.representation_selection import (
+    RepresentationSelection as LibraryRepresentationSelection,
+)
 from adcp.types.legacy import LegacyCreativeAsset as CreativeAsset
 
 from src.core.errors.details import AdapterFailureDetails, ConfigurationDetails, CreativeRejectionDetails
@@ -70,6 +73,27 @@ _UPSERT_FIELDS = ("url", "click_url", "width", "height", "duration")
 #: ``name`` is the one change detection reports; everything else it reports (format
 #: identity, assets, the upsert fields) is revision-bearing.
 _METADATA_CHANGES = frozenset({"name"})
+
+
+def _execution(selection: LibraryRepresentationSelection | None) -> tuple[Any, ...] | None:
+    """The execution review fingerprint a selection pins, or ``None`` for an unselected creative.
+
+    core/representation-selection.json (v3.2.7) ``review_identity``: "the receiving seller
+    tracks (selected_representation_id, selected_output_digest,
+    execution_vast_version-or-null, execution_daast_version-or-null) separately from the
+    source revision; changing any member is an updated execution that follows ordinary
+    re-review without minting a buyer revision". The other lineage members (the source
+    revision, the strategy, who resolved it) are not in it, so a change confined to them is
+    reported and keeps the review state.
+    """
+    if selection is None:
+        return None
+    return (
+        selection.selected_representation_id,
+        selection.selected_output_digest,
+        selection.execution_vast_version,
+        selection.execution_daast_version,
+    )
 
 
 @dataclass(frozen=True)
@@ -159,16 +183,35 @@ class PriorCreativeState:
     #: a row written before it was recorded, which reads as the agent's -- the conservative
     #: side, since it only declines to report a change.
     assets_are_buyer_submitted: bool
+    #: The selection lineage the row holds, read back into the pinned model so it compares
+    #: with the incoming one by value. ``None`` for a creative not resolved from a set.
+    representation_selection: LibraryRepresentationSelection | None
 
     @classmethod
     def from_row(cls, existing_creative) -> PriorCreativeState:
         row_data = existing_creative.data or {}
+        selection = row_data.get("representation_selection")
         return cls(
             name=existing_creative.name,
             identity=CreativeFormatIdentity.from_row(existing_creative),
             upsert_fields={key: row_data.get(key) for key in _UPSERT_FIELDS},
             assets=row_data.get("assets"),
             assets_are_buyer_submitted=bool(row_data.get("assets_are_buyer_submitted")),
+            representation_selection=None
+            if selection is None
+            else LibraryRepresentationSelection.model_validate(selection),
+        )
+
+    def enters_review(self, creative: CreativeAsset, changes: list[str]) -> bool:
+        """Whether an update with *changes* sends the creative back to review.
+
+        Revision content does (every change outside ``_METADATA_CHANGES``), and so does a
+        different execution (:func:`_execution`). A lineage change that pins the same
+        execution is reported as ``representation_selection`` and keeps the review state.
+        """
+        content = set(changes) - _METADATA_CHANGES - {"representation_selection"}
+        return bool(content) or _execution(creative.representation_selection) != _execution(
+            self.representation_selection
         )
 
 
@@ -231,6 +274,11 @@ def comparison_changes(
     if creative.assets or prior.assets_are_buyer_submitted:
         if ASSET_MAP.validate_python(creative.assets or {}) != ASSET_MAP.validate_python(prior.assets or {}):
             changes.append("assets")
+    # The lineage the buyer sent against the lineage stored, whole: it is what list_creatives
+    # reads back, so any member that moved is a modified field. Whether the move re-enters
+    # review is the execution fingerprint's question (``PriorCreativeState.enters_review``).
+    if creative.representation_selection != prior.representation_selection:
+        changes.append("representation_selection")
     return changes
 
 
@@ -724,7 +772,9 @@ def _update_existing_creative(
     # seller-initiated re-review that MUST fire ``creative.status_changed``; re-reviewing an
     # unchanged or renamed creative is neither. Either identity arm reaches this the same
     # way: a canonical creative whose format_option_ref or assets change re-enters review
-    # exactly as a legacy one does.
+    # exactly as a legacy one does. A different selected execution re-enters review too,
+    # even with the source revision unchanged (representation-sets.mdx § Sync, review, and
+    # readback): "approval never transfers silently to different execution bytes".
     needs_approval = (
         _apply_approval_mode(
             creative_repo,
@@ -733,7 +783,7 @@ def _update_existing_creative(
             webhook_url=webhook_url,
             principal_id=principal_id,
         )
-        if not _METADATA_CHANGES.issuperset(changes)
+        if prior.enters_review(creative, changes)
         else False
     )
 
