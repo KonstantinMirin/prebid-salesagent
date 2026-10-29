@@ -73,3 +73,21 @@ Feature: UC-010 get_adcp_capabilities — capability declarations must be implem
     # (protocols/<p>/index.yaml#required_tools). Generative creative is unimplemented
     # here, so advertising `creative` would route buyer traffic to a domain that
     # cannot answer. Tracked by #1724.
+
+  @T-UC-010-local-inline-creative-management @v31 @invariant
+  Scenario: the seller declares inline_creative_management, which its create and update paths honor
+    Given a tenant is resolvable from the request context
+    When the Buyer Agent calls get_adcp_capabilities
+    Then the response is compliant with the get_adcp_capabilities spec
+    And media_buy.features.inline_creative_management should equal true
+    # sales-agent-creative-capabilities.mdx § Creative management modes:
+    # "media_buy.inline_creative_management: true | Package-scoped creative bodies are
+    # accepted on create/update media-buy operations". media-buy-features.json: "If a
+    # seller declares a feature as true, they MUST honor requests using that feature."
+    # This seller accepts packages[].creatives on create_media_buy and update_media_buy,
+    # so the flag's VALUE is the obligation, not only its boolean shape (which
+    # @T-UC-010-main grades). The acceptance half is graded on all four transports by
+    # @T-UC-002-ext-canonical-product-slots-inline (an inline creative is uploaded to the
+    # library and assigned to the package the create made).
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/sales-agent-creative-capabilities.mdx section="Creative management modes"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/media-buy-features.json pointer=/properties/inline_creative_management

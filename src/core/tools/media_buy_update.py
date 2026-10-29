@@ -420,6 +420,34 @@ def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
     return actions
 
 
+def _replace_package_assignments(
+    uow: "MediaBuyUoW", media_buy_id: str, package_id: str, keep: set[str], *, inline: bool = False
+) -> set[str]:
+    """Drop each assignment of *package_id* that *keep* does not name, within the set replaced.
+
+    Returns the creative ids the package was assigned before the drop. The three package
+    fields that set a package's creatives each REPLACE a set (package-update.json):
+    ``creative_ids`` and ``creative_assignments`` ("Replace creative assignments for this
+    package ... Uses replacement semantics") replace every assignment; the inline
+    ``creatives`` (``inline=True``) replace only the inline ones. update_media_buy.mdx's
+    package field table gives the two arrays separate scopes -- ``creative_assignments``
+    "Replace assigned library creatives", ``creatives`` "Replace assigned inline creative
+    bodies for this package" -- and the same page says a seller "must never silently delete
+    an assignment". So the inline replacement leaves a library assignment in place, and
+    marks the rows it keeps as inline, the ones the sync just created among them. One drop
+    rule for all three, so a fix to it cannot reach one field and miss another.
+    """
+    assert uow.assignments is not None
+    existing = uow.assignments.get_by_media_buy_and_package(media_buy_id, package_id)
+    for assignment in existing:
+        if assignment.creative_id in keep:
+            if inline:
+                assignment.inline = True
+        elif assignment.inline or not inline:
+            uow.assignments.delete_row(assignment)
+    return {assignment.creative_id for assignment in existing}
+
+
 def _validate_creatives_for_assignment(
     creative_ids: list[str],
     *,
@@ -1153,24 +1181,15 @@ def _update_media_buy_impl(
                             field=package_field_path("creative_ids", pkg_index),
                         )
 
-                        # Get existing assignments for this package
-                        assert uow.assignments is not None
-                        existing_assignments = uow.assignments.get_by_media_buy_and_package(
-                            actual_media_buy_id, pkg_update.package_id
-                        )
-                        existing_creative_ids = {a.creative_id for a in existing_assignments}
-
-                        # Determine added and removed creative IDs
+                        # Replace: drop the assignments not requested, then add the new ones.
                         requested_ids = set(pkg_update.creative_ids)
+                        existing_creative_ids = _replace_package_assignments(
+                            uow, actual_media_buy_id, pkg_update.package_id, requested_ids
+                        )
                         added_ids = requested_ids - existing_creative_ids
-                        removed_ids = existing_creative_ids - requested_ids
-
-                        # Remove old assignments
-                        for assignment in existing_assignments:
-                            if assignment.creative_id in removed_ids:
-                                uow.assignments.delete_row(assignment)
 
                         # Add new assignments
+                        assert uow.assignments is not None
                         for creative_id in added_ids:
                             uow.assignments.create(
                                 media_buy_id=actual_media_buy_id,
@@ -1271,6 +1290,22 @@ def _update_media_buy_impl(
                                 ),
                             )
 
+                        # The array REPLACES the package's inline creative bodies
+                        # (package-update.json /properties/creatives: "Replace this
+                        # package's inline creative assets"; update_media_buy.mdx: "The
+                        # creatives array replaces the package's inline creative bodies").
+                        # The sync above assigned the new bodies; the inline ones they
+                        # replace are unassigned here, and library assignments -- the
+                        # creative_ids / creative_assignments set -- are left as they are.
+                        _replace_package_assignments(
+                            uow,
+                            uow.media_buys.get_by_id_or_raise(req.media_buy_id).media_buy_id,
+                            pkg_update.package_id,
+                            {c.creative_id for c in pkg_update.creatives},
+                            inline=True,
+                        )
+                        session.flush()
+
                         # Track in affected_packages
                         _package_changes(changes_by_package, pkg_update.package_id)
 
@@ -1349,14 +1384,13 @@ def _update_media_buy_impl(
                         # BR-RULE-024 INV-2: creative_assignments replaces ALL existing
                         # assignments for this package. Delete existing assignments not
                         # in the new list, matching the creative_ids handler pattern.
-                        requested_creative_ids = {ca.creative_id for ca in pkg_update.creative_assignments}
-                        assert uow.assignments is not None
-                        existing_assignments = uow.assignments.get_by_media_buy_and_package(
-                            actual_media_buy_id, pkg_update.package_id
+                        _replace_package_assignments(
+                            uow,
+                            actual_media_buy_id,
+                            pkg_update.package_id,
+                            {ca.creative_id for ca in pkg_update.creative_assignments},
                         )
-                        for existing in existing_assignments:
-                            if existing.creative_id not in requested_creative_ids:
-                                uow.assignments.delete_row(existing)
+                        assert uow.assignments is not None
 
                         for ca in pkg_update.creative_assignments:
                             # Schema validates and coerces dict inputs to LibraryCreativeAssignment

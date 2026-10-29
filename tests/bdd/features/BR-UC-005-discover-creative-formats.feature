@@ -6,7 +6,17 @@ Feature: BR-UC-005 Discover Creative Formats
   So that I can prepare compliant creative assets before creating media buys
 
   # Postconditions verified:
-  #   POST-S1: Buyer knows the complete catalog of creative formats available from this seller
+  #   POST-S1: Buyer knows the formats this seller's deprecated 3.x compatibility list serves
+  #
+  # Sales-agent list_creative_formats is DEPRECATED at the pin (media-buy/
+  # list-creative-formats-request.json "deprecated": true, x-deprecated-in 3.2.0). The pin
+  # lets an existing 3.x agent keep serving it, but the list is not this seller's catalogue
+  # and not a deliverability promise: "Sales agents MUST NOT use an agent-global format list
+  # as a purchasability promise. Product format_options[] is the closed sellable set"
+  # (creative/task-reference/list_creative_formats.mdx). What a buyer can deliver on a
+  # product is graded by BR-UC-GET-PRODUCTS-format-options and BR-UC-FORMAT-SATISFACTION.
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/task-reference/list_creative_formats.mdx
+  # @source repo=adcp ref=v3.2.7 path=docs/media-buy/specification.mdx section="Canonical creative-format discovery"
   #   POST-S2: Buyer knows the asset requirements (type, dimensions, required/optional) for each format
   #   POST-S3: Buyer knows which formats match their filter criteria (when filters applied)
   #   POST-S4: Buyer knows about additional creative agents they can query for more formats
@@ -30,7 +40,7 @@ Feature: BR-UC-005 Discover Creative Formats
     And each format should include a format_id with agent_url and id
     And each format should include a name
     And each format should include asset requirements with type and dimensions
-    # POST-S1: Complete catalog returned
+    # POST-S1: The compatibility list returned, whole
     # POST-S2: Asset requirements included per format
     # Two Thens were dropped here, both grading `type`, which adcp 3.12 removed from
     # Format: "a name and type category" and "sorted by format type then name". Sorting is

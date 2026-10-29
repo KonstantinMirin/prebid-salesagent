@@ -1247,6 +1247,11 @@ class GAMInventoryService:
         # implementation_config and that the order manager reads a package's snapshot with.
         # The size match below scores an ad unit against them.
         #
+        # Read off ``Product.format_contract``, not the product's own columns: a product
+        # linked to an inventory profile is served and graded against the PROFILE's
+        # declarations, so sizing it from its own arms scored ad units against a contract no
+        # buyer was ever offered.
+        #
         # THE LOOP THIS REPLACES WAS DEAD, not merely legacy-only. It tested
         # ``isinstance(format_id, str)`` while ``models.py:402`` types the column
         # ``Mapped[list[dict[str, str]] | None]`` and every writer stores FormatId DOCUMENTS,
@@ -1254,9 +1259,10 @@ class GAMInventoryService:
         # scored with no size signal at all. That is the same defect shape as the GAM seeder's
         # deleted dimension map, which read a ``format_id`` key the stored entries do not
         # carry (salesagent-ne2t3, salesagent-ki6a4).
+        contract = product.format_contract
         creative_sizes: list[dict[str, int]] = [
             {"width": slot["width"], "height": slot["height"]}
-            for slot in product_gam_slots(product.format_ids, product.format_options)
+            for slot in product_gam_slots(contract.format_ids, contract.format_options)
         ]
 
         # Get keywords from product name and description

@@ -204,6 +204,17 @@ def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package | M
     return getattr(package, "creative_ids", None)
 
 
+def _inline_creative_ids(package: AdcpPackageRequest | PackageRequest) -> set[str]:
+    """The ids of the package's inline ``creatives``.
+
+    ``process_and_upload_package_creatives`` merges them into the package's
+    ``creative_ids``, so the assignment loops read them here to mark which assignments
+    came in inline (``CreativeAssignment.inline``): update_media_buy's ``creatives``
+    replaces those and only those.
+    """
+    return {creative.creative_id for creative in package.creatives or [] if creative.creative_id}
+
+
 #: The persisted ``formats_to_provide`` document, read back as the pinned snapshot union.
 #: A stored document and a freshly built snapshot are then ONE type, so the approval path
 #: grades the same thing the create path recorded rather than poking at raw dicts.
@@ -1494,7 +1505,14 @@ def execute_approved_media_buy(
 
                     # Convert formats to FormatId objects with comprehensive validation
                     format_ids_list: list[FormatId] = []
-                    formats: Sequence[Any] = asserted or ([] if recorded else product.format_ids or [])
+                    # A package that recorded no snapshot (its request named no format
+                    # selector) is placed on the product's CONTRACT
+                    # (``Product.format_contract``): a profile-linked product is served its
+                    # profile's arms, and a canonical one the projection its declarations
+                    # assert. The product's own ``format_ids`` column is never read: a row
+                    # moved onto ``format_options`` has it cleared, so reading it refused the
+                    # approval of every such buy as "no valid formats".
+                    formats: Sequence[Any] = asserted or ([] if recorded else product.format_contract.format_ids)
 
                     logger.debug(
                         f"[APPROVAL] Converting {len(formats)} formats for package {package_id} "
@@ -3579,6 +3597,7 @@ async def _create_media_buy_impl(
                                 )
                             )
 
+                            inline_ids = _inline_creative_ids(package)
                             for creative_id in pkg_cids:
                                 creative = creatives_map.get(creative_id)
                                 if not creative:
@@ -3593,6 +3612,7 @@ async def _create_media_buy_impl(
                                     package_id=pkg_id,
                                     creative_id=creative_id,
                                     principal_id=principal_id,
+                                    inline=creative_id in inline_ids,
                                 )
                                 logger.info(
                                     log_safe(
@@ -4378,6 +4398,7 @@ async def _create_media_buy_impl(
 
                         # Collect platform creative IDs for association
                         platform_creative_ids = []
+                        inline_ids = _inline_creative_ids(package)
 
                         for creative_id in pkg_cids:
                             # Get creative from batch-loaded map
@@ -4464,6 +4485,7 @@ async def _create_media_buy_impl(
                                 package_id=response_package_id,
                                 creative_id=creative_id,
                                 principal_id=principal_id,
+                                inline=creative_id in inline_ids,
                             )
 
                         session.flush()  # Flush assignments before adapter call

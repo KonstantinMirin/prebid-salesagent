@@ -118,6 +118,17 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "params": {"width": 300, "height": 250, "max_file_size_kb": 200, "image_formats": ["jpg", "png"]},
         }
     ],
+    # A 728x90 image asserting its own legacy id. Linked as an inventory PROFILE'S contract
+    # beside a product declaring ``fixed_300x250``, so the profile's arm and the product's
+    # own differ in the id the ad server is asked for.
+    "leaderboard_728x90": [
+        {
+            "format_kind": "image",
+            "format_option_id": "satisfaction_image_leaderboard",
+            "v1_format_ref": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_728x90"}],
+            "params": {"width": 728, "height": 90},
+        }
+    ],
     # The same fixed size with a NUMERIC limit whose name is no bound prefix. A claim silent
     # about it inherits it exactly as it inherits ``max_file_size_kb``: what decides
     # silence is the pin's list of constraints a claim must state, not the constraint's
@@ -875,6 +886,7 @@ def _store_product(
     format_ids: list[dict[str, Any]] | None,
     format_options: list[dict[str, Any]] | None,
     placements: list[dict[str, Any]] | None = None,
+    inventory_profile_id: int | None = None,
 ) -> None:
     """Store one product with the given arms and point the buyer's package at it.
 
@@ -892,6 +904,7 @@ def _store_product(
         format_options=format_options,
         placements=placements,
         property_tags=["all_inventory"],
+        inventory_profile_id=inventory_profile_id,
     )
     ctx["default_pricing_option"] = PricingOptionFactory(
         product=product, pricing_model="cpm", currency="USD", is_fixed=True
@@ -1032,6 +1045,36 @@ def given_canonical_only_declaration(ctx: dict, declaration: str) -> None:
     discoverable-but-unpurchasable had no detector.
     """
     _store_declaring_product(ctx, declaration, with_legacy_arm=False)
+
+
+@given(
+    parsers.parse(
+        'the seller links a product declaring "{declaration}" to an inventory profile declaring "{profile_declaration}"'
+    )
+)
+def given_profile_linked_declaration(ctx: dict, declaration: str, profile_declaration: str) -> None:
+    """Store a product linked to an inventory profile whose canonical declarations differ.
+
+    The profile supplies a linked product's contract (``linked_format_contract``), so the
+    product's OWN arms -- the named declaration and this module's legacy arm, both naming
+    ``display_300x250`` -- are stored and never served. Every value a reader of the product's
+    own columns could produce therefore differs from the profile's.
+
+    ``inventory_profile_id`` is the profile's INTEGER primary key, which
+    ``products.inventory_profile_id`` references.
+    """
+    from tests.factories.inventory_profile import InventoryProfileFactory
+
+    profile = InventoryProfileFactory(
+        tenant=ctx["tenant"], format_ids=None, format_options=_DECLARATIONS[profile_declaration]
+    )
+    _store_product(
+        ctx,
+        f"satisfaction_profile_linked_{declaration}",
+        format_ids=list(_LEGACY_ARM),
+        format_options=_DECLARATIONS[declaration],
+        inventory_profile_id=profile.id,
+    )
 
 
 @given(
@@ -2723,6 +2766,53 @@ def then_adapter_trafficks_dimensions(ctx: dict, width: int, height: int) -> Non
     )
 
 
+def assert_approval_executed(ctx: dict) -> None:
+    """The approval the When ran executed the order, or the failure it reported is named."""
+    from src.core.tools.media_buy_create import ApprovalOutcome
+
+    approval = ctx.get("approval_result")
+    assert approval is not None, "no approval was run — the When must dispatch it before this Then"
+    assert approval.outcome is ApprovalOutcome.EXECUTED, (
+        f"the approval did not execute the order: outcome={approval.outcome!r}, error={approval.error_msg!r}"
+    )
+
+
+def _approval_media_packages(ctx: dict) -> list[Any]:
+    """The MediaPackage list the APPROVAL handed the ad server, off the adapter mock.
+
+    ``_execute_adapter_media_buy_creation`` resolves ``get_adapter`` as a module global in
+    ``media_buy_create``, which is the name this env patches, and calls
+    ``adapter.create_media_buy(request, packages, ...)`` positionally.
+    """
+    approval = ctx.get("approval_result")
+    assert approval is not None, "no approval was run — the When must dispatch it before this Then"
+    calls = ctx["env"].mock["adapter"].return_value.create_media_buy.call_args_list
+    assert calls, (
+        f"the approval never reached the ad server, so there is nothing to grade "
+        f"(approval outcome={getattr(approval, 'outcome', approval)!r})"
+    )
+    return list(calls[-1].kwargs.get("packages") or calls[-1].args[1])
+
+
+@then("the approval executes the order")
+def then_approval_executes(ctx: dict) -> None:
+    """The publisher's approval placed the order rather than failing it."""
+    assert_approval_executed(ctx)
+
+
+@then(parsers.parse('the ad server is asked for exactly the format "{format_id}"'))
+def then_adapter_asked_for_format(ctx: dict, format_id: str) -> None:
+    """The legacy format ids the approval handed the ad server are exactly *format_id*.
+
+    A package that recorded no snapshot is placed on the product's CONTRACT, whose legacy
+    arm is derived from the declarations' ``v1_format_ref`` (canonical-formats.mdx producer
+    rules: compatibility ``format_ids`` "MUST be derived from them"). The id is the axis
+    that separates the contract from the product's own stored columns in these fixtures.
+    """
+    asked = sorted(f.id for pkg in _approval_media_packages(ctx) for f in (pkg.format_ids or []))
+    assert asked == [format_id], f"the ad server was asked for formats {asked!r}, expected exactly [{format_id!r}]"
+
+
 @then(parsers.parse("the ad server is asked for a {width:d}x{height:d} package"))
 def then_adapter_asked_for_dimensions(ctx: dict, width: int, height: int) -> None:
     """Assert what the APPROVAL handed the ad server, read off the adapter boundary.
@@ -2736,17 +2826,7 @@ def then_adapter_asked_for_dimensions(ctx: dict, width: int, height: int) -> Non
     that republishes the option, so an id comparison would pass whichever declaration the
     approval read. The dimensions are the axis the two answers differ on.
     """
-    approval = ctx.get("approval_result")
-    assert approval is not None, "no approval was run — the When must dispatch it before this Then"
-    adapter = ctx["env"].mock["adapter"].return_value
-    calls = adapter.create_media_buy.call_args_list
-    assert calls, (
-        f"the approval never reached the ad server, so there is nothing to grade "
-        f"(approval outcome={getattr(approval, 'outcome', approval)!r})"
-    )
-    # The tool calls adapter.create_media_buy(request, packages, ...) positionally.
-    media_packages = calls[-1].kwargs.get("packages") or calls[-1].args[1]
-    dimensions = [(f.width, f.height) for pkg in media_packages for f in (pkg.format_ids or [])]
+    dimensions = [(f.width, f.height) for pkg in _approval_media_packages(ctx) for f in (pkg.format_ids or [])]
     assert (width, height) in dimensions, (
         f"the ad server was asked for {dimensions!r}, which does not include the "
         f"{width}x{height} the parked buy recorded — the approval read the live product, "

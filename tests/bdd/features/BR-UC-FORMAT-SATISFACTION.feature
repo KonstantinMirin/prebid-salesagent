@@ -1443,6 +1443,40 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # create path, so a transport that persisted a malformed one would be caught. It is not
     # four approval executions, and nothing here pretends otherwise.
 
+  @T-UC-FORMAT-SATISFACTION-approval-unsnapshotted-canonical-only @format_satisfaction @requires_db
+  Scenario: approving a parked buy with no recorded snapshot places a canonical-only product on its declarations
+    Given the seller declares a canonical format option "fixed_300x250" and no format_ids
+    And the tenant requires manual approval
+    And the buyer's package selects "no_selector"
+    And the Buyer Agent sent the create_media_buy request
+    When the publisher approves the parked buy
+    Then the approval executes the order
+    And the ad server is asked for exactly the format "display_300x250"
+
+    # A package whose request named no selector records no snapshot (media-buy/
+    # package-request.json: "omitting both selects all formats supported by the product"),
+    # so the approval places it on the product's contract. core/product.json (v3.2.7):
+    # "New products MUST author canonical format_options[]"; canonical-formats.mdx producer
+    # rules: compatibility format_ids "MUST be derived from them". The product stores no
+    # format_ids, so the only source of display_300x250 is the declaration's v1_format_ref:
+    # a reader of the product's own format_ids column fails the approval with "no valid
+    # formats".
+
+  @T-UC-FORMAT-SATISFACTION-approval-unsnapshotted-profile-linked @format_satisfaction @requires_db
+  Scenario: approving a parked buy with no recorded snapshot places a profile-linked product on its profile's contract
+    Given the seller links a product declaring "fixed_300x250" to an inventory profile declaring "leaderboard_728x90"
+    And the tenant requires manual approval
+    And the buyer's package selects "no_selector"
+    And the Buyer Agent sent the create_media_buy request
+    When the publisher approves the parked buy
+    Then the approval executes the order
+    And the ad server is asked for exactly the format "display_728x90"
+
+    # A linked inventory profile supplies the product's format contract, as get_products
+    # announces it. The product's own arms -- its declaration and its legacy column -- both
+    # name display_300x250, so a reader of either asks the ad server for the wrong format;
+    # only the profile's declaration names display_728x90.
+
   @T-UC-FORMAT-SATISFACTION-canonical-only-purchasable @format_satisfaction @requires_db
   Scenario Outline: a product declaring only canonical format options is purchasable - <selector>
     Given the seller declares a canonical format option "fixed_300x250" and no format_ids

@@ -657,6 +657,7 @@ class CreativeAssignmentRepository:
         principal_id: str,
         weight: int = 100,
         placement_ids: list[str] | None = None,
+        inline: bool = False,
     ) -> CreativeAssignment:
         """Create a new assignment within this tenant.
 
@@ -667,6 +668,9 @@ class CreativeAssignmentRepository:
         ``placement_ids`` is placement-specific targeting (adcp#208), carried for
         the ``creative_assignments`` branch of ``update_media_buy``; None leaves the
         column as the model defaults it, which is what every other caller wants.
+
+        ``inline`` marks an assignment made from a package's inline ``creatives``, the set
+        ``update_media_buy``'s inline replacement owns (``CreativeAssignment.inline``).
 
         The assignment id is minted HERE and nowhere else. ``create_media_buy`` and
         ``update_media_buy`` each generated their own ``assign_<hex>``, so the table
@@ -683,6 +687,7 @@ class CreativeAssignmentRepository:
             principal_id=principal_id,
             weight=weight,
             placement_ids=placement_ids,
+            inline=inline,
             created_at=datetime.now(UTC),
         )
         if placement_ids is not None:

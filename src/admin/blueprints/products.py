@@ -5,7 +5,9 @@ import functools
 import json
 import logging
 import uuid
+from collections.abc import Sequence
 from decimal import Decimal
+from typing import Any
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
 from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
@@ -23,6 +25,7 @@ from src.core.database.models import PersistedMediaBuyStatus, PricingOption, Pro
 from src.core.database.product_pricing import get_product_pricing_options
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.format_resolver import linked_format_contract
 from src.core.schemas import Format
 from src.services.gam_product_config_service import GAMProductConfigService
 
@@ -148,7 +151,9 @@ def _parse_authored_format_options(raw: str | None) -> list[dict] | None:
     return document
 
 
-def _refuse_a_product_with_no_format_arm(format_ids: list | None, format_options: list | None) -> None:
+def _refuse_a_product_with_no_format_arm(
+    format_ids: Sequence[Any] | None, format_options: Sequence[Any] | None
+) -> None:
     """core/product.json's root anyOf, checked once where both arms are visible.
 
     The pin's ``format_ids`` property says "Products MUST carry ``format_ids``,
@@ -174,8 +179,8 @@ def _refuse_a_product_with_no_format_arm(format_ids: list | None, format_options
             # release number to act on this -- they need to know the field is not theirs to
             # fill -- so the whole clause goes rather than half of it.
             "A product must declare at least one creative format: author canonical "
-            "format_options. (format_ids is deprecated and is no longer authored here; a "
-            "product that already has one keeps it.)"
+            "format_options, or link an inventory profile that declares them. (format_ids is "
+            "deprecated and is no longer authored here; a product that already has one keeps it.)"
         )
 
 
@@ -842,14 +847,41 @@ def add_product(tenant_id):
                 # keep their value -- not authored is not the same as dropped, and
                 # dropping it would be a migration this stage does not imply.
 
+                # The inventory profile, resolved FIRST because it decides the product's
+                # format contract: a linked profile supplies the declarations
+                # (``Product.format_contract``), so whether this product still has to author
+                # its own cannot be answered without it.
+                profile = None
+                inventory_profile_id = form_data.get("inventory_profile_id", "").strip()
+                if inventory_profile_id:
+                    try:
+                        profile_id = int(inventory_profile_id)
+                    except (ValueError, TypeError):
+                        flash("Invalid inventory profile ID", "error")
+                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                    # SECURITY: Verify profile belongs to this tenant
+                    from src.core.database.models import InventoryProfile
+
+                    profile = db_session.scalars(select(InventoryProfile).filter_by(id=profile_id)).first()
+                    if not profile or profile.tenant_id != tenant_id:
+                        flash(
+                            "Invalid inventory profile - profile not found or does not belong to this tenant",
+                            "error",
+                        )
+                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+
                 # Parse the CANONICAL arm the pin tells new products to author, and refuse
-                # only the state the anyOf actually refuses: neither arm.
+                # only the state the anyOf actually refuses: neither arm -- read off the
+                # contract the product will be SERVED, so a product linked to a profile
+                # that declares formats is not made to author declarations its profile
+                # then overrides.
                 try:
                     format_options = _parse_authored_format_options(form_data.get("format_options"))
-                    # ``None`` literally, not a variable that is always empty: a product
-                    # created here HAS no legacy arm, and spelling that as a value keeps the
-                    # check honest about which arm it is testing.
-                    _refuse_a_product_with_no_format_arm(None, format_options)
+                    # ``None`` for the legacy arm, literally: a product created here HAS no
+                    # legacy arm, and its canonical declarations come from the product or
+                    # its profile, never from a legacy-only profile's ``format_ids``.
+                    contract = linked_format_contract(profile=profile, format_options=format_options, format_ids=None)
+                    _refuse_a_product_with_no_format_arm(None, contract.format_options)
                 except ValueError as e:
                     flash(str(e), "error")
                     return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
@@ -889,10 +921,10 @@ def add_product(tenant_id):
                     gam_config_service = GAMProductConfigService()
                     # ``None`` for the legacy arm: a product created here has none. The
                     # seeder takes ``format_options`` so it can derive its placeholder from
-                    # the canonical declarations (cd0d9921f), which is the arm this surface
-                    # authors.
+                    # the canonical declarations (cd0d9921f) the product will be served --
+                    # its profile's when it links one.
                     base_config = gam_config_service.generate_default_config(
-                        delivery_type, None, format_options=format_options
+                        delivery_type, None, format_options=contract.format_options
                     )
 
                     # Add ad unit/placement targeting if provided
@@ -985,9 +1017,9 @@ def add_product(tenant_id):
                     # legacy arm to hand over. ``generate_default_config`` declares
                     # ``formats`` optional and takes ``format_options`` precisely so the
                     # seeder can derive its sizes from the canonical declarations
-                    # (cd0d9921f), which is the only arm this surface authors.
+                    # (cd0d9921f) the product will be served -- its profile's when it links one.
                     implementation_config = gam_config_service.generate_default_config(
-                        delivery_type, None, format_options=format_options
+                        delivery_type, None, format_options=contract.format_options
                     )
 
                 # Parse targeting template from form (includes custom targeting key-value pairs)
@@ -1029,27 +1061,9 @@ def add_product(tenant_id):
                     "implementation_config": implementation_config,
                 }
 
-                # Handle inventory profile association (optional)
-                # Check for inventory_profile_id directly (no need for inventory_mode radio button)
-                inventory_profile_id = form_data.get("inventory_profile_id", "").strip()
-                if inventory_profile_id:
-                    try:
-                        profile_id = int(inventory_profile_id)
-                        # SECURITY: Verify profile belongs to this tenant
-                        from src.core.database.models import InventoryProfile
-
-                        profile_stmt = select(InventoryProfile).filter_by(id=profile_id)
-                        profile = db_session.scalars(profile_stmt).first()
-                        if not profile or profile.tenant_id != tenant_id:
-                            flash(
-                                "Invalid inventory profile - profile not found or does not belong to this tenant",
-                                "error",
-                            )
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-                        product_kwargs["inventory_profile_id"] = profile_id
-                    except (ValueError, TypeError):
-                        flash("Invalid inventory profile ID", "error")
-                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                # Inventory profile association (optional), resolved and checked above.
+                if profile is not None:
+                    product_kwargs["inventory_profile_id"] = profile.id
 
                 # Only add countries if explicitly set
                 if countries is not None:
@@ -1462,6 +1476,9 @@ def edit_product(tenant_id, product_id):
                 # Handle inventory profile association (optional)
                 # Check for inventory_profile_id directly (no need for inventory_mode radio button)
                 inventory_profile_id = form_data.get("inventory_profile_id", "").strip()
+                # The profile the edited product links, which supplies its format contract
+                # (``Product.format_contract``); the anyOf below is checked against it.
+                linked_profile = None
                 if inventory_profile_id:
                     try:
                         profile_id = int(inventory_profile_id)
@@ -1479,6 +1496,7 @@ def edit_product(tenant_id, product_id):
                                 url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
                             )
                         product.inventory_profile_id = profile_id
+                        linked_profile = profile
                     except (ValueError, TypeError):
                         flash("Invalid inventory profile ID", "error")
                         return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
@@ -1502,9 +1520,13 @@ def edit_product(tenant_id, product_id):
 
                     attributes.flag_modified(product, "format_options")
 
-                # The anyOf, now that both arms carry their post-edit values.
+                # The anyOf, now that both arms carry their post-edit values, over the
+                # contract the product will be served: a linked profile's declarations count.
                 try:
-                    _refuse_a_product_with_no_format_arm(product.format_ids, product.format_options)
+                    contract = linked_format_contract(
+                        profile=linked_profile, format_options=product.format_options, format_ids=product.format_ids
+                    )
+                    _refuse_a_product_with_no_format_arm(list(contract.format_ids), contract.format_options)
                 except ValueError as e:
                     flash(str(e), "error")
                     return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))

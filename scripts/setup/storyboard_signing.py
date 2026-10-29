@@ -472,21 +472,26 @@ def _seed_vector_product(session: Session, tenant_id: str) -> None:
     """
     from sqlalchemy import select
 
+    from scripts.setup.seed_products import canonical_declaration
     from src.core.database.models import PricingOption, Product
-    from tests.factories.product import DEFAULT_PRICING_OPTION_ID, ProductFactory
+    from tests.factories.product import DEFAULT_PRICING_OPTION_ID
     from tests.factories.request import PackageRequestFactory
 
     product_id = PackageRequestFactory.product_id
-    # `format_ids` is object-shaped ({agent_url, id}) and a DB trigger enforces it. Read
-    # the factory's own default rather than restating an id: #1418 already moved this one
-    # once, from "display_300x250" to the catalog's "display_300x250_image".
-    format_ids = ProductFactory.format_ids.function()
+    # Authored canonically, as every seeder authors a product (core/product.json: "New
+    # products MUST author canonical format_options[] ... Do not author a new product from
+    # format_ids alone"). The declaration asserts the named format the signed vectors were
+    # written against, so a legacy buyer is still served that `format_ids` entry, derived
+    # from the declaration's `v1_format_ref`.
+    format_options = [canonical_declaration("image", "display_300x250_image", width=300, height=250)]
     existing = session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first()
     if existing is not None:
         # Re-apply the capabilities rather than returning: a row left by an earlier
         # revision of this function would otherwise keep that revision's capabilities
         # forever, and the run would grade a product nobody in this tree described.
         existing.property_targeting_allowed = True
+        existing.format_options = format_options
+        existing.format_ids = None
         session.flush()
         print(f"   vector product refreshed: {product_id}")
         return
@@ -496,7 +501,7 @@ def _seed_vector_product(session: Session, tenant_id: str) -> None:
             product_id=product_id,
             name="Storyboard signed-vector product",
             description="Named by the corrected request-signing create_media_buy bodies.",
-            format_ids=format_ids,
+            format_options=format_options,
             targeting_template={},
             delivery_type="non_guaranteed",
             property_tags=["all_inventory"],

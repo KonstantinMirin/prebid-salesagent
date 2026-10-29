@@ -569,13 +569,10 @@ class Product(Base, JSONValidatorMixin):
         The FK column is tested before the relationship so a detached row with no profile
         never triggers a lazy load.
         """
-        from src.core.format_resolver import format_contract
+        from src.core.format_resolver import linked_format_contract
 
         profile = self.inventory_profile if self.inventory_profile_id and self.inventory_profile else None
-        return format_contract(
-            format_options=(profile.format_options if profile else None) or self.format_options,
-            format_ids=profile.format_ids if profile else self.format_ids,
-        )
+        return linked_format_contract(profile=profile, format_options=self.format_options, format_ids=self.format_ids)
 
     @property
     def effective_properties(self) -> list[dict] | None:
@@ -1165,6 +1162,11 @@ class CreativeAssignment(Base):
     weight: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
     # adcp#208: placement-specific targeting within package
     placement_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    # Whether the assignment came in through a package's inline ``creatives``. The two
+    # package arrays replace different sets (update_media_buy.mdx): ``creatives`` "Replace
+    # assigned inline creative bodies", ``creative_assignments`` "Replace assigned library
+    # creatives", so the inline replacement drops only rows marked here.
+    inline: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     # Relationships

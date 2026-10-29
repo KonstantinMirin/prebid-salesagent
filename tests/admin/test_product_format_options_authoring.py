@@ -34,7 +34,13 @@ from sqlalchemy import select
 
 from src.core.database.models import Product
 from src.core.product_conversion import convert_product_model_to_schema
-from tests.factories import AuthorizedPropertyFactory, ProductFactory, PropertyTagFactory, TenantFactory
+from tests.factories import (
+    AuthorizedPropertyFactory,
+    InventoryProfileFactory,
+    ProductFactory,
+    PropertyTagFactory,
+    TenantFactory,
+)
 from tests.helpers.admin_session import admin_auth_session, admin_test_app
 
 pytestmark = [pytest.mark.admin, pytest.mark.requires_db]
@@ -199,6 +205,50 @@ def test_a_product_declaring_neither_arm_is_refused_at_authoring_time(operator, 
     assert response.status_code == 200, "a refusal re-renders the form rather than redirecting"
     assert b"at least one creative format" in response.data
     assert _stored(factory_session, tenant_id, "no_format_arm") is None
+
+
+def test_a_product_linked_to_a_canonical_profile_authors_no_declarations_of_its_own(operator, seller, factory_session):
+    """A linked profile supplies the contract (``Product.format_contract``), so the form
+    does not make the operator author declarations the profile then overrides."""
+    tenant, tag_selection = seller
+    tenant_id = tenant.tenant_id
+    profile = InventoryProfileFactory(tenant=tenant, format_ids=None, format_options=[IMAGE_DECLARATION])
+    factory_session.commit()
+
+    response = operator.post(
+        f"/tenant/{tenant_id}/products/add",
+        data=_create_form(
+            tag_selection, product_id="profile_linked", format_options="", inventory_profile_id=str(profile.id)
+        ),
+    )
+
+    assert response.status_code in (301, 302), response.data[:2000]
+    row = _stored(factory_session, tenant_id, "profile_linked")
+    assert row is not None, "the operator form refused a product whose profile declares its formats"
+    assert row.format_options is None
+    assert row.format_ids is None
+    served = convert_product_model_to_schema(row, adapter_type="mock")
+    assert [declaration.format_kind for declaration in served.format_options] == ["image"]
+
+
+def test_a_legacy_only_profile_does_not_stand_in_for_canonical_declarations(operator, seller, factory_session):
+    """A new product's contract is canonical: a profile with only ``format_ids`` does not
+    satisfy the create check ("Do not author a new product from format_ids alone")."""
+    tenant, tag_selection = seller
+    tenant_id = tenant.tenant_id
+    profile = InventoryProfileFactory(tenant=tenant, format_ids=[LEGACY_FORMAT_ID], format_options=None)
+    factory_session.commit()
+
+    response = operator.post(
+        f"/tenant/{tenant_id}/products/add",
+        data=_create_form(
+            tag_selection, product_id="legacy_profile_linked", format_options="", inventory_profile_id=str(profile.id)
+        ),
+    )
+
+    assert response.status_code == 200, "a refusal re-renders the form rather than redirecting"
+    assert b"at least one creative format" in response.data
+    assert _stored(factory_session, tenant_id, "legacy_profile_linked") is None
 
 
 def test_an_unparseable_declaration_is_refused(operator, seller, factory_session):
