@@ -81,11 +81,16 @@ def _validate_creative_input(
     # creative synced by one arm is listed by that arm -- so neither is translated here.
     # Carrying only format_id made a canonical creative unrepresentable: the receiving
     # model's oneOf refuses a creative with neither identity.
-    identity_members: dict[str, Any] = (
-        {"format_id": creative.format_id}
-        if creative.format_id is not None
-        else {"format_kind": creative.format_kind, "format_option_ref": creative.format_option_ref}
-    )
+    # ``format_option_ref`` rides with EITHER arm: core/creative-asset.json declares it
+    # beside the root oneOf, and neither arm forbids it.
+    identity_members: dict[str, Any] = {
+        **(
+            {"format_id": creative.format_id}
+            if creative.format_id is not None
+            else {"format_kind": creative.format_kind}
+        ),
+        "format_option_ref": creative.format_option_ref,
+    }
     schema_data: dict[str, Any] = {
         "creative_id": creative.creative_id or str(uuid.uuid4()),
         "name": creative.name,
