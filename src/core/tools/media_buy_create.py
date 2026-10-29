@@ -145,6 +145,7 @@ from src.services.targeting_capabilities import (
     collect_targeting_violations,
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
+    raise_if_undeclared_overlay_dimension,
     validate_property_targeting_allowed,
 )
 
@@ -3210,15 +3211,22 @@ async def _create_media_buy_impl(
                     )
 
         # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)
-        if req.packages:
-            for pkg in req.packages:
-                if pkg.targeting_overlay is not None:
-                    violations = collect_targeting_violations(pkg.targeting_overlay)
-                    if violations:
-                        raise AdCPInvalidRequestError(
-                            details=ValidationDetails(**violations),
-                            field="targeting_overlay",
-                        )
+        # Every package's overlay is checked for a malformed request before any is asked
+        # whether this seller applies what it names: a request fault outranks a capability gap.
+        overlays = [
+            (index, pkg.targeting_overlay)
+            for index, pkg in enumerate(req.packages or [])
+            if pkg.targeting_overlay is not None
+        ]
+        for _, overlay in overlays:
+            violations = collect_targeting_violations(overlay)
+            if violations:
+                raise AdCPInvalidRequestError(
+                    details=ValidationDetails(**violations),
+                    field="targeting_overlay",
+                )
+        for index, overlay in overlays:
+            raise_if_undeclared_overlay_dimension(overlay, index)
 
     except (AdCPSalesAgentError, ValueError, PermissionError) as e:
         # Audit-update then re-raise via the shared helper so this early-validation

@@ -1214,7 +1214,13 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             # exception. Run: bdd_inprocess at 9c88c3b2e, 6 strict XPASSes, the only
             # failures in 8648 items. The other labels in this set still xfail, so
             # this is one scenario graduated, not the entry emptied.
-            "keyword_duplicate",
+            #
+            # Graduated: keyword_duplicate. The gap was "keyword-dup": the seller accepted
+            # a keyword_targets list repeating a (keyword, match_type) pair, which
+            # core/targeting.json says sellers SHOULD reject. collect_targeting_violations
+            # now reports it (keyword_duplicates), and update_media_buy raises that as
+            # INVALID_REQUEST on every transport, the code and suggestion the row grades
+            # on the wire envelope (_assert_error_outcome -> assert_wire_error).
         },
         "Pre-existing UC-003 targeting-overlay validation gaps (not da07): pydantic "
         "extra='forbid' / GeoProximity coordinate modes / keyword-dup / device_type overlap",
@@ -1231,7 +1237,8 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             # Graduated: "frequency_cap max_impressions without per", the boundary
             # half of the same gap the partition entry above graduates. Same three
             # transports, same measurement, same wire-envelope assertion.
-            "keyword_targets with duplicate",
+            # Graduated: "keyword_targets with duplicate", the boundary half of the
+            # partition entry's keyword_duplicate, for the same reason.
         },
         "Pre-existing UC-003 targeting-overlay validation gaps (not da07): pydantic "
         "extra='forbid' / GeoProximity coordinate modes / keyword-dup / device_type overlap",

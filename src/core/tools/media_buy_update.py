@@ -95,6 +95,7 @@ from src.services.targeting_capabilities import (
     collect_targeting_violations,
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
+    raise_if_undeclared_overlay_dimension,
     validate_property_targeting_allowed,
 )
 
@@ -844,6 +845,10 @@ def _update_media_buy_impl(
                         details=ValidationDetails(**overlay_violations),
                         field="targeting_overlay",
                     )
+                # The same refusal create makes, after the same request-fault check.
+                for index, pkg_update in enumerate(req.packages):
+                    if pkg_update.targeting_overlay is not None:
+                        raise_if_undeclared_overlay_dimension(pkg_update.targeting_overlay, index)
 
                 property_targeting_violations: list[str] = []
                 for pkg_update in req.packages:

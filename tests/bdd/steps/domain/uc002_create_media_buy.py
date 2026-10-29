@@ -19,7 +19,13 @@ from unittest.mock import ANY
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session as _db_session
-from tests.bdd.steps._outcome_helpers import _get_response_field, payload_or_none, require_payload, wire_field
+from tests.bdd.steps._outcome_helpers import (
+    _get_response_field,
+    payload_or_none,
+    require_payload,
+    wire_entry,
+    wire_field,
+)
 from tests.bdd.steps.domain.uc002_task_query import assert_task_query_outcome, is_task_query_outcome
 from tests.bdd.steps.domain.uc002_v31_request import assert_sandbox_outcome, is_sandbox_outcome
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
@@ -991,6 +997,8 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
             f"Expected media_buy_id in response for '{domain}' validation pass, "
             f"got {type(resp).__name__} without media_buy_id"
         )
+    if domain == "targeting":
+        _assert_overlay_echoed(ctx)
     if outcome.endswith(" resolves to now"):
         # The row claims the literal 'asap' was resolved, which a buy id alone does not
         # show: a seller that stored the literal or any other instant answered the same.
@@ -998,6 +1006,23 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
         from tests.bdd.steps.domain.uc002_invariants import then_start_time_resolved
 
         then_start_time_resolved(ctx)
+
+
+def _assert_overlay_echoed(ctx: dict) -> None:
+    """Every dimension the request's overlay sent is on the answered package, as sent.
+
+    create_media_buy.mdx (targeting_overlay): "The resulting package echoes the complete
+    effective overlay", and "Non-null additions must compile exactly or be rejected". An
+    accepted create whose package drops or alters a sent dimension answered success for
+    targeting it did not apply, which is what a bare no-error check could not see.
+    """
+    sent = ctx["request_kwargs"]["packages"][0].get("targeting_overlay") or {}
+    answered = wire_entry(ctx, "packages", index=0).get("targeting_overlay") or {}
+    for dimension, value in sent.items():
+        assert answered.get(dimension) == value, (
+            f"packages[0].targeting_overlay.{dimension}: sent {value!r}, the package answered "
+            f"{answered.get(dimension)!r}"
+        )
 
 
 def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:

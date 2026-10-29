@@ -1584,8 +1584,9 @@ def _set_targeting_overlay(ctx: dict, overlay: dict[str, Any] | None) -> None:
 def given_targeting_overlay_partition(ctx: dict, partition: str) -> None:
     """Set up targeting overlay for partition scenarios (BR-RULE-014).
 
-    Valid partitions (12): targeting validation passes
-    Invalid partitions (7): error INVALID_REQUEST with suggestion
+    Valid partitions (8): targeting validation passes
+    Invalid partitions (11): INVALID_REQUEST for a request fault, UNSUPPORTED_FEATURE for a
+    dimension this seller does not declare (keyword_targeting, proximity_*)
     """
     partition = partition.strip()
 
@@ -1603,11 +1604,15 @@ def given_targeting_overlay_partition(ctx: dict, partition: str) -> None:
         _set_targeting_overlay(ctx, overlay={"geo_countries": ["US"]})
 
     elif partition == "multiple_dimensions":
+        # Two pinned dimensions this seller declares in get_adcp_capabilities
+        # (media_buy.execution.targeting geo_countries and geo_regions). The row used to pair
+        # geo_countries with device_type_any_of, a seller-internal field no pinned
+        # core/targeting.json declares, which the live ad server refuses as UNSUPPORTED_FEATURE.
         _set_targeting_overlay(
             ctx,
             overlay={
                 "geo_countries": ["US"],
-                "device_type_any_of": ["mobile", "desktop"],
+                "geo_regions": ["US-CA"],
             },
         )
 
