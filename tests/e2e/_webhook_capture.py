@@ -309,13 +309,13 @@ def peer_agent_url(key: str) -> str:
     return f"{ALT_CAPTURE_DELIVERY_ORIGIN}{peer_path(key)}"
 
 
-def serve_peer_catalog(key: str, document: dict) -> None:
-    """Make :func:`peer_agent_url` answer ``list_creative_formats`` with *document*, verbatim.
+def serve_peer_tool(key: str, tool: str, document: dict) -> None:
+    """Make :func:`peer_agent_url` answer *tool* with *document*, verbatim.
 
     Control plane, so it rides the plain-HTTP readback port like
     :func:`program_rejections`.
     """
-    _readback_json(_readback_base_url(), "POST", peer_control_path(key), body=document)
+    _readback_json(_readback_base_url(), "POST", peer_control_path(key, tool), body=document)
 
 
 def _assert_own_stack() -> None:

@@ -58,7 +58,6 @@ from src.core.exceptions import (
     AdCPProductNotFoundError,
     AdCPValidationError,
 )
-from src.core.format_cache import load_reference_formats
 from src.core.schemas import (
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
@@ -90,18 +89,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # in-memory tenant override that the boundary's resolver never reads -- the row decides.
 # A bag that takes anything cannot tell a caller it was ignored. The fact is a COLUMN and
 # is stated where the row is written: ``env.setup_default_data(human_review_required=True)``.
-
-
-def _peer_serving_display_300x250_image(env: MediaBuyCreateEnv) -> str:
-    """A real peer creative agent that publishes ``display_300x250_image`` as its own; returns its URL.
-
-    A tenant-configured agent is dialled for a format lookup -- the reference capture stands
-    in for the operator agent only -- so a test that registers one needs an agent that
-    answers. The entry is the capture's, re-homed: its ``format_id.agent_url`` is the
-    peer's own URL, as an agent states for a format it publishes.
-    """
-    (fmt,) = [f for f in load_reference_formats() if f.format_id.id == "display_300x250_image"]
-    return env.publish_formats([fmt], rehome=True)
 
 
 def _require_manual_approval(env: MediaBuyCreateEnv) -> None:
@@ -1319,8 +1306,7 @@ class TestInlineCreativeObligations:
             tenant, _principal = env.setup_default_data()
             # Well-formed registration the buyer's format_id should match: a real peer that
             # serves the format, since a registered agent is dialled for the lookup.
-            peer_url = _peer_serving_display_300x250_image(env)
-            CreativeAgentFactory(tenant=tenant, agent_url=peer_url, enabled=True)
+            peer_url = env.host_reference_format("display_300x250_image")
             # Malformed pre-existing registration -- bypasses admin-ingestion
             # validation entirely by writing directly to the DB, which is
             # exactly how such a row would already exist in production.
@@ -1352,7 +1338,6 @@ class TestInlineCreativeObligations:
         """
         from src.core.exceptions import AdCPAuthorizationError
         from src.core.tools.media_buy_create import _validate_and_convert_format_ids
-        from tests.factories import CreativeAgentFactory
 
         operator = "https://creative.seller.example"
         monkeypatch.setenv("CREATIVE_AGENT_ORIGIN", operator)
@@ -1363,8 +1348,7 @@ class TestInlineCreativeObligations:
         with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             # A real peer that serves the format: a registered agent is dialled for the lookup.
-            partner = _peer_serving_display_300x250_image(env)
-            CreativeAgentFactory(tenant=tenant, agent_url=partner, enabled=True)
+            partner = env.host_reference_format("display_300x250_image")
 
             async def validate(agent_url: str) -> list[dict[str, str]]:
                 return await _validate_and_convert_format_ids(
