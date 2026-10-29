@@ -234,6 +234,35 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "params": {"width": 300, "height": 250, "pixel_ratios": [1, 2]},
         }
     ],
+    # A RENDITION SET: the pinned acme_retina_mrec example's declaration
+    # (static/examples/products/canonical/acme_retina_mrec.json), its image_main slot
+    # requiring the 1x and 2x renditions and accepting an optional 1.5x.
+    # formats/canonical/_base.json ``required_pixel_ratios``: "the manifest slot value MUST be
+    # an array containing exactly one matching image rendition for each required ratio".
+    # ``retina_300x250`` is the same density axis with no requirement, the control that an
+    # acceptance set alone does not demand every rendition.
+    "retina_rendition_set": [
+        {
+            "format_kind": "image",
+            "format_option_id": _PRODUCT_OPTION_ID,
+            "params": {
+                "width": 300,
+                "height": 250,
+                "pixel_ratios": [1, 1.5, 2],
+                "slots": [
+                    {
+                        "asset_group_id": "image_main",
+                        "asset_type": "image",
+                        "required": True,
+                        "min": 2,
+                        "max": 3,
+                        "pixel_ratios": [1, 1.5, 2],
+                        "required_pixel_ratios": [1, 2],
+                    }
+                ],
+            },
+        }
+    ],
     # ``fixed_300x250`` with the ``v1_format_ref`` assertion REMOVED, and nothing else
     # changed. That one difference decides whether the accepted package's deprecated
     # ``format_ids_to_provide`` projection has a source at all, which is the pair the two
@@ -265,6 +294,11 @@ def _manifest(name: str) -> dict[str, Any]:
     from tests.factories.creative_asset import build_assets, image_spec, manifest_image_spec, text_spec
 
     mrec = manifest_image_spec("image_main")
+
+    def rendition(width: int, height: int, **fields: object) -> Any:
+        """One rendition of the 300x250 in an ``image_main`` array, at *width* x *height* intrinsic."""
+        return manifest_image_spec("image_main", width=width, height=height, multiple=True).with_fields(**fields)
+
     manifests: dict[str, Any] = {
         "image_300x250": lambda: build_assets(mrec),
         "image_728x90": lambda: build_assets(manifest_image_spec("image_main", width=728, height=90)),
@@ -280,6 +314,25 @@ def _manifest(name: str) -> dict[str, Any]:
             manifest_image_spec("image_main", width=600, height=500).with_fields(pixel_ratio=2)
         ),
         "image_600x500": lambda: build_assets(manifest_image_spec("image_main", width=600, height=500)),
+        # The 300x250 at 1.5x: a density between the two ``retina_300x250`` accepts.
+        "image_450x375_1_5x": lambda: build_assets(
+            manifest_image_spec("image_main", width=450, height=375).with_fields(pixel_ratio=1.5)
+        ),
+        # RENDITION SETS of the 300x250: image_main as an array, one image per density
+        # (formats/canonical/_base.json ``required_pixel_ratios``). Each differs from
+        # ``image_renditions_1x_2x`` in one rendition: inferred instead of stated ratios, an
+        # added optional 1.5x, the 1x dropped, the 1x sent twice.
+        "image_renditions_1x_2x": lambda: build_assets(
+            rendition(300, 250, pixel_ratio=1), rendition(600, 500, pixel_ratio=2)
+        ),
+        "image_renditions_1x_2x_inferred": lambda: build_assets(rendition(300, 250), rendition(600, 500)),
+        "image_renditions_1x_1_5x_2x": lambda: build_assets(
+            rendition(300, 250, pixel_ratio=1), rendition(450, 375, pixel_ratio=1.5), rendition(600, 500, pixel_ratio=2)
+        ),
+        "image_renditions_2x": lambda: build_assets(rendition(600, 500, pixel_ratio=2)),
+        "image_renditions_1x_1x_2x": lambda: build_assets(
+            rendition(300, 250, pixel_ratio=1), rendition(300, 250, pixel_ratio=1), rendition(600, 500, pixel_ratio=2)
+        ),
         # One of the image_formats ``fixed_300x250`` declares, and one it does not.
         "image_300x250_png": lambda: build_assets(mrec.with_fields(format="png")),
         "image_300x250_gif": lambda: build_assets(mrec.with_fields(format="gif")),
@@ -1905,7 +1958,11 @@ def then_refusal_names_stated_value(ctx: dict, path: str, rejected: str, accepte
 
 @then(parsers.parse('the refusal names "{path}" missing where "{accepted}" is accepted'))
 def then_refusal_names_missing_slot(ctx: dict, path: str, accepted: str) -> None:
-    """A required slot the manifest does not fill: nothing stated, the slot's type accepted."""
+    """Something the manifest does not supply: nothing stated, what the declaration requires accepted.
+
+    A required slot left empty (its asset type accepted), an asset silent about a capped member
+    (the cap accepted), or a rendition set lacking a required pixel ratio (that ratio accepted).
+    """
     problem = _refusal_problem(ctx, path)
     assert "rejected_value" not in problem, f"{path} is reported as stating {problem.get('rejected_value')!r}"
     assert problem.get("accepted_values") == [accepted], f"{path}: accepted {problem.get('accepted_values')!r}"

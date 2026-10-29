@@ -167,9 +167,17 @@ def image_spec(
 MANIFEST_IMAGE_BYTES = 50 * 1024
 
 
-def manifest_image_spec(role: str = "image_main", *, width: int = 300, height: int = 250) -> AssetSpec:
-    """An image as a canonical manifest carries it: its dimensions and its file size."""
-    return image_spec(role, width=width, height=height).with_fields(file_size_bytes=MANIFEST_IMAGE_BYTES)
+def manifest_image_spec(
+    role: str = "image_main", *, width: int = 300, height: int = 250, multiple: bool = False
+) -> AssetSpec:
+    """An image as a canonical manifest carries it: its dimensions and its file size.
+
+    ``multiple=True`` makes it one rendition of an array-valued slot; several such specs for
+    one role build the array (:func:`build_assets`).
+    """
+    return image_spec(role, width=width, height=height, multiple=multiple).with_fields(
+        file_size_bytes=MANIFEST_IMAGE_BYTES
+    )
 
 
 def text_spec(role: str, *, content: str, multiple: bool = False) -> AssetSpec:
@@ -206,10 +214,18 @@ def asset_spec(role: str, asset_type: str, *, multiple: bool = False, **fields: 
 
 
 def build_assets(*specs: AssetSpec) -> dict:
-    """Merge specs into one ``assets`` slot map for a creative payload."""
+    """Merge specs into one ``assets`` slot map for a creative payload.
+
+    Specs sharing a role with ``multiple=True`` each append one item to that slot's array, in
+    order -- the shape of a slot holding several assets, such as an image rendition set
+    (creative-manifest.json: "an array of asset objects (slots with ``min``/``max`` counts")).
+    Any other repeated role is replaced by the later spec.
+    """
     out: dict = {}
     for spec in specs:
-        out.update(spec.payload())
+        for role, value in spec.payload().items():
+            held = out.get(role)
+            out[role] = [*held, *value] if spec.multiple and isinstance(held, list) else value
     return out
 
 
