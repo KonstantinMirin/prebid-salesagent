@@ -50,7 +50,7 @@ from tests.bdd.steps.domain.uc006_sync_creatives import (
     when_sync_creative,
 )
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
-from tests.bdd.steps.generic._dispatch import gate_and_record
+from tests.bdd.steps.generic._dispatch import dispatch_via_client
 from tests.factories.creative import format_option_ref_for_scope
 from tests.factories.creative_asset import build_assets, image_spec, text_spec, url_spec, video_spec
 from tests.factories.request import OMIT, CreativeAssetRequestFactory
@@ -579,15 +579,16 @@ def _listed_back(ctx: dict, creative_id: str) -> dict:
     address table on the SAME env, so no second env and no raw repository read is needed.
 
     A READ-BACK still reaches a transport, so it owes the same two obligations as any other
-    dispatch. It does NOT go through ``dispatch_via_client``: that entry is the single writer
-    of the ctx dispatch-result contract, and this read-back must not clobber the result the
-    scenario is actually grading.
+    dispatch, and it gets them from ``dispatch_via_client`` like every other one. That entry
+    writes the dispatch-result contract into the ctx it is handed, so the read-back hands it
+    a ctx of its own: the scenario's ``ctx["result"]`` is the one being graded and must not
+    be overwritten by the read.
     """
     from tests.harness.client import AdCPTestClient
 
-    client = ctx.get("client") or AdCPTestClient(ctx["env"])
-    gate_and_record({})
-    listed = client.call("list_creatives", {}, ctx["transport"])
+    read_back: dict = {"client": ctx.get("client") or AdCPTestClient(ctx["env"]), "transport": ctx["transport"]}
+    dispatch_via_client(read_back, "list_creatives", {})
+    listed = read_back["result"]
     wire = listed.wire_response
     assert isinstance(wire, dict), (
         f"list_creatives returned no wire body to read the synced creative back from "
