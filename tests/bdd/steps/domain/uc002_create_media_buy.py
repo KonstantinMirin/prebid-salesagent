@@ -19,7 +19,13 @@ from unittest.mock import ANY
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session as _db_session
-from tests.bdd.steps._outcome_helpers import _get_response_field, payload_or_none, require_payload, wire_field
+from tests.bdd.steps._outcome_helpers import (
+    _get_response_field,
+    payload_or_none,
+    require_payload,
+    wire_entry,
+    wire_field,
+)
 from tests.bdd.steps.domain.uc002_task_query import assert_task_query_outcome, is_task_query_outcome
 from tests.bdd.steps.domain.uc002_v31_request import assert_sandbox_outcome, is_sandbox_outcome
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
@@ -998,6 +1004,62 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
         from tests.bdd.steps.domain.uc002_invariants import then_start_time_resolved
 
         then_start_time_resolved(ctx)
+    if domain in _ECHOED_PACKAGE_FIELDS:
+        _assert_package_echoes_request_field(ctx, _ECHOED_PACKAGE_FIELDS[domain])
+
+
+#: The package field a passing row of this validation domain claims the seller took.
+#: core/package.json carries both on the confirmed package: ``catalogs`` "Echoed from the
+#: create_media_buy request", and ``optimization_goals``, the goals "the seller optimizes
+#: delivery toward". A media_buy_id alone passes for a seller that drops the field.
+#: @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json
+_ECHOED_PACKAGE_FIELDS = {"catalog": "catalogs", "optimization": "optimization_goals"}
+
+
+def _echo_mismatch(sent: Any, echoed: Any, path: str) -> str | None:
+    """``None`` when *echoed* carries everything *sent* does; otherwise the first difference.
+
+    Objects compare as subsets: core/catalog.json and core/optimization-goal.json are open
+    (``additionalProperties: true``) and declare defaults a seller may emit, such as an
+    event source's ``value_factor``. Arrays compare position by position at equal length:
+    goal order is priority order, and a dropped entry is a dropped instruction.
+    """
+    if isinstance(sent, dict):
+        if not isinstance(echoed, dict):
+            return f"{path} is {echoed!r}, expected an object"
+        for key, value in sent.items():
+            if key not in echoed:
+                return f"{path}.{key} is missing"
+            if (mismatch := _echo_mismatch(value, echoed[key], f"{path}.{key}")) is not None:
+                return mismatch
+        return None
+    if isinstance(sent, list):
+        if not isinstance(echoed, list) or len(echoed) != len(sent):
+            return f"{path} is {echoed!r}, expected {len(sent)} entries"
+        for index, (sent_item, echoed_item) in enumerate(zip(sent, echoed, strict=True)):
+            if (mismatch := _echo_mismatch(sent_item, echoed_item, f"{path}[{index}]")) is not None:
+                return mismatch
+        return None
+    return None if sent == echoed else f"{path} is {echoed!r}, expected {sent!r}"
+
+
+def _assert_package_echoes_request_field(ctx: dict, field: str) -> None:
+    """The confirmed first package carries exactly the *field* entries the buyer sent.
+
+    With nothing sent (field absent or an empty array) the package carries none.
+    """
+    sent_packages = ctx["request_kwargs"]["packages"]
+    assert len(wire_field(ctx, "packages")) == len(sent_packages), (
+        f"expected one confirmed package per requested package ({len(sent_packages)}), "
+        f"got {len(wire_field(ctx, 'packages'))}"
+    )
+    sent = sent_packages[0].get(field)
+    echoed = wire_entry(ctx, "packages", index=0).get(field)
+    if not sent:
+        assert not echoed, f"no {field} was sent, but the confirmed packages[0].{field} is {echoed!r}"
+        return
+    mismatch = _echo_mismatch(sent, echoed, f"packages[0].{field}")
+    assert mismatch is None, f"the confirmed package does not carry the {field} the buyer sent: {mismatch}"
 
 
 def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:
