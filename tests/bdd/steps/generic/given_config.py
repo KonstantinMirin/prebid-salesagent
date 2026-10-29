@@ -94,17 +94,24 @@ def given_registry_format_typed(ctx: dict, name: str, fmt_type: str, asset_type:
 # ── Format with format_id ───────────────────────────────────────────
 
 
-@given(parsers.parse('the registry has format "{name}" with format_id id "{fmt_id}"'))
-def given_registry_format_with_id(ctx: dict, name: str, fmt_id: str) -> None:
-    """Register a format with a known format_id.
+@given(
+    parsers.re(
+        r'the registry has format "(?P<name>[^"]+)" with format_id id "(?P<fmt_id>[^"]+)"'
+        r'(?: declared by agent "(?P<agent_url>[^"]+)")?'
+    )
+)
+def given_registry_format_with_id(ctx: dict, name: str, fmt_id: str, agent_url: str | None) -> None:
+    """Register a format with a known format_id, declared by *agent_url* when the sentence names one.
 
-    Uses the FormatIdFactory default agent_url (the seller's own creative agent,
-    matching the format_ids request step). v3.1 matches format_ids on the
-    (agent_url, id) pair, so the seeded format and the requested reference MUST
-    agree on agent_url — a prior "creatives" (plural) typo here diverged from the
-    "creative" the request uses and was masked only by the old id-only filter.
+    Without the clause the format_id carries the FormatIdFactory default agent_url, which
+    is the agent the format_ids request step names. core/format-id.json identifies a
+    format "by its declaring agent and local slug", so a format declared by another agent
+    under the same id is a different format: the clause is how a scenario puts one in the
+    catalog. Both are served verbatim by the tenant's peer agent, so the listing carries
+    each identity as declared. A regex rather than ``parsers.parse``: parse's ``{fmt_id}``
+    would also swallow the clause, binding the longer sentence to the shorter form.
     """
-    fid = FormatIdFactory.build(id=fmt_id)
+    fid = FormatIdFactory.build(id=fmt_id, **({"agent_url": agent_url} if agent_url else {}))
     fmt = FormatFactory.build(name=name, format_id=fid)
     _add_format(ctx, fmt)
     _sync_registry(ctx)

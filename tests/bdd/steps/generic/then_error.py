@@ -13,6 +13,7 @@ from pytest_bdd import parsers, then
 
 from tests.bdd.steps._outcome_helpers import (
     payload_or_none,
+    wire_advisory_errors,
     wire_entry_errors,
     wire_error_dict,
     wire_error_envelope_or_none,
@@ -958,8 +959,15 @@ def then_no_error_returned(ctx: dict) -> None:
 
 @then(parsers.parse('no error should be raised for "{value}"'))
 def then_no_error_for_value(ctx: dict, value: str) -> None:
-    """Assert no error was raised for a specific value (silent exclusion)."""
-    assert "error" not in ctx, f"Expected no error for '{value}' but got: {ctx.get('error')}"
+    """The request succeeded and its response reports nothing about *value*: silent exclusion.
+
+    Read on the wire. ``ctx["error"]`` sees only a refusal, and a seller that answered with
+    the match plus a ``REFERENCE_NOT_FOUND`` advisory for the unmatched member did not
+    exclude it silently. The success guard behind ``wire_advisory_errors`` refuses a
+    refused request, and an empty top-level ``errors[]`` is the absence of any report.
+    """
+    advisories = wire_advisory_errors(ctx)
+    assert advisories == [], f"Expected '{value}' to be excluded silently, but the response reports {advisories}"
 
 
 # ── Validation error (sandbox) ───────────────────────────────────────

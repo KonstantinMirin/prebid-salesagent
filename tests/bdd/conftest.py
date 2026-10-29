@@ -1889,35 +1889,34 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         #   the last_a2a_task guard is Transport.A2A-gated and inert on e2e_rest.
         # No UC-003 entries remain in e2e_rest_known_failures.txt — no sibling conflict.
 
-        # FIXME: E2E_REST —
-        # set_registry_formats has no sidecar mock path. Docker's real creative
-        # agent serves its own catalog, so scenarios that inject specific format
-        # fixtures via Given steps and assert on those names can't run against
-        # E2E. Remove when E2E gains catalog-injection.
-        _UC005_E2E_FIXTURE_INJECTION_TAGS: set[str] = {
-            "T-UC-005-inv-031-1-holds",
-            # Graduated e2e_rest: inv-031-1-violated, inv-049-3-violated,
-            # inv-049-4-violated, inv-049-4-nodim (pass with strong assertions)
-            "T-UC-005-inv-031-2-holds",
-            # DELETED: inv-049-1-holds / -violated. No such scenario exists in any feature
-            # file, so these two matched nothing here either — see the note at their former
-            # _XFAIL_TAGS entry.
-            "T-UC-005-inv-049-2-holds",
-            "T-UC-005-inv-049-2-violated",
-            "T-UC-005-inv-049-3-holds",
-            "T-UC-005-inv-049-3-group",
-            "T-UC-005-inv-049-4-holds",
-            "T-UC-005-inv-049-5-holds",
-            "T-UC-005-inv-049-6-holds",
-            "T-UC-005-inv-049-7-holds",
-            "T-UC-005-inv-049-7-violated",
-            # Graduated: inv-049-9 and inv-049-10 (u04y: no e2e_rest variants exist)
-            "T-UC-005-dim-boundary",
-        }
-        if is_e2e_rest and (marker_names & _UC005_E2E_FIXTURE_INJECTION_TAGS):
+        # Graduated: eleven of the twelve scenarios of the _UC005_E2E_FIXTURE_INJECTION_TAGS
+        # set that stood here, a strict=False xfail on e2e_rest: inv-031-1-holds,
+        # inv-031-2-holds, inv-049-2-violated, inv-049-3-holds, inv-049-3-group,
+        # inv-049-4-holds, inv-049-5-holds, inv-049-6-holds, inv-049-7-holds,
+        # inv-049-7-violated and dim-boundary. All eleven XPASSED on e2e_rest in box run
+        # innet_291026_0257 and passed on a2a, mcp and rest in the same run. The twelfth,
+        # inv-049-2-holds, stays routed below. The set's reason ("set_registry_formats has
+        # no sidecar mock") stopped being true when the format Givens began seeding through
+        # CreativeFormatsEnv.set_registry_formats -> seed_own_creative_agent: the tenant's
+        # own peer creative agent (the compose stack's capture service on e2e) serves
+        # exactly the Given's formats and use_default_creative_agent is off, so the live
+        # server lists those formats and no others. Each filter is graded against
+        # media-buy/list-creative-formats-request.json @ 3.2.7 (ANY-render inclusive
+        # widths, case-insensitive partial name_search, is_responsive, format_ids).
+        # The exclusion Thens ("no formats" / "X should not be returned") and
+        # inv-049-2-violated's "no error should be raised" now require a successful
+        # response on the wire, so a refusal can no longer satisfy them.
+        #
+        # E2E_REST: T-UC-005-inv-049-2-holds is not graduated yet. The scenario that
+        # XPASSED in innet_291026_0257 varied only the id, so a seller matching format_ids
+        # on id alone passed it. It now also seeds "foreign-leaderboard" under the same id
+        # from another agent, which grades the (agent_url, id) pair identity of
+        # core/format-id.json @ 3.2.7. No e2e_rest run has graded that scenario yet; remove
+        # this route once a bdd-in-network run shows it passing on all four transports.
+        if is_e2e_rest and "T-UC-005-inv-049-2-holds" in marker_names:
             item.add_marker(
                 pytest.mark.xfail(
-                    reason="E2E: set_registry_formats has no sidecar mock — real creative agent catalog used",
+                    reason="E2E: pair-identity Given added after innet_291026_0257; not yet graded on e2e_rest",
                     strict=False,
                 )
             )
@@ -3677,104 +3676,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # innet_150926_0049 — the last of that run's 11 e2e failures that was a routing
         # artifact rather than a defect.
 
-        # STAYS — inspected, and the previous reason here was WRONG
-        # in every particular. It claimed the spend-fallback needs injected by_placement
-        # data that is "in-process mock state invisible to the live server", with
-        # salesagent-04im as the follow-up. In fact:
-        #   • _inject_placement_data is DEAD CODE — zero callers anywhere in tests/
-        #     (its only other mention was that comment). It never runs on ANY transport,
-        #     so it cannot be the reason e2e_rest differs.
-        #   • the follow-up id that comment cited does not resolve to any issue.
-        #   • by_placement is NOT injected at all — production SYNTHESIZES it server-side
-        #     (media_buy_delivery.py:1040-1058) whenever the adapter reports no
-        #     per-placement data, so e2e_rest receives the same rows as in-process.
-        #
-        # The real defect is that the scenario cannot grade its own obligation, on any
-        # transport. _build_placement_breakdown derives every metric from ONE weight
-        # vector (0.5, 0.3, 0.2): impressions=imp*w, spend=spd*w, clicks=imp*w*0.01.
-        # All metrics are therefore rank-identical by construction AND already emitted
-        # in descending order, so `values == sorted(values, reverse=True)` holds for
-        # every sort key regardless of what production does. Probe (in-process, all 3
-        # transports): n_placements=3, spend=[125.0, 75.0, 50.0], clicks=[25.0, 15.0,
-        # 10.0] — plc_a > plc_b > plc_c on every metric.
-        #
-        # Mutation-proved (local slice, 6 tests = 3 transports x
-        # {fallback, counter-example}):
-        #   M1 delete the spend-fallback branch entirely  -> 6 passed (GREEN)
-        #   M2 fall back to "clicks" instead of "spend"   -> 6 passed (GREEN)
-        # Deleting the exact behaviour the scenario exists to grade does not turn it
-        # red. The obligation is real and correctly stated — AdCP 3.1.1
-        # media-buy/task-reference/get_media_buy_delivery.mdx:869 "falls back to `spend`
-        # if the seller does not report the requested metric" — it is simply ungraded.
-        #
-        # STRENGTHENED 2026-10-09, and the route stays only for want of a measurement.
-        # The prescription above has been carried out: the scenario now NAMES its three
-        # placements (pl-A/B/C, spend 150/200/50, clicks 30/10/50 — not rank-correlated,
-        # so spend ranks B>A>C and clicks ranks C>A>B) and pins the resulting SEQUENCE
-        # via `the response placement breakdown should be ordered "pl-B", "pl-A",
-        # "pl-C"`, alongside the descending-ness Then it already had. The data reaches
-        # production through set_adapter_response's new `by_placement` parameter, which
-        # needs no second e2e realization: _persist_simulation_config dumps the whole
-        # AdapterGetMediaBuyDeliveryResponse into the delivery_simulation_configs row
-        # and MockAdServer._load_delivery_simulation reads it back verbatim, so the live
-        # server sorts the same numbers. _build_placement_breakdown honours
-        # raw_placements when present, so the synthesized one-weight-vector split — the
-        # thing that made every metric rank-identical — is no longer what is sorted.
-        # Mutation-proved in-process, the same two shapes that were GREEN before, each
-        # applied to _apply_breakdown_limit and reverted to a byte-identical src/ tree:
-        #   M1 delete the spend-fallback branch entirely -> 3 failed / 3 passed (RED)
-        #   M2 fall back to "clicks" instead of "spend"  -> 3 failed / 3 passed (RED)
-        # The 3 that still pass under each are the -dim-sortby-valid counter-example,
-        # which asks for a metric the seller DOES report and so never enters the branch.
-        # Note which assertion fires: with non-rank-correlated data the DESCENDING-ness
-        # Then the scenario already had goes red on its own ([50, 150, 200] under M2,
-        # [150, 200, 50] under M1). The data was the defect; the pinned ORDER is the
-        # assertion that stays honest if a future fixture happens to re-correlate.
-        # The route is NOT removed, because only a bdd-in-network run grades e2e_rest and
-        # none has been made against the strengthened assertion — graduating on the
-        # in-process result would cite the wrong measurement, the same error the UC-005
-        # third-party row refused for its own repaired assertion. GH #2059.
-        #
-        # WHAT IS UNMEASURED, named rather than left as "a measurement", because a route
-        # whose reason is only "not yet checked" is indistinguishable from one hiding a
-        # failure. Two of the four links are RULED OUT by construction and must not be
-        # cited as the risk:
-        #   - the ORDER is not a transport concern. by_placement is a JSON array in the
-        #     pinned response and _apply_breakdown_limit sorts it server-side BEFORE
-        #     serialization, so no transport can reorder it.
-        #   - the seed ROW reaching the live server is already proven over e2e_rest: the
-        #     four UC-004 delivery rows graduated 2026-09-15 ride the same
-        #     _persist_simulation_config -> delivery_simulation_configs ->
-        #     MockAdServer._load_delivery_simulation path for by_geo / by_device_type,
-        #     and mock_delivery_seed_enabled is on wherever ADCP_TESTING is.
-        # What is left is the COMPOSITION, and it is specific:
-        #   (1) no e2e_rest run has ever carried `by_placement` through that row. It is a
-        #       declared field on AdapterPackageDelivery and rides the same
-        #       model_dump(mode="json") / model_validate pair, so it should survive — but
-        #       "should" is reading, not measurement.
-        #   (2) the accumulating Given calls set_adapter_response THREE times in one
-        #       scenario, so over e2e it performs three upsert+commit cycles against the
-        #       same (tenant, media_buy) row. The repository's upsert is a read-then-
-        #       replace on that key, so the third write should win carrying all three
-        #       placements; no already-graduated e2e scenario writes that row twice, so
-        #       this is the genuinely novel step.
-        # RESIDUAL RISK, stated: strict=False means an e2e_rest FAILURE here stays hidden.
-        # run stays True so the next in-network run reports an XPASS and graduates it for
-        # free; if it instead fails, that is a harness gap in (1) or (2) and belongs at the
-        # env seam as an E2EUnsupportedSetup declaration, not here.
-        if "T-UC-004-dim-sortby-fallback" in marker_names and is_e2e_rest:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="e2e_rest: the strengthened sort_by assertion (named placements + "
-                    "pinned order) is graded for real in-process, but no in-network run has yet "
-                    "carried by_placement through the delivery_simulation_configs row, nor "
-                    "written that row three times in one scenario as the accumulating Given "
-                    "does. Order is not at risk (server-side sort, JSON array); the seed "
-                    "round-trip for this field is",
-                    strict=False,
-                    run=True,
-                )
-            )
+        # Graduated: the e2e_rest route for T-UC-004-dim-sortby-fallback, a strict=False
+        # xfail kept only because no in-network run had carried by_placement through the
+        # delivery_simulation_configs row, nor written that row three times in one
+        # scenario as the accumulating placement Given does. Box run innet_291026_0257 is
+        # that measurement: XPASS on e2e_rest, passed on a2a, mcp and rest. The scenario
+        # names three placements whose spend, impressions and clicks rank differently and
+        # pins the resulting order ("pl-B", "pl-A", "pl-C"), so only a fallback to spend
+        # satisfies it; the order Then fails loudly when no package carries by_placement.
+        # Obligation: media-buy/get-media-buy-delivery-request.json @ 3.2.7,
+        # reporting_dimensions.placement.sort_by -- "Falls back to 'spend' when the seller
+        # does not report the requested metric at this breakdown's row grain". GH #2059.
 
         # UC-004 partition scenarios: adcp 3.10 changed schema validation behavior.
         # Partition tests exercise valid/invalid value ranges per field.
@@ -4468,6 +4380,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # replace or merge into, and the snapshot reads back only what the update wrote.
             # It grades replacement once create stores the catalogs core/package.json says
             # it echoes.
+            # XPASSED again on all four transports in innet_291026_0257, still vacuous for
+            # the same reason, so still not graduated. Create now records the request's
+            # catalogs in package_config (both arms of media_buy_create.py), so the update
+            # replaces a stored cat-1 and a merging seller would report both. Graduates on
+            # the first box run of that change that shows it passing on every transport.
             "T-UC-026-inv-201-1",
             "T-UC-026-inv-201-2",
             "T-UC-026-inv-201-3",
@@ -4601,16 +4518,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         #     already-paused rows now start from a package created paused, so a seller that
         #     ignored the resume reports the stored pause and fails.
         # The two "existing values preserved" REST rows stay routed below, with their own
-        # reason: their xpass is vacuous on the claim the row names.
+        # reason: their xpass is vacuous on the claim the row names. They XPASSED again in
+        # innet_291026_0257 on the same vacuous Then, so they are not graduated from it. The
+        # vacuity is now removed: the Given creates the package with catalogs, create records
+        # them in package_config, and _assert_unnamed_catalogs_preserved compares the
+        # snapshot's catalogs with the created ones (3.2.7 media-buy/package-update.json,
+        # "Omit to leave catalogs unchanged"). They graduate, with their a2a, mcp and
+        # e2e_rest siblings now graded by the same check, on the first box run of that change.
         _UC026_SHAPE_ROW_ANSWERED_UNSUPPORTED = (
             "answered UNSUPPORTED_FEATURE where the row expects INVALID_REQUEST, on a2a, mcp, "
             "rest and e2e_rest (innet_291026_0008)"
         )
         _UC026_PRESERVATION_UNGRADED = (
-            "the row claims existing array values are preserved, but the Given creates a package "
-            "with none and the effect check reads only the requested budget, so the xpass grades "
-            "nothing about preservation; seeding catalogs would not help yet, because create does "
-            "not persist catalogs into package_config"
+            "the row's xpass in innet_291026_0257 graded nothing about preservation (the package "
+            "was created with no catalogs); the Given now seeds catalogs, create persists them and "
+            "the effect check compares them, so this row graduates on the first box run that "
+            "measures that change"
         )
         _UC026_PARTITION_SELECTIVE: list[tuple[str, set[str], str]] = [
             # Moved here from _UC026_XFAIL_TAGS, narrowed from the whole tag to one row.
@@ -4777,9 +4700,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             ),
             # Replacement: creative_assignments/optimization_goals on every transport, plus
             # the REST "existing values preserved" rows, which are routed for their own
-            # reason (_UC026_PRESERVATION_UNGRADED). Their a2a, mcp and e2e_rest siblings pass
-            # unrouted on the same vacuous Then; a Given that seeds array values is what
-            # grades them, and it waits on create persisting catalogs.
+            # reason (_UC026_PRESERVATION_UNGRADED). Their a2a, mcp and e2e_rest siblings run
+            # unrouted; the Given now seeds catalogs and create persists them, so all four
+            # rows grade preservation (see the note above _UC026_SHAPE_ROW_ANSWERED_UNSUPPORTED).
             #
             # Graduated: replace_catalogs on every transport, and the REST siblings
             # [rest-replace_catalogs / [rest-catalogs provided / [rest-only scalar fields

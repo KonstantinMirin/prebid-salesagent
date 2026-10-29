@@ -281,9 +281,23 @@ def then_results_ordered(ctx: dict, datatable: Sequence[Sequence[object]]) -> No
 # -- Specific format inclusion/exclusion ---------------------------------------
 
 
+def _listed_formats(ctx: dict) -> list[Any]:
+    """The formats of a SUCCESSFUL listing; a refusal fails here instead of listing nothing.
+
+    The exclusion Thens below need this and the inclusion ones do not. ``_get_formats``
+    answers ``[]`` for a refused request, and ``the response is compliant with the
+    list_creative_formats spec`` grades a refusal against the error contract, so a
+    scenario ending in "no formats" or "X should not be returned" held on a seller that
+    refused the filter outright. Every such scenario sends a request the pin admits and
+    expects the format filtered out of a successful response.
+    """
+    resp = require_payload(ctx)
+    return list(resp.formats or [])
+
+
 @then("no formats should be returned")
 def then_no_formats(ctx: dict) -> None:
-    formats = _get_formats(ctx)
+    formats = _listed_formats(ctx)
     assert len(formats) == 0, f"Expected 0 formats, got {len(formats)}"
 
 
@@ -303,7 +317,7 @@ def then_named_returned(ctx: dict, name: str) -> None:
 
 @then(parsers.parse('"{name}" should not be returned'))
 def then_named_not_returned(ctx: dict, name: str) -> None:
-    names = [_fmt_name(f) for f in _get_formats(ctx)]
+    names = [_fmt_name(f) for f in _listed_formats(ctx)]
     assert name not in names, f"Did not expect '{name}' in results, got {names}"
 
 
