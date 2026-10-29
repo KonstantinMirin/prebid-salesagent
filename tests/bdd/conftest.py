@@ -5773,6 +5773,15 @@ _E2E_RESTART_IDENTITY_SQL = (
 )
 
 
+#: The tables the live server's concurrent writers take KEY SHARE row locks on, in the order
+#: they take them, which the reset deletes from FIRST and in this same order. The delivery
+#: scheduler's ``webhook_delivery_log`` INSERT checks its foreign keys in the order its
+#: migration declared them (``1759f70fc76a``): tenants, then principals, then media_buys.
+#: Two transactions that take the same rows in the same order cannot wait on each other in
+#: a cycle, whichever one starts first.
+_E2E_RESET_FIRST = ("tenants", "principals", "media_buys")
+
+
 def _reset_e2e_db(e2e_config) -> None:
     """Flush the live server DB to a clean baseline before an e2e scenario.
 
@@ -5798,25 +5807,29 @@ def _reset_e2e_db(e2e_config) -> None:
     in scenario SETUP and never on an assertion (#2048).
 
     DELETE takes a RowExclusiveLock, which does not conflict with AccessShareLock
-    at all, so that relation-lock cycle has nowhere to form. A ROW-lock cycle
-    remains, with a concurrent writer rather than a reader. The delivery
-    scheduler's ``webhook_delivery_log`` INSERT takes KEY SHARE locks on the rows
-    its foreign keys name -- tenants, then principals, then media_buys -- while
-    the reset deletes rows in ``pg_tables`` order (measured: principals, then
-    media_buys, then tenants). With those orders the server starts waiting first
-    and Postgres picks it as the victim; ``ProtocolWebhookService._conclude``
-    swallows the error and one delivery-log row is lost. When the reset commits
-    first, the INSERT fails its foreign-key check and is swallowed the same way.
-    Neither touches the scenario, and since #2328 neither trips the server's
-    process-wide fail-fast in ``get_db_session``. Nothing enforces the order,
-    though: a ``DeadlockDetected`` back in scenario SETUP means it changed, and
-    #2048 tracks the remaining cycle. Do NOT "fix" a recurrence by retrying or by
-    serialising the suite -- both leave the cycle in place.
+    at all, so that relation-lock cycle has nowhere to form. A ROW-lock cycle is
+    left, with a concurrent writer rather than a reader. The delivery scheduler's
+    ``webhook_delivery_log`` INSERT takes KEY SHARE locks on the rows its foreign
+    keys name -- tenants, then principals, then media_buys. A reset that deleted in
+    ``pg_tables`` order took principals long before tenants, so each side could hold
+    the row the other waited on, and Postgres killed whichever side's deadlock check
+    ran first -- the server's delivery-log write, or the reset in scenario SETUP
+    (innet_291026_0008). That order is the catalog's physical order, which moves
+    whenever a migration rewrites a table's ``pg_class`` row, so nothing held it
+    still. The reset therefore deletes ``_E2E_RESET_FIRST`` before anything else, in
+    the INSERT's order. If the INSERT holds tenants, the reset waits holding nothing
+    the INSERT needs and deletes the committed log row with the rest; if the reset
+    holds tenants first, the INSERT waits, then fails its foreign-key check, and
+    ``ProtocolWebhookService._conclude`` swallows that without touching the scenario
+    (since #2328 it does not trip the server's process-wide fail-fast in
+    ``get_db_session`` either). Do NOT "fix" a recurrence by retrying or by
+    serialising the suite -- both leave a cycle in place; a new writer that takes
+    these rows in another order belongs in the ordering.
 
-    Emptying every table makes the delete order irrelevant, so FK triggers are
-    suppressed for the transaction (``session_replication_role = replica``, SET
-    LOCAL so it reverts at COMMIT) instead of topologically sorting 40+ tables --
-    that is the property ``CASCADE`` was supplying. It needs a superuser, which
+    Emptying every table makes the delete order irrelevant to the end state, so FK
+    triggers are suppressed for the transaction (``session_replication_role =
+    replica``, SET LOCAL so it reverts at COMMIT) instead of topologically sorting
+    40+ tables -- that is the property ``CASCADE`` was supplying. It needs a superuser, which
     the e2e Postgres role already is (run_all_tests.sh calls pg_terminate_backend
     on other backends with it); if that ever stops being true this raises loudly
     rather than silently leaving rows behind.
@@ -5835,8 +5848,10 @@ def _reset_e2e_db(e2e_config) -> None:
                 )
             ]
             if tables:
+                ordered = [t for t in _E2E_RESET_FIRST if t in tables]
+                ordered += sorted(t for t in tables if t not in _E2E_RESET_FIRST)
                 statements = ["SET LOCAL session_replication_role = replica"]
-                statements += [f'DELETE FROM "{t}"' for t in tables]
+                statements += [f'DELETE FROM "{t}"' for t in ordered]
                 conn.exec_driver_sql("; ".join(statements))
                 conn.exec_driver_sql(_E2E_RESTART_IDENTITY_SQL)
     finally:
