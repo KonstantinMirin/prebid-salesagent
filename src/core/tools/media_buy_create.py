@@ -2923,11 +2923,14 @@ async def _create_media_buy_impl(
                                 f"Resolved legacy pricing_option_id for product {package.product_id}: {package.pricing_option_id}"
                             )
 
-            # Get currency from product pricing options (per AdCP spec)
-            request_currency: str | None = None
+            # The buy's one currency. When the buyer sends total_budget, its currency IS the
+            # denomination ("Its currency is the single media-buy denomination",
+            # create_media_buy.mdx, total_budget), so every package -- the first included --
+            # is checked against it below. Otherwise the first package's selected option sets it.
+            request_currency: str | None = req.total_budget.currency if req.total_budget else None
 
-            # First, try to get currency from first package's pricing option
-            if req.packages and len(req.packages) > 0:
+            # Otherwise, the currency of the first package's selected pricing option
+            if not request_currency and req.packages:
                 first_package = req.packages[0]
                 package_product_ids = [first_package.product_id] if first_package.product_id else []
 

@@ -1275,6 +1275,8 @@ def given_currency_configuration(ctx: dict, config: str) -> None:
       spellings of each pair are one request.
     - 1 pkg XYZ: single package, currency the tenant does not hold
     - 1 pkg JPY (GAM no JPY): tenant holds JPY, the ad-server network does not
+    - total_budget USD, 1 pkg EUR: the buyer's total_budget names USD (equal to the
+      package budget sum, as fixed mode requires) while the only package selects EUR
     """
     config = config.strip()
 
@@ -1292,6 +1294,11 @@ def given_currency_configuration(ctx: dict, config: str) -> None:
 
     elif config == "1 pkg JPY (GAM no JPY)":
         _setup_ad_server_currencies(ctx, "JPY", secondary=[])
+
+    elif config == "total_budget USD, 1 pkg EUR":
+        _select_currency_option(ctx, "EUR")
+        kwargs = ctx["request_kwargs"]
+        kwargs["total_budget"] = {"amount": sum(pkg["budget"] for pkg in kwargs["packages"]), "currency": "USD"}
 
     else:
         raise ValueError(f"Unknown currency boundary config: {config}")

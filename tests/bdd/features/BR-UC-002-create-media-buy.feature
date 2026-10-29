@@ -2022,10 +2022,15 @@ Feature: BR-UC-002 Create Media Buy
     # CORRECTED against the pin, for the reason the currency partition outline records: two
     # currencies in one buy are refused TERMS_REJECTED naming the incompatible package.
     # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
+    # total_budget, when sent, sets the denomination: "Its currency is the single media-buy
+    # denomination" and "every selected pricing option MUST declare that currency", so a
+    # first package in another currency is the incompatible package the seller names.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
 
     Examples: Boundary values
       | boundary_point                           | config           | outcome                                  |
       | single package (trivially valid)         | 1 pkg USD        | currency validation passes               |
+      | total_budget currency differs from the only package | total_budget USD, 1 pkg EUR | error TERMS_REJECTED on packages[0].pricing_option_id with suggestion |
       | two packages, same currency              | 2 pkg USD+USD    | currency validation passes               |
       | two packages, same currency (via pricing options) | 2 pkg same pricing_option_id currency | currency validation passes      |
       | two packages, different currencies       | 2 pkg USD+EUR    | error TERMS_REJECTED on packages[1].pricing_option_id with suggestion |
