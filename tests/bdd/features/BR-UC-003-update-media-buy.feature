@@ -1552,35 +1552,52 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Valid partitions
       | partition                        | goals_value                                                                                                                                                             | outcome |
-      | single_metric_goal               | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                | success |
-      | single_event_goal                | [{"kind": "event", "event_sources": [{"event_source_id": "pixel-1", "event_type": "purchase"}]}]                                                                        | success |
-      | multiple_mixed_goals             | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase"}], "priority": 2}]      | success |
-      | metric_with_cost_per_target      | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0.50}}]                                                                                 | success |
-      | metric_with_threshold_rate       | [{"kind": "metric", "metric": "views", "target": {"kind": "threshold_rate", "value": 0.70}}]                                                                            | success |
-      | event_with_roas_target           | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase", "value_field": "value"}], "target": {"kind": "per_ad_spend", "value": 4.0}}]   | success |
-      | event_with_maximize_value        | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase", "value_field": "value"}], "target": {"kind": "maximize_value"}}]                | success |
-      | reach_with_frequency             | [{"kind": "metric", "metric": "reach", "reach_unit": "individuals", "target_frequency": {"min": 1, "max": 3, "window": {"interval": 7, "unit": "days"}}}]              | success |
-      | completed_views_with_duration    | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 15}]                                                                                          | success |
-      | event_with_attribution_window    | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase"}], "attribution_window": {"post_click": {"interval": 7, "unit": "days"}, "post_view": {"interval": 1, "unit": "days"}}}] | success |
-      | event_multi_source_dedup         | [{"kind": "event", "event_sources": [{"event_source_id": "pixel", "event_type": "purchase", "value_field": "value"}, {"event_source_id": "api", "event_type": "purchase", "value_field": "order_total", "value_factor": 0.01}]}] | success |
-      | goals_with_explicit_priorities   | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "metric", "metric": "views", "priority": 2}]                                                          | success |
-      | refund_event_with_negative_factor | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "refund", "value_field": "value", "value_factor": -1}]}]                                   | success |
+      | single_metric_goal               | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                | error UNSUPPORTED_FEATURE with suggestion |
+      | single_event_goal                | [{"kind": "event", "event_sources": [{"event_source_id": "pixel-1", "event_type": "purchase"}]}]                                                                        | error UNSUPPORTED_FEATURE with suggestion |
+      | multiple_mixed_goals             | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase"}], "priority": 2}]      | error UNSUPPORTED_FEATURE with suggestion |
+      | metric_with_cost_per_target      | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0.50}}]                                                                                 | error UNSUPPORTED_FEATURE with suggestion |
+      | metric_with_threshold_rate       | [{"kind": "metric", "metric": "views", "target": {"kind": "threshold_rate", "value": 0.70}}]                                                                            | error UNSUPPORTED_FEATURE with suggestion |
+      | event_with_roas_target           | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase", "value_field": "value"}], "target": {"kind": "per_ad_spend", "value": 4.0}}]   | error UNSUPPORTED_FEATURE with suggestion |
+      | event_with_maximize_value        | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase", "value_field": "value"}], "target": {"kind": "maximize_value"}}]                | error UNSUPPORTED_FEATURE with suggestion |
+      | reach_with_frequency             | [{"kind": "metric", "metric": "reach", "reach_unit": "individuals", "target_frequency": {"min": 1, "max": 3, "window": {"interval": 7, "unit": "days"}}}]              | error UNSUPPORTED_FEATURE with suggestion |
+      | completed_views_with_duration    | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 15}]                                                                                          | error UNSUPPORTED_FEATURE with suggestion |
+      | event_with_attribution_window    | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase"}], "attribution_window": {"post_click": {"interval": 7, "unit": "days"}, "post_view": {"interval": 1, "unit": "days"}}}] | error UNSUPPORTED_FEATURE with suggestion |
+      | event_multi_source_dedup         | [{"kind": "event", "event_sources": [{"event_source_id": "pixel", "event_type": "purchase", "value_field": "value"}, {"event_source_id": "api", "event_type": "purchase", "value_field": "order_total", "value_factor": 0.01}]}] | error UNSUPPORTED_FEATURE with suggestion |
+      | goals_with_explicit_priorities   | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "metric", "metric": "views", "priority": 2}]                                                          | error UNSUPPORTED_FEATURE with suggestion |
+      | refund_event_with_negative_factor | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "refund", "value_field": "value", "value_factor": -1}]}]                                   | error UNSUPPORTED_FEATURE with suggestion |
 
     Examples: Invalid partitions
       | partition              | goals_value                                                                                                        | outcome                                      |
-      | empty_array            | []                                                                                                                  | error with suggestion                        |
-      | missing_kind           | [{"metric": "clicks"}]                                                                                              | error with suggestion                        |
-      | invalid_kind           | [{"kind": "custom"}]                                                                                                | error with suggestion                        |
-      | metric_missing_metric  | [{"kind": "metric"}]                                                                                                | error with suggestion                        |
-      | invalid_metric_enum    | [{"kind": "metric", "metric": "conversions"}]                                                                       | error with suggestion                        |
-      | event_missing_sources  | [{"kind": "event"}]                                                                                                 | error with suggestion                        |
-      | event_sources_empty    | [{"kind": "event", "event_sources": []}]                                                                            | error with suggestion                        |
-      | target_value_zero      | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0}}]                                | error with suggestion                        |
-      | target_value_negative  | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": -1.0}}]                             | error with suggestion                        |
-      | priority_zero          | [{"kind": "metric", "metric": "clicks", "priority": 0}]                                                             | error with suggestion                        |
-      | priority_negative      | [{"kind": "metric", "metric": "clicks", "priority": -1}]                                                            | error with suggestion                        |
-      | view_duration_zero     | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 0}]                                       | error with suggestion                        |
-      | event_source_id_empty  | [{"kind": "event", "event_sources": [{"event_source_id": "", "event_type": "purchase"}]}]                            | error with suggestion                        |
+      | empty_array            | []                                                                                                                  | error INVALID_REQUEST on packages[0].optimization_goals with suggestion |
+      | missing_kind           | [{"metric": "clicks"}]                                                                                              | error INVALID_REQUEST on packages[0].optimization_goals[0] with suggestion |
+      | invalid_kind           | [{"kind": "custom"}]                                                                                                | error INVALID_REQUEST on packages[0].optimization_goals[0] with suggestion |
+      | metric_missing_metric  | [{"kind": "metric"}]                                                                                                | error INVALID_REQUEST on packages[0].optimization_goals[0].metric with suggestion |
+      | invalid_metric_enum    | [{"kind": "metric", "metric": "conversions"}]                                                                       | error INVALID_REQUEST on packages[0].optimization_goals[0].metric with suggestion |
+      | event_missing_sources  | [{"kind": "event"}]                                                                                                 | error INVALID_REQUEST on packages[0].optimization_goals[0].event_sources with suggestion |
+      | event_sources_empty    | [{"kind": "event", "event_sources": []}]                                                                            | error INVALID_REQUEST on packages[0].optimization_goals[0].event_sources with suggestion |
+      | target_value_zero      | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0}}]                                | error INVALID_REQUEST on packages[0].optimization_goals[0].target.value with suggestion |
+      | target_value_negative  | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": -1.0}}]                             | error INVALID_REQUEST on packages[0].optimization_goals[0].target.value with suggestion |
+      | priority_zero          | [{"kind": "metric", "metric": "clicks", "priority": 0}]                                                             | error INVALID_REQUEST on packages[0].optimization_goals[0].priority with suggestion |
+      | priority_negative      | [{"kind": "metric", "metric": "clicks", "priority": -1}]                                                            | error INVALID_REQUEST on packages[0].optimization_goals[0].priority with suggestion |
+      | view_duration_zero     | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 0}]                                       | error INVALID_REQUEST on packages[0].optimization_goals[0].view_duration_seconds with suggestion |
+      | event_source_id_empty  | [{"kind": "event", "event_sources": [{"event_source_id": "", "event_type": "purchase"}]}]                            | error INVALID_REQUEST on packages[0].optimization_goals[0].event_sources[0].event_source_id with suggestion |
+    # REGROUNDED to the pin. The product this outline seeds declares neither
+    # metric_optimization nor conversion_tracking, and core/product.json makes those the
+    # capability: metric_optimization "Presence indicates the product supports
+    # optimization_goals with kind: 'metric'", and "event optimization goals are only
+    # accepted on products with conversion_tracking". So the schema-valid goals (the
+    # "Valid partitions", which expected success) are refused with UNSUPPORTED_FEATURE.
+    # The schema-invalid goals are refused before that, by the request schema, as
+    # INVALID_REQUEST on the member that broke it (package-update.json minItems 1;
+    # optimization-goal.json kind discriminator, metric enum, event_sources minItems 1,
+    # target.value exclusiveMinimum 0, priority minimum 1, view_duration_seconds
+    # exclusiveMinimum 0, event_source_id minLength 1). The bare "error with suggestion"
+    # these rows carried was also satisfied by the UNSUPPORTED_FEATURE refusal, so it
+    # could not tell a schema rejection from the capability one.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/metric_optimization
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/conversion_tracking
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/optimization-goal.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/optimization_goals
 
   @T-UC-003-boundary-optimization-goals @boundary @optimization_goals
   Scenario Outline: Optimization goals boundary validation - <boundary_point>
@@ -1697,20 +1714,36 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Boundary values
       | boundary_point                                                            | kw_value                                                                     | outcome                  |
-      | array length 0 (empty)                                                    | []                                                                            | error with suggestion    |
-      | array length 1 (minimum valid)                                            | [{"keyword": "laptop", "match_type": "phrase"}]                               | success                  |
-      | keyword length 0 (empty string)                                           | [{"keyword": "", "match_type": "broad"}]                                      | error with suggestion    |
-      | keyword length 1 (single char)                                            | [{"keyword": "a", "match_type": "broad"}]                                     | success                  |
-      | match_type = 'broad'                                                      | [{"keyword": "shoes", "match_type": "broad"}]                                 | success                  |
-      | match_type = 'phrase'                                                     | [{"keyword": "shoes", "match_type": "phrase"}]                                | success                  |
-      | match_type = 'exact'                                                      | [{"keyword": "shoes", "match_type": "exact"}]                                 | success                  |
-      | match_type = 'unknown'                                                    | [{"keyword": "shoes", "match_type": "unknown"}]                               | error with suggestion    |
-      | bid_price = -0.01                                                         | [{"keyword": "shoes", "match_type": "exact", "bid_price": -0.01}]             | error with suggestion    |
-      | bid_price = 0                                                             | [{"keyword": "shoes", "match_type": "broad", "bid_price": 0}]                 | success                  |
-      | bid_price = 0.01                                                          | [{"keyword": "shoes", "match_type": "exact", "bid_price": 0.01}]              | success                  |
-      | keyword_targets_add WITH targeting_overlay.keyword_targets                | <with overlay present>                                                        | error with suggestion    |
-      | keyword_targets_add WITHOUT targeting_overlay.keyword_targets             | [{"keyword": "shoes", "match_type": "broad"}]                                 | success                  |
-      | keyword_targets_add WITH targeting_overlay.negative_keywords (cross-dimension) | [{"keyword": "shoes", "match_type": "broad"}]                           | success                  |
+      | array length 0 (empty)                                                    | []                                                                            | error INVALID_REQUEST on packages[0].keyword_targets_add with suggestion |
+      | array length 1 (minimum valid)                                            | [{"keyword": "laptop", "match_type": "phrase"}]                               | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword length 0 (empty string)                                           | [{"keyword": "", "match_type": "broad"}]                                      | error INVALID_REQUEST on packages[0].keyword_targets_add[0].keyword with suggestion |
+      | keyword length 1 (single char)                                            | [{"keyword": "a", "match_type": "broad"}]                                     | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'broad'                                                      | [{"keyword": "shoes", "match_type": "broad"}]                                 | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'phrase'                                                     | [{"keyword": "shoes", "match_type": "phrase"}]                                | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'exact'                                                      | [{"keyword": "shoes", "match_type": "exact"}]                                 | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'unknown'                                                    | [{"keyword": "shoes", "match_type": "unknown"}]                               | error INVALID_REQUEST on packages[0].keyword_targets_add[0].match_type with suggestion |
+      | bid_price = -0.01                                                         | [{"keyword": "shoes", "match_type": "exact", "bid_price": -0.01}]             | error INVALID_REQUEST on packages[0].keyword_targets_add[0].bid_price with suggestion |
+      | bid_price = 0                                                             | [{"keyword": "shoes", "match_type": "broad", "bid_price": 0}]                 | error UNSUPPORTED_FEATURE with suggestion |
+      | bid_price = 0.01                                                          | [{"keyword": "shoes", "match_type": "exact", "bid_price": 0.01}]              | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword_targets_add WITH targeting_overlay.keyword_targets                | <with overlay present>                                                        | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword_targets_add WITHOUT targeting_overlay.keyword_targets             | [{"keyword": "shoes", "match_type": "broad"}]                                 | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword_targets_add WITH targeting_overlay.negative_keywords (cross-dimension) | <with targeting_overlay.negative_keywords present>                     | error UNSUPPORTED_FEATURE with suggestion |
+    # REGROUNDED to the pin for this seller, which declares no keyword targeting.
+    # targeting.mdx: "Seller must declare execution.targeting.keyword_targets in
+    # get_adcp_capabilities"; core/targeting.json: a fresh create/update "MUST be applied
+    # exactly or rejected". So every schema-valid keyword_targets_add is refused with
+    # UNSUPPORTED_FEATURE (the rows that said success), the same answer
+    # @T-UC-003-alt-keyword-ops gives. Each schema-invalid row is refused earlier, by the
+    # request schema, as INVALID_REQUEST on the member that broke it (minItems 1, keyword
+    # minLength 1, match-type enum, bid_price minimum 0); the bare "error with suggestion"
+    # these rows carried was satisfied by the UNSUPPORTED_FEATURE refusal too, so it could
+    # not tell the two apart. Both overlay rows now send their overlay (the cross-dimension
+    # row used to send none). targeting.mdx's SHOULD-level conflict check for
+    # targeting_overlay.keyword_targets beside keyword_targets_add is not reachable on a
+    # seller that applies neither, so the WITH row is refused as unsupported too.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/keyword_targets_add
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/targeting.mdx section="keyword_targets"
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/targeting.mdx section="Managing keywords after launch"
 
   @T-UC-003-partition-keyword-targets-remove @partition @keyword_targets_remove
   Scenario Outline: Keyword targets remove partition validation - <partition>
@@ -1763,18 +1796,24 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Boundary values
       | boundary_point                                                                | kw_value                                           | outcome                  |
-      | array length 0 (empty)                                                        | []                                                  | error with suggestion    |
-      | array length 1 (minimum valid)                                                | [{"keyword": "laptop", "match_type": "phrase"}]     | success                  |
-      | keyword length 0 (empty string)                                               | [{"keyword": "", "match_type": "broad"}]             | error with suggestion    |
-      | keyword length 1 (single char)                                                | [{"keyword": "a", "match_type": "broad"}]            | success                  |
-      | match_type = 'broad'                                                          | [{"keyword": "shoes", "match_type": "broad"}]        | success                  |
-      | match_type = 'phrase'                                                         | [{"keyword": "shoes", "match_type": "phrase"}]       | success                  |
-      | match_type = 'exact'                                                          | [{"keyword": "shoes", "match_type": "exact"}]        | success                  |
-      | match_type = 'unknown'                                                        | [{"keyword": "shoes", "match_type": "unknown"}]      | error with suggestion    |
-      | keyword_targets_remove WITH targeting_overlay.keyword_targets                 | <with overlay present>                               | error with suggestion    |
-      | keyword_targets_remove WITHOUT targeting_overlay.keyword_targets              | [{"keyword": "shoes", "match_type": "broad"}]        | success                  |
-      | remove pair that exists in current list                                       | [{"keyword": "shoes", "match_type": "broad"}]        | success                  |
-      | remove pair that does NOT exist in current list (no-op)                       | [{"keyword": "nonexistent", "match_type": "exact"}]  | success                  |
+      | array length 0 (empty)                                                        | []                                                  | error INVALID_REQUEST on packages[0].keyword_targets_remove with suggestion |
+      | array length 1 (minimum valid)                                                | [{"keyword": "laptop", "match_type": "phrase"}]     | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword length 0 (empty string)                                               | [{"keyword": "", "match_type": "broad"}]             | error INVALID_REQUEST on packages[0].keyword_targets_remove[0].keyword with suggestion |
+      | keyword length 1 (single char)                                                | [{"keyword": "a", "match_type": "broad"}]            | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'broad'                                                          | [{"keyword": "shoes", "match_type": "broad"}]        | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'phrase'                                                         | [{"keyword": "shoes", "match_type": "phrase"}]       | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'exact'                                                          | [{"keyword": "shoes", "match_type": "exact"}]        | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'unknown'                                                        | [{"keyword": "shoes", "match_type": "unknown"}]      | error INVALID_REQUEST on packages[0].keyword_targets_remove[0].match_type with suggestion |
+      | keyword_targets_remove WITH targeting_overlay.keyword_targets                 | <with overlay present>                               | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword_targets_remove WITHOUT targeting_overlay.keyword_targets              | [{"keyword": "shoes", "match_type": "broad"}]        | error UNSUPPORTED_FEATURE with suggestion |
+      | remove pair that exists in current list                                       | [{"keyword": "shoes", "match_type": "broad"}]        | error UNSUPPORTED_FEATURE with suggestion |
+      | remove pair that does NOT exist in current list (no-op)                       | [{"keyword": "nonexistent", "match_type": "exact"}]  | error UNSUPPORTED_FEATURE with suggestion |
+    # REGROUNDED on the grounds given under @T-UC-003-boundary-keyword-targets-add: removal
+    # is as unsupported as addition on this seller (@T-UC-003-alt-keyword-remove), so a
+    # schema-valid keyword_targets_remove is UNSUPPORTED_FEATURE and a schema-invalid one is
+    # INVALID_REQUEST on the broken member. The exists / no-op pair is the SHOULD of a seller
+    # that holds a keyword list, which this one does not; both rows are refused alike.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/keyword_targets_remove
 
   @T-UC-003-partition-negative-keywords-add @partition @negative_keywords_add
   Scenario Outline: Negative keywords add partition validation - <partition>
@@ -1827,18 +1866,27 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Boundary values
       | boundary_point                                                                  | nk_value                                             | outcome                  |
-      | array length 0 (empty)                                                          | []                                                    | error with suggestion    |
-      | array length 1 (minimum valid)                                                  | [{"keyword": "discount", "match_type": "exact"}]      | success                  |
-      | keyword length 0 (empty string)                                                 | [{"keyword": "", "match_type": "broad"}]               | error with suggestion    |
-      | keyword length 1 (single char)                                                  | [{"keyword": "x", "match_type": "broad"}]              | success                  |
-      | match_type = 'broad'                                                            | [{"keyword": "cheap", "match_type": "broad"}]          | success                  |
-      | match_type = 'phrase'                                                           | [{"keyword": "cheap", "match_type": "phrase"}]         | success                  |
-      | match_type = 'exact'                                                            | [{"keyword": "cheap", "match_type": "exact"}]          | success                  |
-      | match_type = 'unknown'                                                          | [{"keyword": "cheap", "match_type": "unknown"}]        | error with suggestion    |
-      | negative_keywords_add WITH targeting_overlay.negative_keywords                  | <with overlay present>                                 | error with suggestion    |
-      | negative_keywords_add WITHOUT targeting_overlay.negative_keywords               | [{"keyword": "cheap", "match_type": "broad"}]          | success                  |
-      | add pair that already exists in list (duplicate no-op)                          | [{"keyword": "cheap", "match_type": "broad"}]          | success                  |
-      | negative_keywords_add WITH targeting_overlay.keyword_targets (cross-dimension)  | [{"keyword": "cheap", "match_type": "broad"}]          | success                  |
+      | array length 0 (empty)                                                          | []                                                    | error INVALID_REQUEST on packages[0].negative_keywords_add with suggestion |
+      | array length 1 (minimum valid)                                                  | [{"keyword": "discount", "match_type": "exact"}]      | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword length 0 (empty string)                                                 | [{"keyword": "", "match_type": "broad"}]               | error INVALID_REQUEST on packages[0].negative_keywords_add[0].keyword with suggestion |
+      | keyword length 1 (single char)                                                  | [{"keyword": "x", "match_type": "broad"}]              | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'broad'                                                            | [{"keyword": "cheap", "match_type": "broad"}]          | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'phrase'                                                           | [{"keyword": "cheap", "match_type": "phrase"}]         | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'exact'                                                            | [{"keyword": "cheap", "match_type": "exact"}]          | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'unknown'                                                          | [{"keyword": "cheap", "match_type": "unknown"}]        | error INVALID_REQUEST on packages[0].negative_keywords_add[0].match_type with suggestion |
+      | negative_keywords_add WITH targeting_overlay.negative_keywords                  | <with overlay present>                                 | error UNSUPPORTED_FEATURE with suggestion |
+      | negative_keywords_add WITHOUT targeting_overlay.negative_keywords               | [{"keyword": "cheap", "match_type": "broad"}]          | error UNSUPPORTED_FEATURE with suggestion |
+      | add pair that already exists in list (duplicate no-op)                          | [{"keyword": "cheap", "match_type": "broad"}]          | error UNSUPPORTED_FEATURE with suggestion |
+      | negative_keywords_add WITH targeting_overlay.keyword_targets (cross-dimension)  | <with targeting_overlay.keyword_targets present>       | error UNSUPPORTED_FEATURE with suggestion |
+    # REGROUNDED to the pin for this seller, which declares no negative-keyword support
+    # (targeting.mdx: "Seller must declare execution.targeting.negative_keywords"), on the
+    # grounds given under @T-UC-003-boundary-keyword-targets-add: schema-valid adds are
+    # refused UNSUPPORTED_FEATURE, as @T-UC-003-alt-negative-keywords is; schema-invalid
+    # ones are INVALID_REQUEST on the broken member (minItems 1, keyword minLength 1,
+    # match-type enum). The duplicate no-op is the SHOULD of a seller that applies the
+    # list, which this one does not. The cross-dimension row now sends its overlay.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/negative_keywords_add
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/targeting.mdx section="negative_keywords"
 
   @T-UC-003-partition-negative-keywords-remove @partition @negative_keywords_remove
   Scenario Outline: Negative keywords remove partition validation - <partition>
@@ -1891,18 +1939,23 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Boundary values
       | boundary_point                                                                      | nk_value                                              | outcome                  |
-      | array length 0 (empty)                                                              | []                                                     | error with suggestion    |
-      | array length 1 (minimum valid)                                                      | [{"keyword": "discount", "match_type": "exact"}]       | success                  |
-      | keyword length 0 (empty string)                                                     | [{"keyword": "", "match_type": "broad"}]                | error with suggestion    |
-      | keyword length 1 (single char)                                                      | [{"keyword": "x", "match_type": "broad"}]               | success                  |
-      | match_type = 'broad'                                                                | [{"keyword": "cheap", "match_type": "broad"}]           | success                  |
-      | match_type = 'phrase'                                                               | [{"keyword": "cheap", "match_type": "phrase"}]          | success                  |
-      | match_type = 'exact'                                                                | [{"keyword": "cheap", "match_type": "exact"}]           | success                  |
-      | match_type = 'unknown'                                                              | [{"keyword": "cheap", "match_type": "unknown"}]         | error with suggestion    |
-      | negative_keywords_remove WITH targeting_overlay.negative_keywords                   | <with overlay present>                                  | error with suggestion    |
-      | negative_keywords_remove WITHOUT targeting_overlay.negative_keywords                | [{"keyword": "cheap", "match_type": "broad"}]           | success                  |
-      | remove pair that exists in current list                                             | [{"keyword": "cheap", "match_type": "broad"}]           | success                  |
-      | remove pair that does NOT exist in current list (no-op)                             | [{"keyword": "nonexistent", "match_type": "exact"}]     | success                  |
+      | array length 0 (empty)                                                              | []                                                     | error INVALID_REQUEST on packages[0].negative_keywords_remove with suggestion |
+      | array length 1 (minimum valid)                                                      | [{"keyword": "discount", "match_type": "exact"}]       | error UNSUPPORTED_FEATURE with suggestion |
+      | keyword length 0 (empty string)                                                     | [{"keyword": "", "match_type": "broad"}]                | error INVALID_REQUEST on packages[0].negative_keywords_remove[0].keyword with suggestion |
+      | keyword length 1 (single char)                                                      | [{"keyword": "x", "match_type": "broad"}]               | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'broad'                                                                | [{"keyword": "cheap", "match_type": "broad"}]           | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'phrase'                                                               | [{"keyword": "cheap", "match_type": "phrase"}]          | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'exact'                                                                | [{"keyword": "cheap", "match_type": "exact"}]           | error UNSUPPORTED_FEATURE with suggestion |
+      | match_type = 'unknown'                                                              | [{"keyword": "cheap", "match_type": "unknown"}]         | error INVALID_REQUEST on packages[0].negative_keywords_remove[0].match_type with suggestion |
+      | negative_keywords_remove WITH targeting_overlay.negative_keywords                   | <with overlay present>                                  | error UNSUPPORTED_FEATURE with suggestion |
+      | negative_keywords_remove WITHOUT targeting_overlay.negative_keywords                | [{"keyword": "cheap", "match_type": "broad"}]           | error UNSUPPORTED_FEATURE with suggestion |
+      | remove pair that exists in current list                                             | [{"keyword": "cheap", "match_type": "broad"}]           | error UNSUPPORTED_FEATURE with suggestion |
+      | remove pair that does NOT exist in current list (no-op)                             | [{"keyword": "nonexistent", "match_type": "exact"}]     | error UNSUPPORTED_FEATURE with suggestion |
+    # REGROUNDED on the grounds given under @T-UC-003-boundary-negative-keywords-add:
+    # a schema-valid negative_keywords_remove is UNSUPPORTED_FEATURE on this seller
+    # (@T-UC-003-alt-negative-keywords) and a schema-invalid one is INVALID_REQUEST on the
+    # broken member; the exists / no-op pair is refused alike.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/negative_keywords_remove
 
   @T-UC-003-partition-targeting-overlay @partition @targeting_overlay
   Scenario Outline: Targeting overlay partition validation - <partition>

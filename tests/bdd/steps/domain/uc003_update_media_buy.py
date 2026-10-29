@@ -8,6 +8,7 @@ conftest's _harness_env.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -1753,9 +1754,10 @@ def given_frequency_cap_config(ctx: dict, freq_cap_config: str) -> None:
 def _set_keyword_field_from_param(ctx: dict, field: str, raw_value: str) -> None:
     """Set a keyword operation field from a parameterized scenario value.
 
-    Handles JSON arrays and special sentinel values like
-    '<with targeting_overlay.keyword_targets present>' and
-    '<with overlay present>' which inject a conflict condition.
+    Handles JSON arrays and the overlay sentinels. ``<with targeting_overlay.<dim> present>``
+    puts that overlay dimension beside the operation, so a row can name the conflicting
+    dimension or the other one (the cross-dimension rows); ``<with overlay present>`` means
+    the operation's own dimension.
     """
     import json
 
@@ -1766,17 +1768,15 @@ def _set_keyword_field_from_param(ctx: dict, field: str, raw_value: str) -> None
     stripped = raw_value.strip()
 
     if stripped.startswith("<with"):
-        # Conflict sentinel: inject both the overlay field AND the add/remove field
         overlay = pkg.setdefault("targeting_overlay", {})
         if isinstance(overlay, str):
             overlay = json.loads(overlay)
             pkg["targeting_overlay"] = overlay
-        # The field name determines which overlay dimension conflicts
-        if "keyword_targets" in field:
-            overlay["keyword_targets"] = [{"keyword": "conflict", "match_type": "broad"}]
-        elif "negative_keywords" in field:
-            overlay["negative_keywords"] = [{"keyword": "conflict", "match_type": "broad"}]
-        # Also set the add/remove field to trigger the conflict validation
+        named = re.fullmatch(r"<with targeting_overlay\.(keyword_targets|negative_keywords) present>", stripped)
+        own = "keyword_targets" if field.startswith("keyword_targets") else "negative_keywords"
+        assert named or stripped == "<with overlay present>", f"unrecognised overlay sentinel {stripped!r}"
+        dimension = named.group(1) if named else own
+        overlay[dimension] = [{"keyword": "conflict", "match_type": "broad"}]
         pkg[field] = [{"keyword": "shoes", "match_type": "broad"}]
     else:
         pkg[field] = json.loads(stripped)
