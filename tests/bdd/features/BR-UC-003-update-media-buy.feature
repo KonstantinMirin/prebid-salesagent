@@ -78,12 +78,21 @@ Feature: BR-UC-003 Update Media Buy
     | field        | value       |
     | media_buy_id | mb_existing |
     | start_time   | asap        |
+    And the existing media buy has start_time "2099-01-01T00:00:00Z" and end_time "2099-02-01T00:00:00Z"
     And the existing end_time is in the future
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy success spec
     And the response status should be "completed"
+    And the media buy's stored start_time should be the instant the update took effect
     # POST-S1: Buyer knows start_time updated to current UTC time
     # POST-S4: Unambiguous success
+    # LOCAL CORRECTION: POST-S1 was never checked, so a seller that dropped "asap" or stored
+    # the literal passed. The buy now starts far in the future, and the stored start must be
+    # the instant the update took effect: core/start-timing.json "asap" is "Start campaign as
+    # soon as possible", and update-media-buy-response.json implementation_date is the
+    # "ISO 8601 timestamp when changes take effect". Both instants are the seller's own clock.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/start-timing.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
 
   @T-UC-003-alt-budget @alt-flow @budget @post-s1 @post-s4 @post-s5
   Scenario: Update campaign-level budget

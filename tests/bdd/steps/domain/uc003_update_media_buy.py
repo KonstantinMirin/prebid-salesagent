@@ -149,6 +149,22 @@ def _stored_package(ctx: dict, label: str) -> tuple[Any, dict[str, Any]]:
         return row.budget, dict(row.package_config or {})
 
 
+def _stored_buy_fields(ctx: dict, *names: str) -> tuple[Any, ...]:
+    """The persisted media buy's *names* columns, read through the repository.
+
+    The buy-level sibling of :func:`_stored_package`, for the same reason: the claim is
+    what the seller RECORDED, and a response can report a value the seller never wrote.
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    mb = _existing_media_buy(ctx)
+    with MediaBuyUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.media_buys is not None
+        row = uow.media_buys.get_by_id(mb.media_buy_id)
+        assert row is not None, f"no persisted media buy {mb.media_buy_id!r}"
+        return tuple(getattr(row, name) for name in names)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — Background + request construction
 # ═══════════════════════════════════════════════════════════════════════
@@ -1006,6 +1022,29 @@ def then_start_end_time_unchanged(ctx: dict) -> None:
         actual_end = actual_end.astimezone(UTC)
     assert actual_start == original_start, f"start_time changed: expected {original_start}, got {actual_start}"
     assert actual_end == original_end, f"end_time changed: expected {original_end}, got {actual_end}"
+
+
+@then("the media buy's stored start_time should be the instant the update took effect")
+def then_stored_start_is_applied_instant(ctx: dict) -> None:
+    """A start_time of "asap" is stored as the instant the update took effect.
+
+    core/start-timing.json: "asap" is "Start campaign as soon as possible", and
+    update-media-buy-response.json ``implementation_date`` is the "ISO 8601 timestamp when
+    changes take effect". Both instants come from the seller's clock, so the comparison
+    holds on e2e_rest too. The scenario seeds a start far from now, so a seller that kept
+    the prior start, or stored anything but the applied instant, falls outside the tolerance.
+    """
+    from datetime import datetime
+
+    from tests.bdd.steps.domain.uc002_invariants import _ASAP_TOLERANCE_SECONDS, _as_utc
+
+    applied = datetime.fromisoformat(str(wire_field(ctx, "implementation_date")).replace("Z", "+00:00"))
+    (stored,) = _stored_buy_fields(ctx, "start_time")
+    assert stored is not None, "the seller stored no start_time for an 'asap' update"
+    drift = abs((_as_utc(stored) - _as_utc(applied)).total_seconds())
+    assert drift <= _ASAP_TOLERANCE_SECONDS, (
+        f"stored start_time {stored} is {drift:.0f}s from the update's implementation_date {applied}"
+    )
 
 
 @then("the response should contain media_buy_id")
