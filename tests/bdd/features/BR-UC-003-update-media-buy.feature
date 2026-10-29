@@ -2751,33 +2751,19 @@ Feature: BR-UC-003 Update Media Buy
     # invalid_transitions: re-cancel of terminal canceled buy is NOT_CANCELLABLE, not silent success
     # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/invalid_transitions.yaml phase=double_cancel step=second_cancel
 
-  # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
-    # Gated upstream by `requires_capability creative.has_creative_library`, which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
-    # and feeding a guard a false claim is the guard grading a fiction. Declaring it
-    # restores the claim and the coverage with it; that decision is salesagent-o1wxm,
-    # because declaring a capability is a get_adcp_capabilities behaviour change and this
-    # repo declares a posture only where the implementation backs it.
-    # The `@storyboard-v3.1` TAG is gone and nothing else is: every Given, When and Then
-    # below still runs on every transport.
-  @T-UC-003-storyboard-creative-fate-after-cancellation @v3-1 @cancellation @creative-library @lifecycle-decoupling
-  Scenario: Canceling a media buy releases package-creative assignments but leaves creatives in the library with review state intact
-    Given a media buy has been canceled
-    And the canceled buy had a package with creative assignments
-    When the buyer subsequently calls list_creatives for the same account
-    Then the response is compliant with the list_creatives spec
-    And the creatives that were assigned to the canceled buy's package should still appear in the library
-    And the creatives' review status should be unchanged from before the cancellation
-    And the creatives should NOT be auto-flipped to status "rejected" as a side effect of the cancellation
-    And the creatives should remain reusable by creative_id in a subsequent create_media_buy or sync_creatives
-    # creative_fate_after_cancellation storyboard: per the creative library model,
-    # creative state and assignment state are SEPARATE. Canceling a buy releases
-    # the package-creative assignments but the underlying creatives remain in the
-    # library, reusable by creative_id in a subsequent create_media_buy or
-    # sync_creatives. A seller MUST NOT implicitly reject a creative because its
-    # containing buy was canceled -- a rejection MUST be a deliberate review
-    # decision with its own rejection_reason.
-    # creative_fate_after_cancellation: creative lifecycle decoupled from media buy lifecycle
-    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/creative_fate_after_cancellation.yaml phase=verify_creative_persists_post_cancel step=list_creatives_after_cancel
+  # REMOVED: T-UC-003-storyboard-creative-fate-after-cancellation ("Canceling a media buy
+  # releases package-creative assignments but leaves creatives in the library with review
+  # state intact"). It graded a creative-LIBRARY obligation, and the pin attaches that
+  # obligation to a declaration this seller does not make. creative-libraries.mdx: "A
+  # creative library is hosted by any agent that declares has_creative_library: true in its
+  # capabilities", and "Inline package creatives from a seller that does not advertise a
+  # creative library are not library creatives ... does not advertise independent library
+  # management or cross-buy reuse". The storyboard it came from is gated on the same
+  # declaration (requires_capability creative.has_creative_library equals true) and grades a
+  # non-declaring seller not_applicable, so for this seller the pin has no answer to grade.
+  # Restore it from that storyboard if salesagent-o1wxm declares the capability.
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-libraries.mdx
+  # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/creative_fate_after_cancellation.yaml
 
   @T-UC-003-partition-revision @partition @revision @schema-v3.1
   Scenario Outline: Revision optimistic-concurrency partition validation - <partition>
