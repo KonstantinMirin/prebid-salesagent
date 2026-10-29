@@ -1739,6 +1739,59 @@ Feature: BR-UC-006 Sync Creative Assets
     # pointer to a media_buy_seller creative_sync phase names nothing at the pin.
     # @source repo=adcp ref=v3.2.7 path=static/compliance/source/universal/schema-validation.yaml phase=format_option_reconciliation
 
+  @T-UC-006-canonical-identity-roundtrip-on-sync @schema-v3.2 @format-kind @format-option-ref
+  Scenario Outline: A creative synced by format_kind with a <scope>-scope format_option_ref is listed back with that identity intact
+    Given the Buyer is authenticated
+    And the buyer syncs a creative identified by canonical kind "image" with a <scope>-scope format_option_ref
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "created"
+    And listing the library returns the creative on format_kind "image" with the format_option_ref the buyer last sent, scope included
+
+    Examples: the two scopes the reference discriminates between
+      | scope     |
+      | product   |
+      | publisher |
+
+    # canonical-formats-migration.mdx's completion checklist: "Preview, sync, library, and
+    # delivery paths preserve `format_kind` and `format_option_ref`." The checklist item
+    # carries no RFC 2119 keyword; the force comes from the schemas it points at. The sync
+    # request's item (core/creative-asset.json) carries the canonical arm, and
+    # list-creatives-response.json declares format_kind and format_option_ref on every
+    # listed creative. sync-creatives-response.json carries no format identity per
+    # creative, so a following list_creatives is the only place the buyer can observe that
+    # the sync kept it. That makes this sync-then-list scenario the only way the sync half
+    # can be graded. The library-side roundtrip (@T-UC-018-canonical-format-option-ref-roundtrip)
+    # seeds its creative with a factory and never drives the sync write path.
+    #
+    # Both scopes are rows because core/format-option-ref.json discriminates on `scope`,
+    # and a product-scope and a publisher-scope option with the same format_option_id are
+    # different options. A single row would pass on a seller that hard-coded the other.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats-migration.mdx section="Completion checklist"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-option-ref.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-response.json pointer=/properties/creatives/items property=format_option_ref
+
+  @T-UC-006-canonical-identity-resync-replaces-option @schema-v3.2 @format-kind @format-option-ref
+  Scenario: Re-syncing a canonical creative onto a different format_option_ref stores and lists the new option
+    Given the Buyer is authenticated
+    And the buyer syncs a creative identified by canonical kind "image" with a product-scope format_option_ref
+    And the creative already exists with identical data
+    And the resync narrows the same creative to a publisher-scope format_option_ref
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "updated"
+    And listing the library returns the creative on format_kind "image" with the format_option_ref the buyer last sent, scope included
+
+    # The update half of the same checklist item. The first sync goes through the
+    # transport (the "identical data" Given), so the stored row is exactly what the write
+    # path left. The resync then names a different option on the same kind. A different
+    # option is a different format identity, so the update is a real change, answered
+    # "updated" (enums/creative-action.json), and the listing must now carry the new
+    # reference. A seller that kept the first-stored option on update would list the
+    # product-scope reference and fail the readback.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats-migration.mdx section="Completion checklist"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/creative-action.json
+
   @T-UC-006-storyboard-creative-reception-stateful-render @uc006-storyboard-routing @schema-v3.1 @v3-1 @stateful-push @creative-reception
   Scenario: Stateful sales agent accepts pushed creatives and exposes them via per-creative status transitions
     Given the Buyer is authenticated

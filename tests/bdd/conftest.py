@@ -6631,6 +6631,12 @@ _UC006_WIRED_SCENARIOS = frozenset(
         # CREATIVE_REJECTED with reasons, driven through the no-preview / no-media_url
         # rejection production already makes.
         "T-UC-006-error-details-creative-rejected",
+        # A canonical creative's format_kind and format_option_ref read back through
+        # list_creatives after a sync and after a resync onto a different option. The env
+        # serves both tools already; the readback uses the same client the format_id
+        # roundtrip does.
+        "T-UC-006-canonical-identity-roundtrip-on-sync",
+        "T-UC-006-canonical-identity-resync-replaces-option",
     }
 )
 

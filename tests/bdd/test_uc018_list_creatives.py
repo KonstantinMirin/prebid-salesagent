@@ -100,10 +100,17 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from src.core.schemas import CreativeFormatIdentity, FormatId, canonical_agent_url
-from tests.bdd.steps._outcome_helpers import error_envelope_or_none, require_payload, wire_dict, wire_field
+from tests.bdd.steps._outcome_helpers import (
+    assert_listed_format_option_ref,
+    assert_listed_on_canonical_kind,
+    error_envelope_or_none,
+    require_payload,
+    wire_dict,
+    wire_field,
+)
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
-from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
+from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL, format_option_ref_for_scope
 from tests.helpers.envelope_assertions import assert_envelope_shape
 from tests.helpers.pinned_schema import validator_for
 
@@ -312,10 +319,7 @@ def then_each_creative_exposes_core_fields(ctx: dict) -> None:
         entry = entries[creative_id]
         for field in ("name", "status"):
             assert entry.get(field) not in (None, ""), f"creative entry has no {field!r}: {entry}"
-        assert entry.get("format_kind") == kind, (
-            f"expected format_kind {kind!r}, got {entry.get('format_kind')!r}: {entry}"
-        )
-        assert "format_id" not in entry, f"a creative synced by format_kind is listed with a format_id: {entry}"
+        assert_listed_on_canonical_kind(entry, kind)
 
 
 # ── @concept-id storyboard scenario (#1407) ─────────────────────────────
@@ -1752,19 +1756,6 @@ def then_parameterized_format_id_roundtrips(ctx: dict) -> None:
     )
 
 
-#: One reference per arm of ``core/format-option-ref.json``'s oneOf, written as the buyer
-#: sends them. Keyed by the ``scope`` each arm's discriminator takes, which is also the
-#: outline's parameter, so the scenario cannot name a scope this mapping has no arm for.
-#: The publisher arm's domain satisfies that arm's ``pattern`` (lower-case labels only).
-_FORMAT_OPTION_REFS: dict[str, dict[str, Any]] = {
-    "product": {"scope": "product", "format_option_id": "opt_hero_image"},
-    "publisher": {
-        "scope": "publisher",
-        "publisher_domain": "example.com",
-        "format_option_id": "opt_hero_image",
-    },
-}
-
 #: The pinned reference document, validated through the same file the response schema
 #: $refs. Built once: the resolver walks the pinned tree per call.
 _FORMAT_OPTION_REF_VALIDATOR = validator_for("core/format-option-ref.json")
@@ -1781,19 +1772,12 @@ def given_creative_on_canonical_format_option(ctx: dict, format_kind: str, scope
     The reference the buyer sent is recorded in ``ctx`` rather than recomputed in the Then,
     so the two sides cannot drift into agreeing about a value neither of them sent.
 
-    Both guards below are what keep the row non-vacuous. The first refuses a scope the
-    oneOf has no arm for, which would otherwise seed ``None`` and grade the absent case
-    under a sentence promising a reference. The second asserts the fixture itself is valid
-    against the pinned file BEFORE anything is stored: if the seeded document were already
-    malformed, the readback assertion would be comparing one invalid document to another
-    and could not distinguish a seller that lost the reference from one that kept it.
+    ``format_option_ref_for_scope`` refuses a scope the oneOf has no arm for and checks the
+    document against the pinned file BEFORE anything is stored, which is what keeps the row
+    non-vacuous: a malformed fixture would make the readback compare one invalid document
+    to another.
     """
-    assert scope in _FORMAT_OPTION_REFS, (
-        f"the scenario names scope {scope!r}, which core/format-option-ref.json has no arm "
-        f"for; the pinned arms are {sorted(_FORMAT_OPTION_REFS)}"
-    )
-    reference = _FORMAT_OPTION_REFS[scope]
-    _FORMAT_OPTION_REF_VALIDATOR.validate(reference)
+    reference = format_option_ref_for_scope(scope)
 
     env = ctx["env"]
     tenant, principal = _get_or_create_tenant_and_principal(env)
@@ -1810,14 +1794,20 @@ def given_creative_on_canonical_format_option(ctx: dict, format_kind: str, scope
     ctx["sent_format_option_ref"] = reference
 
 
-def _listed_format_option_ref(ctx: dict) -> dict[str, Any]:
-    """The one seeded creative's ``format_option_ref`` exactly as the buyer received it."""
+def _single_listed_creative(ctx: dict) -> dict[str, Any]:
+    """The one seeded creative exactly as the buyer received it on the wire."""
     entries = _wire_creatives(ctx)
     assert len(entries) == 1, f"expected the one seeded creative on the wire, got {len(entries)}"
-    listed = entries[0].get("format_option_ref")
+    return entries[0]
+
+
+def _listed_format_option_ref(ctx: dict) -> dict[str, Any]:
+    """The one seeded creative's ``format_option_ref`` exactly as the buyer received it."""
+    entry = _single_listed_creative(ctx)
+    listed = entry.get("format_option_ref")
     assert listed is not None, (
         "the listed creative carries no format_option_ref, so the buyer cannot tell which "
-        f"concrete format option it targets: {sorted(entries[0])}"
+        f"concrete format option it targets: {sorted(entry)}"
     )
     return listed
 
@@ -1826,14 +1816,10 @@ def _listed_format_option_ref(ctx: dict) -> dict[str, Any]:
 def then_format_option_ref_roundtrips(ctx: dict) -> None:
     """The whole reference comes back, compared as a document rather than member by member.
 
-    Whole-document equality, not a subset: ``scope`` is the member the loss dropped, and a
-    subset check over the members the seller DID emit passes while the discriminator is
-    gone. The product arm's ``publisher_domain: false`` makes the other direction matter
-    too -- an extra member is as wrong as a missing one -- which only an equality holds.
+    The equality is :func:`assert_listed_format_option_ref`, the same one the UC-006
+    sync-then-list readback uses.
     """
-    sent = ctx["sent_format_option_ref"]
-    listed = _listed_format_option_ref(ctx)
-    assert listed == sent, f"the listed format_option_ref is not the reference the buyer sent: {listed!r} != {sent!r}"
+    assert_listed_format_option_ref(_single_listed_creative(ctx), ctx["sent_format_option_ref"])
 
 
 @then("the listed creative's format_option_ref should be valid against core/format-option-ref.json")
@@ -1845,6 +1831,17 @@ def then_format_option_ref_is_pin_valid(ctx: dict) -> None:
     would refuse, whatever the seller echoed.
     """
     _FORMAT_OPTION_REF_VALIDATOR.validate(_listed_format_option_ref(ctx))
+
+
+@then(parsers.parse('the listed creative should carry format_kind "{kind}" and no format_id'))
+def then_listed_creative_carries_format_kind(ctx: dict, kind: str) -> None:
+    """The one seeded creative is listed on the canonical arm, with the kind it was synced by.
+
+    The VALUE is compared, not mere presence: a projection that kept some identity but the
+    wrong one would satisfy a presence check. ``format_id`` absent because the item's oneOf
+    makes the arms exclusive and this creative was synced on the canonical one.
+    """
+    assert_listed_on_canonical_kind(_single_listed_creative(ctx), kind)
 
 
 def _dispatch_format_ids_filter(ctx: dict) -> None:

@@ -38,19 +38,22 @@ import asyncio
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import is_e2e, payload_or_none, wire_dict
+from tests.bdd.steps._outcome_helpers import assert_listed_on_canonical_kind, is_e2e, payload_or_none, wire_dict
 from tests.bdd.steps.domain.uc006_sync_creatives import (
     _action_str,
     _build_creative_payload,
     _creative_format_id_entry,
+    _e2e_unique_id,
     _product_format_entry,
     _setup_product_with_creative_policy,
+    latest_creative_id,
     when_sync_creative,
 )
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 from tests.bdd.steps.generic._dispatch import gate_and_record
+from tests.factories.creative import format_option_ref_for_scope
 from tests.factories.creative_asset import build_assets, image_spec, text_spec, url_spec, video_spec
-from tests.factories.request import CreativeAssetRequestFactory
+from tests.factories.request import OMIT, CreativeAssetRequestFactory
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — provenance structural-rejection scenarios
@@ -564,6 +567,40 @@ def then_every_status_in_creative_status_enum(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _listed_back(ctx: dict, creative_id: str) -> dict:
+    """The library entry for *creative_id* exactly as ``list_creatives`` puts it on the wire.
+
+    sync-creatives-response.json carries no format identity per creative, so what a sync
+    STORED is observable to the buyer only through a following ``list_creatives``; this is
+    that read, on the scenario's own transport.
+
+    ``CreativeSyncEnv`` exposes no ``list_creatives`` primitive (its MCP_TOOL /
+    REST_ENDPOINT are sync-only), but ``AdCPTestClient.call`` resolves any tool off the
+    address table on the SAME env, so no second env and no raw repository read is needed.
+
+    A READ-BACK still reaches a transport, so it owes the same two obligations as any other
+    dispatch. It does NOT go through ``dispatch_via_client``: that entry is the single writer
+    of the ctx dispatch-result contract, and this read-back must not clobber the result the
+    scenario is actually grading.
+    """
+    from tests.harness.client import AdCPTestClient
+
+    client = ctx.get("client") or AdCPTestClient(ctx["env"])
+    gate_and_record({})
+    listed = client.call("list_creatives", {}, ctx["transport"])
+    wire = listed.wire_response
+    assert isinstance(wire, dict), (
+        f"list_creatives returned no wire body to read the synced creative back from "
+        f"(error={listed.error!r}); the readback cannot be graded on this transport"
+    )
+    matches = [c for c in (wire.get("creatives") or []) if c.get("creative_id") == creative_id]
+    assert len(matches) == 1, (
+        f"expected creative {creative_id!r} exactly once on the list_creatives wire, found {len(matches)}; "
+        f"wire listed {sorted(c.get('creative_id') or '' for c in wire.get('creatives') or [])!r}"
+    )
+    return matches[0]
+
+
 @then("the seller's own format_id object should roundtrip through sync_creatives without modification")
 def then_format_id_roundtrips_verbatim(ctx: dict) -> None:
     """Assert the creative's format_id roundtrips verbatim — ON THE WIRE first.
@@ -573,12 +610,8 @@ def then_format_id_roundtrips_verbatim(ctx: dict) -> None:
     ``list_creatives`` and compares the wire's ``format_id`` to the captured
     ``{agent_url, id}``. Grading only the DB row (as this step used to) cannot
     detect a seller that persists the format_id correctly and then serializes it
-    wrong on the wire — which is exactly the roundtrip being graded.
-
-    ``CreativeSyncEnv`` exposes no ``list_creatives`` primitive (its MCP_TOOL /
-    REST_ENDPOINT are sync-only), but ``AdCPTestClient.call`` resolves any tool
-    off the address table on the SAME env, so no second env and no raw repository
-    read is introduced as the primary check.
+    wrong on the wire — which is exactly the roundtrip being graded. The read is
+    :func:`_listed_back`.
 
     The ``CreativeRepository`` read is KEPT, after the wire assertion, as a
     redundant in-process check: if the two ever disagree, the wire is the
@@ -586,7 +619,6 @@ def then_format_id_roundtrips_verbatim(ctx: dict) -> None:
     """
     from src.core.database.repositories.creative import CreativeRepository
     from src.core.schemas import CreativeFormatIdentity
-    from tests.harness.client import AdCPTestClient
 
     first = _first_creative_result(ctx, "a persisted creative whose format_id roundtrips verbatim")
     captured = ctx["captured_format_id"]
@@ -594,24 +626,7 @@ def then_format_id_roundtrips_verbatim(ctx: dict) -> None:
     env = ctx["env"]
 
     # ── PRIMARY: read the creative back over the wire ──────────────────────
-    client = ctx.get("client") or AdCPTestClient(env)
-    # A READ-BACK still reaches a transport, so it owes the same two obligations as
-    # any other dispatch. It does NOT go through ``dispatch_via_client``: that entry
-    # is the single writer of the ctx dispatch-result contract, and this read-back
-    # must not clobber the result the scenario is actually grading.
-    gate_and_record({})
-    listed = client.call("list_creatives", {}, ctx["transport"])
-    wire = listed.wire_response
-    assert isinstance(wire, dict), (
-        f"list_creatives returned no wire body to verify the roundtrip against "
-        f"(error={listed.error!r}); the roundtrip cannot be graded on this transport"
-    )
-    listed_ids = {c.get("creative_id") for c in (wire.get("creatives") or [])}
-    assert first.creative_id in listed_ids, (
-        f"creative {first.creative_id!r} did not come back on the list_creatives wire; "
-        f"wire listed {sorted(i for i in listed_ids if i)!r}"
-    )
-    entry = next(c for c in wire["creatives"] if c.get("creative_id") == first.creative_id)
+    entry = _listed_back(ctx, first.creative_id)
     # Both halves of the v3.1 federation pair are asserted UNCONDITIONALLY. The
     # agent_url half used to be gated on `if wire_agent_url is not None`, so a wire
     # that dropped agent_url — or flattened format_id back to a bare string —
@@ -649,3 +664,71 @@ def then_format_id_roundtrips_verbatim(ctx: dict) -> None:
     assert str(stored.agent_url) == captured["agent_url"], (
         f"format_id.agent_url did not roundtrip: expected {captured['agent_url']!r}, stored {str(stored.agent_url)!r}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN / THEN steps — canonical format identity survives sync
+# (canonical-formats-migration.mdx § Completion checklist: sync and library
+# paths preserve format_kind and format_option_ref)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(
+    parsers.parse(
+        'the buyer syncs a creative identified by canonical kind "{kind}" with a {scope}-scope format_option_ref'
+    )
+)
+def given_sync_canonical_creative_with_option_ref(ctx: dict, kind: str, scope: str) -> None:
+    """The creative payload the sync will carry: canonical kind, narrowed to one option.
+
+    ``format_id=OMIT`` is what makes it canonical: core/creative-asset.json is a oneOf on
+    the identifier, so the legacy arm has to be ABSENT rather than null. The reference the
+    buyer sends is recorded in ``ctx`` so the readback compares against what was SENT,
+    never against a value recomputed in the Then.
+    """
+    reference = format_option_ref_for_scope(scope)
+    ctx["creatives"] = [
+        CreativeAssetRequestFactory.payload(
+            creative_id=_e2e_unique_id("creative_canonical"),
+            format_id=OMIT,
+            format_kind=kind,
+            format_option_ref=reference,
+        )
+    ]
+    ctx["sent_format_option_ref"] = reference
+
+
+@given(parsers.parse("the resync narrows the same creative to a {scope}-scope format_option_ref"))
+def given_resync_narrows_option_ref(ctx: dict, scope: str) -> None:
+    """Change only the option the NEXT sync names, on the creative a prior Given synced.
+
+    The kind and every other member stay as stored, so the one difference the resync
+    carries is the format_option_ref -- a different option on the same kind, which is a
+    real identity change and not a respelling.
+    """
+    reference = format_option_ref_for_scope(scope)
+    assert ctx["creatives"][-1].get("format_option_ref") != reference, (
+        "the resync must name a DIFFERENT option than the stored one, or it grades nothing"
+    )
+    ctx["creatives"][-1] = {**ctx["creatives"][-1], "format_option_ref": reference}
+    ctx["sent_format_option_ref"] = reference
+
+
+@then(
+    parsers.parse(
+        'listing the library returns the creative on format_kind "{kind}" with the format_option_ref '
+        "the buyer last sent, scope included"
+    )
+)
+def then_listed_back_with_canonical_identity(ctx: dict, kind: str) -> None:
+    """What the sync STORED, read back over the scenario's own transport.
+
+    sync-creatives-response.json carries no format identity per creative, so the listing is
+    the only place the buyer can observe that the sync preserved it. Three values are
+    compared: the kind, the absence of the legacy arm (the item oneOf makes the two
+    exclusive and this creative was synced on the canonical one), and the whole option
+    reference -- an equality, because ``scope`` is the discriminator a subset check over
+    the members the seller did emit would miss.
+    """
+    entry = _listed_back(ctx, latest_creative_id(ctx))
+    assert_listed_on_canonical_kind(entry, kind, option_ref=ctx["sent_format_option_ref"])
