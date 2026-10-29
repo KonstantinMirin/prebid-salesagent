@@ -1961,6 +1961,7 @@ Feature: BR-UC-002 Create Media Buy
   Scenario Outline: Budget amount boundary validation - <boundary_point>
     Given a valid create_media_buy request
     And the account exists and is active
+    And the seller sets no minimum package budget
     And a package budget is set to <value>
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy spec
@@ -1974,9 +1975,11 @@ Feature: BR-UC-002 Create Media Buy
       | amount = 0 (rejected by rule)        | 0     | error BUDGET_TOO_LOW on packages with suggestion |
       | amount = 0.01 (minimum positive)     | 0.01  | budget validation passes                     |
       | amount negative                      | -1    | error INVALID_REQUEST on packages[0].budget with suggestion |
-    # The zero row names its field because the seeded tenant's min_package_budget (100) would
-    # also refuse 0 with BUDGET_TOO_LOW. The positivity rule this row grades sums every package
-    # and names the array; the seller-minimum refusal names packages[0].budget.
+    # The boundary is the amount itself, so no seller minimum may answer for it: the factory
+    # tenant's min_package_budget (100) refused 0.01 with BUDGET_TOO_LOW and refused 0 with the
+    # same code, so neither row could tell the positivity rule from the minimum. With no minimum
+    # set, 0.01 must be accepted and 0 is refused by the positivity rule alone, which sums every
+    # package and names the array (packages); the seller-minimum refusal names packages[0].budget.
 
   @T-UC-002-boundary-pricing-option-xor @boundary @pricing-option-xor
   Scenario Outline: Pricing option XOR boundary validation - <boundary_point>
