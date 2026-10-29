@@ -135,6 +135,20 @@ def _create_request(ctx: dict) -> dict[str, Any]:
     return _ensure_request_defaults(ctx)
 
 
+def _default_account_named_by_request(ctx: dict) -> Any:
+    """The env's default account, refusing to run unless the shared request names it.
+
+    A Given that states something about "the account" holds it on the default account's
+    row; a request naming another account would grade a row the Given never touched.
+    """
+    account = ctx["env"].setup_default_account()
+    named = _create_request(ctx)["account"]
+    assert named == {"account_id": account.account_id}, (
+        f"the request names {named!r}, not the default account {account.account_id!r}"
+    )
+    return account
+
+
 _STATUS_CONDITIONS = (
     "creatives missing for all packages",
     "creatives present, future flight",
@@ -181,14 +195,9 @@ def given_account_without_governance_agents(ctx: dict) -> None:
     Written rather than assumed: the seeded default leaves the column unset, and this
     step makes the state the scenario is about explicit on the row the request resolves.
     """
-    env = ctx["env"]
-    account = env.setup_default_account()
-    named = _create_request(ctx)["account"]
-    assert named == {"account_id": account.account_id}, (
-        f"the request names {named!r}, not the seeded account {account.account_id!r} this step configures"
-    )
+    account = _default_account_named_by_request(ctx)
     account.governance_agents = None
-    env._commit_factory_data()
+    ctx["env"]._commit_factory_data()
 
 
 @given(parsers.parse('a valid create_media_buy request with agency_estimate_number "{value}"'))
@@ -395,10 +404,7 @@ def given_plan_id_governance_request(ctx: dict, boundary_point: str) -> None:
     """
     assert boundary_point in _PLAN_ID_GOVERNANCE_ROWS, f"unmapped plan_id governance row {boundary_point!r}"
     kwargs = _create_request(ctx)
-    account = ctx["env"].setup_default_account()
-    assert kwargs["account"] == {"account_id": account.account_id}, (
-        f"the request must name the default account, got {kwargs['account']!r}"
-    )
+    account = _default_account_named_by_request(ctx)
     assert not account.governance_agents, (
         f"account {account.account_id!r} carries governance_agents {account.governance_agents!r}; "
         "this row is about an account with none"
