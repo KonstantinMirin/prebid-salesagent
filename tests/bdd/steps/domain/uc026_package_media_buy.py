@@ -988,8 +988,21 @@ def given_buyer_owns_pkg_with_catalogs(ctx: dict, pkg_id: str, catalogs: str) ->
     should not be present", which says nothing unless the old catalog was sent. Recording
     the claim as metadata left the package with no catalogs at all, so a seller that
     merged instead of replacing passed it.
+
+    The record is read back, not the create echo: the update's ``affected_packages``
+    reports the stored ``package_config["catalogs"]``, so a seller that echoed the request
+    on create but stored nothing would leave the update nothing to merge into, and a
+    merging seller would pass the replacement Thens.
     """
-    _create_media_buy_for_update(ctx, catalogs=json.loads(catalogs))
+    requested = json.loads(catalogs)
+    _create_media_buy_for_update(ctx, catalogs=requested)
+    package_id = ctx.get("existing_package_id")
+    assert package_id, "the created package carries no package_id, so its stored catalogs cannot be read back"
+    stored = stored_package_config(ctx, str(ctx["existing_media_buy_id"]), str(package_id))
+    assert _catalog_identities(stored.get("catalogs") or []) == _catalog_identities(requested), (
+        f"the package was created with catalogs {_catalog_identities(requested)} but the record holds "
+        f"{stored.get('catalogs')!r}, so a later replacement has no stored list to replace"
+    )
 
 
 @given(parsers.parse('the Buyer owns a media buy with a package "{pkg_id}" having optimization_goals {goals}'))
@@ -3032,39 +3045,16 @@ def then_pkg_catalogs(ctx: dict, expected: str) -> None:
         then_catalogs_unchanged(ctx)
         return
 
+    _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     actual_catalogs = _pkg_field(pkgs[0], "catalogs")
-    expected_parsed = json.loads(expected)
-
     assert actual_catalogs is not None, f"Expected catalogs {expected} but catalogs field is None in response"
-
-    # Normalize for comparison
-    actual_normalized = [
-        c if isinstance(c, dict) else (c.model_dump() if hasattr(c, "model_dump") else {"raw": str(c)})
-        for c in actual_catalogs
-    ]
-    expected_list = expected_parsed if isinstance(expected_parsed, list) else [expected_parsed]
-    assert len(actual_normalized) == len(expected_list), (
-        f"Expected {len(expected_list)} catalogs, got {len(actual_normalized)}"
-    )
-    # Verify each expected catalog is present with matching fields
-    for exp_cat in expected_list:
-        if isinstance(exp_cat, dict):
-            _assert_catalog_in_list(exp_cat, actual_normalized)
-
-
-def _assert_catalog_in_list(expected: dict, actual_list: list[dict]) -> None:
-    """Assert expected catalog dict is found in actual list (matching key fields)."""
-    exp_type = expected.get("type")
-    exp_id = expected.get("catalog_id")
-    for actual in actual_list:
-        a_type = actual.get("type")
-        a_id = actual.get("catalog_id")
-        if exp_type and a_type == exp_type and exp_id and a_id == exp_id:
-            return
-        if exp_id and a_id == exp_id:
-            return
-    raise AssertionError(f"Expected catalog {expected} not found in actual catalogs {actual_list}")
+    # The whole list, by the (type, catalog_id) pair the buyer named each catalog by: a
+    # replacement is a swap, so an extra catalog, a missing one, or the right id under
+    # another type each fail here.
+    want = _catalog_identities(json.loads(expected))
+    got = _catalog_identities(actual_catalogs)
+    assert got == want, f"Expected the package's catalogs to be exactly {want}, got {got}"
 
 
 def _assert_goal_in_list(expected: dict, actual_list: list[dict]) -> None:
