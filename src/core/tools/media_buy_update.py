@@ -1143,16 +1143,20 @@ def _update_media_buy_impl(
                             today=utc_flight_start(today),
                         )
 
-                        # The seller's record is written HERE, inside this request's unit of
-                        # work, once the ad server has accepted the change. It was left to
-                        # each adapter, and they disagreed: Kevel wrote nothing, GAM and
+                        # The seller's budget column is written HERE, inside this request's
+                        # unit of work, once the ad server has accepted the change, and
+                        # nowhere else: no adapter writes media_packages.budget. It was left
+                        # to each adapter, and they disagreed: Kevel wrote nothing, GAM and
                         # Broadstreet wrote only package_config["budget"] while get_media_buys
-                        # reads the column, and every adapter committed in its own session, so
-                        # a later branch's refusal could not take the write back. Pinned
+                        # reads the column, and the mock wrote both in its own session. Pinned
                         # update_media_buy.mdx (v3.2.7) makes the request "one atomic mutation"
                         # in which no package field from a rejected update may change, and
                         # "every mutating update increments revision": update_package_fields
-                        # writes the column, moves the revision and rolls back with the UoW.
+                        # writes the column and moves the revision, and both roll back with
+                        # the UoW. The UoW owns only that: the adapter call above has already
+                        # reached the ad server when a later branch refuses, and GAM and
+                        # Broadstreet still commit package_config["budget"] in their own
+                        # sessions.
                         uow.media_buys.update_package_fields(
                             req.media_buy_id,
                             pkg_update.package_id,
