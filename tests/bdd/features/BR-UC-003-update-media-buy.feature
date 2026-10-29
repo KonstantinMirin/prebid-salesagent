@@ -1206,10 +1206,17 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: the first valid row was status "pending_activation", which is not a
+    # value of the pinned enums/media-buy-status.json. The state gate finds no actions for
+    # it in the SDK state machine and then allows every action, so that row could not fail
+    # whatever the rule for a buy awaiting its start. It is now "pending_start", the pinned
+    # status for that state, which the gate checks: a budget update maps to update_budget
+    # and update_packages, and pending_start must allow both for the row to succeed.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/media-buy-status.json
 
     Examples: Valid partitions
       | partition                  | status               | outcome |
-      | status_pending_activation  | pending_activation   | success |
+      | status_pending_start       | pending_start        | success |
       | status_active              | active               | success |
 
     Examples: Invalid partitions
