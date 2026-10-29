@@ -11,9 +11,11 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from adcp.types import Catalog
 from pydantic import ValidationError
 
 from src.core.exceptions import (
+    AdCPValidationError,
     adcp_error_for,
 )
 from src.core.exceptions import (
@@ -198,6 +200,19 @@ def package_field_path(attr: str, index: int) -> str:
     ``PACKAGES_FIELD`` where the collection as a whole failed (salesagent-rfxfu).
     """
     return f"packages[{index}].{attr}"
+
+
+def refuse_duplicate_catalog_types(catalogs: list[Catalog] | None, index: int) -> None:
+    """Refuse a package whose catalogs repeat a type, pointing at its catalogs array.
+
+    core/package.json and media-buy/package-request.json catalogs (AdCP): "Each catalog
+    MUST have a distinct type ... sellers MUST reject requests containing multiple
+    catalogs of the same type with a validation_error". The package's collection is at
+    fault, not one entry, so the pointer names the array.
+    """
+    catalog_types = [catalog.type for catalog in catalogs or []]
+    if len(catalog_types) != len(set(catalog_types)):
+        raise AdCPValidationError(field=package_field_path("catalogs", index))
 
 
 def format_validation_error(validation_error: ValidationError, label: str = "request") -> str:
