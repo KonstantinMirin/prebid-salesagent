@@ -1585,6 +1585,11 @@ def _update_media_buy_impl(
                 affected_packages=affected_packages_list,
                 valid_actions=_final_actions,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
+                # sandbox.mdx: sellers "SHOULD include `sandbox: true` in success responses
+                # when processing a sandbox account request", as create_media_buy does.
+                # Omitted, never false, for a production account: the field only ever
+                # confirms sandbox mode.
+                sandbox=True if identity.account.sandbox else None,
             )
 
             # Log successful update_media_buy call
