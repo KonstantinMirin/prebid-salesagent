@@ -2328,35 +2328,28 @@ def given_adapter_manual_approval_flag(ctx: dict, adapter_flag: str) -> None:
 def given_tenant_approval_mode(ctx: dict, approval_mode: str) -> None:
     """Configure the tenant's approval mode.
 
-    'auto-approval' — tenant human_review_required=False, adapter manual_approval_required=False
-    'manual' — tenant human_review_required=True
+    'auto-approval' — tenant human_review_required=False, no adapter gates the operation
+    'manual' — tenant human_review_required=True, every adapter gates create and update
+
+    Delegates to the shared tenant-approval writers, which configure EVERY adapter the env
+    exposes plus the identity's tenant and the live server's adapter row. The update
+    path's approval gate reads its own adapter (``env.mock['update_adapter']``), which the
+    body this replaced never touched, so its 'manual' row ran the auto path in process.
     """
-    from tests.factories.core import set_adapter_test_behavior
+    from tests.bdd.steps.generic.given_media_buy import (
+        _configure_adapter_manual_approval,
+        given_tenant_auto_approval,
+        given_tenant_manual_approval,
+    )
 
     stripped = approval_mode.strip()
-    tenant = ctx.get("tenant")
-    assert tenant is not None, "No tenant in ctx — cannot configure approval mode"
-    env = ctx["env"]
-
     if stripped == "auto-approval":
-        tenant.human_review_required = False
-        if "adapter" in env.mock:
-            env.mock["adapter"].return_value.manual_approval_required = False
-        # Also write to DB so Docker adapter reads the correct config
-        set_adapter_test_behavior(env, tenant.tenant_id, manual_approval_required=False)
+        given_tenant_auto_approval(ctx)
+        _configure_adapter_manual_approval(ctx["env"], required=False)
     elif stripped == "manual":
-        tenant.human_review_required = True
-        if "adapter" in env.mock:
-            env.mock["adapter"].return_value.manual_approval_required = True
-            env.mock["adapter"].return_value.manual_approval_operations = {
-                "create_media_buy",
-                "update_media_buy",
-            }
-        # Also write to DB so Docker adapter reads the correct config
-        set_adapter_test_behavior(env, tenant.tenant_id, manual_approval_required=True)
+        given_tenant_manual_approval(ctx)
     else:
         raise ValueError(f"Unknown approval mode: {stripped}")
-    env._commit_factory_data()
 
 
 @given(parsers.re(r"the adapter (?P<adapter_result>returns \w+|not yet called)"))
@@ -2369,35 +2362,27 @@ def given_adapter_result(ctx: dict, adapter_result: str) -> None:
 
     Uses regex to avoid matching 'the adapter manual_approval_required is ...'
     which is a separate step for approval workflow partition/boundary scenarios.
+
+    The adapter configured is the one the UPDATE path calls (``update_media_buy`` on
+    ``env.mock['update_adapter']``). This used to set ``update_order`` -- a method no
+    adapter has -- on the create-module mock, so in process the error row never failed.
+    The error is the ad server's outage class, ``AdCPAdapterError``: SERVICE_UNAVAILABLE,
+    the code the rows expect and the class the live server's mock adapter raises.
     """
-    from tests.factories.core import set_adapter_test_behavior
+    from src.core.exceptions import AdCPAdapterError
+    from tests.bdd.steps.generic.given_media_buy import set_update_adapter_outcome
 
     stripped = adapter_result.strip()
     env = ctx["env"]
+    assert "update_adapter" in env.mock, (
+        f"Step claims 'the adapter {stripped}' but the env registers no update-path adapter "
+        f"(env.mock['update_adapter']); {type(env).__name__} does not drive update_media_buy."
+    )
 
     if stripped == "returns success":
-        # Default behavior — adapter returns normally
-        assert "adapter" in env.mock, (
-            "Step claims 'the adapter returns success' but no adapter mock is registered in env.mock. "
-            "Ensure the test environment sets up the adapter mock before this step."
-        )
-        env.mock["adapter"].return_value.update_order.side_effect = None
-        # Also reset DB test_behavior
-        tenant = ctx.get("tenant")
-        if tenant is not None:
-            set_adapter_test_behavior(env, tenant.tenant_id, fail_on_update=False)
+        set_update_adapter_outcome(ctx, None)
     elif stripped == "returns error":
-        assert "adapter" in env.mock, (
-            "Step claims 'the adapter returns error' but no adapter mock is registered in env.mock. "
-            "Ensure the test environment sets up the adapter mock before this step."
-        )
-        env.mock["adapter"].return_value.update_order.side_effect = Exception("Adapter error: update failed")
-        # Also write to DB so Docker adapter raises the same error
-        tenant = ctx.get("tenant")
-        if tenant is not None:
-            set_adapter_test_behavior(
-                env, tenant.tenant_id, fail_on_update=True, error_message="Adapter error: update failed"
-            )
+        set_update_adapter_outcome(ctx, AdCPAdapterError())
     elif stripped == "not yet called":
         # Manual approval — adapter won't be called
         pass
