@@ -1135,7 +1135,7 @@ def given_pricing_option_configuration(ctx: dict, config: str) -> None:
     elif config in ("both_set", "fixed+floor"):
         _setup_both_pricing(ctx)
 
-    elif config in ("neither_set", "neither"):
+    elif config in ("neither_set", "neither", "neither (code rejects)"):
         _setup_neither_pricing(ctx)
 
     elif config.startswith("fixed_price="):
