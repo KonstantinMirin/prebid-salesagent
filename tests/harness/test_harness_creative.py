@@ -67,11 +67,9 @@ class TestCreativeSyncEnvContract:
             assert "slack_notifier" in env.mock
             assert "audit_log" in env.mock
             assert len(env.mock) == 5
-            # The Gemini key is a settings field, pinned on the settings object for the
-            # env's lifetime rather than mocked through a config accessor.
-            from src.core.config import get_settings
-
-            assert get_settings().integrations.gemini_api_key is None
+            # The generative build reads the TENANT's Gemini key, and the env's tenant
+            # carries none until a test sets one (set_gemini_api_key).
+            assert env.identity.tenant.gemini_api_key is None
 
     def test_identity_defaults(self):
         """Identity has sane defaults."""

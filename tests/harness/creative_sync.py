@@ -68,12 +68,11 @@ Available mocks via env.mock:
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 from adcp.types import AccountReferenceById
@@ -507,32 +506,8 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
         self.ai_review_commit_observations = {}
         self.mock[self._AI_REVIEW_PATCH_NAME].submit.side_effect = self._observe_at_ai_review_submit
 
-        # Gemini key: default None (safe for static creatives). Production reads it off
-        # the typed settings, and a composition root rebuilds those from the ENVIRONMENT
-        # whenever it starts -- the REST leg imports src.app, which mounts the admin app,
-        # which calls load_settings() -- so pinning the settings object would be undone
-        # by the first REST dispatch. The environment is what gets pinned, and the
-        # settings are rebuilt from it on every change and again on release, which is
-        # the contract load_settings() documents for a test that changes the environment.
-        self._gemini_env = patch.dict(os.environ)
-        self._gemini_env.start()
-        self._guard("gemini_api_key_env", self._release_gemini_env)
-        self._apply_gemini_api_key(None)
-
-    def _apply_gemini_api_key(self, value: str | None) -> None:
-        from src.core.config import load_settings
-
-        if value is None:
-            os.environ.pop("GEMINI_API_KEY", None)
-        else:
-            os.environ["GEMINI_API_KEY"] = value
-        load_settings()
-
-    def _release_gemini_env(self) -> None:
-        from src.core.config import load_settings
-
-        self._gemini_env.stop()
-        load_settings()
+        # No Gemini key is configured here: the generative build reads the TENANT's key,
+        # and a tenant row carries none until a scenario sets one (set_gemini_api_key).
 
     def _observe_at_ai_review_submit(self, *args: Any, **kwargs: Any) -> MagicMock:
         """Stand in for ``_ai_review_executor.submit`` and record DB visibility.
@@ -1135,39 +1110,25 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
 
         return {"agent_url": self.DEFAULT_AGENT_URL, "id": format_id}
 
-    @realize_e2e(
-        e2e_unsupported(
-            "GEMINI_API_KEY is read from the SERVER's own configuration, and e2e_rest talks to "
-            "a process this harness does not configure — there is no surface for setting or "
-            "clearing another process's env-derived config mid-scenario"
-        )
-    )
     def set_gemini_api_key(self, value: str | None) -> None:
-        """Configure (or clear, with ``None``) the generative build's API key.
+        """Configure (or clear, with ``None``) the TENANT's Gemini API key, on every transport.
 
-        A named method rather than four step bodies reaching into
-        ``env.mock["config"].return_value``. "Is the key configured" is a state of
-        the ENVIRONMENT, so the environment should own it: a step that has to know
-        the mock's internal shape to express a precondition is one that breaks when
-        the harness reorganises, and it is invisible to the e2e-escape-hatch guard,
-        whose scan is harness-only (salesagent-b341x.9). Four reaches become zero
-        without moving any behaviour.
+        The generative build reads the key off the tenant
+        (``TenantContext.gemini_api_key``, src/core/tools/creatives/_processing.py), so
+        "is the key configured" is a column this env writes, through the env-owned
+        writer both caller paths read (:meth:`configure_tenant_field`): the identity a
+        direct ``call_impl`` hands over, and the row the wire legs' resolver -- the e2e
+        server's included -- reads. It used to be the server's environment, which a test
+        cannot set for another process, and this method was declared unrealizable over
+        e2e_rest for exactly that reason (CLAUDE.md pattern 11: a real input a deployment
+        can set, seeded like any other state).
 
         ``None`` is a real state, not a missing argument -- it is the
         "GEMINI_API_KEY not configured" precondition BR-RULE-036 grades -- which is
-        why the type admits it and there is no default.
-
-        DECLARED UNSUPPORTED OVER e2e, which is the point of having moved it here.
-        The docstring above notes the reaches were "invisible to the e2e-escape-hatch
-        guard, whose scan is harness-only" -- routing them in made them visible, and
-        the guard immediately asked the question the step bodies had been dodging: a
-        mock-setter over e2e_rest silently no-ops, so a scenario would assert against
-        unconfigured server state. It cannot be realized (the key belongs to another
-        process's configuration), so it says so rather than pretending.
+        why the type admits it and there is no default. An empty string is the same state.
         """
-        # The environment is under the patch.dict started in _configure_mocks, so this
-        # write lives exactly as long as the env and is undone with it.
-        self._apply_gemini_api_key(value)
+        self.ensure_tenant()
+        self.configure_tenant_field("gemini_api_key", value or None)
 
     def set_served_catalogue(self, formats: list[Format]) -> None:
         """The seller's catalog is exactly *formats*, on every transport.

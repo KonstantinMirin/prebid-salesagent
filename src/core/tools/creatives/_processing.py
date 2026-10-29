@@ -601,6 +601,25 @@ def _store_previews(data: dict[str, Any], preview_result: Mapping[str, Any] | No
     return True
 
 
+def _generative_build_key(tenant: TenantContext, creative_format: Any) -> str:
+    """The Gemini API key a generative build sends the creative agent: the TENANT's own.
+
+    The creative agent bills the caller's key, not its own
+    (``CreativeAgentRegistry.build_creative``), and the caller is this tenant -- the same
+    ``gemini_api_key`` the AI review and the policy check read off it. A tenant without
+    one cannot build, which is this seller's configuration and nothing the buyer can
+    correct: CONFIGURATION_ERROR, on the create and the update path alike.
+    """
+    if not tenant.gemini_api_key:
+        logger.error(
+            "[sync_creatives] Cannot build generative creative %s: tenant %s has no Gemini API key",
+            creative_format,
+            tenant.tenant_id,
+        )
+        raise AdCPConfigurationError()
+    return tenant.gemini_api_key
+
+
 def _apply_approval_mode(
     creative_repo: CreativeRepository,
     row: Any,
@@ -749,15 +768,7 @@ def _update_existing_creative(
                     f"checking for Gemini API key"
                 )
 
-                # Get Gemini API key from config
-                from src.core.config import get_settings
-
-                gemini_api_key = get_settings().integrations.gemini_api_key
-
-                if not gemini_api_key:
-                    error_msg = f"Cannot update generative creative {creative_format}: GEMINI_API_KEY not configured"
-                    logger.error(f"[sync_creatives] {error_msg}")
-                    raise AdCPConfigurationError()
+                gemini_api_key = _generative_build_key(tenant, creative_format)
 
                 # Extract message/brief from assets or inputs
                 message = _extract_message_from_assets(creative)
@@ -1022,15 +1033,7 @@ def _create_new_creative(
                     f"[sync_creatives] Detected generative format: {creative_format}, checking for Gemini API key"
                 )
 
-                # Get Gemini API key from config
-                from src.core.config import get_settings
-
-                gemini_api_key = get_settings().integrations.gemini_api_key
-
-                if not gemini_api_key:
-                    error_msg = f"Cannot build generative creative {creative_format}: GEMINI_API_KEY not configured"
-                    logger.error(f"[sync_creatives] {error_msg}")
-                    raise AdCPConfigurationError()
+                gemini_api_key = _generative_build_key(tenant, creative_format)
 
                 # Extract message/brief from assets or inputs
                 message = _extract_message_from_assets(creative)
