@@ -66,7 +66,7 @@ from adcp import ErrorCode
 
 from src.core.audit_logger import get_audit_logger
 from src.core.errors.codes import AppErrorCode
-from src.core.resolved_identity import PublicIdentity, ResolvedIdentity
+from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import Error as AdCPResponseError
 
 if TYPE_CHECKING:
@@ -417,8 +417,7 @@ def _list_creative_formats_impl(
     # request naming an account needs a credential even on this public tool, so the
     # resolver hands over a ResolvedIdentity with that account inside; a request naming
     # none is a production request and carries no flag.
-    account = identity.account if isinstance(identity, ResolvedIdentity) else None
-    sandbox_flag: bool | None = True if account is not None and account.sandbox else None
+    sandbox_flag = identity.sandbox_echo
 
     # Format list from registry is compatible with library Format type
     response = ListCreativeFormatsResponse(

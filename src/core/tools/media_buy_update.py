@@ -1586,11 +1586,9 @@ def _update_media_buy_impl(
                 valid_actions=_final_actions,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
                 # sandbox.mdx: sellers "SHOULD include `sandbox: true` in success responses
-                # when processing a sandbox account request", as create_media_buy does.
-                # Omitted, never false, for a production account: the field only ever
-                # confirms sandbox mode. The spelling is the one get_adapter's sandbox
-                # selection (adapter_helpers) already applies to this same identity.
-                sandbox=True if identity.account is not None and identity.account.sandbox else None,
+                # when processing a sandbox account request", as create_media_buy does. The
+                # same predicate get_adapter's sandbox selection reads (identity.in_sandbox).
+                sandbox=identity.sandbox_echo,
             )
 
             # Log successful update_media_buy call

@@ -2572,14 +2572,9 @@ async def _create_media_buy_impl(
     # was refused by a check about the platform it was never going to touch
     # (salesagent-blugj, salesagent-9imdq).
     #
-    # Reads the ACCOUNT, which is a real input the boundary resolved -- never a test flag.
-    # The same ``identity.account is not None and identity.account.sandbox`` spelling the
-    # other sandbox readers in this codebase use (adapter_helpers, the creative sync and
-    # listing paths); ``bool`` because the column is nullable and this parameter is not.
-    validate_setup_complete(
-        tenant.tenant_id,
-        sandbox=bool(identity.account is not None and identity.account.sandbox),
-    )
+    # Reads the ACCOUNT, which is a real input the boundary resolved -- never a test flag --
+    # through the one sandbox predicate every other sandbox reader uses (identity.in_sandbox).
+    validate_setup_complete(tenant.tenant_id, sandbox=identity.in_sandbox)
 
     # No second webhook-URL verdict here: the stored-then-fetched URLs already
     # got their correctable refusal at the registration gate above, before any
@@ -4610,7 +4605,7 @@ async def _create_media_buy_impl(
             # sandbox.mdx: sellers "SHOULD include `sandbox: true` in success responses
             # when processing a sandbox account request". Omitted, never false, for a
             # production account: the field only ever confirms sandbox mode.
-            sandbox=True if identity.account.sandbox else None,
+            sandbox=identity.sandbox_echo,
         )
 
         # Log activity

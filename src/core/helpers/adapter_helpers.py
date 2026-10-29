@@ -395,11 +395,10 @@ def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdMan
     # A SANDBOX account never reaches a live ad server. Returned HERE, before the
     # live config assembly below reads a credential and before any live client is
     # constructed, so the live branches are unreachable for it rather than guarded.
-    if identity.account is not None and identity.account.sandbox:
+    if identity.in_sandbox:
         logger.info(
-            "[ADAPTER_SELECT] account %s is sandbox: answering with the simulating adapter "
-            "instead of the tenant's configured %r",
-            identity.account.account_id,
+            "[ADAPTER_SELECT] the request names a sandbox account: answering with the "
+            "simulating adapter instead of the tenant's configured %r",
             selected_adapter,
         )
         # LOUDLY, rather than inventing a posture. Every production path that creates a

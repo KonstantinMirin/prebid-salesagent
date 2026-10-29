@@ -194,7 +194,7 @@ def sync_creatives(
         # tenant and principal -- no second select. Set only when true and omitted
         # otherwise: the error shape forbids the field, and a production account's
         # response simply has none.
-        sandbox = True if identity.account is not None and identity.account.sandbox else None
+        sandbox = identity.sandbox_echo
 
         # Check if any product in this tenant requires AI provenance metadata
         provenance_policies = creative_repo.get_provenance_policies()
