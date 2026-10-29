@@ -63,13 +63,6 @@ def serve_peer_tool(key: str, tool: str, document: dict) -> str:
     return peer_agent_url(key)
 
 
-def serve_peer_catalog(key: str, document: dict) -> str:
-    """Serve *document* as ``list_creative_formats`` under *key*; return the agent URL a seller dials."""
-    from tests.e2e.webhook_capture_service import PEER_CATALOG_TOOL
-
-    return serve_peer_tool(key, PEER_CATALOG_TOOL, document)
-
-
 def rehomed_reference_format(format_id: str, agent_url: str) -> dict[str, Any]:
     """The reference capture's *format_id*, published by the agent at *agent_url* as its own.
 
