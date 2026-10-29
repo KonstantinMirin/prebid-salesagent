@@ -5,7 +5,9 @@ import functools
 import json
 import logging
 import uuid
+from collections.abc import Sequence
 from decimal import Decimal
+from typing import Any
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
 from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
@@ -149,7 +151,9 @@ def _parse_authored_format_options(raw: str | None) -> list[dict] | None:
     return document
 
 
-def _refuse_a_product_with_no_format_arm(format_ids: list | None, format_options: list | None) -> None:
+def _refuse_a_product_with_no_format_arm(
+    format_ids: Sequence[Any] | None, format_options: Sequence[Any] | None
+) -> None:
     """core/product.json's root anyOf, checked once where both arms are visible.
 
     The pin's ``format_ids`` property says "Products MUST carry ``format_ids``,
