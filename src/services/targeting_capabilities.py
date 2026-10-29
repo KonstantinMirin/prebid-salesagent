@@ -25,17 +25,40 @@ it answers the question the next reader would otherwise measure. salesagent-lh23
 the per-dimension table and the apply-exactly-or-reject decision it needs.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPValidationError
 from src.core.schemas import AnyTargeting, Error
-from src.core.validation_helpers import PACKAGES_FIELD
+from src.core.validation_helpers import PACKAGES_FIELD, package_field_path
 
 if TYPE_CHECKING:
     from src.core.database.models import Product
+
+#: Whether a buyer can sync catalogs to this seller. False until a sync_catalogs tool
+#: ships. ONE fact with two readers: get_adcp_capabilities declares it as
+#: ``catalog_management``, and :func:`raise_if_unappliable_targeting` refuses a targeting
+#: dimension that references a synced catalog while it is False.
+CATALOG_MANAGEMENT_SUPPORTED: Final[bool] = False
+
+
+def raise_if_unappliable_targeting(targeting: AnyTargeting, package_index: int) -> None:
+    """Refuse a targeting dimension this seller cannot apply, naming it.
+
+    ``core/targeting.json``: "A fresh create/update request MUST be applied exactly or
+    rejected". ``store_catchments`` targets stores "from a synced store catalog", its
+    ``catalog_id`` being a "Synced store-type catalog ID from sync_catalogs"; with no
+    catalog management no such catalog exists, so the entry cannot be applied.
+    ``targeting.mdx``: "unsupported dimensions ... produce ``UNSUPPORTED_FEATURE``" with
+    an exact ``error.field``.
+    """
+    if targeting.store_catchments and not CATALOG_MANAGEMENT_SUPPORTED:
+        raise AdCPCapabilityNotSupportedError(
+            field=package_field_path("targeting_overlay.store_catchments", package_index),
+            details=CapabilityRefusalDetails(capability="catalog_management"),
+        )
 
 
 def supports_property_list_filtering(adapter: object | type | None) -> bool:

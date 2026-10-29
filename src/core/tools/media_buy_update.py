@@ -95,6 +95,7 @@ from src.services.targeting_capabilities import (
     collect_targeting_violations,
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
+    raise_if_unappliable_targeting,
     validate_property_targeting_allowed,
 )
 
@@ -832,9 +833,10 @@ def _update_media_buy_impl(
                 # can't bypass unknown-field rejection, managed-only dimension checks, or
                 # same-value geo inclusion/exclusion overlap by sending changes through update.
                 overlay_violations: dict[str, object] = {}
-                for pkg_update in req.packages:
+                for pkg_index, pkg_update in enumerate(req.packages):
                     if pkg_update.targeting_overlay is None:
                         continue
+                    raise_if_unappliable_targeting(pkg_update.targeting_overlay, pkg_index)
                     overlay_violations.update(collect_targeting_violations(pkg_update.targeting_overlay))
                 if overlay_violations:
                     # Canonical code per the generated storyboard (UC-002 @ext-f and UC-003

@@ -84,7 +84,7 @@ from src.core.signing.posture import (
 )
 from src.core.tenant_context import TenantContext
 from src.core.tools.accounts import resolve_account_currency_modes
-from src.services.targeting_capabilities import supports_property_list_filtering
+from src.services.targeting_capabilities import CATALOG_MANAGEMENT_SUPPORTED, supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
 
@@ -656,7 +656,8 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         # without the tool would let buyers reach the boundary and get
         # UNSUPPORTED_FEATURE there instead of being warned at capability
         # discovery. Mirrors the property_list_filtering=False rationale above.
-        catalog_management=False,
+        # The same fact refuses targeting_overlay.store_catchments at create/update.
+        catalog_management=CATALOG_MANAGEMENT_SUPPORTED,
         # committed_metrics_supported: declared False until a committed-metrics
         # surface exists (no product/media-buy data model backs a delivery
         # commitment today). Mirrors the catalog_management=False rationale above.

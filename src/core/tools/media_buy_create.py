@@ -145,6 +145,7 @@ from src.services.targeting_capabilities import (
     collect_targeting_violations,
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
+    raise_if_unappliable_targeting,
     validate_property_targeting_allowed,
 )
 
@@ -3179,8 +3180,9 @@ async def _create_media_buy_impl(
 
         # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)
         if req.packages:
-            for pkg in req.packages:
+            for pkg_index, pkg in enumerate(req.packages):
                 if pkg.targeting_overlay is not None:
+                    raise_if_unappliable_targeting(pkg.targeting_overlay, pkg_index)
                     violations = collect_targeting_violations(pkg.targeting_overlay)
                     if violations:
                         raise AdCPInvalidRequestError(
