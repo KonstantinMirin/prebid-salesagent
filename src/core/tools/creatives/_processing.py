@@ -464,12 +464,16 @@ def _apply_approval_mode(
     creative_repo: CreativeRepository,
     row: Any,
     *,
-    approval_mode: str,
     tenant: TenantContext,
     webhook_url: str | None,
     principal_id: str,
 ) -> bool:
     """Set *row*'s review status from the tenant's approval mode. Returns whether it needs approval.
+
+    The mode is read off *tenant* and nowhere else, through the same
+    ``TenantContext.auto_approves_creatives`` that ``get_adcp_capabilities`` advertises as
+    ``media_buy.creative_approval_mode``, so the advertised posture and this routing cannot
+    disagree.
 
     ONE policy for a created and an updated creative, whichever identity arm it carries. The
     update path used to run this only ``if creative.format_id``, so re-syncing a creative
@@ -480,11 +484,11 @@ def _apply_approval_mode(
     identity (``CreativeAssetRequest`` refuses neither and both), so there is no item this
     policy has nothing to say about.
     """
-    if approval_mode == "auto-approve":
+    if tenant.auto_approves_creatives:
         row.status = CreativeStatusEnum.approved.value
         return False
     row.status = CreativeStatusEnum.pending_review.value
-    if approval_mode == "ai-powered":
+    if tenant.approval_mode == "ai-powered":
         _defer_ai_review(
             creative_repo,
             creative_id=row.creative_id,
@@ -500,7 +504,6 @@ def _update_existing_creative(
     existing_creative: Any,
     creative_repo: CreativeRepository,
     format_value: Any,
-    approval_mode: str,
     tenant: TenantContext,
     webhook_url: str | None,
     all_formats: list[Any],
@@ -519,8 +522,7 @@ def _update_existing_creative(
         existing_creative: Existing DBCreative model to update (mutated in-place).
         creative_repo: CreativeRepository for DB operations (flush, update_data).
         format_value: Validated FormatId from Creative schema.
-        approval_mode: Tenant approval mode (auto-approve, ai-powered, require-human).
-        tenant: Tenant dict with tenant_id, slack_webhook_url, etc.
+        tenant: The tenant; its approval_mode routes review (``_apply_approval_mode``).
         webhook_url: Push notification webhook URL for AI review callbacks.
         all_formats: Pre-fetched creative formats from registry.
         registry: CreativeAgentRegistry instance.
@@ -558,7 +560,6 @@ def _update_existing_creative(
     needs_approval = _apply_approval_mode(
         creative_repo,
         existing_creative,
-        approval_mode=approval_mode,
         tenant=tenant,
         webhook_url=webhook_url,
         principal_id=principal_id,
@@ -905,7 +906,6 @@ def _create_new_creative(
     creative: CreativeAsset,
     creative_repo: CreativeRepository,
     format_value: Any,
-    approval_mode: str,
     tenant: TenantContext,
     webhook_url: str | None,
     all_formats: list[Any],
@@ -1222,7 +1222,6 @@ def _create_new_creative(
     needs_approval = _apply_approval_mode(
         creative_repo,
         db_creative,
-        approval_mode=approval_mode,
         tenant=tenant,
         webhook_url=webhook_url,
         principal_id=principal_id,
