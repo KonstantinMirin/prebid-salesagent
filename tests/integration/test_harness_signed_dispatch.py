@@ -352,9 +352,9 @@ def test_a_refusal_carries_its_envelope_on_every_leg(integration_db, transport):
     WHY ``recovery`` IS THE POINT. ``core/error.json`` types ``error.code`` as an
     OPEN string, so a receiver that meets a code it does not know decodes the failure
     by reading ``recovery``; it is the one closed field in the envelope. This seller
-    classifies all 28 codes by hand in ``src/core/errors/signature_codes.py``
-    (``_RECOVERY``, transcribed from security.mdx @ v3.1.1 L1373 and L1119-1127),
-    and until this test nothing observed any of it on the wire.
+    loads the classification of all 29 codes from the pinned
+    ``enums/request-signing-error-code.json`` (``src/core/errors/codes.py``), and
+    until this test nothing observed any of it on the wire.
 
     WHY IT WAS UNGRADEABLE rather than merely ungraded. ``_jsonrpc_body``
     (``tests/harness/_base.py``) raised ``WireRefusal`` on every ``status_code >=

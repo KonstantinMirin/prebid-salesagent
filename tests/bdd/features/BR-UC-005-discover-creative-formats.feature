@@ -499,7 +499,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Given a creative agent whose catalog has no entries
     When the Buyer Agent requests the format catalog
     Then no formats from the creative agent should be returned
-    And the response should NOT have an "errors" field
+    And the response should NOT contain an "errors" field
 
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-response.json pointer=/properties/errors
   @T-UC-005-peer-catalog-all-discarded @UC-005-MAIN-MCP-01 @edge-case

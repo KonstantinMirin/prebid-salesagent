@@ -58,7 +58,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from tests.helpers.signing_vectors import create_media_buy_body
+from tests.helpers.signing_vectors import _PROFILE_ONLY_VECTORS, create_media_buy_body
 
 #: Vendored-corpus ids keyed the way ``load_signing_vectors`` keys them
 #: (``"negative/001-no-signature-header"``), derived from a vector file's own path so the
@@ -288,10 +288,17 @@ def corrected_compliance_tree(source: Path, dest: Path) -> Path:
     vectors = dest / "test-vectors" / "request-signing"
     if not vectors.is_dir():
         raise FileNotFoundError(f"no request-signing vectors under {vectors}")
-    for bucket in _BUCKETS:
-        for path in sorted((vectors / bucket).glob("*.json")):
-            source_text = path.read_text()
-            corrected = correct_vector_text(f"{bucket}/{path.stem}", source_text)
-            if corrected != source_text:
-                path.write_text(corrected)
+    vector_ids = [f"{bucket}/{path.stem}" for bucket in _BUCKETS for path in sorted((vectors / bucket).glob("*.json"))]
+    # The profile-3.2 vectors with no root counterpart are driven under their own ids, so
+    # the root walk above never reaches them. The 3.2.7 corpus ships real bodies for every
+    # profile-3.2 vector but one of these: ``001-base64url-sf-binary`` still carries the
+    # ``{"plan_id":"plan_001"}`` stub, and its headers pass through verbatim, graded at
+    # checklist step 1 -- before the body is read -- so its body is corrected like the rest.
+    vector_ids.extend(_PROFILE_ONLY_VECTORS)
+    for vector_id in vector_ids:
+        path = vectors / f"{vector_id}.json"
+        source_text = path.read_text()
+        corrected = correct_vector_text(vector_id, source_text)
+        if corrected != source_text:
+            path.write_text(corrected)
     return dest
