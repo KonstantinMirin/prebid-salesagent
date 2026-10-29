@@ -10,10 +10,13 @@ import json
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime
 
 from pydantic import ValidationError
 
+from src.core.errors.details import TimeWindowDetails
 from src.core.exceptions import (
+    AdCPInvalidRequestError,
     adcp_error_for,
 )
 from src.core.exceptions import (
@@ -198,6 +201,21 @@ def package_field_path(attr: str, index: int) -> str:
     ``PACKAGES_FIELD`` where the collection as a whole failed (salesagent-rfxfu).
     """
     return f"packages[{index}].{attr}"
+
+
+def refuse_inverted_flight(start: datetime, end: datetime) -> None:
+    """Refuse a buy-level flight whose end is not after its start: INVALID_REQUEST on ``end_time``.
+
+    create_media_buy.mdx "Flight date validation": "Out-of-range or inverted dates SHOULD
+    return an ``INVALID_REQUEST`` error". The create path checks the requested window and the
+    update path checks the window the update would leave, and both answer here, so one rule
+    has one code whichever task reached it.
+    """
+    if end <= start:
+        raise AdCPInvalidRequestError(
+            details=TimeWindowDetails(start_time=str(start), end_time=str(end)),
+            field="end_time",
+        )
 
 
 def format_validation_error(validation_error: ValidationError, label: str = "request") -> str:
