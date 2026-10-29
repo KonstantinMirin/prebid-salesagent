@@ -34,6 +34,7 @@ from src.core.exceptions import (
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
+    AdCPConflictError,
     AdCPContextNotFoundError,
     AdCPCreativeNotFoundError,
     AdCPGoneError,
@@ -63,6 +64,7 @@ from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.errors.details import (
     AdapterFailureDetails,
     CapabilityRefusalDetails,
+    ConflictDetails,
     CreativeRefDetails,
     EntityRefDetails,
     ErrorProblem,
@@ -650,6 +652,34 @@ def _verify_principal(
         )
 
 
+def _refuse_stale_revision(req: UpdateMediaBuyRequest, repo: MediaBuyRepository) -> None:
+    """Refuse an update whose ``revision`` is not the buy's current one, with CONFLICT.
+
+    update-media-buy-request.json ``/properties/revision``: "When provided, sellers MUST
+    reject the update with CONFLICT if the media buy's current revision does not match,
+    and MUST enforce that comparison atomically with the write". update_media_buy.mdx adds
+    that the seller "applies no changes", so this runs before the first write. The value
+    compared is read under the row lock ``lock_revision`` takes, which this transaction
+    holds through its own revision bump. An absent ``revision`` is last-write-wins: the
+    field is optional "for backward compatibility".
+
+    The details are error-details/conflict.json's: the buy, the revision the buyer
+    expected, and the one it is at, so the buyer can re-read and retry.
+    """
+    if req.revision is None:
+        return
+    current = repo.lock_revision(req.media_buy_id)
+    if current is not None and current != req.revision:
+        raise AdCPConflictError(
+            details=ConflictDetails(
+                resource_id=req.media_buy_id,
+                expected_version=str(req.revision),
+                current_version=str(current),
+            ),
+            field="revision",
+        )
+
+
 def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
     identity: AccountIdentity,
@@ -746,6 +776,7 @@ def _update_media_buy_impl(
 
             # Verify principal owns this media buy
             _verify_principal(media_buy_id_to_use, identity, uow.media_buys)
+            _refuse_stale_revision(req, uow.media_buys)
 
             # State-machine precondition: terminal states reject all mutations,
             # and non-terminal states only accept actions in their valid set.

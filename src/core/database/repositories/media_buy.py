@@ -89,6 +89,26 @@ class MediaBuyRepository:
             raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
         return media_buy
 
+    def lock_revision(self, media_buy_id: str) -> int | None:
+        """Lock the media buy's row for this transaction and return its current revision.
+
+        ``SELECT ... FOR NO KEY UPDATE``: the row stays locked until the Unit of Work ends,
+        so no other writer can bump the revision between a caller's comparison against this
+        value and the bump its own write makes. That is the atomicity the update request's
+        ``revision`` demands of the check. ``NO KEY`` is the lock PostgreSQL's own UPDATE of
+        a non-key column takes: it serializes writers of this row but not inserts of rows
+        that reference it (packages, webhook delivery logs), which take ``FOR KEY SHARE``.
+        ``None`` when the buy is not in this tenant.
+        """
+        return self._session.scalars(
+            select(MediaBuy.revision)
+            .where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.media_buy_id == media_buy_id,
+            )
+            .with_for_update(key_share=True)
+        ).first()
+
     def find_by_idempotency_key(
         self, idempotency_key: str, principal_id: str, account_id: str | None = None
     ) -> MediaBuy | None:

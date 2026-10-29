@@ -3582,105 +3582,54 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # "completed" and affected_packages, so nothing observes the upload or the
         # assignment. It is parked as a vacuous pass in _UC002_UC003_VACUOUS_PARKS instead.
 
-        # T-UC-003-boundary-revision is wired (see _UC003_REVISION_TAGS and the
-        # uc003-manual-approval row in the routing registry below), so its steps
-        # RUN and each row fails or passes on its own assertion. Routing is per ROW,
-        # selected on the Examples `outcome` column rather than a node-id substring, so
-        # a row that changes its expected outcome stops matching instead of silently
-        # keeping someone else's exemption.
+        # T-UC-003-boundary-revision / -partition-revision are wired (see _UC003_REVISION_TAGS
+        # and the uc003-manual-approval row in the routing registry below), so their steps
+        # RUN and each row fails or passes on its own assertion.
         #
-        # Two rows expect CONFLICT and are the coverage half of #1607. Verified failure:
-        # `_assert_error_outcome` raises `AssertionError: Expected an error for outcome:
-        # error "CONFLICT" with suggestion` — an assertion about a response that came
-        # back 200 OK, NOT a StepDefinitionNotFoundError. Production accepts the stale
-        # and ahead tokens on a2a, mcp and rest and returns success; enforcement is what
-        # #1607 owns. strict=True so implementing it XPASSes and the graduation workflow
-        # catches the row rather than letting it sit green-by-omission.
+        # Graduated: the CONFLICT rows (stale_revision, ahead_revision, and the boundary's
+        # revision-below/above-current rows). They were strict xfails on two reasons: #1607,
+        # update_media_buy accepting a stale or ahead revision; and on a2a, #1885, the skill
+        # handler dropping `revision`. a2a now dispatches through `serve` like every other
+        # transport (the handler log quoted below shows `revision` arriving), and
+        # `_refuse_stale_revision` answers a mismatch with CONFLICT under the row lock
+        # `MediaBuyRepository.lock_revision` takes -- media-buy/update-media-buy-request.json
+        # /properties/revision, "sellers MUST reject the update with CONFLICT". The box run
+        # that lands this change is the evidence each row passes on all four transports.
+        # GRADUATED at the adcp 9.0.0 / AdCP 3.2.1 pin: the wrong_type row ('"7"').
+        # Its reason was "pydantic runs in lax mode, so the string "7" is coerced to
+        # 7 and a revision whose JSON type is wrong is ACCEPTED", and its named REMEDY
+        # was strict typing on the field — deferred because `revision` is INHERITED
+        # from the SDK model, so the decision was cross-cutting. The SDK made that
+        # decision: at v9 the inherited field is
+        #   Optional[Annotated[int, Strict(strict=True),
+        #                      BeforeValidator(as_json_schema_integer)]]   (+ Ge(1))
+        # and the measured behaviour now separates the two values the scenario says
+        # must not behave alike — model_validate(revision="7") REFUSES with
+        # [type=int_type] while revision=7 parses. The obligation itself did not move:
+        # media-buy/update-media-buy-request.json declares revision
+        # {"type": "integer", "minimum": 1} at the 3.2 pin, as it did at 3.1.
+        # Not vacuous: the row's Then is `error "INVALID_REQUEST" with suggestion`,
+        # which routes to TransportResult.assert_wire_error and raises outright when
+        # no wire envelope was captured — a request that died building in the step
+        # cannot pass it. The Given passes the string through UNCONVERTED into the
+        # shared harness env's dispatch kwargs, so all three transports send the same
+        # wrong-typed document. No second routing carries this tag: the only other
+        # mention of T-UC-003-partition-revision is the uc003-manual-approval EnvRoute
+        # (setup, not an exemption).
+        # GRADUATED (the remaining INVALID_REQUEST rows). The entry described a harness
+        # limitation -- "revision 0 is rejected by UpdateMediaBuyRequest's ge=1 during
+        # request construction in the step, so the request never reaches the seller" --
+        # and prescribed its own remedy: dispatch the raw payload instead of the typed
+        # model. That remedy is in place. The a2a handler log for these rows now reads
+        #   Found explicit skill invocation: update_media_buy with params:
+        #   ['revision', 'idempotency_key', 'media_buy_id', 'paused', 'account']
+        # so `revision` DOES reach the seller and the rows grade the seller's rejection
+        # as written. Strict XPASS on all three transports.
         #
-        # One row expects INVALID_REQUEST for revision 0 and fails for a DIFFERENT
-        # reason, which is why it is not filed under #1607: production DOES reject it,
-        # but `UpdateMediaBuyRequest.revision` carries `ge=1`, so pydantic raises during
-        # request construction inside the step — before any transport dispatch. The row
-        # cannot grade the seller's response because the request never reaches the
-        # seller. That is a harness limitation, not a production gap, and calling it one
-        # is the exact mislabelling this task exists to stop.
-        if marker_names & {"T-UC-003-boundary-revision", "T-UC-003-partition-revision"}:
-            # pytest-bdd nests a Scenario Outline's Examples row under the single
-            # `_pytest_bdd_example` param rather than exposing each column, so reading
-            # `params["outcome"]` returns None and every row falls through unrouted.
-            _row = (getattr(item, "callspec", None) and item.callspec.params.get("_pytest_bdd_example")) or {}
-            _row_outcome = str(_row.get("outcome") or "")
-            if "CONFLICT" in _row_outcome and is_a2a:
-                # a2a fails EARLIER than the others and for a different reason, so it
-                # does not carry #1607's label. Measured: a probe in _update_media_buy_impl
-                # reads `req.revision=None` on a2a and `6` on mcp/rest, because
-                # _handle_update_media_buy_skill rebuilds the request from five hand-listed
-                # fields and forwards another hand-listed subset — `revision` is in neither.
-                # Implementing CONFLICT would NOT xpass this row; the token never arrives.
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason=(
-                            "cause=transport-drops-parameter scope=per-transport ref=#1885 — the "
-                            "a2a skill handler discards `revision` before it reaches the tool, so "
-                            "this row cannot grade CONFLICT enforcement on a2a at all. NOT #1607: "
-                            "enforcing the check would leave this row red. #1885 is the remedy — "
-                            "route the handler through media_buy_update.UpdateMediaBuyRequest, which "
-                            "already forwards every field — so closing it makes this row gradeable. "
-                            "#1259 owns the separate question of why no guard sees the drop."
-                        ),
-                        strict=True,
-                    )
-                )
-            elif "CONFLICT" in _row_outcome:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason=(
-                            "cause=production-gap scope=per-transport ref=#1607 — update_media_buy "
-                            "accepts a stale or ahead revision and returns success; the spec MUST "
-                            "reject it with CONFLICT. Steps execute, the token arrives (probed: "
-                            "req.revision=6 on mcp and rest), and the failure is the missing "
-                            "rejection. scope=per-transport because each transport enforces (or "
-                            "fails to enforce) independently, so each must xpass on its own when "
-                            "#1607 lands."
-                        ),
-                        strict=True,
-                    )
-                )
-            # GRADUATED at the adcp 9.0.0 / AdCP 3.2.1 pin: the wrong_type row ('"7"').
-            # Its reason was "pydantic runs in lax mode, so the string "7" is coerced to
-            # 7 and a revision whose JSON type is wrong is ACCEPTED", and its named REMEDY
-            # was strict typing on the field — deferred because `revision` is INHERITED
-            # from the SDK model, so the decision was cross-cutting. The SDK made that
-            # decision: at v9 the inherited field is
-            #   Optional[Annotated[int, Strict(strict=True),
-            #                      BeforeValidator(as_json_schema_integer)]]   (+ Ge(1))
-            # and the measured behaviour now separates the two values the scenario says
-            # must not behave alike — model_validate(revision="7") REFUSES with
-            # [type=int_type] while revision=7 parses. The obligation itself did not move:
-            # media-buy/update-media-buy-request.json declares revision
-            # {"type": "integer", "minimum": 1} at the 3.2 pin, as it did at 3.1.
-            # Not vacuous: the row's Then is `error "INVALID_REQUEST" with suggestion`,
-            # which routes to TransportResult.assert_wire_error and raises outright when
-            # no wire envelope was captured — a request that died building in the step
-            # cannot pass it. The Given passes the string through UNCONVERTED into the
-            # shared harness env's dispatch kwargs, so all three transports send the same
-            # wrong-typed document. No second routing carries this tag: the only other
-            # mention of T-UC-003-partition-revision is the uc003-manual-approval EnvRoute
-            # (setup, not an exemption).
-            # GRADUATED (the remaining INVALID_REQUEST rows). The entry described a harness
-            # limitation -- "revision 0 is rejected by UpdateMediaBuyRequest's ge=1 during
-            # request construction in the step, so the request never reaches the seller" --
-            # and prescribed its own remedy: dispatch the raw payload instead of the typed
-            # model. That remedy is in place. The a2a handler log for these rows now reads
-            #   Found explicit skill invocation: update_media_buy with params:
-            #   ['revision', 'idempotency_key', 'media_buy_id', 'paused', 'account']
-            # so `revision` DOES reach the seller and the rows grade the seller's rejection
-            # as written. Strict XPASS on all three transports.
-            #
-            # The wrong_type row ("7" as a string) came out of this graduation red, because
-            # the blanket entry had been masking a REAL gap: pydantic lax mode coerced the
-            # string to an int and the request succeeded. That is fixed at the field
-            # instead of re-parked here -- see UpdateMediaBuyRequest.revision.
+        # The wrong_type row ("7" as a string) came out of this graduation red, because
+        # the blanket entry had been masking a REAL gap: pydantic lax mode coerced the
+        # string to an int and the request succeeded. That is fixed at the field
+        # instead of re-parked here -- see UpdateMediaBuyRequest.revision.
 
         # FIXME: UC-003 extension/error scenarios — production uses
         # different error codes than spec, or doesn't validate at all. These are
