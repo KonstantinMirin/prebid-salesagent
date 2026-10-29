@@ -220,7 +220,7 @@ jobs:
     # yet, or a pull request whose token cannot read the package), the agent is built
     # from source first: 11m on a hosted runner for adcp@8d1d3244b2ef. 35m then ran out
     # mid-suite, so the ceiling covers the source build as well.
-    timeout-minutes: 100
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -308,11 +308,18 @@ jobs:
       - name: Sample runner resources
         if: matrix.group == 'creative'
         run: |
-          nohup sh -c 'while true; do date -u +%T; df -h / | tail -1; free -m | sed -n 2,3p; uptime; docker stats --no-stream --format "{{.Name}} {{.CPUPerc}} {{.MemUsage}}" 2>/dev/null; sleep 120; done' > /tmp/runner-resources.log 2>&1 &
+          nohup sh -c 'while true; do date -u +%T; df -h / | tail -1; free -m | sed -n 2,3p; uptime; cat /proc/pressure/memory /proc/pressure/io 2>/dev/null; docker stats --no-stream --format "{{.Name}} {{.CPUPerc}} {{.MemUsage}}" 2>/dev/null; sleep 60; done' > /tmp/runner-resources.log 2>&1 &
       - name: Run integration suite in-network
         if: matrix.group == 'creative'
-        timeout-minutes: 90
-        run: ./run_all_tests.sh integration
+        timeout-minutes: 55
+        run: |
+          df -h /
+          ./scripts/creative-agent-stack.sh build
+          df -h /; docker system df
+          rm -rf /tmp/adcp-server-*
+          docker builder prune -af
+          df -h /
+          ./run_all_tests.sh integration
         env:
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
