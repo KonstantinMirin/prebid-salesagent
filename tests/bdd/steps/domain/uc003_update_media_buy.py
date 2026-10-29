@@ -488,7 +488,19 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
     # reaches production. AdCPPackageUpdate forbids it (extra=forbid), so it is
     # rejected — currently as VALIDATION_ERROR rather than the spec-expected
     # INVALID_REQUEST (BR-RULE-198), so T-UC-003-ext-w is xfailed (#1417).
-    _supported_pkg_fields = {"package_id", "budget", "paused", "targeting_overlay", "catalogs", "product_id"}
+    # canceled and start_time are package-update.json properties (adcp v3.2.7), sent as
+    # written: start_time's literal "asap" is the value the package-scope row exists to
+    # show refused (``not: {const: asap}``), so it is not resolved as a date token.
+    _supported_pkg_fields = {
+        "package_id",
+        "budget",
+        "paused",
+        "targeting_overlay",
+        "catalogs",
+        "product_id",
+        "canceled",
+        "start_time",
+    }
     kwargs = _ensure_update_defaults(ctx)
     pkg_update: dict[str, Any] = {}
     # Skip header row if present (pytest-bdd datatables include header as first row)
@@ -504,12 +516,12 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
             pkg_update["package_id"] = value
         elif field == "budget":
             pkg_update["budget"] = float(value)
-        elif field == "paused":
-            pkg_update["paused"] = as_bool(value)
+        elif field in ("paused", "canceled"):
+            pkg_update[field] = as_bool(value)
         elif field in ("targeting_overlay", "catalogs"):
             pkg_update[field] = json.loads(value)
-        elif field == "product_id":
-            pkg_update["product_id"] = value
+        elif field in ("product_id", "start_time"):
+            pkg_update[field] = value
     assert pkg_update, "Datatable produced empty package update — check table format"
     kwargs["packages"] = [pkg_update]
 
@@ -1888,21 +1900,18 @@ def given_new_end_time_after_existing_start(ctx: dict) -> None:
 
 @given(parsers.parse("the budget {amount:d} is greater than zero"))
 def given_budget_greater_than_zero(ctx: dict, amount: int) -> None:
-    """Declarative guard — verify the budget value from the datatable is positive.
+    """Declarative guard — the budget the package update carries is *amount*, and positive.
 
-    This is a precondition assertion: the scenario's datatable already set the
-    budget on update_kwargs; this step verifies the value is > 0 as the step
-    text claims.
+    The request's budget is the package update's: the pinned
+    ``media-buy/update-media-buy-request.json`` (adcp v3.2.7) declares no top-level
+    ``budget`` (its aggregate is ``total_budget``, an ``{amount, currency}`` object), and
+    ``media-buy/package-update.json`` declares ``budget``. This guard read a top-level
+    ``budget`` key no Given of its one scenario writes, so it refused every run before
+    dispatch.
     """
     assert amount > 0, f"Budget {amount} is not greater than zero — step precondition violated"
-    kwargs = _ensure_update_defaults(ctx)
-    actual_budget = kwargs.get("budget")
-    assert actual_budget is not None, (
-        "update_kwargs has no 'budget' — step claims budget is greater than zero "
-        "but no budget was set by a prior Given step"
-    )
-    assert float(actual_budget) == float(amount), (
-        f"Budget in update_kwargs ({actual_budget}) does not match step text ({amount})"
+    assert _requested_budget(ctx) == float(amount), (
+        f"the package update carries budget {_requested_budget(ctx)}, not the step's {amount}"
     )
 
 
@@ -3416,11 +3425,24 @@ def _assert_start_time_stored_as_sent(ctx: dict) -> None:
     _assert_instant_stored_as_sent("start_time", sent, _stored_existing_buy(ctx).start_time)
 
 
+def _assert_completed(ctx: dict) -> None:
+    """Applied in-line: the protocol status is ``completed`` on the success arm naming the buy.
+
+    ``update-media-buy-response.json`` (adcp v3.2.7) separates the synchronous success arm
+    from the submitted envelope; the top-level ``status`` (protocol-envelope TaskStatus) is
+    what tells the buyer which one it got, so an approval-gated update fails here.
+    """
+    _assert_wire_field_equals(ctx, "status", "completed")
+    _assert_synchronous_success(ctx)
+
+
 _UPDATE_OUTCOMES = {
     "accepted": _assert_synchronous_success,
     "accepted with the frequency cap stored": _assert_frequency_cap_stored,
     "success with each assignment's placement_ids stored as requested": _assert_assignment_routing_persisted,
     "accepted with no package modified": _assert_accepted_unmodified,
+    "success (completed)": _assert_completed,
+    "success (submitted)": _assert_submitted,
     "success with persisted records": _assert_persisted_success,
     "success with pending status": _assert_submitted,
     "submitted task envelope (awaiting approval)": _assert_submitted,
