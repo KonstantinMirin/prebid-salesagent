@@ -2393,14 +2393,7 @@ def given_request_canonical_creative_with_clickthrough(ctx: dict, signal: str) -
     )
     env._commit_factory_data()
     _add_creative_ids_to_package(ctx, [creative.creative_id])
-    product = ctx.get("default_product")
-    if product is not None:
-        product.format_options = [
-            *(product.format_options or []),
-            {"format_kind": "image", "params": {"width": 300, "height": 250}},
-        ]
-        env._commit_factory_data()
-    _seed_auto_approval(ctx)
+    _publish_on_default_product(ctx, {"format_kind": "image", "params": {"width": 300, "height": 250}})
 
 
 @given("a valid create_media_buy request with a canonical audio creative")
@@ -2427,14 +2420,7 @@ def given_request_canonical_audio_creative(ctx: dict) -> None:
     )
     env._commit_factory_data()
     _add_creative_ids_to_package(ctx, [creative.creative_id])
-    product = ctx.get("default_product")
-    if product is not None:
-        product.format_options = [
-            *(product.format_options or []),
-            {"format_kind": "audio_hosted", "params": {}},
-        ]
-        env._commit_factory_data()
-    _seed_auto_approval(ctx)
+    _publish_on_default_product(ctx, {"format_kind": "audio_hosted", "params": {}})
 
 
 #: A media slot id named by NOTHING except the product declaration under test: no slot of
@@ -2461,7 +2447,6 @@ def given_request_product_renames_the_media_slot(ctx: dict) -> None:
     name, so the scenario reddens unless the product declaration was actually consulted.
     """
     from tests.factories.creative import CreativeFactory
-    from tests.factories.creative_asset import build_assets, image_spec
 
     _ensure_request_defaults(ctx)
     env = ctx["env"]
@@ -2475,20 +2460,66 @@ def given_request_product_renames_the_media_slot(ctx: dict) -> None:
     )
     env._commit_factory_data()
     _add_creative_ids_to_package(ctx, [creative.creative_id])
+    _declare_renamed_media_slot(ctx)
+
+
+@given("a valid create_media_buy request uploading an inline creative keyed to the slot its product renames")
+def given_request_inline_creative_in_renamed_slot(ctx: dict) -> None:
+    """The renamed-slot product again, with the creative sent INLINE on the package.
+
+    create_media_buy syncs a package's inline creatives before the package exists, so the
+    sync names no assignment for them -- and a sync that assigns nothing holds a canonical
+    manifest to its KIND's slots, where ``image`` requires ``image_main``. These creatives are
+    assigned the moment the buy exists, and their manifest is owed the product's declaration,
+    which names :data:`PRODUCT_RENAMED_MEDIA_SLOT` (creative-manifests.mdx § Basic structure:
+    "assets is keyed by asset_group_id from the matched declaration's params.slots[]"). So the
+    sibling stored-creative scenario and this one must answer alike; update_media_buy, which
+    passes its assignments to the sync, already did.
+    """
+    from tests.factories.request import OMIT
+
+    _ensure_request_defaults(ctx)
+    ctx["request_kwargs"]["packages"][0]["creatives"] = [
+        CreativeAssetRequestFactory.payload(
+            creative_id="inline-renamed-slot",
+            name="Inline creative in the renamed slot",
+            format_id=OMIT,
+            format_kind="image",
+            assets=build_assets(image_spec(PRODUCT_RENAMED_MEDIA_SLOT)),
+        )
+    ]
+    _declare_renamed_media_slot(ctx)
+
+
+def _declare_renamed_media_slot(ctx: dict) -> None:
+    """Give the default product the one image declaration naming :data:`PRODUCT_RENAMED_MEDIA_SLOT`.
+
+    Its slot list REPLACES the kind's, so ``image_main`` is not owed.
+    """
+    _publish_on_default_product(
+        ctx,
+        {
+            "format_kind": "image",
+            "params": {
+                "width": 300,
+                "height": 250,
+                "slots": [{"asset_group_id": PRODUCT_RENAMED_MEDIA_SLOT, "asset_type": "image", "required": True}],
+            },
+        },
+    )
+
+
+def _publish_on_default_product(ctx: dict, declaration: dict[str, Any]) -> None:
+    """Add one canonical *declaration* to the default product's ``format_options``, then auto-approve.
+
+    The canonical creative Givens each need the product to publish the declaration their
+    creative selects; auto-approval is seeded so the create takes the synchronous path the
+    Thens read.
+    """
     product = ctx.get("default_product")
     if product is not None:
-        product.format_options = [
-            *(product.format_options or []),
-            {
-                "format_kind": "image",
-                "params": {
-                    "width": 300,
-                    "height": 250,
-                    "slots": [{"asset_group_id": PRODUCT_RENAMED_MEDIA_SLOT, "asset_type": "image", "required": True}],
-                },
-            },
-        ]
-        env._commit_factory_data()
+        product.format_options = [*(product.format_options or []), declaration]
+        ctx["env"]._commit_factory_data()
     _seed_auto_approval(ctx)
 
 

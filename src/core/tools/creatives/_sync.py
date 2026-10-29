@@ -67,12 +67,21 @@ def sync_creatives(
     identity: ResolvedIdentity,
     principal_id: str,
     tenant: TenantContext,
+    assigned_by_caller: bool = False,
 ) -> SyncCreativesResponse:
     """Sync creative assets to the centralized creative library.
 
     THE SERVICE. Takes a resolved caller and does the work: no auth, no transport concerns,
     no idempotency. Callable from any controller, and from any other service that needs
     creatives uploaded -- which is the point.
+
+    ``assigned_by_caller`` is True when the calling service assigns every creative in *req*
+    to a package once the sync returns -- ``create_media_buy``'s inline creatives, which are
+    synced before the packages they belong to exist, so ``req.assignments`` cannot name them.
+    Such a creative is graded against the declaration its package's product selects at that
+    service's own gate, and is not held to its kind here: a product may replace the kind's
+    slot list (core/product-format-declaration.json), and "assets is keyed by asset_group_id
+    from the matched declaration's params.slots[]" (creative-manifests.mdx § Basic structure).
     """
 
     # ``creatives`` is aliased because it is NARROWED below by the creative_ids filter.
@@ -248,10 +257,11 @@ def sync_creatives(
                     results.append(_failed_sync_result(creative_id, typed))
                     continue  # Skip to next creative
 
-                # A canonical manifest no assignment in this request selects a declaration
-                # for is held to its kind; an assigned one is graded against the product's
-                # declaration at the assignment gate instead (creative_satisfies).
-                if validated_creative.creative_id not in assigned_creative_ids:
+                # A canonical manifest no assignment selects a declaration for is held to its
+                # kind; an assigned one -- by this request, or by the calling service right
+                # after it -- is graded against the product's declaration at that assignment's
+                # gate instead (creative_satisfies).
+                if not assigned_by_caller and validated_creative.creative_id not in assigned_creative_ids:
                     check_unassigned_manifest(
                         creative, index=creative_index, creative_id=validated_creative.creative_id
                     )
