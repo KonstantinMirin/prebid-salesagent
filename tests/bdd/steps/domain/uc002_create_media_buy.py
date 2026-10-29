@@ -991,6 +991,13 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
             f"Expected media_buy_id in response for '{domain}' validation pass, "
             f"got {type(resp).__name__} without media_buy_id"
         )
+    if outcome.endswith(" resolves to now"):
+        # The row claims the literal 'asap' was resolved, which a buy id alone does not
+        # show: a seller that stored the literal or any other instant answered the same.
+        # The stored start must be the moment the seller took the buy, as INV-4 grades.
+        from tests.bdd.steps.domain.uc002_invariants import then_start_time_resolved
+
+        then_start_time_resolved(ctx)
 
 
 def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:

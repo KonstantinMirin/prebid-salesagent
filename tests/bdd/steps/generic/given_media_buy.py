@@ -1395,7 +1395,8 @@ def given_minimum_spend_scenario(ctx: dict, partition: str) -> None:
     - budget_meets_product_min: budget 5000 >= product min_spend 1000
     - budget_meets_tenant_min: budget 5000 >= tenant min_package_budget 100 (no product min)
     - no_minimum_configured: no min_spend at either level
-    - budget_below_product_min: budget 50 < product min_spend 1000
+    - budget_below_product_min: budget 500 < product min_spend 1000, but >= tenant
+      min_package_budget 100, so only the product minimum can refuse it
     - budget_below_tenant_min: budget 50 < tenant min_package_budget 100 (no product min)
     """
     partition = partition.strip()
@@ -1410,7 +1411,9 @@ def given_minimum_spend_scenario(ctx: dict, partition: str) -> None:
         _set_min_spend(ctx, product_min=None, tenant_min=None, budget=5000.0)
 
     elif partition == "budget_below_product_min":
-        _set_min_spend(ctx, product_min=1000.0, tenant_min=100.0, budget=50.0)
+        # Between the two minimums. At 50 the tenant minimum refused it too, with the same
+        # code and field, so the row passed whether or not the product minimum was enforced.
+        _set_min_spend(ctx, product_min=1000.0, tenant_min=100.0, budget=500.0)
 
     elif partition == "budget_below_tenant_min":
         _set_min_spend(ctx, product_min=None, tenant_min=100.0, budget=50.0)
@@ -1424,19 +1427,23 @@ def given_minimum_spend_configuration(ctx: dict, config: str) -> None:
     """Set up minimum spend configuration for boundary scenarios (BR-RULE-008).
 
     Boundary values:
-    - budget=100 min=100: budget exactly at product min_spend (exact match)
-    - budget=99.99 min=100: budget just below product min_spend
+    - budget=100 min=100: budget exactly at product min_spend (exact match), no tenant min
+    - budget=99.99 min=100: budget just below product min_spend, no tenant min
     - budget=50 tmin=50: budget exactly at tenant min_package_budget (no product min)
     - budget=49.99 tmin=50: budget just below tenant min_package_budget
     - budget=1 no-min: no minimum configured at any level
+
+    The two product-minimum rows clear the tenant minimum. With a tenant minimum of 100 as
+    well, 99.99 was refused by the tenant check with the same code and field, so the rows
+    graded nothing about the product minimum.
     """
     config = config.strip()
 
     if config == "budget=100 min=100":
-        _set_min_spend(ctx, product_min=100.0, tenant_min=100.0, budget=100.0)
+        _set_min_spend(ctx, product_min=100.0, tenant_min=None, budget=100.0)
 
     elif config == "budget=99.99 min=100":
-        _set_min_spend(ctx, product_min=100.0, tenant_min=100.0, budget=99.99)
+        _set_min_spend(ctx, product_min=100.0, tenant_min=None, budget=99.99)
 
     elif config == "budget=50 tmin=50":
         _set_min_spend(ctx, product_min=None, tenant_min=50.0, budget=50.0)

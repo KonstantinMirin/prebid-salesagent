@@ -697,11 +697,16 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
-    And the error code should be "INVALID_REQUEST"
+    And the error code should be "UNSUPPORTED_FEATURE"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error explains unsupported currency
     # POST-F3: Suggestion for recovery
+    # LOCAL CORRECTION: the generated line asserted INVALID_REQUEST. JPY is a schema-valid
+    # ISO 4217 code, so nothing about the request is malformed; the pinned enum's code for
+    # "a requested feature or field is not supported by this seller" is UNSUPPORTED_FEATURE,
+    # which is what create answers for the same currency gate (@T-UC-002-ext-d).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/UNSUPPORTED_FEATURE
 
   @T-UC-003-ext-g @extension @ext-g @error @post-f1 @post-f2 @post-f3
   Scenario: Daily spend cap exceeded -- updated budget exceeds daily max
@@ -718,9 +723,14 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
-    And the error code should be "BUDGET_TOO_LOW"
+    And the error code should be "BUDGET_EXCEEDED"
     And the error should include "recovery" field with value "correctable"
     And the error should include "suggestion" field
+    # LOCAL CORRECTION: the generated line asserted BUDGET_TOO_LOW, which the pinned enum
+    # defines as "Budget is below the seller's minimum" -- the opposite condition. A budget
+    # whose daily spend exceeds the cap is BUDGET_EXCEEDED ("Operation would exceed the
+    # allocated budget"), recovery correctable.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/BUDGET_EXCEEDED
     # BR-RULE-012 INV-2: daily budget > cap → rejected
     # POST-F1: System state unchanged
     # POST-F2: Error explains daily cap exceeded
@@ -1139,12 +1149,17 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Invalid partitions
       | partition      | value          | outcome                                              |
       | absent         | <not provided> | error "INVALID_REQUEST" with suggestion              |
-      | empty_string   |                | error "VALIDATION_ERROR" with suggestion              |
+      | empty_string   |                | error "INVALID_REQUEST" with suggestion              |
       | too_short      | abc1234        | error "INVALID_REQUEST" with suggestion              |
       | too_long       | <256 character string> | error "INVALID_REQUEST" with suggestion      |
     # The `absent` row moved from Valid to Invalid: v3.1 lists idempotency_key in the root
     # /required set of adcp/_schemas/3.1/media-buy/update-media-buy-request.json, at the
     # pinned spec version 3.1.1 (adcp==6.6.0), so omitting it is a schema rejection.
+    # LOCAL CORRECTION: the empty_string row asserted VALIDATION_ERROR. An empty key fails the
+    # pinned idempotency_key minLength 16 and pattern, a schema violation, so the code is
+    # INVALID_REQUEST -- the same answer the boundary outline's "empty string (length 0)" row
+    # already grades.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/idempotency_key
 
   @T-UC-003-boundary-idempotency-key @boundary @idempotency_key
   Scenario Outline: Idempotency key boundary validation - <boundary_point>
@@ -1252,7 +1267,11 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Invalid partitions
       | partition       | amount | outcome                                      |
       | zero_amount     | 0      | error "BUDGET_TOO_LOW" with suggestion        |
-      | negative_amount | -50    | error "BUDGET_TOO_LOW" with suggestion        |
+      | negative_amount | -50    | error "INVALID_REQUEST" with suggestion       |
+    # LOCAL CORRECTION: negative_amount asserted BUDGET_TOO_LOW. The pinned package-update.json
+    # gives budget "minimum": 0, so -50 is a schema violation (INVALID_REQUEST); only a
+    # schema-valid amount below the seller's minimum, like 0, is BUDGET_TOO_LOW.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/budget
 
   @T-UC-003-boundary-budget-amount @boundary @budget_amount
   Scenario Outline: Budget amount boundary validation - <boundary_point>
@@ -1273,7 +1292,10 @@ Feature: BR-UC-003 Update Media Buy
       | boundary_point                  | amount | outcome                                      |
       | amount = 0 (rejected by rule)   | 0      | error "BUDGET_TOO_LOW" with suggestion        |
       | amount = 0.01 (minimum positive) | 0.01  | success                                      |
-      | amount negative                 | -1     | error "BUDGET_TOO_LOW" with suggestion        |
+      | amount negative                 | -1     | error "INVALID_REQUEST" with suggestion       |
+    # LOCAL CORRECTION: "amount negative" asserted BUDGET_TOO_LOW. The pinned package-update.json
+    # gives budget "minimum": 0, so -1 is a schema violation, answered INVALID_REQUEST.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/budget
 
   @T-UC-003-partition-daily-spend-cap @partition @daily_spend_cap
   Scenario Outline: Daily spend cap partition validation - <partition>
@@ -1300,7 +1322,10 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition    | budget | cap_config | flight_days | outcome                                      |
-      | exceeds_cap  | 50000  | 1000       | 10          | error "BUDGET_TOO_LOW" with suggestion        |
+      | exceeds_cap  | 50000  | 1000       | 10          | error "BUDGET_EXCEEDED" with suggestion       |
+    # LOCAL CORRECTION: exceeds_cap asserted BUDGET_TOO_LOW ("Budget is below the seller's
+    # minimum"). A daily spend above the cap is BUDGET_EXCEEDED in the pinned enum.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/BUDGET_EXCEEDED
 
   @T-UC-003-boundary-daily-spend-cap @boundary @daily_spend_cap
   Scenario Outline: Daily spend cap boundary validation - <boundary_point>
@@ -1322,9 +1347,12 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Boundary values
       | boundary_point                       | budget | cap_config | flight_days | outcome                                      |
       | daily budget = cap (at limit)        | 10000  | 1000       | 10          | success                                      |
-      | daily budget > cap (exceeds)         | 10001  | 1000       | 10          | error "BUDGET_TOO_LOW" with suggestion        |
+      | daily budget > cap (exceeds)         | 10001  | 1000       | 10          | error "BUDGET_EXCEEDED" with suggestion       |
       | cap not configured (skipped)         | 99999  | not set    | 10          | success                                      |
       | flight duration 0 days (floor to 1)  | 500    | 1000       | 0           | success                                      |
+    # LOCAL CORRECTION: the exceeds row asserted BUDGET_TOO_LOW ("Budget is below the seller's
+    # minimum"). A daily spend above the cap is BUDGET_EXCEEDED in the pinned enum.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/BUDGET_EXCEEDED
 
   @T-UC-003-partition-media-buy-identification @partition @media_buy_identification
   Scenario Outline: Media buy identification partition validation - <partition>
@@ -1877,12 +1905,17 @@ Feature: BR-UC-003 Update Media Buy
       | partition              | start_value              | outcome |
       | asap_literal           | asap                     | success |
       | future_iso_datetime    | 2026-05-01T00:00:00Z     | success |
-      | future_naive_datetime  | 2026-05-01T00:00:00      | success |
 
     Examples: Invalid partitions
-      | partition          | start_value          | outcome                  |
-      | past_datetime      | 2020-01-01T00:00:00Z | error with suggestion    |
-      | wrong_case_asap    | ASAP                 | error with suggestion    |
+      | partition             | start_value          | outcome                                 |
+      | past_datetime         | 2020-01-01T00:00:00Z | error with suggestion                   |
+      | wrong_case_asap       | ASAP                 | error with suggestion                   |
+      | future_naive_datetime | 2026-05-01T00:00:00  | error "INVALID_REQUEST" with suggestion |
+    # LOCAL CORRECTION: future_naive_datetime sat with the valid partitions and expected
+    # success. The pinned core/start-timing.json admits the const "asap" or a string of
+    # format date-time, which is RFC 3339 and requires a UTC offset, so a naive timestamp
+    # is a schema violation: INVALID_REQUEST.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/start-timing.json
 
   @T-UC-003-boundary-start-time @boundary @start_time
   Scenario Outline: Start time boundary validation - <boundary_point>
