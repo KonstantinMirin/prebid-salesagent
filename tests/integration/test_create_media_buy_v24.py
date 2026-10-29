@@ -100,54 +100,34 @@ class TestCreateMediaBuyV24Format:
             # Add required setup data (access control, currency limits, property tags)
             add_required_setup_data(session, "test_tenant_v24")
 
-            # Create products for different currencies (for multi-package test)
-            product_usd = create_test_product_with_pricing(
-                session=session,
-                tenant_id="test_tenant_v24",
-                product_id="prod_test_v24_usd",
-                name="Test Product V24 USD",
-                description="Test product for v2.4 format (USD)",
-                format_ids=[{"agent_url": "https://test.com", "id": "display_300x250"}],
-                delivery_type="guaranteed",
-                pricing_model="CPM",
-                rate="10.0",
-                is_fixed=True,
-                currency="USD",
-                min_spend_per_package="1000.0",
-                targeting_template={},
-            )
-
-            product_eur = create_test_product_with_pricing(
-                session=session,
-                tenant_id="test_tenant_v24",
-                product_id="prod_test_v24_eur",
-                name="Test Product V24 EUR",
-                description="Test product for v2.4 format (EUR)",
-                format_ids=[{"agent_url": "https://test.com", "id": "display_300x250"}],
-                delivery_type="guaranteed",
-                pricing_model="CPM",
-                rate="10.0",
-                is_fixed=True,
-                currency="EUR",
-                min_spend_per_package="1000.0",
-                targeting_template={},
-            )
-
-            product_gbp = create_test_product_with_pricing(
-                session=session,
-                tenant_id="test_tenant_v24",
-                product_id="prod_test_v24_gbp",
-                name="Test Product V24 GBP",
-                description="Test product for v2.4 format (GBP)",
-                format_ids=[{"agent_url": "https://test.com", "id": "display_300x250"}],
-                delivery_type="guaranteed",
-                pricing_model="CPM",
-                rate="10.0",
-                is_fixed=True,
-                currency="GBP",
-                min_spend_per_package="1000.0",
-                targeting_template={},
-            )
+            # Three USD products for the multi-package buy, and one EUR product. ONE
+            # currency per buy: create_media_buy.mdx (Pricing & Currency) says "Every
+            # selected pricing option MUST declare that currency ... Split products
+            # requiring another currency into a separate media buy", and production refuses
+            # a mixed buy with TERMS_REJECTED. The multi-package test used to buy one USD,
+            # one EUR and one GBP product together, which is that refused buy. Distinct
+            # products, because a buy naming one product twice is refused too.
+            for product_id, currency in (
+                ("prod_test_v24_usd", "USD"),
+                ("prod_test_v24_usd_2", "USD"),
+                ("prod_test_v24_usd_3", "USD"),
+                ("prod_test_v24_eur", "EUR"),
+            ):
+                create_test_product_with_pricing(
+                    session=session,
+                    tenant_id="test_tenant_v24",
+                    product_id=product_id,
+                    name=f"Test Product V24 {product_id}",
+                    description=f"Test product for v2.4 format ({currency})",
+                    format_ids=[{"agent_url": "https://test.com", "id": "display_300x250"}],
+                    delivery_type="guaranteed",
+                    pricing_model="CPM",
+                    rate="10.0",
+                    is_fixed=True,
+                    currency=currency,
+                    min_spend_per_package="1000.0",
+                    targeting_template={},
+                )
 
             # Add additional currency limits for EUR
             currency_limit_eur = CurrencyLimit(
@@ -157,15 +137,6 @@ class TestCreateMediaBuyV24Format:
                 max_daily_package_spend=10000.0,
             )
             session.add(currency_limit_eur)
-
-            # Add GBP for multi-currency test
-            currency_limit_gbp = CurrencyLimit(
-                tenant_id="test_tenant_v24",
-                currency_code="GBP",
-                min_package_budget=1000.0,
-                max_daily_package_spend=10000.0,
-            )
-            session.add(currency_limit_gbp)
 
             # The account every request below names. media_buys has a
             # (tenant_id, account_id) foreign key, so the row must exist; in production
@@ -186,11 +157,11 @@ class TestCreateMediaBuyV24Format:
                 "principal_id": "test_principal_v24",
                 "product_id_usd": "prod_test_v24_usd",
                 "product_id_eur": "prod_test_v24_eur",
-                "product_id_gbp": "prod_test_v24_gbp",
+                "product_id_usd_2": "prod_test_v24_usd_2",
+                "product_id_usd_3": "prod_test_v24_usd_3",
                 # Use generated pricing_option_id format (not database ID)
                 "pricing_option_id_usd": "cpm_usd_fixed",
                 "pricing_option_id_eur": "cpm_eur_fixed",
-                "pricing_option_id_gbp": "cpm_gbp_fixed",
             }
 
             # Cleanup - IMPORTANT: Delete in reverse dependency order
@@ -363,22 +334,19 @@ class TestCreateMediaBuyV24Format:
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
+        # Three distinct products, all priced in USD: a buy has one currency (see the
+        # setup fixture), so the packages share the USD pricing option id.
         packages = [
             PackageRequest(
-                product_id=setup_test_tenant["product_id_usd"],  # Use USD product
+                product_id=setup_test_tenant[product_key],
                 pricing_option_id=setup_test_tenant["pricing_option_id_usd"],  # Required field
-                budget=3000.0,  # Float budget, currency from pricing_option
-            ),
-            PackageRequest(
-                product_id=setup_test_tenant["product_id_eur"],  # Use EUR product
-                pricing_option_id=setup_test_tenant["pricing_option_id_eur"],  # Required field
-                budget=2500.0,  # Float budget, currency from pricing_option
-            ),
-            PackageRequest(
-                product_id=setup_test_tenant["product_id_gbp"],  # Use GBP product
-                pricing_option_id=setup_test_tenant["pricing_option_id_gbp"],  # Required field
-                budget=2000.0,  # Float budget, currency from pricing_option
-            ),
+                budget=budget,  # Float budget, currency from pricing_option
+            )
+            for product_key, budget in (
+                ("product_id_usd", 3000.0),
+                ("product_id_usd_2", 2500.0),
+                ("product_id_usd_3", 2000.0),
+            )
         ]
 
         identity = _account_identity()
