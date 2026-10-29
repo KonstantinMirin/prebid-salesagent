@@ -128,6 +128,13 @@ class Tenant(Base, JSONValidatorMixin):
     account_sandbox: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )  # #1592 C2/A2
+    # Whether this seller federates the AdCP standard creative agent (the deployment's
+    # operator agent) in its format catalog and its ``creative_agents`` referrals. Default
+    # TRUE: a seller federates it unless an operator turns it off on the creative-agents
+    # admin page, which a seller listing only its own creative agents does.
+    use_default_creative_agent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
     account_approval_mode: Mapped[str | None] = mapped_column(
         String(50), nullable=True
     )  # BR-RULE-060: auto|credit_review|legal_review

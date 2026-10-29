@@ -331,19 +331,21 @@ class CreativeAgentRegistry:
         """Get list of creative agents for a tenant.
 
         Returns:
-            List of CreativeAgent instances (default + tenant-specific)
+            List of CreativeAgent instances: the deployment's default agent unless the
+            tenant does not federate it (``tenants.use_default_creative_agent``), then the
+            tenant's own enabled agents.
         """
-        agents = [self.DEFAULT_AGENT]
-
         if not tenant_id:
-            return agents
+            return [self.DEFAULT_AGENT]
 
         # Load tenant-specific agents from database
         from src.core.database.database_session import get_db_session
         from src.core.database.repositories.agent import CreativeAgentRepository
 
         with get_db_session() as session:
-            db_agents = CreativeAgentRepository(session, tenant_id).get_enabled()
+            repo = CreativeAgentRepository(session, tenant_id)
+            agents = [self.DEFAULT_AGENT] if repo.federates_default_agent() else []
+            db_agents = repo.get_enabled()
 
             # config_for, not a second mapping: the inline block here also wrote an
             # auth["header"] key with ZERO readers in src/, while auth_header was
