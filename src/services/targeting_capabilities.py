@@ -71,24 +71,42 @@ def supports_property_list_filtering(adapter: object | type | None) -> bool:
 UNDECLARED_OVERLAY_DIMENSIONS: tuple[str, ...] = ("collection_list", "collection_list_exclude")
 
 
+def refuse_unsupported_package_members(
+    packages: "Sequence[Any] | None",
+    names: "Sequence[str]",
+    *,
+    member: str | None = None,
+) -> None:
+    """Refuse the first package that sets one of ``names`` this seller cannot apply.
+
+    Reads each name on the package itself, or on its ``member`` object (for example
+    ``targeting_overlay``) when one is given. The refusal is UNSUPPORTED_FEATURE with the
+    name as the capability and the indexed pointer (``packages[0].targeting_overlay.x``)
+    as the field, so every caller's refusal has the same shape. Callers raise it before a
+    unit of work opens, so nothing is persisted. Names are read without a default, so a
+    pin that renames one fails loudly instead of never matching.
+    """
+    prefix = f"{member}." if member else ""
+    for index, package in enumerate(packages or ()):
+        target = getattr(package, member) if member else package
+        if target is None:
+            continue
+        for name in names:
+            if getattr(target, name) is not None:
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(capability=name),
+                    field=package_field_path(f"{prefix}{name}", index),
+                )
+
+
 def refuse_undeclared_overlay_dimensions(packages: "Sequence[Any] | None") -> None:
     """Refuse a package overlay that names a dimension this seller does not declare.
 
     ``core/targeting.json``: "A fresh create/update request MUST be applied exactly or
     rejected". Accepting the reference and dropping it is the one answer that sentence
-    excludes. Shared by create_media_buy and update_media_buy, and raised before either
-    opens a unit of work, so nothing is persisted.
+    excludes. Shared by create_media_buy and update_media_buy.
     """
-    for index, package in enumerate(packages or ()):
-        overlay = package.targeting_overlay
-        if overlay is None:
-            continue
-        for name in UNDECLARED_OVERLAY_DIMENSIONS:
-            if getattr(overlay, name) is not None:
-                raise AdCPCapabilityNotSupportedError(
-                    details=CapabilityRefusalDetails(capability=name),
-                    field=package_field_path(f"targeting_overlay.{name}", index),
-                )
+    refuse_unsupported_package_members(packages, UNDECLARED_OVERLAY_DIMENSIONS, member="targeting_overlay")
 
 
 # ─── property_list targeting helpers ────────────────────────────────────
