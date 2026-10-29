@@ -2955,14 +2955,25 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: the rows expected "accepted". core/targeting.json describes both
+    # collection_list and collection_list_exclude as "Seller must declare support in
+    # get_adcp_capabilities", and get-adcp-capabilities-response.json's
+    # execution.targeting.collection_list reads "False or absence makes no product-level
+    # promise. Product.overlay_support is authoritative". This seller declares neither, at
+    # either level, and the same targeting.json says "A fresh create/update request MUST be
+    # applied exactly or rejected". An accepted reference was stored and never applied, so the
+    # pinned answer is UNSUPPORTED_FEATURE naming the dimension, before any mutation: the base
+    # request's budget change must not land either. With both set, collection_list is named.
     # ---------- immutable_field_guard boundaries (immutable_field_guard.yaml, BR-RULE-198) ----------
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/collection_list
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json
 
     Examples: collection_list overlay (BR-UC-002/003)
       | boundary                                              | outcome  |
-      | collection_list with valid agent_url and list_id      | accepted |
-      | collection_list_exclude with valid agent_url and list_id | accepted |
-      | both collection_list and collection_list_exclude set  | accepted |
+      | collection_list with valid agent_url and list_id      | error "UNSUPPORTED_FEATURE" on packages[0].targeting_overlay.collection_list with suggestion — no records persisted |
+      | collection_list_exclude with valid agent_url and list_id | error "UNSUPPORTED_FEATURE" on packages[0].targeting_overlay.collection_list_exclude with suggestion — no records persisted |
+      | both collection_list and collection_list_exclude set  | error "UNSUPPORTED_FEATURE" on packages[0].targeting_overlay.collection_list with suggestion — no records persisted |
 
   @T-UC-003-bva-immutable-field-guard @boundary @immutable_field_guard @schema-v3.1 @post-f2
   Scenario Outline: immutable field guard boundary - <boundary>

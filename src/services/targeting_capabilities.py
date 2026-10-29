@@ -25,12 +25,13 @@ it answers the question the next reader would otherwise measure. salesagent-lh23
 the per-dimension table and the apply-exactly-or-reject decision it needs.
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPValidationError
 from src.core.schemas import AnyTargeting, Error
 from src.core.validation_helpers import PACKAGES_FIELD
 
@@ -127,6 +128,37 @@ def property_list_unsupported_advisories(
     """
     advisories = build_property_list_unsupported_advisories(packages, supports_property_list_filtering(adapter))
     return advisories or None
+
+
+#: Overlay dimensions this seller does not declare, and so refuses. ``core/targeting.json``
+#: describes both: "Seller must declare support in get_adcp_capabilities". The declaration is
+#: ``get-adcp-capabilities-response.json`` ``execution.targeting.collection_list`` /
+#: ``collection_list_exclude`` ("False or absence makes no product-level promise.
+#: Product.overlay_support is authoritative"). ``seller_capabilities`` builds that targeting
+#: block from the geo dimensions only, no product carries ``overlay_support``, and no adapter
+#: compiles either reference into ad-server targeting. ``core/targeting.json``: "A fresh
+#: create/update request MUST be applied exactly or rejected", so storing the reference and
+#: answering success would be a silent drop.
+UNDECLARED_OVERLAY_DIMENSIONS: tuple[str, ...] = ("collection_list", "collection_list_exclude")
+
+
+def refuse_undeclared_overlay_dimensions(packages: Sequence[Any] | None) -> None:
+    """Refuse a package whose ``targeting_overlay`` sets a dimension this seller does not declare.
+
+    One raise site for create_media_buy and update_media_buy, both before any mutation. A
+    ``null`` value is not refused: on an update it clears the stored dimension
+    (``core/targeting-input.json``), which applies exactly.
+    """
+    for index, package in enumerate(packages or ()):
+        overlay = package.targeting_overlay
+        if overlay is None:
+            continue
+        for name in UNDECLARED_OVERLAY_DIMENSIONS:
+            if getattr(overlay, name) is not None:
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(capability=name),
+                    field=f"packages[{index}].targeting_overlay.{name}",
+                )
 
 
 def validate_property_targeting_allowed(
