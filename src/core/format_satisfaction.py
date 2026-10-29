@@ -45,14 +45,34 @@ the route: "For a product with multiple included placements, the selected format
 cover every placement." :attr:`SelectorResolution.uncovered` is that rule, asked once the
 four steps have selected a declaration.
 
+A CREATIVE IS GRADED ON ITS MANIFEST, not on params. A stored creative declares a kind and
+an option, never ``params``; what it states about its dimensions, duration, codecs and file
+size is on its ASSETS. ``docs/creative/creative-manifests.mdx`` § Validation is the rule:
+
+  1. Resolve ``format_option_ref`` when present; otherwise select the unambiguous compatible
+     ``format_kind`` declaration.
+  2. Confirm all required slots are present.
+  3. Validate each asset against its declared type and technical constraints.
+  4. Check fixed dimensions, durations, codecs, file-size limits, and required disclosures.
+  5. Reject unknown or uncovered selections; do not silently relax the target contract.
+
+:func:`creative_satisfies` is that rule, and it runs through the same routes as a selector:
+the manifest rides on the route (:attr:`FormatRoute.manifest`), the selected declaration is
+graded against it by :func:`_manifest_shortfalls`, and the facts an asset states are put in
+the declaration's own vocabulary so :func:`_unsatisfied_params` -- the one matcher -- grades
+them. ``formats.mdx``'s fifth rule is what this closes on the creative side: a same-kind
+728x90 creative no longer satisfies a product fixing 300x250.
+
 WHAT THIS MODULE DOES NOT DO, deliberately:
 
-* It does not derive a creative's params from its assets. A stored creative declares a
-  kind and an option, never ``params``, so a creative's claim passes ``params=None`` and
-  the params rules are SKIPPED for it -- see :func:`satisfies`. Deriving them from the
-  manifest's assets is the creative-side stage's job (``salesagent-ol033.7``), and until
-  it lands, grading a creative on params the seller cannot read would refuse spec-legal
-  traffic.
+* It does not grade a LEGACY creative's manifest. ``assets`` is keyed by the matched
+  declaration's ``params.slots[]`` on the canonical branch (creative-manifests.mdx § Basic
+  structure), while a creative naming a ``format_id`` keys its assets by that named format's
+  own asset ids, so grading them against a canonical slot list would refuse every legacy
+  creative for a vocabulary it never used.
+* Required disclosures, aspect ratios and the per-kind multi-asset constraints (carousel
+  cards, responsive asset counts) are not read: no asset member states them in the
+  declaration's vocabulary.
 """
 
 from __future__ import annotations
@@ -67,16 +87,28 @@ from typing import Any, get_args
 
 from adcp.canonical_formats import upgrade_legacy_format_id
 from adcp.canonical_formats.format_options import FormatKindNotInClosedSetError
+from adcp.types import ErrorCode
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from adcp.types.domains.core.format_option_ref import FormatOptionReference as LibraryFormatOptionReference
 from adcp.types.domains.core.placement import Mode as LibraryPlacementMode
 from adcp.types.domains.core.product_format_declaration import (
     ProductFormatDeclaration as LibraryFormatDeclaration,
 )
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, RootModel, TypeAdapter, ValidationError
 
-from src.core.errors.details import CapabilityRefusalDetails, SelectorConflictDetails, SelectorRouteSummary
-from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPConflictingSelectorsError
+from src.core.errors.details import (
+    CapabilityRefusalDetails,
+    CreativeManifestDetails,
+    ErrorProblem,
+    SelectorConflictDetails,
+    SelectorRouteSummary,
+)
+from src.core.exceptions import (
+    AdCPCapabilityNotSupportedError,
+    AdCPConflictingSelectorsError,
+    AdCPCreativeSizeMismatchError,
+    AdCPCreativeValidationFailedError,
+)
 from src.core.schemas import FormatOptionIdentity, FormatSelector
 
 logger = logging.getLogger(__name__)
@@ -124,6 +156,8 @@ class FormatRefusal(StrEnum):
     LEGACY_NOT_SELECTED = "legacy_not_selected"
     LEGACY_NOT_ACCEPTED = "legacy_not_accepted"
     PLACEMENT_UNCOVERED = "placement_uncovered"
+    MANIFEST_NOT_SATISFIED = "manifest_not_satisfied"
+    MANIFEST_AMBIGUOUS = "manifest_ambiguous"
 
 
 #: The two members that are a RESOLUTION failure in ``media-buy/package-request.json``'s
@@ -137,6 +171,36 @@ class FormatRefusal(StrEnum):
 _RESOLUTION_FAILURES: frozenset[FormatRefusal] = frozenset(
     {FormatRefusal.OPTION_NOT_PUBLISHED, FormatRefusal.LEGACY_UNPROJECTABLE}
 )
+
+
+#: The declaration constraints that are a creative's SIZE. A manifest failing only these is
+#: ``CREATIVE_SIZE_MISMATCH``: "The submitted creative dimensions do not match any size accepted
+#: by the selected packages" (enums/error-code.json). Any other failure is not about size.
+_DIMENSION_CONSTRAINTS: frozenset[str] = frozenset(
+    {"width", "height", "min_width", "max_width", "min_height", "max_height", "sizes"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ManifestShortfall:
+    """One way a creative's manifest fails the declaration it was graded against.
+
+    Values, not a sentence: ``field`` is the manifest path (``assets.image_main.width``),
+    ``constraint`` the declaration key that refused it (``width``, ``slots``),
+    ``rejected_value`` what the asset states and ``accepted_values`` what the declaration
+    accepts -- the pin's canonical rejection-set keys, which the raise site carries into
+    ``problems[]`` unchanged.
+    """
+
+    field: str
+    constraint: str
+    rejected_value: str | None
+    accepted_values: tuple[str, ...]
+
+    @property
+    def dimensional(self) -> bool:
+        """Whether this is a size failure (:data:`_DIMENSION_CONSTRAINTS`)."""
+        return self.constraint in _DIMENSION_CONSTRAINTS
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +244,10 @@ class FormatSatisfaction:
     #: from ``refusal`` at the call site: the route knows its own provenance, and a mapping
     #: would be a second place that has to agree about which refusal came from which arm.
     field: str | None = None
+    #: What a creative's MANIFEST failed, one entry per constraint, when the refusal is
+    #: :attr:`FormatRefusal.MANIFEST_NOT_SATISFIED`. ``compare=False`` for the reason
+    #: ``selection`` gives: it is the verdict's evidence, not its identity.
+    shortfalls: tuple[ManifestShortfall, ...] = dataclass_field(default=(), compare=False)
 
     @property
     def declaration(self) -> LibraryFormatDeclaration | None:
@@ -218,6 +286,12 @@ class FormatRoute:
     #: ``None`` for a stored creative, whose identity is columns and not a request arm --
     #: those call sites name their own pointer (``packages``).
     field: str | None = None
+    #: A canonical creative's ASSETS, keyed by slot id, as plain documents
+    #: (:func:`manifest_document`). ``None`` for every route that is not a canonical
+    #: creative -- a package selector carries no manifest, and a legacy creative's assets
+    #: are keyed by its named format, not by a declaration's slots. When present, the
+    #: declaration the route selects is graded against it (:func:`_manifest_shortfalls`).
+    manifest: Mapping[str, Any] | None = None
 
 
 def product_declarations(format_options: Any) -> tuple[LibraryFormatDeclaration, ...]:
@@ -354,7 +428,8 @@ def _slot_shortfall(claimed: Any, accepted: Any) -> list[str]:
     that fill its slots arrive later with the creative. Grading a selector as if it were a
     manifest would refuse every selector against every declaration that requires anything.
     The manifest-side grading -- required slots against a creative's actual assets -- is
-    ``salesagent-ol033.7``.
+    :func:`_manifest_slot_shortfalls`, which asks this function which required slots the
+    manifest's assets leave uncovered.
     """
     if not isinstance(accepted, (list, tuple)) or not isinstance(claimed, (list, tuple)):
         return []
@@ -589,11 +664,264 @@ def _stated_constraints(accepted: Mapping[str, Any], claimed: Mapping[str, Any])
     return {key: bound for key, bound in accepted.items() if key in stated}
 
 
+#: What one media asset can STATE, as ``(declaration constraint, asset member)`` pairs per
+#: ``asset_type``. The asset members are the pinned asset schemas' own
+#: (``core/assets/image-asset.json``, ``video-asset.json``, ``audio-asset.json``); the
+#: constraint names are the canonical declaration params they answer. A dimension answers
+#: its exact key and both of its bounds, because a declaration may state either.
+#:
+#: A key absent here is a constraint no asset of that type can speak to, and it is not
+#: graded on a manifest at all: a manifest cannot be held to a fact it has no member for.
+#: A key present here and missing from the asset is graded as SILENCE, which fails only
+#: for the constraints the pin says a creative "MUST declare and match"
+#: (:data:`_MUST_BE_STATED`) and is inherited for every other.
+_ASSET_FACTS: Mapping[str, tuple[tuple[str, str], ...]] = {
+    "image": (
+        ("width", "width"),
+        ("min_width", "width"),
+        ("max_width", "width"),
+        ("height", "height"),
+        ("min_height", "height"),
+        ("max_height", "height"),
+        ("max_file_size_kb", "file_size_bytes"),
+        ("image_formats", "format"),
+        ("pixel_ratios", "pixel_ratio"),
+    ),
+    "video": (
+        ("width", "width"),
+        ("min_width", "width"),
+        ("max_width", "width"),
+        ("height", "height"),
+        ("min_height", "height"),
+        ("max_height", "height"),
+        ("duration_ms_exact", "duration_ms"),
+        ("max_file_size_mb", "file_size_bytes"),
+        ("video_codecs", "video_codec"),
+        ("audio_codecs", "audio_codec"),
+        ("containers", "container_format"),
+    ),
+    "audio": (
+        ("duration_ms_exact", "duration_ms"),
+        ("max_file_size_mb", "file_size_bytes"),
+        ("audio_codecs", "codec"),
+    ),
+}
+
+#: Bytes per unit of a file-size cap, for an asset that states ``file_size_bytes``. Binary
+#: units, which is the reading that refuses less where the pin does not say which it means.
+_BYTES_PER_UNIT: Mapping[str, int] = {"max_file_size_kb": 1024, "max_file_size_mb": 1024 * 1024}
+
+
+def manifest_document(assets: Any) -> dict[str, Any]:
+    """A creative's ``assets`` as plain documents keyed by slot id, whatever shape arrives.
+
+    Two shapes reach here: the stored document (dicts, after the JSON column) and, inside
+    the transaction that just wrote the row, the pinned asset MODELS the sync handed the
+    column. Both read the same once flattened by :func:`_plain`. Three asset types are
+    root models over their payload (``vast``, ``daast``, ``display_tag``), so a root model
+    is read through its root.
+    """
+    return (
+        {str(group): _asset_document(value) for group, value in assets.items()} if isinstance(assets, Mapping) else {}
+    )
+
+
+def _asset_document(value: Any) -> Any:
+    """One asset value as plain data (see :func:`manifest_document`)."""
+    if isinstance(value, RootModel):
+        return _asset_document(value.root)
+    if isinstance(value, (list, tuple)):
+        return [_asset_document(item) for item in value]
+    if isinstance(value, Mapping):
+        return dict(value)
+    return _plain(value)
+
+
+def _asset_types(value: Any) -> set[str]:
+    """The ``asset_type`` of each asset a slot holds -- one, or each item of a multi-asset slot."""
+    items = value if isinstance(value, list) else [value]
+    return {str(item.get("asset_type")) for item in items if isinstance(item, Mapping)}
+
+
+def _shown(value: Any) -> str:
+    """A constraint or asset value as the string a ``problems[]`` entry carries.
+
+    A whole number is rendered as a plain ``int``: the generated duration scalars subclass
+    ``int`` (see :func:`_plain`) and their own ``str`` is their repr, ``DurationMsRange(5000)``.
+    """
+    plain = _plain(value)
+    if _is_number(plain) and float(plain).is_integer():
+        return str(int(plain))
+    return str(plain)
+
+
+def _shown_all(bound: Any) -> tuple[str, ...]:
+    """A declared bound as ``accepted_values``: each member of a set or range, else the value."""
+    return tuple(_shown(item) for item in bound) if isinstance(bound, (list, tuple)) else (_shown(bound),)
+
+
+def _manifest_slot_shortfalls(
+    slots: Sequence[Mapping[str, Any]], manifest: Mapping[str, Any]
+) -> list[ManifestShortfall]:
+    """Steps 2 and 3 of creative-manifests.mdx § Validation, over the declaration's slots.
+
+    "Confirm all required slots are present" is :func:`_slot_shortfall`'s question, asked of
+    the slots the manifest's assets fill, so a required slot filled with the wrong asset type
+    is missing exactly as it is for a selector. "Validate each asset against its declared
+    type" also covers an OPTIONAL slot the manifest fills: a declared slot holding an asset of
+    another type is refused whether or not the slot was required. An asset keyed by no
+    declared slot is not graded: the declaration says nothing about it.
+    """
+    offered = [
+        {"asset_group_id": group, "asset_type": asset_type}
+        for group, value in manifest.items()
+        for asset_type in _asset_types(value)
+    ]
+    shortfalls = [
+        ManifestShortfall(
+            field=f"assets.{group}",
+            constraint="slots",
+            rejected_value=None,
+            accepted_values=tuple(str(slot.get("asset_type")) for slot in slots if slot.get("asset_group_id") == group),
+        )
+        for group in _slot_shortfall(offered, slots)
+        if group not in manifest
+    ]
+    for slot in slots:
+        group, expected = str(slot.get("asset_group_id") or ""), slot.get("asset_type")
+        if group in manifest and expected and (held := _asset_types(manifest[group])) != {str(expected)}:
+            shortfalls.append(
+                ManifestShortfall(
+                    field=f"assets.{group}.asset_type",
+                    constraint="slots",
+                    rejected_value=",".join(sorted(held)) or None,
+                    accepted_values=(str(expected),),
+                )
+            )
+    return shortfalls
+
+
+def _asset_claim(asset: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    """What one media asset states, in the declaration's vocabulary, and from which member.
+
+    The claim is what :func:`_unsatisfied_params` grades, so a manifest is held to a
+    declaration by the same matcher as a selector. Every key the asset's type CAN state is
+    in the claim, ``None`` where the asset is silent, which is what makes silence about a
+    fixed width a failure and silence about a file-size cap an inheritance.
+
+    ``sizes`` is one more key, built from both dimensions: an image or video declaration may
+    state its accepted sizes as a list of ``{width, height}`` rather than one fixed pair.
+    """
+    facts = _ASSET_FACTS[str(asset.get("asset_type"))]
+    members = dict(facts)
+    claim: dict[str, Any] = {}
+    for constraint, member in facts:
+        value = _plain(asset.get(member))
+        divisor = _BYTES_PER_UNIT.get(constraint)
+        claim[constraint] = value / divisor if divisor and _is_number(value) else value
+    if "width" in members:
+        width, height = claim["width"], claim["height"]
+        claim["sizes"] = None if width is None or height is None else {"width": width, "height": height}
+        members["sizes"] = "width"
+    if "duration_ms_exact" in members:
+        members["duration_ms_range"] = members["duration_ms_exact"]
+    return claim, members
+
+
+def _primary_media_slot(slots: Sequence[Mapping[str, Any]]) -> str | None:
+    """The slot whose asset the declaration's params describe: its first REQUIRED media slot.
+
+    A canonical declaration states its dimensions and duration once, for the creative's main
+    media -- ``image_main`` for ``image``, ``video_main`` for ``video_hosted``, ``audio_main``
+    for ``audio_hosted`` -- and that slot is the one each kind's schema requires. A product
+    that replaces the slot list names its own required media slot the same way. A
+    declaration with no required media slot (a tag, a bundle, a catalog) has no asset whose
+    members state those params, so none is graded.
+    """
+    return next(
+        (
+            str(slot["asset_group_id"])
+            for slot in slots
+            if slot.get("required") and slot.get("asset_group_id") and slot.get("asset_type") in _ASSET_FACTS
+        ),
+        None,
+    )
+
+
+def _manifest_shortfalls(declaration: LibraryFormatDeclaration, manifest: Mapping[str, Any]) -> list[ManifestShortfall]:
+    """Everything *manifest* fails in *declaration*: steps 2 to 4 of § Validation.
+
+    The slots first (:func:`_manifest_slot_shortfalls`), then the main media asset's facts
+    against the declaration's params (:func:`_asset_claim` graded by
+    :func:`_unsatisfied_params`). Only the constraints the asset type can state are graded
+    (:func:`_stated_constraints` over the claim's keys); among those, silence fails exactly
+    where the pin requires a creative to declare the constraint. A main slot the manifest
+    leaves empty is reported once, as the missing slot, and its facts are not graded.
+    """
+    declared = _declared_params(declaration)
+    slots = tuple(slot for slot in declared.get("slots") or () if isinstance(slot, Mapping))
+    shortfalls = _manifest_slot_shortfalls(slots, manifest)
+    primary = _primary_media_slot(slots)
+    asset = manifest.get(primary) if primary is not None else None
+    if not isinstance(asset, Mapping) or str(asset.get("asset_type")) not in _ASSET_FACTS:
+        return shortfalls
+    claim, members = _asset_claim(asset)
+    for constraint in _unsatisfied_params(claim, _stated_constraints(declared, claim)):
+        member = members[constraint]
+        shortfalls.append(
+            ManifestShortfall(
+                field=f"assets.{primary}.{member}",
+                constraint=constraint,
+                rejected_value=None if asset.get(member) is None else _shown(asset.get(member)),
+                accepted_values=_shown_all(declared[constraint]),
+            )
+        )
+    return shortfalls
+
+
+def _manifest_verdict(
+    graded_against: str,
+    shortfalls: Sequence[ManifestShortfall],
+    selection: tuple[LibraryFormatDeclaration, ...] = (),
+) -> FormatSatisfaction:
+    """Satisfied with *selection* when nothing fell short, else the shortfalls as a refusal.
+
+    *graded_against* is the label the refusal names in ``accepted_values``: the declaration
+    the manifest was held to, or the canonical kind when no declaration was selected.
+    """
+    if not shortfalls:
+        return FormatSatisfaction(satisfied=True, selection=selection)
+    return FormatSatisfaction(
+        satisfied=False,
+        refusal=FormatRefusal.MANIFEST_NOT_SATISFIED,
+        accepted_values=(graded_against,),
+        summary=(
+            f"manifest does not satisfy {graded_against!r} on: {', '.join(shortfall.field for shortfall in shortfalls)}"
+        ),
+        shortfalls=tuple(shortfalls),
+    )
+
+
+def kind_manifest_verdict(kind: str, assets: Any) -> FormatSatisfaction:
+    """A canonical manifest graded against its KIND alone, when no declaration is selected.
+
+    A ``sync_creatives`` that assigns a creative to nothing selects no product declaration,
+    so what the manifest can be held to is the canonical format its ``format_kind`` names:
+    the slots that kind's schema declares (:func:`declared_slots_by_kind`). A canonical
+    schema fixes no dimensions or durations by default, so the slots are the whole of it.
+    Graded by the same slot reader as a selected declaration, so the two cannot disagree
+    about what a slot is.
+    """
+    slots = declared_slots_by_kind().get(kind, ())
+    return _manifest_verdict(kind, _manifest_slot_shortfalls(slots, manifest_document(assets)))
+
+
 def _selecting(
     candidates: Sequence[LibraryFormatDeclaration],
     params: Mapping[str, Any] | None,
     *,
     exact: bool,
+    manifest: Mapping[str, Any] | None = None,
 ) -> FormatSatisfaction:
     """Grade every candidate; the verdict selects EACH one the claim satisfies.
 
@@ -604,7 +932,7 @@ def _selecting(
     refusal is reported: it names the params that failed, which is the buyer's lever, and a
     union across candidates would be a sentence this module does not author.
     """
-    graded = [_graded(candidate, params, exact=exact) for candidate in candidates]
+    graded = [_graded(candidate, params, exact=exact, manifest=manifest) for candidate in candidates]
     selection = tuple(declaration for verdict in graded for declaration in verdict.selection)
     return FormatSatisfaction(satisfied=True, selection=selection) if selection else graded[0]
 
@@ -613,6 +941,7 @@ def _legacy_route(
     identity: FormatSelector,
     declarations: Sequence[LibraryFormatDeclaration],
     params: Mapping[str, Any] | None,
+    manifest: Mapping[str, Any] | None = None,
 ) -> FormatSatisfaction:
     """A retained legacy reference: normalize it, then see which declaration it selects.
 
@@ -702,7 +1031,7 @@ def _legacy_route(
         and any(format_identity_or_none(ref) == asserted for ref in declaration.v1_format_ref or [])
     ]
     if asserting:
-        return _selecting(asserting, params, exact=True)
+        return _selecting(asserting, params, exact=True, manifest=manifest)
 
     projected = _legacy_projection(assertion)
     kind = identity.kind
@@ -715,7 +1044,7 @@ def _legacy_route(
                 accepted_values=tuple(sorted(_declaration_label(d) for d in declarations)),
                 summary=(f"named format {assertion.id!r} projects to no canonical declaration this product publishes"),
             )
-        return _kind_route(kind, declarations, params)
+        return _kind_route(kind, declarations, params, manifest)
 
     narrowing = [
         declaration
@@ -724,7 +1053,7 @@ def _legacy_route(
         and not _unsatisfied_params(projected, _stated_constraints(_declared_params(declaration), projected))
     ]
     if narrowing:
-        return _selecting(narrowing, params, exact=True)
+        return _selecting(narrowing, params, exact=True, manifest=manifest)
     return FormatSatisfaction(
         satisfied=False,
         refusal=FormatRefusal.LEGACY_NOT_SELECTED,
@@ -772,6 +1101,7 @@ def _graded(
     params: Mapping[str, Any] | None,
     *,
     exact: bool,
+    manifest: Mapping[str, Any] | None = None,
 ) -> FormatSatisfaction:
     """*selected* is the declaration the route picked; grade the claim's params against it.
 
@@ -788,12 +1118,17 @@ def _graded(
     params, REJECT) are the same input -- which is what this module's probe reported before
     the distinction existed.
 
-    ``params is None`` skips the grading entirely: the claim did not state its params at
-    all, which is every stored creative. See :func:`satisfies`.
+    ``params is None`` skips the params grading: the claim did not state its params at all,
+    which is every stored creative. A canonical creative is graded on its MANIFEST instead,
+    whichever route selected the declaration -- an option ref names the declaration, and the
+    manifest is still owed every constraint of it (creative-manifests.mdx § Validation: the
+    manifest is validated "against the selected product or publisher declaration").
 
     The satisfied verdict CARRIES ``selected``, so a caller holding two route resolutions
     can ask whether they named the same declaration. That is steps 11 and 12.
     """
+    if manifest is not None:
+        return _manifest_verdict(_declaration_label(selected), _manifest_shortfalls(selected, manifest), (selected,))
     resolved = FormatSatisfaction(satisfied=True, selection=(selected,))
     if params is None:
         return resolved
@@ -817,6 +1152,7 @@ def _option_route(
     option: FormatOptionIdentity,
     declarations: Sequence[LibraryFormatDeclaration],
     params: Mapping[str, Any] | None,
+    manifest: Mapping[str, Any] | None = None,
 ) -> FormatSatisfaction:
     """An EXACT publisher-or-product option claim, which must match both halves.
 
@@ -836,13 +1172,14 @@ def _option_route(
             accepted_values=tuple(sorted(_declaration_label(d) for d in declarations)),
             summary=f"format option {option.format_option_id!r} is not published by this product",
         )
-    return _graded(selected, params, exact=True)
+    return _graded(selected, params, exact=True, manifest=manifest)
 
 
 def _kind_route(
     kind: str,
     declarations: Sequence[LibraryFormatDeclaration],
     params: Mapping[str, Any] | None,
+    manifest: Mapping[str, Any] | None = None,
 ) -> FormatSatisfaction:
     """A bare canonical kind: the closed-set step, then the full params obligation.
 
@@ -883,6 +1220,23 @@ def _kind_route(
     Every candidate the claim satisfies is SELECTED, and step (2) compares those sets
     across routes; see :func:`_selecting`, which also says which refusal is reported when
     none satisfies.
+
+    A MANIFEST MUST LAND ON EXACTLY ONE. A package selector may select several declarations
+    (step (2) compares sets), but a creative is validated "against the selected product or
+    publisher declaration" -- one -- and creative-manifests.mdx § Validation step 1 says how
+    a manifest without ``format_option_ref`` finds it: "select the unambiguous compatible
+    ``format_kind`` declaration". So the candidates are graded against the manifest, and:
+
+    * exactly one compatible -- selected, which is the case
+      ``core/creative-asset.json`` calls ``format_option_ref`` "optional when format_kind
+      alone routes the creative to a single declaration";
+    * none compatible -- the first candidate's shortfalls are reported, naming every
+      candidate in ``accepted_values`` so the buyer sees each declaration it could target;
+    * several compatible -- :attr:`FormatRefusal.MANIFEST_AMBIGUOUS`. The same field is
+      "Required when the target product has multiple format_options entries sharing the
+      same format_kind" (and ``canonical-formats.mdx``: "without it, the seller can't
+      disambiguate which option the buyer is shipping against"). ``accepted_values`` names
+      the compatible declarations, which are the values the buyer may put in the ref.
     """
     accepted = [str(declaration.format_kind) for declaration in declarations]
     if kind not in accepted:
@@ -894,13 +1248,29 @@ def _kind_route(
             accepted_values=tuple(sorted(set(refused.accepted_kinds))),
             summary=str(refused),
         )
-    return _selecting([d for d in declarations if str(d.format_kind) == kind], params, exact=False)
+    candidates = [d for d in declarations if str(d.format_kind) == kind]
+    verdict = _selecting(candidates, params, exact=False, manifest=manifest)
+    if manifest is None or len(candidates) == 1:
+        return verdict
+    if not verdict:
+        return replace(verdict, accepted_values=tuple(sorted(_declaration_label(d) for d in candidates)))
+    if len(verdict.selection) == 1:
+        return verdict
+    compatible = tuple(sorted(_declaration_label(d) for d in verdict.selection))
+    return FormatSatisfaction(
+        satisfied=False,
+        refusal=FormatRefusal.MANIFEST_AMBIGUOUS,
+        rejected_value=kind,
+        accepted_values=compatible,
+        summary=f"manifest of {kind!r} satisfies several declarations and names no format_option_ref: {compatible}",
+    )
 
 
 def _canonical_lane(
     identity: FormatSelector,
     declarations: Sequence[LibraryFormatDeclaration],
     params: Mapping[str, Any] | None,
+    manifest: Mapping[str, Any] | None = None,
 ) -> FormatSatisfaction:
     """Grade a claim against a product that declares ``format_options[]``.
 
@@ -914,18 +1284,18 @@ def _canonical_lane(
     reference (salesagent-t0uoo).
     """
     if (option := identity.option) is not None:
-        return _option_route(option, declarations, params)
+        return _option_route(option, declarations, params, manifest)
     if identity.assertion is not None:
-        return _legacy_route(identity, declarations, params)
+        return _legacy_route(identity, declarations, params, manifest)
     if (kind := identity.kind) is not None:
-        return _kind_route(kind, declarations, params)
+        return _kind_route(kind, declarations, params, manifest)
     # The claim names no kind, no option and no reference at all, so there is nothing to
     # compare against a canonical declaration. Satisfied -- and this is the SKIP-VS-REFUSE
     # DIVERGENCE resolved: the create gate skipped here while the update and assignment
     # gates refused, so one buyer input had two answers depending on which tool received
-    # it. One function means one answer, and the permissive one is the only one the seller
-    # can justify today: refusing would refuse on params it cannot yet read (see the module
-    # docstring).
+    # it. One function means one answer, and the permissive one is the one the pin supports:
+    # a package naming no format "selects all formats supported by the product"
+    # (media-buy/package-request.json), and a stored creative always names at least its kind.
     return _SATISFIED
 
 
@@ -1499,7 +1869,7 @@ def resolve_routes(
             (
                 route,
                 replace(
-                    _canonical_lane(route.claim, declared, route.params)
+                    _canonical_lane(route.claim, declared, route.params, route.manifest)
                     if declared
                     else _legacy_lane(route.claim, legacy_references),
                     field=route.field,
@@ -1518,6 +1888,7 @@ def satisfies(
     *,
     params: Mapping[str, Any] | None = None,
     legacy_catalog: Iterable[Any] | None = None,
+    manifest: Mapping[str, Any] | None = None,
 ) -> FormatSatisfaction:
     """Whether the format *identity* names satisfies what a product declares.
 
@@ -1543,6 +1914,9 @@ def satisfies(
         legacy_catalog: the product's deprecated arm -- ``format_ids``, as stored. Read
             through ``format_resolver.product_format_identities``, so one corrupt entry is
             dropped rather than raised.
+        manifest: a canonical creative's assets (:attr:`FormatRoute.manifest`), graded
+            against the declaration the route selects. :func:`creative_satisfies` is the
+            caller that supplies it.
 
     Returns:
         A :class:`FormatSatisfaction`. Satisfied when the product declares NEITHER arm,
@@ -1556,7 +1930,9 @@ def satisfies(
     The satisfied verdict carries the declaration the one route selected, so a caller that
     needs the selection rather than the verdict does not have to ask twice.
     """
-    resolution = resolve_routes((FormatRoute(identity, params),), declarations, legacy_catalog=legacy_catalog)
+    resolution = resolve_routes(
+        (FormatRoute(identity, params, manifest=manifest),), declarations, legacy_catalog=legacy_catalog
+    )
     # Unreachable by construction: ``conflicting`` needs two routes to disagree, and there
     # is one. Asserted rather than assumed because this is the one claim the projection
     # below makes -- a conflict reported as "satisfied" would be a silent acceptance.
@@ -1567,6 +1943,34 @@ def satisfies(
     if refused is not None:
         return refused
     return FormatSatisfaction(satisfied=True, selection=resolution.selection)
+
+
+def creative_satisfies(creative: Any, contract: Any) -> FormatSatisfaction:
+    """Whether a STORED creative satisfies a product's format contract. Every creative gate asks here.
+
+    THE ONE VALIDATOR for a creative against a product, and four gates ask it: the two on the
+    create path, the update path and the ``sync_creatives`` assignment path. Each used to
+    build the identity and call :func:`satisfies` itself with no manifest, so a canonical
+    creative was graded on its kind alone and a same-kind 728x90 creative satisfied a product
+    fixing 300x250 -- the fifth rule of ``formats.mdx``, "Equal format_kind values alone do
+    not prove compatibility", broken on the creative side.
+
+    *creative* is the ORM row: the identity is read through
+    :meth:`CreativeFormatIdentity.from_row` and the manifest is the row's stored ``assets``.
+    *contract* is the product's ``format_contract``. The manifest travels only for a
+    canonical creative -- one asserting no legacy reference -- for the reason the module
+    docstring gives.
+    """
+    from src.core.schemas import CreativeFormatIdentity
+
+    identity = CreativeFormatIdentity.from_row(creative)
+    manifest = manifest_document((creative.data or {}).get("assets")) if identity.assertion is None else None
+    return satisfies(
+        identity.as_selector(),
+        contract.format_options,
+        legacy_catalog=contract.format_ids,
+        manifest=manifest,
+    )
 
 
 def canonical_refusal(
@@ -1606,6 +2010,67 @@ def canonical_refusal(
         ),
         field=field,
     )
+
+
+#: The two refusals that are about a creative's MANIFEST rather than the product's closed
+#: set: :func:`creative_refusal` answers them with a creative code, every other one with
+#: :func:`canonical_refusal`.
+_MANIFEST_REFUSALS: frozenset[FormatRefusal] = frozenset(
+    {FormatRefusal.MANIFEST_NOT_SATISFIED, FormatRefusal.MANIFEST_AMBIGUOUS}
+)
+
+
+def creative_refusal(
+    verdict: FormatSatisfaction,
+    *,
+    field: str | None = None,
+    creative_id: str | None = None,
+    **entity: Any,
+) -> AdCPCapabilityNotSupportedError | AdCPCreativeSizeMismatchError | AdCPCreativeValidationFailedError:
+    """The error to raise for a refused CREATIVE verdict. Every creative gate raises this.
+
+    A selection outside the product's closed set, or an option ref it does not publish, is
+    :func:`canonical_refusal`'s ``UNSUPPORTED_FEATURE``: "Reject unknown or uncovered
+    selections" (creative-manifests.mdx § Validation step 5). A manifest that does not
+    satisfy the declaration it selected takes a creative code from the pinned enum:
+
+    * ``CREATIVE_SIZE_MISMATCH`` when every shortfall is a dimension -- "The submitted
+      creative dimensions do not match any size accepted by the selected packages";
+    * ``CREATIVE_VALIDATION_FAILED_GENERIC`` otherwise, including an ambiguous selection --
+      "the producer cannot classify the failure with a more specific standard code". No
+      code in the enum names a missing ``format_option_ref``; ``CREATIVE_REPRESENTATION_UNRESOLVED``
+      is about a CreativeRepresentationSet and requires a rejection per representation id,
+      which a plain manifest has none of.
+
+    ``problems[]`` carries each shortfall as values -- the manifest path, what the asset
+    states, what the declaration accepts -- under the code it is an instance of.
+    """
+    if verdict.refusal not in _MANIFEST_REFUSALS:
+        return canonical_refusal(verdict, field=field, creative_id=creative_id, **entity)
+    sized = bool(verdict.shortfalls) and all(shortfall.dimensional for shortfall in verdict.shortfalls)
+    details = CreativeManifestDetails(
+        creative_id=creative_id,
+        rejected_value=verdict.rejected_value,
+        accepted_values=list(verdict.accepted_values),
+        problems=[
+            ErrorProblem(
+                code=ErrorCode.CREATIVE_SIZE_MISMATCH
+                if shortfall.dimensional
+                else ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC,
+                subject_type="creative",
+                subject_id=creative_id,
+                field=shortfall.field,
+                rejected_value=shortfall.rejected_value,
+                accepted_values=list(shortfall.accepted_values),
+            )
+            for shortfall in verdict.shortfalls
+        ]
+        or None,
+        **entity,
+    )
+    if sized:
+        return AdCPCreativeSizeMismatchError(details=details, field=field)
+    return AdCPCreativeValidationFailedError(details=details, field=field)
 
 
 def _route_selector(route: FormatRoute) -> str:

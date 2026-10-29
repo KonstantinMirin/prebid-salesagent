@@ -20,6 +20,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.format_resolver import is_dialled_agent_url
+from src.core.format_satisfaction import creative_refusal, kind_manifest_verdict
 from src.core.schemas import (
     Creative,
     CreativePolicy,
@@ -211,6 +212,27 @@ def _validate_creative_input(
         logger.debug(f"Skipping external validation for adapter-provided format '{format_id}' (agent_url: {agent_url})")
 
     return validated_creative
+
+
+def check_unassigned_manifest(creative: CreativeAsset, *, index: int, creative_id: str) -> None:
+    """Refuse a canonical manifest that does not fill its kind, when nothing selects a declaration.
+
+    docs/creative/creative-manifests.mdx § Validation: "Sellers perform final acceptance
+    during sync_creatives". A sync that ASSIGNS the creative grades it against the product
+    declaration the assignment selects (``creative_satisfies``, at the assignment gate). A
+    sync that assigns it to nothing selects no declaration, so the manifest is held to what
+    its ``format_kind`` names: the canonical format's slots, required and typed
+    (``kind_manifest_verdict``). Only the canonical arm: a legacy item keys its assets by its
+    named format's own asset ids, not by a canonical slot list.
+
+    ``field`` names the item, which the pin's creative codes ask a seller to identify; the
+    manifest paths that failed are in ``details.problems[]``.
+    """
+    if creative.format_kind is None:
+        return
+    verdict = kind_manifest_verdict(str(creative.format_kind), creative.assets)
+    if not verdict:
+        raise creative_refusal(verdict, field=f"creatives[{index}]", creative_id=creative_id)
 
 
 def _assets_carry_provenance(creative: CreativeAsset) -> bool:

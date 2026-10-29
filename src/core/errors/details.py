@@ -49,6 +49,7 @@ __all__ = [
     "ValidationDetails",
     "PricingValidationDetails",
     "ConfigurationDetails",
+    "CreativeManifestDetails",
     "CreativeRefDetails",
     "CreativeRejectionDetails",
     "TimeWindowDetails",
@@ -567,6 +568,23 @@ class CreativeRejectionDetails(EntityRefDetails, ValueRejectionDetails, Problems
     creative_ids: list[str] | None = None
     missing_field: str | None = None
     invalid_field: str | None = None
+
+
+class CreativeManifestDetails(EntityRefDetails, ValueRejectionDetails, ProblemsDetails):
+    """A creative manifest that does not satisfy the product declaration it was graded against.
+
+    The pin publishes no details schema for ``CREATIVE_SIZE_MISMATCH`` or
+    ``CREATIVE_VALIDATION_FAILED_GENERIC``. The first's enum entry says a seller "MAY include
+    the submitted and accepted dimensions in buyer-safe error.details", and ``problems``
+    carries exactly that per failed constraint: ``field`` is the manifest path
+    (``assets.image_main.width``), ``rejected_value`` what the asset states and
+    ``accepted_values`` what the declaration accepts. ``accepted_values`` at the top names
+    the declarations graded, by ``format_option_id`` where one is published, which is also
+    what a buyer puts in ``format_option_ref`` when the refusal is an ambiguous selection.
+
+    No new field: the entity ids, the pin's canonical rejection-set keys and the problem list
+    are all inherited, so nothing here can carry an authored sentence.
+    """
 
 
 class ConfigurationDetails(CapabilityRefusalDetails):

@@ -201,6 +201,34 @@ def build_assets(*specs: AssetSpec) -> dict:
     return out
 
 
+def canonical_assets(kind: str) -> dict:
+    """The ``assets`` a manifest of canonical *kind* must carry: one asset per REQUIRED slot.
+
+    Read off the pin, not listed here: ``declared_slots_by_kind`` is the seller's own reader
+    of each canonical schema's ``slots`` default, so the slot ids and asset types are the
+    ones the seller grades against (``image`` -> ``image_main``, ``video_hosted`` ->
+    ``video_main``). creative-manifests.mdx § Basic structure: "``assets`` is keyed by
+    ``asset_group_id`` from the matched declaration's ``params.slots[]``".
+
+    Only the media types have a builder; a kind requiring anything else raises ``KeyError``
+    naming the type, so a scenario cannot silently send an incomplete manifest.
+    """
+    from src.core.format_satisfaction import declared_slots_by_kind
+
+    builders = {
+        "image": image_spec,
+        "video": video_spec,
+        "audio": lambda group: asset_spec(group, "audio", url="https://example.com/spot.mp3"),
+    }
+    return build_assets(
+        *(
+            builders[str(slot["asset_type"])](str(slot["asset_group_id"]))
+            for slot in declared_slots_by_kind()[kind]
+            if slot.get("required")
+        )
+    )
+
+
 def assert_assets(stored_assets: Mapping, *specs: AssetSpec) -> None:
     """Assert every spec is present in ``stored_assets`` with its declared fields preserved."""
     for spec in specs:

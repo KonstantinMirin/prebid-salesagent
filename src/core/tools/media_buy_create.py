@@ -434,11 +434,11 @@ def _resolved_format_verdicts(
     packages against different products and each pairing gets its own verdict; collapsing
     them would silently pick one product's answer for another product's package.
 
-    Both arms of the claim travel. ``satisfies`` decides which one applies from what the
-    PRODUCT declares, so keeping only the legacy arm -- as this once did -- cannot see a
-    canonical product at all.
+    Both arms of the claim travel, and a canonical creative's manifest with them.
+    ``creative_satisfies`` decides which lane applies from what the PRODUCT declares, so
+    keeping only the legacy arm -- as this once did -- cannot see a canonical product at all.
     """
-    from src.core.format_satisfaction import satisfies
+    from src.core.format_satisfaction import creative_satisfies
 
     product_ids_needed = {
         package.product_id for package in packages if _get_creative_ids(package) and package.product_id
@@ -452,7 +452,7 @@ def _resolved_format_verdicts(
         product.product_id: product
         for product in ProductRepository(session, tenant_id).list_by_ids(list(product_ids_needed))
     }
-    identities = {creative.creative_id: CreativeFormatIdentity.from_row(creative) for creative in creatives_list}
+    creatives_by_id = {creative.creative_id: creative for creative in creatives_list}
 
     verdicts: list[tuple[str, str, Any]] = []
     for package in packages:
@@ -461,20 +461,10 @@ def _resolved_format_verdicts(
         if not pkg_creative_ids or product is None:
             continue
         for cid in pkg_creative_ids:
-            claim = identities.get(cid)
-            if claim is None:
+            creative = creatives_by_id.get(cid)
+            if creative is None:
                 continue
-            verdicts.append(
-                (
-                    product.product_id,
-                    cid,
-                    satisfies(
-                        claim.as_selector(),
-                        product.format_contract.format_options,
-                        legacy_catalog=product.format_contract.format_ids,
-                    ),
-                )
-            )
+            verdicts.append((product.product_id, cid, creative_satisfies(creative, product.format_contract)))
     return verdicts
 
 
@@ -693,7 +683,7 @@ def _validate_creatives_before_adapter_call(
     # family that fails at the baseline too). So the inversion is silent today. The missing
     # scenario — one creative that is both terminal-state and outside its product's set — is
     # filed; until it exists, this paragraph is the only thing standing in the way.
-    from src.core.format_satisfaction import FormatRefusal, canonical_refusal
+    from src.core.format_satisfaction import FormatRefusal, creative_refusal
 
     for product_id, cid, verdict in creative_verdicts:
         if verdict:
@@ -706,11 +696,12 @@ def _validate_creatives_before_adapter_call(
             continue
         # A CANONICAL refusal is not a business-rule problem to collect -- the
         # product published a closed set and this creative is outside it, which the
-        # pin codes UNSUPPORTED_FEATURE. Raised rather than appended because the
+        # pin codes UNSUPPORTED_FEATURE, or its manifest fails the declaration it
+        # selects, which the pin codes CREATIVE_SIZE_MISMATCH or
+        # CREATIVE_VALIDATION_FAILED_GENERIC. Raised rather than appended because the
         # code differs: folding it into ``reasons`` would answer the buyer
-        # VALIDATION_ERROR for a condition whose recovery is "pick a format this
-        # product publishes".
-        raise canonical_refusal(verdict, field=PACKAGES_FIELD, creative_id=cid, product_id=product_id)
+        # VALIDATION_ERROR for a condition with its own recovery.
+        raise creative_refusal(verdict, field=PACKAGES_FIELD, creative_id=cid, product_id=product_id)
 
     if validation_errors:
         error_msg = (
@@ -4245,7 +4236,7 @@ async def _create_media_buy_impl(
                     # typed to take a legacy ``FormatId`` -- so this site had to skip a
                     # creative with no retained assertion, while the update and assignment
                     # sites refused one. One function, one answer.
-                    from src.core.format_satisfaction import FormatRefusal, canonical_refusal, satisfies
+                    from src.core.format_satisfaction import FormatRefusal, creative_refusal, creative_satisfies
 
                     for package in req.packages:
                         pkg_cids = _get_creative_ids(package)
@@ -4264,13 +4255,7 @@ async def _create_media_buy_impl(
                                 for creative_id in pkg_cids:
                                     creative = creatives_by_id.get(creative_id)
                                     if creative:
-                                        stored_identity = CreativeFormatIdentity.from_row(creative)
-                                        contract = product_format_check.format_contract
-                                        verdict = satisfies(
-                                            stored_identity.as_selector(),
-                                            contract.format_options,
-                                            legacy_catalog=contract.format_ids,
-                                        )
+                                        verdict = creative_satisfies(creative, product_format_check.format_contract)
 
                                         if not verdict:
                                             logger.warning(
@@ -4278,7 +4263,7 @@ async def _create_media_buy_impl(
                                                 extra={
                                                     "creative_id": creative_id,
                                                     "product_id": package.product_id,
-                                                    "creative_format": stored_identity.label,
+                                                    "creative_format": CreativeFormatIdentity.from_row(creative).label,
                                                     "validation_error": verdict.summary,
                                                 },
                                             )
@@ -4286,7 +4271,7 @@ async def _create_media_buy_impl(
                                                 step.step_id, status="failed", error_message=verdict.summary
                                             )
                                             if verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED:
-                                                raise canonical_refusal(
+                                                raise creative_refusal(
                                                     verdict,
                                                     field=PACKAGES_FIELD,
                                                     creative_id=creative_id,
