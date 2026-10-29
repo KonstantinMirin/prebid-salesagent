@@ -827,7 +827,13 @@ _XFAIL_TAGS: dict[str, str] = {
     # constructs a real typed GetAdcpCapabilitiesRequest (Pydantic enforces the
     # protocols enum + minItems:1), and _get_adcp_capabilities_impl echoes
     # req.context verbatim onto the response on every transport.
-    "T-UC-010-ext-d-all-protocols": "signals/governance/sponsored_intelligence/creative sections never emitted — #1724",
+    # Graduated: T-UC-010-ext-d-all-protocols. The reason demanded the signals, governance,
+    # sponsored_intelligence and creative sections, which v3.2.7
+    # get-adcp-capabilities-response.json makes "Only present if <protocol> is in
+    # supported_protocols". The scenario's Thens were corrected to that rule: a filter naming
+    # every request-enum value is accepted, media_buy is present, and the four unsupported
+    # sections are absent. For a media_buy-only tenant that absence is the spec-true answer,
+    # and production already emits it. No e2e_rest_known_failures.txt row existed.
     # Graduated: T-UC-010-v31-supported-versions removed —
     # see T-UC-010-ext-a graduation note above (same _build_adcp_block fix).
     # Graduated: version negotiation now implemented

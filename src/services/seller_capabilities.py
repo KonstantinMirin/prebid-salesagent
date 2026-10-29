@@ -634,7 +634,12 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
     # Build features - be honest about what we actually support
     # These should be adapter-dependent in the future
     features = MediaBuyFeatures(
-        # inline_creative_management: We have sync_creatives/list_creatives tools
+        # inline_creative_management: package-scoped creative bodies are accepted on
+        # create_media_buy and update_media_buy (process_and_upload_package_creatives).
+        # That is the flag's whole meaning at the pin. It says nothing about a reusable
+        # library: sync_creatives/list_creatives are creative.has_creative_library, which
+        # lives in the creative block and is not declared here
+        # (docs/creative/sales-agent-creative-capabilities.mdx § Creative management modes).
         inline_creative_management=True,
         # property_list_filtering: True iff the bound adapter actually compiles
         # `targeting_overlay.property_list` into native ad-server targeting.
