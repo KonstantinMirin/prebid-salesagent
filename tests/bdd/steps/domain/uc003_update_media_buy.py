@@ -9,7 +9,7 @@ conftest's _harness_env.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
@@ -147,6 +147,22 @@ def _stored_package(ctx: dict, label: str) -> tuple[Any, dict[str, Any]]:
         row = uow.media_buys.get_package(mb.media_buy_id, package_id)
         assert row is not None, f"no persisted package {package_id!r} (label {label!r}) on {mb.media_buy_id!r}"
         return row.budget, dict(row.package_config or {})
+
+
+def _stored_campaign(ctx: dict) -> tuple[bool, datetime | None, datetime | None]:
+    """``(is_paused, start_time, end_time)`` of the persisted buy, read the way :func:`_stored_package` reads.
+
+    The campaign-level counterpart: what the seller RECORDED for the buy's pause and
+    flight, not what the response echoed.
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    mb = _existing_media_buy(ctx)
+    with MediaBuyUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.media_buys is not None
+        row = uow.media_buys.get_by_id(mb.media_buy_id)
+        assert row is not None, f"no persisted media buy {mb.media_buy_id!r}"
+        return row.is_paused, row.start_time, row.end_time
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -3268,7 +3284,8 @@ def _assert_persisted_success(ctx: dict) -> None:
 
     When the package update also carried a ``targeting_overlay``, every dimension it sent
     must be stored with the value sent: a seller that applied the budget and dropped the
-    overlay answered the same success.
+    overlay answered the same success. Campaign-level fields sent beside the packages are
+    graded by :func:`_assert_campaign_fields_applied`.
     """
     _assert_synchronous_success(ctx)
     stored, config = _stored_package(ctx, "pkg_001")
@@ -3281,6 +3298,37 @@ def _assert_persisted_success(ctx: dict) -> None:
         unapplied = {dim: value for dim, value in sent_overlay.items() if stored_overlay.get(dim) != value}
         assert not unapplied, (
             f"update succeeded but the stored targeting_overlay {stored_overlay!r} does not hold {unapplied!r}"
+        )
+    _assert_campaign_fields_applied(ctx)
+
+
+def _assert_campaign_fields_applied(ctx: dict) -> None:
+    """Every campaign-level field the request carried is what the seller stored.
+
+    update_media_buy.mdx § Compatibility transaction boundary: one request is one atomic
+    mutation, so a pause or a flight change sent beside package changes is applied with
+    them. A seller that applied the packages and dropped the pause or the dates answered
+    the same success. A request carrying none of these fields leaves nothing to check.
+    """
+    sent = ctx["update_kwargs"]
+    sent_paused = sent.get("paused")
+    sent_times = {field: sent[field] for field in ("start_time", "end_time") if field in sent}
+    if sent_paused is None and not sent_times:
+        return
+    is_paused, start_time, end_time = _stored_campaign(ctx)
+    if sent_paused is not None:
+        assert is_paused is sent_paused, (
+            f"update succeeded but the stored is_paused is {is_paused!r}, not {sent_paused!r}"
+        )
+        if sent_paused:
+            # lifecycle.mdx: a paused buy reports media_buy_status "paused".
+            _assert_wire_field_equals(ctx, "media_buy_status", "paused")
+    stored_times = {"start_time": start_time, "end_time": end_time}
+    for field, value in sent_times.items():
+        expected = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        actual = stored_times[field]
+        assert actual is not None and actual.astimezone(UTC) == expected, (
+            f"update succeeded but the stored {field} is {actual!r}, not the requested {expected!r}"
         )
 
 
