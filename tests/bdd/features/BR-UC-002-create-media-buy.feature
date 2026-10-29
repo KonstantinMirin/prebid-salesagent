@@ -1334,6 +1334,10 @@ Feature: BR-UC-002 Create Media Buy
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
+    And the error should include "field" field with value "account"
+    # account is in /required; the refusal names the absent member, so a refusal of any
+    # other missing field cannot pass this scenario.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/required
     # --- BR-RULE-087: Optimization Goal Validation ---
 
   @T-UC-002-inv-080-11 @invariant @BR-RULE-080 @v31
@@ -3432,7 +3436,12 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy success spec
     And the response should succeed
+    And the package frequency_cap should be echoed and recorded on the package, not at the media buy root
     # v3.1: core/frequency-cap.json — the level follows the owning field, not a property
+    # core/package.json targeting_overlay: "Sellers MUST echo an applied package frequency_cap
+    # independently from any MediaBuy root cap"; the record is read too, since an echo of the
+    # request alone passes a seller that stores nothing.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/targeting_overlay
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-frequency-cap-scope-unregistered @v31 @frequency-cap-scope @targeting @validation @post-f2
@@ -3562,12 +3571,20 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
+    # Corrected to the pin. The rows said "targeting validation passes", but both dimensions
+    # say "Seller must declare support in get_adcp_capabilities", and this seller declares
+    # neither (no media_buy.execution.targeting.collection_list / collection_list_exclude, no
+    # Product.overlay_support). core/targeting.json: "A fresh create/update request MUST be
+    # applied exactly or rejected", so an undeclared dimension is refused UNSUPPORTED_FEATURE,
+    # never accepted and dropped.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/collection_list
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/execution/properties/targeting/properties/collection_list
 
     Examples: Boundary values
-      | boundary_point                                            | outcome                      |
-      | collection_list with valid agent_url and list_id          | targeting validation passes  |
-      | collection_list_exclude with valid agent_url and list_id  | targeting validation passes  |
-      | both collection_list and collection_list_exclude set      | targeting validation passes  |
+      | boundary_point                                           | outcome                                                                                            |
+      | collection_list with valid agent_url and list_id         | error UNSUPPORTED_FEATURE on packages[0].targeting_overlay.collection_list with suggestion         |
+      | collection_list_exclude with valid agent_url and list_id | error UNSUPPORTED_FEATURE on packages[0].targeting_overlay.collection_list_exclude with suggestion |
+      | both collection_list and collection_list_exclude set     | error UNSUPPORTED_FEATURE with suggestion                                                          |
 
   @T-UC-002-storyboard-async-submitted-envelope-task-id-roundtrip @schema-v3.1 @v3-1 @submitted-envelope @async @task-id-roundtrip
   Scenario: Async submitted envelope -- task_id matches deterministic value registered via comply_test_controller

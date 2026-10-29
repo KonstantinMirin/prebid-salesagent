@@ -68,6 +68,34 @@ def supports_property_list_filtering(adapter: object | type | None) -> bool:
     return bool(getattr(adapter_class, "supports_property_list_filtering", False))
 
 
+def _unsupported_package_member(
+    member_path: str, capability: str, package_index: int
+) -> AdCPCapabilityNotSupportedError:
+    """The one UNSUPPORTED_FEATURE refusal for a package member this seller cannot apply.
+
+    ``field`` is the indexed pointer to the member (``packages[0].targeting_overlay.x``) and
+    ``details`` names the capability the seller lacks and the package that asked, so every
+    refusal of this request phase -- an unapplied package field on update, an undeclared
+    overlay dimension on create or update -- has the same shape.
+    """
+    return AdCPCapabilityNotSupportedError(
+        details=CapabilityRefusalDetails(capability=capability, package_index=package_index),
+        field=package_field_path(member_path, package_index),
+    )
+
+
+def refuse_unsupported_package_members(packages: Sequence[Any] | None, names: Sequence[str]) -> None:
+    """Refuse the first package that sets one of ``names``, a package field this seller cannot apply.
+
+    Callers raise it before a unit of work opens, so nothing is persisted. Names are read
+    without a default, so a pin that renames one fails loudly instead of never matching.
+    """
+    for index, package in enumerate(packages or ()):
+        for name in names:
+            if getattr(package, name) is not None:
+                raise _unsupported_package_member(name, name, index)
+
+
 # ─── property_list targeting helpers ────────────────────────────────────
 #
 # Spec scope: these helpers only handle ``property_list``. The AdCP.0
@@ -78,8 +106,8 @@ def supports_property_list_filtering(adapter: object | type | None) -> bool:
 # only — declared in ``get_adcp_capabilities`` per
 # ``core/targeting.json:collection_list``: "Seller must declare support in
 # get_adcp_capabilities." There is no per-product flag for collection_list,
-# so the asymmetry below is spec-defined, not an oversight. Collection-list
-# capability infrastructure lands separately.
+# so the asymmetry below is spec-defined, not an oversight. This seller declares
+# neither, so :func:`raise_if_undeclared_overlay_dimension` refuses both.
 
 
 def build_property_list_unsupported_advisories(
@@ -299,16 +327,23 @@ def keyword_duplicate_pairs(targeting: AnyTargeting) -> list[dict[str, str]]:
 
 #: Overlay dimensions this seller refuses wherever they are sent. Each one's pinned description
 #: (core/targeting.json) says "Seller must declare support in get_adcp_capabilities"; each is
-#: declared there by an object of its own under media_buy.execution.targeting
+#: declared there under media_buy.execution.targeting
 #: (protocol/get-adcp-capabilities-response.json); this seller's capabilities builder emits none
-#: of the three (src/services/seller_capabilities.py builds geo_countries, geo_regions,
-#: geo_metros and geo_postal_areas only); and no adapter under src/adapters reads them. Accepting
-#: one answers success for targeting nothing applies, which the same file's "A fresh
+#: of them (src/services/seller_capabilities.py builds geo_countries, geo_regions,
+#: geo_metros and geo_postal_areas only, and no collection_list or collection_list_exclude
+#: flag); no product carries overlay_support; and no adapter under src/adapters reads them.
+#: Accepting one answers success for targeting nothing applies, which the same file's "A fresh
 #: create/update request MUST be applied exactly or rejected" forbids.
 #:
 #: A deliberate hand list with a known ceiling: when an adapter learns to apply one of these and
 #: the builder declares it (#1857), the refusal must consult that declaration instead.
-UNDECLARED_OVERLAY_DIMENSIONS: tuple[str, ...] = ("geo_proximity", "keyword_targets", "negative_keywords")
+UNDECLARED_OVERLAY_DIMENSIONS: tuple[str, ...] = (
+    "geo_proximity",
+    "keyword_targets",
+    "negative_keywords",
+    "collection_list",
+    "collection_list_exclude",
+)
 
 
 def raise_if_undeclared_overlay_dimension(targeting: AnyTargeting, package_index: int) -> None:
@@ -334,10 +369,7 @@ def raise_if_undeclared_overlay_dimension(targeting: AnyTargeting, package_index
         refused.append(("store_catchments", "catalog_management"))
     if refused:
         dimension, capability = refused[0]
-        raise AdCPCapabilityNotSupportedError(
-            details=CapabilityRefusalDetails(capability=capability, package_index=package_index),
-            field=package_field_path(f"targeting_overlay.{dimension}", package_index),
-        )
+        raise _unsupported_package_member(f"targeting_overlay.{dimension}", capability, package_index)
 
 
 def refuse_invalid_package_overlays(overlays: Sequence[AnyTargeting | None]) -> None:

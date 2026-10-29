@@ -15,7 +15,7 @@ from adcp.types.domains.enums.available_metric import AvailableMetric
 from pytest_bdd import given, parsers, then, when
 
 from src.core.product_conversion import default_reporting_capabilities
-from tests.bdd.steps._outcome_helpers import wire_entry, wire_field
+from tests.bdd.steps._outcome_helpers import stored_package_config, wire_absent, wire_entry, wire_field
 from tests.bdd.steps.generic._dispatch import dispatch_package_update
 from tests.bdd.steps.generic.given_media_buy import (
     _add_inline_creatives,
@@ -52,6 +52,37 @@ def given_overlay_frequency_cap(ctx: dict) -> None:
 def given_overlay_frequency_cap_with_scope(ctx: dict) -> None:
     """The same cap plus ``scope``, a key core/frequency-cap.json does not declare."""
     _set_targeting_overlay(ctx, {"frequency_cap": {**_OVERLAY_FREQUENCY_CAP, "scope": "package"}})
+
+
+def _assert_is_the_sent_cap(cap: Any, where: str) -> None:
+    """Assert *cap* is :data:`_OVERLAY_FREQUENCY_CAP`: each sent member equal, nothing else set.
+
+    Compared member by member rather than as a whole document: the stored shape is the
+    persistence edge's serialization, which keeps unset optionals as null.
+    """
+    assert isinstance(cap, dict), f"no package frequency_cap {where}: {cap!r}"
+    sent = {name: cap.get(name) for name in _OVERLAY_FREQUENCY_CAP}
+    assert sent == _OVERLAY_FREQUENCY_CAP, f"the package frequency_cap {where} is {cap!r}, not what the buyer sent"
+    extra = {name: value for name, value in cap.items() if name not in _OVERLAY_FREQUENCY_CAP and value is not None}
+    assert not extra, f"the package frequency_cap {where} carries members the buyer did not send: {extra!r}"
+
+
+@then("the package frequency_cap should be echoed and recorded on the package, not at the media buy root")
+def then_package_frequency_cap_package_scoped(ctx: dict) -> None:
+    """The overlay cap stays on its package, in the response and in the record.
+
+    core/package.json targeting_overlay: "Sellers MUST echo an applied package frequency_cap
+    independently from any MediaBuy root cap". The request set no root cap, so the root
+    carries none (create-media-buy-response.json: the root cap is echoed "whenever the
+    request or executed proposal set one"). The stored package is read too, because an echo
+    of the request alone is satisfied by a seller that records nothing.
+    """
+    assert len(wire_field(ctx, "packages")) == 1, "expected exactly one created package"
+    package = wire_entry(ctx, "packages", index=0)
+    _assert_is_the_sent_cap((package.get("targeting_overlay") or {}).get("frequency_cap"), "on the wire")
+    wire_absent(ctx, "frequency_cap")
+    stored = stored_package_config(ctx, wire_field(ctx, "media_buy_id"), str(package.get("package_id")))
+    _assert_is_the_sent_cap((stored.get("targeting_overlay") or {}).get("frequency_cap"), "in the stored package")
 
 
 def _collection_list(list_id: str) -> dict[str, str]:

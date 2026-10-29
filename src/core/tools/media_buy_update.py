@@ -96,6 +96,7 @@ from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
     refuse_invalid_package_overlays,
+    refuse_unsupported_package_members,
     validate_property_targeting_allowed,
 )
 
@@ -368,12 +369,11 @@ def _refuse_unapplied_package_fields(req: UpdateMediaBuyRequest) -> None:
     The capability NAME travels as structured detail and the buyer-facing sentence is the
     code's own, which is how every other ``AdCPCapabilityNotSupportedError`` site in this
     tree reports a refusal (``src/adapters/gam/managers/targeting.py:680`` is the nearest
-    sibling).
+    sibling). The field is the indexed pointer to the refused member, the same shape the
+    undeclared-overlay refusal reports, because both build it in one place
+    (``src/services/targeting_capabilities.py``).
     """
-    for pkg_update in req.packages or ():
-        for name in _UNAPPLIED_PACKAGE_FIELDS:
-            if getattr(pkg_update, name, None) is not None:
-                raise AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(capability=name))
+    refuse_unsupported_package_members(req.packages, _UNAPPLIED_PACKAGE_FIELDS)
 
 
 def _refuse_ambiguous_bidding(req: UpdateMediaBuyRequest) -> None:
