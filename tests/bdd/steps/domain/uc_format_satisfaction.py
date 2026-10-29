@@ -1750,19 +1750,52 @@ def then_refused_conflicting_selectors(ctx: dict) -> None:
 
     The DETAILS are asserted too, and they are what stops this passing on a seller that
     answers the code without having compared anything: the pin asks for "the supplied
-    selector routes and their normalized canonical summaries", so every route the buyer
-    sent must appear ONCE -- a route is an arm, and an array arm is one route selecting a
-    set -- and the selected sets the summaries report must differ, which is the refusal.
-    WHICH sets each route selected is the scenario's to state, through
+    selector routes and their normalized canonical summaries", and a route's summary is the
+    option SET it selected, because sets are what step (2) compares ("require the selected
+    option sets to match"). So, per route -- a route is an arm, and an array arm is one route
+    selecting a set:
+
+    - every arm the buyer sent is summarized ONCE, and no other;
+    - every summary states its selected set as a list, empty when it selected nothing;
+    - on a product that publishes ``format_options[]``, every option named is one it
+      publishes (a legacy-only product's selection is the SDK's projection of its
+      deprecated arm, whose option ids the product never published);
+    - the ``format_option_refs`` arm selected exactly the options its refs name, which is
+      the request's own statement and not this seller's derivation: "Each reference
+      matches one target product ``format_options[]`` entry";
+    - the arms' sets differ, because that disagreement IS the refusal. A summary that
+      names one entry of a set two options narrow shows two routes agreeing beside a
+      refusal that says they differ.
+
+    WHICH set any other route selected is the scenario's to state, through
     :func:`then_conflict_route_selects`.
     """
     routes = _conflict_route_summaries(ctx)
-    sent = [arm for arm in ("format_option_refs", "format_kind", "format_ids") if arm in _SELECTORS[ctx["selector"]]]
+    request = _SELECTORS[ctx["selector"]]
+    sent = [arm for arm in ("format_option_refs", "format_kind", "format_ids") if arm in request]
     assert sorted(route.get("field") for route in routes) == sorted(sent), (
         f"the refusal summarizes routes {[r.get('field') for r in routes]}, but the buyer sent one route per arm {sent}"
     )
-    sets = {frozenset(route.get("selected_option") or ()) for route in routes}
-    assert len(sets) > 1, f"the summarized routes all selected the same option set, so nothing conflicts: {routes!r}"
+    assert all(isinstance(route.get("selected_option"), list) for route in routes), (
+        f"every route summary must state the option set it selected (empty when none); got {routes!r}"
+    )
+    arms = {route["field"]: set(route["selected_option"]) for route in routes}
+    published = {option["format_option_id"] for option in ctx["default_product"].format_options or ()}
+    named = set().union(*arms.values())
+    if published:
+        assert named <= published, (
+            f"the refusal names options {sorted(named - published)} the product does not publish ({sorted(published)})"
+        )
+    if "format_option_refs" in request:
+        referenced = {ref["format_option_id"] for ref in request["format_option_refs"]}
+        assert arms["format_option_refs"] == referenced, (
+            f"the format_option_refs route names {sorted(referenced)} but its summary selected "
+            f"{sorted(arms['format_option_refs'])}"
+        )
+    summarized = {arm: sorted(selected) for arm, selected in arms.items()}
+    assert len({frozenset(selected) for selected in arms.values()}) > 1, (
+        f"every route's summary selected the same set, yet the routes were refused as differing -- got {summarized!r}"
+    )
 
 
 def _conflict_route_summaries(ctx: dict) -> list[dict[str, Any]]:

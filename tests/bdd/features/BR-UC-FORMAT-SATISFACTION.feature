@@ -372,7 +372,10 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # ref selects one. The sets differ whichever option the ref names, so both rows are
     # refused -- the verdict does not depend on declaration order. option_plus_projectable_legacy
     # is accepted against fixed_300x250 above, where the product publishes one option: the
-    # rows differ in the product and in nothing else.
+    # rows differ in the product and in nothing else. legacy_set states the legacy route's
+    # set exactly, because "the refs arm names its refs" and "the sets differ" also admit an
+    # empty or one-entry legacy set -- the answer of a seller that declines to choose between
+    # two narrowing declarations, or keeps the first.
     #
     # THE DURATION ROW. A legacy reference states duration as duration_ms
     # (core/format-id.json); the declaration states duration_ms_exact. The legacy route's

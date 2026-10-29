@@ -290,7 +290,9 @@ class SelectorRouteSummary(BaseModel):
     ``selector`` every value the buyer put there, rendered. ``format_kind`` and
     ``selected_option`` are the normalized summary: the canonical shapes the arm resolved
     to, and the SET of the product's ``format_options[]`` entries it selected -- the set
-    step (2) compares across routes. An empty ``selected_option`` is an arm that resolved
+    step (2) compares across routes. A broad legacy id selects each entry that narrows it,
+    and naming one entry of two would show the buyer two routes agreeing beside a refusal
+    that says they differ. An empty ``selected_option`` is an arm that resolved
     and selected NOTHING, which is itself a differing selected set and so is a conflict
     the buyer has to see.
     """
