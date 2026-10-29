@@ -186,16 +186,23 @@ def _seed_auto_approval(ctx: dict, *, sync_adapter: bool = True) -> None:
 
     No-op when the scenario has no tenant yet.
     """
-    tenant = ctx.get("tenant")
-    if tenant is None:
+    if ctx.get("tenant") is None:
         return
-    env = ctx["env"]
-    tenant.human_review_required = False
-    env._commit_factory_data()
-    # Also update the tenant overrides the call_impl identity is built from.
-    env._tenant_overrides["human_review_required"] = False
+    _set_tenant_human_review(ctx, required=False)
     if sync_adapter:
         _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
+
+
+def _set_tenant_human_review(ctx: dict, *, required: bool) -> None:
+    """Set ``human_review_required`` on the tenant row and on the identity overrides.
+
+    The committed row is what the live (e2e) server reads; the overrides are what the
+    in-process call_impl identity is built from.
+    """
+    env = ctx["env"]
+    ctx["tenant"].human_review_required = required
+    env._commit_factory_data()
+    env._tenant_overrides["human_review_required"] = required
 
 
 def _sync_adapter_error_to_db(
@@ -230,7 +237,12 @@ def _sync_adapter_error_to_db(
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _configure_adapter_manual_approval(env: Any, *, required: bool) -> None:
+#: The media-buy operations a real adapter gates when its config names none
+#: (``manual_approval_operations`` in ``AdServerAdapter.__init__``, src/adapters/base.py).
+_GATED_OPERATIONS = frozenset({"create_media_buy", "update_media_buy"})
+
+
+def _configure_adapter_manual_approval(env: Any, *, required: bool, operations: frozenset[str] | None = None) -> None:
     """Set manual-approval config on EVERY adapter mock the env exposes.
 
     MediaBuyCreateEnv patches the create-module adapter as ``env.mock['adapter']``;
@@ -238,14 +250,15 @@ def _configure_adapter_manual_approval(env: Any, *, required: bool) -> None:
     ``env.mock['update_adapter']``. The production create/update manual-approval
     gate reads ``manual_approval_required`` + ``'<op>' in manual_approval_operations``
     from its OWN module's adapter, so both must be configured (guarded on presence).
+    ``operations`` defaults to the gated set when ``required`` and to none otherwise.
     """
-    operations = {"create_media_buy", "update_media_buy"} if required else []
+    gated = (_GATED_OPERATIONS if required else frozenset()) if operations is None else operations
     for name in ("adapter", "update_adapter"):
         if name not in env.mock:
             continue
         adapter_mock = env.mock[name].return_value
         adapter_mock.manual_approval_required = required
-        adapter_mock.manual_approval_operations = operations
+        adapter_mock.manual_approval_operations = set(gated)
 
 
 @given("tenant human_review_required is false")
@@ -270,21 +283,36 @@ def given_tenant_auto_approval(ctx: dict) -> None:
 @given("approval path is manual")
 def given_tenant_manual_approval(ctx: dict) -> None:
     """Configure tenant for manual approval."""
-    tenant = ctx.get("tenant")
-    assert tenant is not None, (
+    assert ctx.get("tenant") is not None, (
         "No tenant in ctx — step claims 'tenant is configured for manual approval' but no tenant exists to configure"
     )
-    tenant.human_review_required = True
-    env = ctx["env"]
-    env._commit_factory_data()
-    env._tenant_overrides["human_review_required"] = True
+    _set_tenant_human_review(ctx, required=True)
     # Production code checks: manual_approval_required AND
     # "<op>" in adapter.manual_approval_operations. The mock adapter defaults to
     # manual_approval_operations=[], so configure every adapter mock (create +
     # update) for manual approval — the update submitted path reads update_adapter.
-    _configure_adapter_manual_approval(env, required=True)
+    _configure_adapter_manual_approval(ctx["env"], required=True)
     # Also write to DB so Docker-hosted adapter reads the correct config
     _sync_adapter_approval_to_db(ctx, manual_approval_required=True)
+
+
+def given_tenant_review_alone(ctx: dict) -> None:
+    """Tenant ``human_review_required=True`` with the adapter's own flag OFF.
+
+    Isolates the tenant arm of the create approval gate
+    (``tenant.human_review_required OR adapter.manual_approval_required``, then
+    ``'create_media_buy' in adapter.manual_approval_operations``).
+    :func:`given_tenant_manual_approval` sets the adapter flag too, so a row graded through
+    it still parks the buy if production ignored the tenant. Here the adapter keeps a real
+    adapter's gated operations and its flag stays False, in-process and in the DB the live
+    server reads, so the tenant flag is the only input that can park the buy.
+    """
+    assert ctx.get("tenant") is not None, (
+        "No tenant in ctx — step claims the tenant requires review but no tenant exists to configure"
+    )
+    _set_tenant_human_review(ctx, required=True)
+    _configure_adapter_manual_approval(ctx["env"], required=False, operations=_GATED_OPERATIONS)
+    _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
 
 
 @given("adapter manual_approval_required is false")
@@ -325,7 +353,7 @@ def given_approval_partition(ctx: dict, partition: str) -> None:
         given_tenant_auto_approval(ctx)
         given_adapter_no_manual_approval(ctx)
     elif partition == "pending_human_review":
-        given_tenant_manual_approval(ctx)
+        given_tenant_review_alone(ctx)
     elif partition == "pending_adapter_approval":
         # Tenant auto-approve, but adapter requires manual approval
         given_tenant_auto_approval(ctx)
@@ -346,7 +374,7 @@ def given_approval_boundary(ctx: dict, config: str) -> None:
         given_tenant_auto_approval(ctx)
         given_adapter_no_manual_approval(ctx)
     elif config == "tenant_hr=true":
-        given_tenant_manual_approval(ctx)
+        given_tenant_review_alone(ctx)
     elif config == "adapter_ma=true":
         # Tenant auto-approve, but adapter requires manual approval
         given_tenant_auto_approval(ctx)
