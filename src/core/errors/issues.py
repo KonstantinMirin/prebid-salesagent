@@ -151,6 +151,17 @@ class JsonPointer:
         ``issues[0].pointer`` translated -- a path over THE BUYER'S DOCUMENT. So membership
         in that document is the test: a segment survives iff it addresses something there.
 
+        Membership is judged over the WHOLE path, not one segment at a time. A tag value
+        can also be a real member name at that level: ``core/optimization-goal.json``'s
+        ``kind: "metric"`` arm carries a ``metric`` member, so a priority rejected on
+        ``{"kind": "metric", "metric": "clicks", "priority": 0}`` arrives as
+        ``optimization_goals.0.metric.priority``. Keeping ``metric`` because it resolves
+        (to ``"clicks"``) strands ``priority`` and answers ``optimization_goals[0].metric``,
+        a member the buyer got right. So the pointer is the longest subsequence of ``loc``
+        that is a path through the document. Both readings of that example are five
+        segments long, so a tie goes to the later segment: pydantic's loc ENDS at the
+        member it rejected, and the synthesized segment is the one in the middle.
+
         ``names_absent_member`` is the one error for which it cannot be: a ``missing``
         rejection's last segment names the member that is ABSENT, which is exactly why it
         does not resolve. Interior segments never get this treatment -- pydantic puts the
@@ -163,16 +174,28 @@ class JsonPointer:
         if not isinstance(document, Mapping | Sequence) or isinstance(document, str | bytes):
             return cls(tuple(loc))
         segments = tuple(loc)
-        kept: list[str | int] = []
-        node: Any = document
-        for position, segment in enumerate(segments):
-            child = _member(node, segment)
-            if child is not _ABSENT:
-                kept.append(segment)
-                node = child
-            elif names_absent_member and position == len(segments) - 1:
-                kept.append(segment)
-        return cls(tuple(kept))
+        last = len(segments) - 1
+        memo: dict[tuple[int, int], tuple[str | int, ...]] = {}
+
+        def longest(node: Any, position: int) -> tuple[str | int, ...]:
+            """The longest path through *node* built from ``segments[position:]``."""
+            if position > last:
+                return ()
+            key = (position, id(node))
+            if key not in memo:
+                segment = segments[position]
+                skipped = longest(node, position + 1)
+                child = _member(node, segment)
+                if child is not _ABSENT:
+                    kept = (segment, *longest(child, position + 1))
+                    memo[key] = kept if len(kept) > len(skipped) else skipped
+                elif names_absent_member and position == last:
+                    memo[key] = (segment,)
+                else:
+                    memo[key] = skipped
+            return memo[key]
+
+        return cls(longest(document, 0))
 
     @staticmethod
     def _escape(token: str) -> str:
