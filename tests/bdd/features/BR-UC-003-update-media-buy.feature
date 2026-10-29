@@ -566,8 +566,8 @@ Feature: BR-UC-003 Update Media Buy
     # resolve_identity() nulls it on a failed token->principal lookup, and the
     # BDD harness's identity_for() now mirrors that — salesagent-z9e0). So
     # require_principal_id fires FIRST with AUTH_MISSING, before
-    # update_media_buy's ownership check (AdCPAuthorizationError /
-    # PERMISSION_DENIED, salesagent-otc5) is ever reached — that check only
+    # update_media_buy's ownership check (MEDIA_BUY_NOT_FOUND, see
+    # @T-UC-003-ext-c) is ever reached — that check only
     # fires for a principal_id that resolved but doesn't own the media buy, a
     # genuinely different case from "principal_id never resolved". This now
     # matches the scenario's own title on every transport.
@@ -593,19 +593,32 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-c @extension @ext-c @error @post-f1 @post-f2 @post-f3
   Scenario: Ownership mismatch -- principal does not own media buy
-    Given the Buyer is authenticated as principal "principal_other"
-    And the media buy "mb_existing" is owned by principal "principal_owner"
-    And a valid update_media_buy request with:
+    Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
+    And the media buy "mb_existing" exists with owner principal_owner
+    And the authenticated principal is principal_other
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
-    And the error code should be "ACCOUNT_NOT_FOUND"
+    And the error code should be "MEDIA_BUY_NOT_FOUND"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error explains ownership mismatch
     # POST-F3: Suggestion for recovery
+    # LOCAL CORRECTION (mirror upstream in adcp-req), two parts:
+    # 1. The generated line asserted ACCOUNT_NOT_FOUND. The pin answers a buy owned by
+    #    another principal exactly as an absent buy (@T-UC-003-ext-b): "the body MUST NOT
+    #    distinguish 'unauthorized' from 'not found'", and MEDIA_BUY_NOT_FOUND is the code
+    #    for a buy that "does not exist or is not accessible to the requesting agent".
+    #    The caller's account resolves, so ACCOUNT_NOT_FOUND would name the wrong object.
+    # 2. The generated Givens authenticated as a principal with no row, which the resolver
+    #    refuses with AUTH_MISSING before ownership is ever checked (the same mechanism
+    #    @T-UC-003-ext-a-unknown grades). They now use the ownership outlines' Givens: the
+    #    caller exists and can reach the request's account, so ownership is the only
+    #    difference from the Background's buyer.
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx section="Agent and Account Isolation"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/MEDIA_BUY_NOT_FOUND
 
   @T-UC-003-ext-d @extension @ext-d @error @post-f1 @post-f2 @post-f3
   Scenario: Budget validation -- campaign budget zero
@@ -1211,13 +1224,17 @@ Feature: BR-UC-003 Update Media Buy
       | partition                  | status               | outcome |
       | status_pending_activation  | pending_activation   | success |
       | status_active              | active               | success |
+      | paused_budget_change       | paused               | accepted |
 
     Examples: Invalid partitions
       | partition              | status     | outcome                                      |
-      | paused_packages_locked | paused     | error "INVALID_STATE" with suggestion        |
       | terminal_rejected      | rejected   | error "INVALID_STATE" with suggestion        |
       | terminal_canceled    | canceled   | error "INVALID_STATE" with suggestion        |
       | terminal_completed   | completed  | error "INVALID_STATE" with suggestion        |
+    # LOCAL CORRECTION (mirror upstream in adcp-req): paused_packages_locked asserted
+    # INVALID_STATE for a package update that changes only the budget. It is now the valid
+    # paused_budget_change row, for the reason given on @T-UC-003-boundary-media-buy-status.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/media-buy-valid-action.json pointer=/enumMetadata/update_budget
 
   @T-UC-003-boundary-media-buy-status @boundary @media_buy_status
   Scenario Outline: Media buy status boundary validation - <boundary_point>
@@ -1239,10 +1256,18 @@ Feature: BR-UC-003 Update Media Buy
       | boundary_point                            | status               | outcome                                  |
       | pending_activation (non-terminal, updatable) | pending_activation | success                                  |
       | active (non-terminal, updatable)          | active               | success                                  |
-      | paused (packages locked, budget/dates ok) | paused               | error "INVALID_STATE" with suggestion    |
+      | paused (packages locked, budget/dates ok) | paused               | accepted                                 |
       | rejected (terminal, update blocked)       | rejected             | error "INVALID_STATE" with suggestion   |
       | canceled (terminal, update blocked)       | canceled             | error "INVALID_STATE" with suggestion   |
       | completed (terminal, update blocked)      | completed            | error "INVALID_STATE" with suggestion   |
+    # LOCAL CORRECTION (mirror upstream in adcp-req): the paused row asserted INVALID_STATE
+    # for a request whose only change is packages[].budget, against its own label ("budget/
+    # dates ok"). The pin maps packages[].budget to the budget actions (the normative action
+    # table; media-buy-valid-action.json lists it in update_budget's update_fields), a paused
+    # buy here advertises update_budget, and a seller rejects only an action it does not
+    # advertise, with ACTION_NOT_ALLOWED. INVALID_STATE is the code for a terminal buy.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx section="Action vocabulary and field mapping"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/media-buy-valid-action.json pointer=/enumMetadata/update_budget
 
   @T-UC-003-partition-budget-amount @partition @budget_amount
   Scenario Outline: Budget amount partition validation - <partition>
@@ -2054,13 +2079,23 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    And the package "pkg_001" should have creative assignments [<stored>]
 
     Examples: Valid partitions
-      | partition                    | mode                                              | outcome |
-      | creative_ids_replace         | creative_ids=[cr_new_1, cr_new_2]                 | success |
-      | creative_assignments_replace | creative_assignments=[{cr_new_1, weight:70}]      | success |
-      | add_new_creative             | creative_ids=[cr_old_1, cr_old_2, cr_new_3]       | success |
-      | remove_existing_creative     | creative_ids=[cr_old_1]                           | success |
+      | partition                    | mode                                                      | stored                       | outcome |
+      | replace_all_existing         | creative_assignments=[{cr_new_1}, {cr_new_2}]             | cr_new_1, cr_new_2           | success |
+      | creative_assignments_replace | creative_assignments=[{cr_new_1, weight:70}]              | cr_new_1:70                  | success |
+      | add_new_creative             | creative_assignments=[{cr_old_1}, {cr_old_2}, {cr_new_3}] | cr_old_1, cr_old_2, cr_new_3 | success |
+      | remove_existing_creative     | creative_assignments=[{cr_old_1}]                         | cr_old_1                     | success |
+    # LOCAL CORRECTION (mirror upstream in adcp-req), two parts:
+    # 1. Three rows sent packages[].creative_ids, which the pinned package-update.json does
+    #    not declare. Replacement goes through creative_assignments ("Replace creative
+    #    assignments for this package ... Uses replacement semantics"), so every row now uses
+    #    it; creative_ids_replace is renamed replace_all_existing for that reason.
+    # 2. Every row ended in a bare success, which a seller that appended, or ignored the
+    #    array, also produced. Each row now names the assignment set the seller must store,
+    #    and the weighted row the stored weight.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/creative_assignments
 
   @T-UC-003-boundary-creative-replacement @boundary @creative_replacement
   Scenario Outline: Creative replacement boundary validation - <boundary_point>
@@ -2273,7 +2308,12 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition       | owner       | principal   | outcome                                        |
-      | owner_mismatch  | buyer_001   | buyer_999   | error "PERMISSION_DENIED" with suggestion      |
+      | owner_mismatch  | buyer_001   | buyer_999   | error "MEDIA_BUY_NOT_FOUND" with suggestion    |
+    # LOCAL CORRECTION (mirror upstream in adcp-req): the generated row asserted
+    # PERMISSION_DENIED, which tells the caller the buy exists. The pin forbids that
+    # answer: a buy the caller cannot access is answered as an absent one (@T-UC-003-ext-b).
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx section="Agent and Account Isolation"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/MEDIA_BUY_NOT_FOUND
 
   @T-UC-003-boundary-principal-ownership @boundary @principal_ownership
   Scenario Outline: Principal ownership boundary validation - <boundary_point>
@@ -2289,7 +2329,10 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Boundary values
       | boundary_point                    | owner       | principal   | outcome                                        |
       | principal matches owner           | buyer_001   | buyer_001   | success                                        |
-      | principal differs from owner      | buyer_001   | buyer_999   | error "PERMISSION_DENIED" with suggestion      |
+      | principal differs from owner      | buyer_001   | buyer_999   | error "MEDIA_BUY_NOT_FOUND" with suggestion    |
+    # LOCAL CORRECTION (mirror upstream in adcp-req): PERMISSION_DENIED -> MEDIA_BUY_NOT_FOUND,
+    # for the reason given on @T-UC-003-partition-principal-ownership.
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx section="Agent and Account Isolation"
 
   @T-UC-003-v31-error-budget-too-low @extension @ext-d @error @v3.1 @error-details @post-f1 @post-f2 @post-f3
   Scenario: BUDGET_TOO_LOW error carries v3.1 details shape (minimum_budget + currency)

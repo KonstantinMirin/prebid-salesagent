@@ -32,13 +32,13 @@ from sqlalchemy import select
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAmbiguousBiddingPolicyError,
-    AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
     AdCPContextNotFoundError,
     AdCPCreativeNotFoundError,
     AdCPGoneError,
+    AdCPMediaBuyNotFoundError,
     AdCPNotCancellableError,
     AdCPValidationError,
 )
@@ -418,6 +418,13 @@ def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
 
     Returned names align with ``MEDIA_BUY_STATE_MACHINE`` keys so they can
     be intersected against ``seller_valid_actions(current_status)``.
+
+    A package entry's ``budget`` maps to ``update_budget`` alone: the pinned
+    ``enums/media-buy-valid-action.json`` lists ``packages[].budget`` among
+    ``update_budget``'s ``update_fields``, and update_media_buy.mdx's normative action
+    table maps it to the budget actions only. So an entry that changes nothing but its
+    budget does not also ask for ``update_packages``, which a paused buy does not offer
+    while it does offer ``update_budget``.
     """
     actions: list[str] = []
     if req.new_packages:
@@ -430,7 +437,7 @@ def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
         actions.append("update_budget")
     if req.start_time is not None or req.end_time is not None:
         actions.append("update_dates")
-    if req.packages:
+    if req.packages and any(pkg.model_fields_set - {"package_id", "budget"} for pkg in req.packages):
         actions.append("update_packages")
     return actions
 
@@ -642,8 +649,7 @@ def _verify_principal(
         repo: Tenant-scoped MediaBuyRepository for DB lookups
 
     Raises:
-        AdCPMediaBuyNotFoundError: Media buy not found
-        AdCPAuthorizationError: Principal doesn't own media buy
+        AdCPMediaBuyNotFoundError: Media buy not found, or owned by another principal
     """
     principal_id = identity.principal.principal_id
     tenant = identity.tenant
@@ -660,9 +666,11 @@ def _verify_principal(
             resource_id=media_buy_id,
             reason=f"Principal does not own media buy (owner: {media_buy.principal_id})",
         )
-        raise AdCPAuthorizationError(
-            details=EntityRefDetails(principal_id=principal_id, media_buy_id=media_buy_id),
-        )
+        # The buyer gets the absent-buy answer, byte for byte: L1/security.mdx (3.2.7)
+        # "the body MUST NOT distinguish 'unauthorized' from 'not found'", and
+        # enums/error-code.json MEDIA_BUY_NOT_FOUND covers a buy "not accessible to the
+        # requesting agent". Same class and details as get_by_id_or_raise above.
+        raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
 
 
 def _update_media_buy_impl(

@@ -1348,7 +1348,8 @@ def then_package_has_creative_assignments(ctx: dict, package_id: str, expected_i
 
     BR-RULE-024: creative_assignments on update replaces all existing.
     Reads the package from DB and verifies the creative assignments list
-    contains exactly the expected creative IDs.
+    contains exactly the expected creative IDs. An entry written ``cr_new_1:70`` also
+    pins that assignment's stored weight.
     """
     from sqlalchemy import select
 
@@ -1367,13 +1368,20 @@ def then_package_has_creative_assignments(ctx: dict, package_id: str, expected_i
                 tenant_id=tenant.tenant_id,
             )
         ).all()
-        actual_ids = {a.creative_id for a in assignments}
+        actual_weights = {a.creative_id: a.weight for a in assignments}
 
-    expected = {cid.strip() for cid in expected_ids.split(",")}
-    assert actual_ids == expected, (
+    entries = [entry.strip().partition(":") for entry in expected_ids.split(",")]
+    expected = {cid.strip() for cid, _, _ in entries}
+    assert set(actual_weights) == expected, (
         f"Package '{package_id}' creative assignments mismatch. "
-        f"Expected: {sorted(expected)}, actual: {sorted(actual_ids)}"
+        f"Expected: {sorted(expected)}, actual: {sorted(actual_weights)}"
     )
+    for cid, _, weight in entries:
+        if weight:
+            assert actual_weights[cid.strip()] == int(weight), (
+                f"Package '{package_id}' assignment {cid.strip()!r} stored weight "
+                f"{actual_weights[cid.strip()]!r}, the update sent {weight}"
+            )
 
 
 @then(parsers.parse("the old assignments [{old_ids}] should be removed"))
@@ -1433,11 +1441,11 @@ def _inline_creative_payload(creative_id: str, name: str) -> dict[str, Any]:
     )
 
 
-def _approved_display_creative(ctx: dict, creative_id: str) -> None:
+def _approved_display_creative(ctx: dict, creative_id: str) -> Any:
     """An approved display creative in the buyer's library, compatible with the display product."""
     from tests.factories.creative import CreativeFactory
 
-    CreativeFactory(
+    return CreativeFactory(
         creative_id=creative_id,
         tenant=ctx["tenant"],
         principal=ctx["principal"],
@@ -1867,26 +1875,18 @@ def given_budget_greater_than_zero(ctx: dict, amount: int) -> None:
 
 @given(parsers.parse('the package "{package_id}" has existing creative assignments [{assignments}]'))
 def given_package_existing_creatives(ctx: dict, package_id: str, assignments: str) -> None:
-    """Create existing creative assignments on a package.
+    """Assign the named creatives to the package, as CreativeAssignment rows.
 
-    Parses comma-separated creative IDs (e.g., 'cr_old_1, cr_old_2') and creates
-    Creative records + assignment config on the package.
+    Parses comma-separated creative IDs (e.g., 'cr_old_1, cr_old_2') and creates each
+    Creative and its assignment to the Background's buy and package. The rows are the
+    state the seller reads and replaces (``_replace_package_assignments`` deletes the
+    rows a replacement does not name); a list written into ``package_config`` is read by
+    nothing, so a seller that appended instead of replacing passed every replacement Then.
     """
-    from tests.factories.creative import CreativeFactory
+    from tests.factories.creative import CreativeAssignmentFactory
 
     env = ctx["env"]
     creative_ids = [cid.strip() for cid in assignments.split(",")]
-    # Create Creative records
-    for cid in creative_ids:
-        CreativeFactory(
-            creative_id=cid,
-            tenant=ctx["tenant"],
-            principal=ctx["principal"],
-            format="display_300x250_image",
-            approved=True,
-            data={"assets": {"primary": {"url": f"https://example.com/{cid}.png", "width": 300, "height": 250}}},
-        )
-    # Set creative_assignments on the existing package — fail loudly if package missing
     pkg = ctx.get("existing_package")
     assert pkg is not None, (
         f"No 'existing_package' in ctx — step claims package '{package_id}' has creative assignments "
@@ -1895,9 +1895,12 @@ def given_package_existing_creatives(ctx: dict, package_id: str, assignments: st
     # package_id is a Gherkin label; register it against the existing package
     # so later resolver calls can translate label → real package_id.
     _register_package(ctx, package_id, pkg)
-    config = pkg.package_config or {}
-    config["creative_assignments"] = [{"creative_id": cid, "weight": 1.0} for cid in creative_ids]
-    pkg.package_config = config
+    for cid in creative_ids:
+        CreativeAssignmentFactory(
+            creative=_approved_display_creative(ctx, cid),
+            media_buy=_existing_media_buy(ctx),
+            package_id=pkg.package_id,
+        )
     env._commit_factory_data()
     ctx["existing_creative_ids"] = creative_ids
 
@@ -1911,8 +1914,6 @@ def given_creative_update_mode(ctx: dict, mode: str) -> None:
     - 'creative_assignments=[{cr_new_1, weight:70}]' — set creative_assignments
     """
     import re
-
-    from tests.factories.creative import CreativeFactory
 
     kwargs = _ensure_update_defaults(ctx)
     if not kwargs.get("packages"):
@@ -1930,42 +1931,25 @@ def given_creative_update_mode(ctx: dict, mode: str) -> None:
         env = ctx["env"]
         for cid in creative_ids:
             if cid not in (ctx.get("existing_creative_ids") or []):
-                CreativeFactory(
-                    creative_id=cid,
-                    tenant=ctx["tenant"],
-                    principal=ctx["principal"],
-                    format="display_300x250_image",
-                    approved=True,
-                    data={
-                        "assets": {"primary": {"url": f"https://example.com/{cid}.png", "width": 300, "height": 250}}
-                    },
-                )
+                _approved_display_creative(ctx, cid)
         env._commit_factory_data()
         ctx["referenced_creative_ids"] = creative_ids
     elif stripped.startswith("creative_assignments="):
-        # Parse creative_assignments=[{cr_new_1, weight:70}]
+        # Parse creative_assignments=[{cr_new_1, weight:70}, {cr_new_2}]. An entry that names
+        # no weight sends none: creative-assignment.json requires only creative_id.
         assignments = []
         env = ctx["env"]
-        # Find all {id, weight:N} blocks
+        # Find all {id[, weight:N]} blocks
         for match in re.finditer(r"\{([^}]+)\}", stripped):
             parts = [p.strip() for p in match.group(1).split(",")]
             cid = parts[0]
-            weight = 1.0
+            assignment: dict[str, Any] = {"creative_id": cid}
             for part in parts[1:]:
                 if part.startswith("weight:"):
-                    weight = float(part.split(":")[1])
-            assignments.append({"creative_id": cid, "weight": weight})
+                    assignment["weight"] = float(part.split(":")[1])
+            assignments.append(assignment)
             if cid not in (ctx.get("existing_creative_ids") or []):
-                CreativeFactory(
-                    creative_id=cid,
-                    tenant=ctx["tenant"],
-                    principal=ctx["principal"],
-                    format="display_300x250_image",
-                    approved=True,
-                    data={
-                        "assets": {"primary": {"url": f"https://example.com/{cid}.png", "width": 300, "height": 250}}
-                    },
-                )
+                _approved_display_creative(ctx, cid)
         env._commit_factory_data()
         pkg["creative_assignments"] = assignments
         ctx["referenced_creative_ids"] = [a["creative_id"] for a in assignments]
@@ -2123,6 +2107,30 @@ def given_creative_assignments_with_state(ctx: dict, creative_state: str) -> Non
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _package_product(ctx: dict) -> Any:
+    """The product the Background's package was bought from: the row whose placements it uses."""
+    product = ctx.get("default_product")
+    if product is None:
+        # UC-003 harness doesn't store product in ctx — look up from existing package
+        pkg_obj = ctx.get("existing_package")
+        if pkg_obj is not None:
+            product_id = (pkg_obj.package_config or {}).get("product_id")
+            if product_id:
+                from sqlalchemy import select
+
+                from src.core.database.models import Product as ProductModel
+
+                with db_session(ctx) as session:
+                    product = session.scalars(
+                        select(ProductModel).filter_by(product_id=product_id, tenant_id=ctx["tenant"].tenant_id)
+                    ).first()
+    assert product is not None, (
+        "Scenario names the package's product's placements but no product found in ctx or DB — "
+        "ensure a Given step sets ctx['default_product'] or the harness creates a product"
+    )
+    return product
+
+
 @given(
     parsers.parse("the package update includes creative_assignments with placement configuration: {placement_config}")
 )
@@ -2137,8 +2145,6 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
     """
     import re
 
-    from tests.factories.creative import CreativeFactory
-
     env = ctx["env"]
     kwargs = _ensure_update_defaults(ctx)
     if not kwargs.get("packages"):
@@ -2146,16 +2152,8 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
     pkg = kwargs["packages"][0]
     stripped = placement_config.strip()
 
-    # Create a creative for the assignment
     cid = "cr_placement_test"
-    CreativeFactory(
-        creative_id=cid,
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        format="display_300x250_image",
-        approved=True,
-        data={"assets": {"primary": {"url": f"https://example.com/{cid}.png", "width": 300, "height": 250}}},
-    )
+    _approved_display_creative(ctx, cid)
     env._commit_factory_data()
 
     assignment: dict[str, Any] = {"creative_id": cid, "weight": 1.0}
@@ -2171,29 +2169,21 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
             assignment["placement_ids"] = placement_ids
             ctx["referenced_placement_ids"] = placement_ids
 
-    # Handle "product unsupported" — configure product to not support placements
-    if "product unsupported" in stripped:
-        product = ctx.get("default_product")
-        if product is None:
-            # UC-003 harness doesn't store product in ctx — look up from existing package
-            pkg_obj = ctx.get("existing_package")
-            if pkg_obj is not None:
-                product_id = (pkg_obj.package_config or {}).get("product_id")
-                if product_id:
-                    from sqlalchemy import select
+    # The package's product decides which placement_ids exist. Every configuration that sends
+    # placement_ids starts from a product defining plc_a and plc_b, so a valid id is one the
+    # product defines and an invalid one is one it does not. "(product unsupported)" then
+    # clears them: a product with no placements refuses every placement_id with
+    # UNSUPPORTED_FEATURE, and without the clear plc_a is a valid id and that row succeeds.
+    if "placement_ids" in assignment:
+        from tests.factories.product import StoredPlacementFactory
 
-                    from src.core.database.models import Product as ProductModel
-
-                    with db_session(ctx) as session:
-                        product = session.scalars(
-                            select(ProductModel).filter_by(product_id=product_id, tenant_id=ctx["tenant"].tenant_id)
-                        ).first()
-        assert product is not None, (
-            "Scenario requires '(product unsupported)' but no product found in ctx or DB — "
-            "ensure a Given step sets ctx['default_product'] or the harness creates a product"
-        )
-        # The model column is `placements`; clearing it disables placement-level targeting.
-        product.placements = None
+        product = _package_product(ctx)
+        product.placements = [
+            StoredPlacementFactory(placement_id="plc_a"),
+            StoredPlacementFactory(placement_id="plc_b"),
+        ]
+        if "product unsupported" in stripped:
+            product.placements = None
         env._commit_factory_data()
 
     pkg["creative_assignments"] = [assignment]
