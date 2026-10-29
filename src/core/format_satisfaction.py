@@ -1652,7 +1652,11 @@ class PlacementLayer:
     (2). Layer (1) is the product's declarations, which the selected declaration already
     belongs to.
 
-    ``declarations`` is None for a placement whose layer (3) this seller cannot resolve: a
+    ``declarations`` is None for a placement that states no narrowing of its own: "An omitted
+    optional layer is unconstrained", so it admits every product declaration. It is still
+    INCLUDED inventory, so a creative set routing every creative elsewhere leaves it uncovered.
+
+    ``resolved`` is False for a placement whose layer (3) this seller cannot resolve: a
     ``publisher_ref`` placement, whose effective set depends on the publisher's adagents.json,
     for which this seller has no resolver on the buy path. The pin is explicit that such a
     layer is not "unconstrained": "an unresolved publisher placement or format-option
@@ -1661,10 +1665,11 @@ class PlacementLayer:
 
     placement_id: str
     declarations: tuple[LibraryFormatDeclaration, ...] | None
+    resolved: bool = True
 
 
 def included_placement_layers(placements: Iterable[Any] | None) -> tuple[PlacementLayer, ...]:
-    """The INCLUDED placements of a product that narrow its formats, as stored documents.
+    """The INCLUDED placements of a product and the narrowing each states, from stored documents.
 
     Only ``mode: included`` counts. ``core/placement.json`` makes ``included`` "fixed product
     inventory: it cannot be independently selected", so every package buys it, while a
@@ -1673,13 +1678,22 @@ def included_placement_layers(placements: Iterable[Any] | None) -> tuple[Placeme
     serves unchanged and which state their ``mode`` (``ck_products_placements_explicit``),
     so the gate grades the mode the buyer was shown.
 
-    A placement that states no inline ``format_options`` is left out: "An omitted optional
+    A placement that states neither inline ``format_options`` nor the deprecated
+    ``format_ids`` is an UNCONSTRAINED layer (``declarations`` None): "An omitted optional
     layer is unconstrained", so it accepts every product declaration. A placement whose
-    inline declarations are all unparseable keeps an EMPTY layer, which covers nothing, so
-    it fails closed rather than widening to the product set.
+    declarations are all unparseable, or all unprojectable, keeps an EMPTY layer, which covers
+    nothing, so it fails closed rather than widening to the product set.
 
-    An included ``publisher_ref`` placement is kept as an UNRESOLVED layer (``declarations``
-    None), whatever inline ``format_options`` it also states: layer (3) is that placement's
+    THE DEPRECATED ARM NARROWS TOO. ``core/placement.json`` ``format_ids``: "When present on a
+    product placement, this field narrows the product-level ``format_ids`` contract and MUST
+    NOT introduce formats the product does not accept." A placement stating only that arm --
+    the shape a legacy-only product's placements have -- is read through the SDK's projection
+    (:func:`_placement_projection`), the same one the product's own deprecated arm is graded
+    through, so the two layers are compared in one vocabulary. The canonical arm wins when a
+    placement states both, as ``core/product.json`` makes buyers "prefer ``format_options``".
+
+    An included ``publisher_ref`` placement is kept as an UNRESOLVED layer (``resolved``
+    False), whatever inline ``format_options`` it also states: layer (3) is that placement's
     adagents.json narrowing, which this seller has no resolver for on the buy path, and the
     pin says "an unresolved publisher placement or format-option reference MUST fail
     closed". So it refuses every package that selects a format until a resolver exists.
@@ -1689,22 +1703,70 @@ def included_placement_layers(placements: Iterable[Any] | None) -> tuple[Placeme
     for placement in placements or []:
         if not isinstance(placement, Mapping) or placement.get("mode") != LibraryPlacementMode.included:
             continue
+        placement_id = str(placement.get("placement_id"))
         if placement.get("kind") == LibraryPlacementKind.publisher_ref:
-            layers.append(PlacementLayer(placement_id=str(placement.get("placement_id")), declarations=None))
-            continue
-        if placement.get("format_options") is None:
-            continue
-        layers.append(
-            PlacementLayer(
-                placement_id=str(placement.get("placement_id")),
-                declarations=product_declarations(placement["format_options"]),
-            )
-        )
+            layers.append(PlacementLayer(placement_id=placement_id, declarations=None, resolved=False))
+        elif placement.get("format_options") is not None:
+            layers.append(PlacementLayer(placement_id, product_declarations(placement["format_options"])))
+        elif placement.get("format_ids") is not None:
+            layers.append(PlacementLayer(placement_id, _placement_projection(placement["format_ids"])))
+        else:
+            layers.append(PlacementLayer(placement_id, declarations=None))
     return tuple(layers)
 
 
-def _placement_accepts(selected: LibraryFormatDeclaration, accepted: LibraryFormatDeclaration) -> bool:
-    """Whether a placement's declaration *accepted* takes the product declaration *selected*.
+def _placement_projection(format_ids: Iterable[Any]) -> tuple[LibraryFormatDeclaration, ...]:
+    """A placement's deprecated ``format_ids``, projected by the SDK, as an id-less layer.
+
+    Each entry goes through :func:`_projected_declaration`, which fails closed: an entry the
+    SDK cannot project contributes nothing. The ``format_option_id`` the projection MINTS is
+    removed, because it is no option this product published -- the SDK derives it from the
+    reference's spelling, so ``display_300x250`` and ``display_image`` sized 300x250 mint
+    different ids for one shape. Without an id the layer is matched to the product's
+    declarations by ``core/product.json``'s third rule, "declarations with the same
+    format_kind whose narrower parameters satisfy the broader declaration".
+    """
+    from src.core.format_resolver import product_format_references
+
+    return tuple(
+        projected.model_copy(update={"format_option_id": None})
+        for reference in product_format_references(format_ids)
+        if (projected := _projected_declaration(reference)) is not None
+    )
+
+
+def _narrowed(selected: LibraryFormatDeclaration, accepted: LibraryFormatDeclaration) -> LibraryFormatDeclaration:
+    """*selected* with every parameter *accepted* STATES in its place: their intersection.
+
+    ``canonical-formats.mdx`` § "Narrows": "when v2.params omits a parameter that v1
+    specified, v2 inherits v1's value". So the narrower placement declaration keeps the
+    product option's identity and every parameter it is silent about, and replaces the ones
+    it states. STATED means set on the document, not filled by the per-kind schema's
+    defaults: an inline declaration silent about ``slots`` inherits the option's slots, not
+    the kind's default list.
+    """
+    params = accepted.params
+    # One arm of the pinned union types ``params`` as a plain mapping rather than a model.
+    if isinstance(params, BaseModel):
+        stated = {name: value for name in params.model_fields_set if (value := getattr(params, name)) is not None}
+    else:
+        stated = {name: value for name, value in (params or {}).items() if value is not None}
+    if not stated:
+        return selected
+    base = selected.params
+    narrowed = base.model_copy(update=stated) if isinstance(base, BaseModel) else {**(base or {}), **stated}
+    return selected.model_copy(update={"params": narrowed})
+
+
+def _effective_declaration(
+    selected: LibraryFormatDeclaration, accepted: LibraryFormatDeclaration
+) -> LibraryFormatDeclaration | None:
+    """What a placement's declaration *accepted* admits of the product declaration *selected*.
+
+    None when the placement does not take *selected* at all; otherwise the NARROWER of the
+    two, which is the pair's intersection and so the declaration a creative routed to this
+    placement has to satisfy: *accepted* narrowed onto *selected* (:func:`_narrowed`) when
+    the placement is the narrower side, *selected* itself when the option is.
 
     The matching rule is ``core/product.json``'s, stated for intersecting these layers:
     "Match publisher-declared options by {publisher_domain, format_option_id}, match
@@ -1729,17 +1791,158 @@ def _placement_accepts(selected: LibraryFormatDeclaration, accepted: LibraryForm
       declaration the target, so a placement broader than the option it admits (a wider
       duration range, a larger file-size cap) matches, and an exact duration inside the
       placement's range matches through the cross-key rule of :func:`_unsatisfied_params`.
+
+    A placement naming the option by id restates it, and whatever it states narrows it.
     """
     if (option := _option_identity(accepted)) is not None:
-        return option == _option_identity(selected)
+        return _narrowed(selected, accepted) if option == _option_identity(selected) else None
     if str(accepted.format_kind) != str(selected.format_kind):
-        return False
+        return None
     claim = {key: value for key, value in _declared_params(accepted).items() if value is not None}
     offered = {key: value for key, value in _declared_params(selected).items() if value is not None}
     inherited = _stated_constraints(offered, claim)
     if "duration_ms_range" in claim and "duration_ms_exact" in offered:
         inherited["duration_ms_exact"] = offered["duration_ms_exact"]
-    return not _unsatisfied_params(claim, inherited) or not _unsatisfied_params(offered, claim)
+    if not _unsatisfied_params(claim, inherited):
+        return _narrowed(selected, accepted)
+    return selected if not _unsatisfied_params(offered, claim) else None
+
+
+def _placement_sets(
+    layers: Sequence[PlacementLayer], declarations: Sequence[LibraryFormatDeclaration]
+) -> tuple[tuple[PlacementLayer, tuple[tuple[LibraryFormatDeclaration, LibraryFormatDeclaration], ...]], ...]:
+    """Each RESOLVED layer with its effective set, as ``(product declaration, effective)`` pairs.
+
+    ``core/product.json``: "A placement's effective accepted set is the intersection of every
+    applicable layer". The pair keeps the product declaration beside what the placement admits
+    of it, because the two questions asked of the set read different halves: a package selector
+    covers a placement by SELECTING one of its product declarations, and a creative covers it by
+    SATISFYING one of its effective declarations. An unconstrained layer admits each product
+    declaration as it is. Unresolved layers are left out; see :func:`_unresolved_placement`.
+    """
+    return tuple(
+        (
+            layer,
+            tuple((declaration, declaration) for declaration in declarations)
+            if layer.declarations is None
+            else tuple(
+                (declaration, effective)
+                for declaration in declarations
+                for accepted in layer.declarations
+                if (effective := _effective_declaration(declaration, accepted)) is not None
+            ),
+        )
+        for layer in layers
+        if layer.resolved
+    )
+
+
+def _unresolved_placement(layers: Sequence[PlacementLayer], field: str | None) -> FormatSatisfaction | None:
+    """The refusal for the first included placement whose effective set cannot be computed.
+
+    ``core/product.json``: "an unresolved publisher placement or format-option reference MUST
+    fail closed" (:class:`PlacementLayer`). Reported before coverage on both paths, whatever
+    was selected or assigned, because no selection can be shown to cover such a placement.
+    """
+    for layer in layers:
+        if not layer.resolved:
+            return FormatSatisfaction(
+                satisfied=False,
+                refusal=FormatRefusal.PLACEMENT_UNRESOLVED,
+                rejected_value=layer.placement_id,
+                summary=f"included placement {layer.placement_id!r} is publisher-referenced and unresolved",
+                field=field,
+            )
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class _PlacementContract:
+    """One placement's effective set, in the shape :func:`creative_satisfies` reads a contract in.
+
+    The canonical arm only: an effective declaration is canonical whichever arm the product
+    published, because the deprecated arm is compared through its projection.
+    """
+
+    format_options: tuple[LibraryFormatDeclaration, ...]
+    format_ids: tuple[()] = ()
+
+
+def creatives_uncovered(
+    creatives: Sequence[tuple[Any, Collection[str] | None]], product: Any
+) -> FormatSatisfaction | None:
+    """The first included placement a package's creative set leaves uncovered, or None.
+
+    ``core/product.json`` ``format_options``: "For a product or package containing multiple
+    included placements, a single creative intended for every placement MUST lie in the
+    intersection of every selected placement's effective set. Distinct per-placement
+    creatives MAY use the union, but the selected creative set MUST cover every included
+    placement; uncovered inventory MUST be rejected or refined, never silently omitted." This
+    seller rejects. It is the creative-side twin of :attr:`SelectorResolution.uncovered`,
+    over the same layers read the same way, and every creative gate asks it of the package's
+    WHOLE creative set once the request's assignments are in place.
+
+    *creatives* is that set: each stored creative row with the ``placement_ids`` its
+    assignment routes it to, None for an assignment that names none ("When omitted, the
+    creative is eligible for all placements", ``sync-creatives-request.json``). *product* is
+    the product ORM row: its ``format_contract`` and its stored ``placements`` documents, the
+    two things the create-time selector gate reads off the same row.
+
+    A creative covers a placement when it is routed there and satisfies the placement's
+    effective set, asked of :func:`creative_satisfies` -- the one creative validator, manifest
+    included -- against that set (:class:`_PlacementContract`). Graded against the EFFECTIVE
+    declaration rather than the product declaration the creative selected, because a product
+    option may be broader than the placement: a 300x250 creative satisfies an unsized image
+    option and still does not fill a placement narrowing it to 728x90.
+
+    An empty set covers nothing and is not refused: a package may be bought before its
+    creatives are assigned. A product declaring neither arm imposes no format restriction, so
+    it has no effective set to grade against (:func:`resolve_routes`).
+
+    A MULTI-PUBLISHER PRODUCT WITH NO ``placements[]`` has no layer here, so its creatives are
+    graded against the product declarations alone. The pin states this case twice and the
+    two texts differ: ``formats.mdx`` § Matching and satisfaction treats each
+    ``publisher_properties[]`` selector as an eligibility slice that fails closed when
+    indeterminate, while ``core/product.json`` ``format_options`` says such a product "has no
+    public routing key for per-placement creatives: its format_options MUST therefore be the
+    common intersection accepted across every selected publisher/property scope". The schema
+    is the normative text, so the product's own declarations ARE every slice's accepted set
+    and there is nothing per-publisher left to cover.
+    """
+    if not creatives:
+        return None
+    # The product's upper bound and included placements, read exactly as a package selector
+    # reads them -- which is what makes this the selector rule's twin rather than a second
+    # reading of the product.
+    contract = product.format_contract
+    bound = resolve_routes(
+        (), contract.format_options, legacy_catalog=contract.format_ids, placements=product.placements
+    )
+    unresolved = _unresolved_placement(bound.placements, field=None)
+    if unresolved is not None:
+        return unresolved
+    for layer, pairs in _placement_sets(bound.placements, bound.declarations):
+        effective = _PlacementContract(tuple(admitted for _, admitted in pairs))
+        if effective.format_options and any(
+            (routed is None or layer.placement_id in routed) and creative_satisfies(creative, effective)
+            for creative, routed in creatives
+        ):
+            continue
+        return FormatSatisfaction(
+            satisfied=False,
+            refusal=FormatRefusal.PLACEMENT_UNCOVERED,
+            # The placement the set leaves unserved: with several creatives there is no single
+            # offending creative, and the placement is what the buyer has to fill.
+            rejected_value=layer.placement_id,
+            # What a creative must satisfy to cover it, named by the option ids the buyer was
+            # shown. A legacy-only product published none, and the ids its projection mints
+            # would name options the buyer never saw, so it names nothing.
+            accepted_values=tuple(sorted({_declaration_label(e) for e in effective.format_options}))
+            if bound.published
+            else (),
+            summary=f"the package's creatives do not cover included placement {layer.placement_id!r}",
+        )
+    return None
 
 
 def _same_selection(
@@ -1859,7 +2062,7 @@ class SelectorResolution:
     #: product narrows neither arm, or the package names no selector: both mean the
     #: selector imposes nothing, which is :meth:`__bool__`'s ``True`` with no selection.
     routes: tuple[tuple[FormatRoute, FormatSatisfaction], ...] = ()
-    #: The product's included placements that narrow its formats, for :attr:`uncovered`.
+    #: The product's included placements and their narrowing, for :attr:`uncovered`.
     #: Empty for every single-route caller (a stored creative), which is what keeps the
     #: coverage rule on the package path only.
     placements: tuple[PlacementLayer, ...] = dataclass_field(default=(), compare=False)
@@ -2022,21 +2225,23 @@ class SelectorResolution:
         if self.unresolved is not None or self.conflicting or self.unsatisfied is not None:
             return None
         field = self.routes[0][0].field
-        for layer in self.placements:
-            if layer.declarations is None:
-                return FormatSatisfaction(
-                    satisfied=False,
-                    refusal=FormatRefusal.PLACEMENT_UNRESOLVED,
-                    rejected_value=layer.placement_id,
-                    summary=f"included placement {layer.placement_id!r} is publisher-referenced and unresolved",
-                    field=field,
-                )
+        unresolved = _unresolved_placement(self.placements, field)
+        if unresolved is not None:
+            return unresolved
         chosen = self._winning_arm
         if not chosen:
             return None
-        labels = sorted(_declaration_label(d) for d in chosen)
-        for layer in self.placements:
-            if not any(_placement_accepts(d, accepted) for d in chosen for accepted in layer.declarations or ()):
+        # The selection as the buyer can recognise it: the option ids a product published, or
+        # on the deprecated lane -- whose declarations are the SDK's projection, carrying ids
+        # the projection minted and the buyer was never shown -- the references the buyer sent.
+        labels = (
+            sorted(_declaration_label(d) for d in chosen)
+            if self.published
+            else sorted({_route_selector(route) for route, _ in self._arms[0]})
+        )
+        sets = _placement_sets(self.placements, self.declarations)
+        for layer, pairs in sets:
+            if not any(declaration in chosen for declaration, _ in pairs):
                 return FormatSatisfaction(
                     satisfied=False,
                     refusal=FormatRefusal.PLACEMENT_UNCOVERED,
@@ -2046,16 +2251,16 @@ class SelectorResolution:
                     # What this product would accept from this package on its own: the
                     # declarations every included placement admits. Empty when the
                     # placements share none, which is when only a set can cover them.
+                    # Nothing on the deprecated lane, for the reason ``labels`` gives.
                     accepted_values=tuple(
                         sorted(
                             _declaration_label(d)
                             for d in self.declarations
-                            if all(
-                                any(_placement_accepts(d, accepted) for accepted in each.declarations or ())
-                                for each in self.placements
-                            )
+                            if all(any(admitted == d for admitted, _ in each) for _, each in sets)
                         )
-                    ),
+                    )
+                    if self.published
+                    else (),
                     summary=f"selected formats {labels!r} do not cover included placement {layer.placement_id!r}",
                     field=field,
                 )
@@ -2340,11 +2545,14 @@ def canonical_refusal(
     )
 
 
-#: The two refusals that are about a creative's MANIFEST rather than the product's closed
-#: set: :func:`creative_refusal` answers them with a creative code, every other one with
-#: :func:`canonical_refusal`.
-_MANIFEST_REFUSALS: frozenset[FormatRefusal] = frozenset(
-    {FormatRefusal.MANIFEST_NOT_SATISFIED, FormatRefusal.MANIFEST_AMBIGUOUS}
+#: The refusals that are about the CREATIVES rather than the product's closed set:
+#: :func:`creative_refusal` answers them with a creative code, every other one with
+#: :func:`canonical_refusal`. The two manifest refusals are one creative failing the
+#: declaration it selects; :attr:`FormatRefusal.PLACEMENT_UNCOVERED` reaches here only from
+#: :func:`creatives_uncovered`, a package's creative set leaving an included placement
+#: unfilled. All three are corrected by changing the creatives, not the buy.
+_CREATIVE_REFUSALS: frozenset[FormatRefusal] = frozenset(
+    {FormatRefusal.MANIFEST_NOT_SATISFIED, FormatRefusal.MANIFEST_AMBIGUOUS, FormatRefusal.PLACEMENT_UNCOVERED}
 )
 
 
@@ -2364,8 +2572,9 @@ def creative_refusal(
 
     * ``CREATIVE_SIZE_MISMATCH`` when every shortfall is a dimension -- "The submitted
       creative dimensions do not match any size accepted by the selected packages";
-    * ``CREATIVE_VALIDATION_FAILED_GENERIC`` otherwise, including an ambiguous selection --
-      "the producer cannot classify the failure with a more specific standard code". No
+    * ``CREATIVE_VALIDATION_FAILED_GENERIC`` otherwise, including an ambiguous selection and
+      a creative set that leaves an included placement uncovered (:func:`creatives_uncovered`)
+      -- "the producer cannot classify the failure with a more specific standard code". No
       code in the enum names a missing ``format_option_ref``; ``CREATIVE_REPRESENTATION_UNRESOLVED``
       is about a CreativeRepresentationSet and requires a rejection per representation id,
       which a plain manifest has none of.
@@ -2373,7 +2582,7 @@ def creative_refusal(
     ``problems[]`` carries each shortfall as values -- the manifest path, what the asset
     states, what the declaration accepts -- under the code it is an instance of.
     """
-    if verdict.refusal not in _MANIFEST_REFUSALS:
+    if verdict.refusal not in _CREATIVE_REFUSALS:
         return canonical_refusal(verdict, field=field, creative_id=creative_id, **entity)
     sized = bool(verdict.shortfalls) and all(shortfall.dimensional for shortfall in verdict.shortfalls)
     details = CreativeManifestDetails(
@@ -2399,6 +2608,25 @@ def creative_refusal(
     if sized:
         return AdCPCreativeSizeMismatchError(details=details, field=field)
     return AdCPCreativeValidationFailedError(details=details, field=field)
+
+
+def require_covered(
+    creatives: Sequence[tuple[Any, Collection[str] | None]],
+    product: Any,
+    *,
+    field: str | None = None,
+    **entity: Any,
+) -> None:
+    """Raise :func:`creative_refusal` when a package's creative set leaves a placement uncovered.
+
+    The one raise for :func:`creatives_uncovered`, which every gate that changes a package's
+    creatives asks once that package's whole set is known: the create path's pre-adapter gate,
+    ``sync_creatives`` assignments, and ``update_media_buy``'s ``creative_ids`` and
+    ``creative_assignments``. ``entity`` names the package and product the refusal is about.
+    """
+    verdict = creatives_uncovered(creatives, product)
+    if verdict is not None:
+        raise creative_refusal(verdict, field=field, **entity)
 
 
 def _route_selector(route: FormatRoute) -> str:

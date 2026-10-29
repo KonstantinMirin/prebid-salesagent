@@ -597,6 +597,30 @@ class CreativeAssignmentRepository:
             ).all()
         )
 
+    def package_creative_set(self, media_buy_id: str, package_id: str) -> list[tuple[Creative, list[str] | None]]:
+        """The creatives assigned to one package of one media buy, each with its ``placement_ids``.
+
+        The package's whole creative set as the session holds it, pending writes included
+        (the session autoflushes before the select), which is what the placement-coverage
+        rule grades once a request's assignments are in place. Joined on the assignment's
+        composite FK, so each creative is the assigning principal's own row.
+        """
+        rows = self._session.execute(
+            select(Creative, CreativeAssignment.placement_ids)
+            .join(
+                CreativeAssignment,
+                (CreativeAssignment.creative_id == Creative.creative_id)
+                & (CreativeAssignment.tenant_id == Creative.tenant_id)
+                & (CreativeAssignment.principal_id == Creative.principal_id),
+            )
+            .where(
+                CreativeAssignment.tenant_id == self._tenant_id,
+                CreativeAssignment.media_buy_id == media_buy_id,
+                CreativeAssignment.package_id == package_id,
+            )
+        ).all()
+        return [(creative, placement_ids) for creative, placement_ids in rows]
+
     def get_existing(
         self,
         media_buy_id: str,

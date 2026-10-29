@@ -41,7 +41,12 @@ from src.core.exceptions import (
     AdCPNotCancellableError,
     AdCPValidationError,
 )
-from src.core.format_satisfaction import FormatRefusal, FormatSatisfaction, creative_refusal, creative_satisfies
+from src.core.format_satisfaction import (
+    FormatRefusal,
+    FormatSatisfaction,
+    creative_refusal,
+    creative_satisfies,
+)
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
 
@@ -82,6 +87,7 @@ from src.core.schemas import (
     UpdateMediaBuySuccess,
 )
 from src.core.tools.creatives import sync_creatives
+from src.core.tools.creatives._assignments import require_package_covered
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
     validate_budget_positive,
@@ -1191,6 +1197,14 @@ def _update_media_buy_impl(
 
                         # Flush to persist assignment changes within the session
                         session.flush()
+                        assert uow.assignments is not None
+                        require_package_covered(
+                            uow.assignments,
+                            actual_media_buy_id,
+                            pkg_update.package_id,
+                            product,
+                            field=package_field_path("creative_ids", pkg_index),
+                        )
 
                         # Registers the package as affected; the response snapshot reads the
                         # persisted effect back rather than a per-change dict.
@@ -1401,6 +1415,13 @@ def _update_media_buy_impl(
 
                         # Flush to persist assignment changes within the session
                         session.flush()
+                        require_package_covered(
+                            uow.assignments,
+                            actual_media_buy_id,
+                            pkg_update.package_id,
+                            ca_product,
+                            field=package_field_path("creative_assignments", pkg_index),
+                        )
 
                         # Track in affected_packages
                         _package_changes(changes_by_package, pkg_update.package_id)

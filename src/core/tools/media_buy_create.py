@@ -438,8 +438,24 @@ def _resolved_format_verdicts(
     ``creative_satisfies`` decides which lane applies from what the PRODUCT declares, so
     keeping only the legacy arm -- as this once did -- cannot see a canonical product at all.
     """
-    from src.core.format_satisfaction import creative_satisfies
+    return _format_verdicts(_package_creatives(session, tenant_id, packages, creatives_list))
 
+
+def _package_creatives(
+    session: "Session",
+    tenant_id: str,
+    packages: "Sequence[MediaPackage] | Sequence[AdcpPackageRequest]",
+    creatives_list: "Sequence[Any]",
+) -> list[tuple[int, Any, list[Any]]]:
+    """``(package index, product row, creative rows)`` for every package naming creatives and a stored product.
+
+    The pairing both creative questions on the create path are asked over: whether each
+    creative satisfies its package's product (:func:`_format_verdicts`), and whether the
+    package's creatives together cover every included placement of that product
+    (``format_satisfaction.require_covered``). Read once, so the two cannot pair a creative
+    with different products. A requested id with no row is left out; the existence gate
+    refuses it before either question is asked.
+    """
     product_ids_needed = {
         package.product_id for package in packages if _get_creative_ids(package) and package.product_id
     }
@@ -454,18 +470,28 @@ def _resolved_format_verdicts(
     }
     creatives_by_id = {creative.creative_id: creative for creative in creatives_list}
 
-    verdicts: list[tuple[str, str, Any]] = []
-    for package in packages:
+    pairings: list[tuple[int, Any, list[Any]]] = []
+    # Indexed rather than ``enumerate``d: enumerate over a union of two sequence types joins
+    # their element types to a base that has no ``product_id``.
+    for index in range(len(packages)):
+        package = packages[index]
         pkg_creative_ids = _get_creative_ids(package)
         product = products_by_id.get(package.product_id) if package.product_id else None
         if not pkg_creative_ids or product is None:
             continue
-        for cid in pkg_creative_ids:
-            creative = creatives_by_id.get(cid)
-            if creative is None:
-                continue
-            verdicts.append((product.product_id, cid, creative_satisfies(creative, product.format_contract)))
-    return verdicts
+        pairings.append((index, product, [creatives_by_id[cid] for cid in pkg_creative_ids if cid in creatives_by_id]))
+    return pairings
+
+
+def _format_verdicts(pairings: "Sequence[tuple[int, Any, list[Any]]]") -> list[tuple[str, str, Any]]:
+    """``(product_id, creative_id, verdict)`` for every creative of every pairing, in order."""
+    from src.core.format_satisfaction import creative_satisfies
+
+    return [
+        (product.product_id, creative.creative_id, creative_satisfies(creative, product.format_contract))
+        for _index, product, creatives in pairings
+        for creative in creatives
+    ]
 
 
 def _validate_creatives_before_adapter_call(
@@ -545,7 +571,8 @@ def _validate_creatives_before_adapter_call(
     # order in which this function raises is itself graded -- a terminal-state creative
     # answers GONE ahead of any format refusal, and that precedence would invert if the
     # refusals moved up with the computation. One computation, consumed twice.
-    creative_verdicts = _resolved_format_verdicts(session, tenant_id, packages, creatives_list)
+    package_creatives = _package_creatives(session, tenant_id, packages, creatives_list)
+    creative_verdicts = _format_verdicts(package_creatives)
     declarations_by_creative: dict[str, tuple[Any, ...]] = {}
     for _product_id, cid, verdict in creative_verdicts:
         if verdict.declaration is not None:
@@ -717,6 +744,23 @@ def _validate_creatives_before_adapter_call(
         raise AdCPValidationError(
             details=ValidationDetails(reasons=validation_errors),
             field=PACKAGES_FIELD,
+        )
+
+    # core/product.json format_options: "the selected creative set MUST cover every included
+    # placement; uncovered inventory MUST be rejected or refined, never silently omitted".
+    # Asked LAST, once every creative has passed on its own, because coverage is a property
+    # of the package's set: a creative the product refuses outright is that creative's
+    # failure, reported above with its own code. A creative named on a create package carries
+    # no placement_ids, so each is "eligible for all placements" (sync-creatives-request.json).
+    from src.core.format_satisfaction import require_covered
+
+    for index, product, creatives in package_creatives:
+        require_covered(
+            [(creative, None) for creative in creatives],
+            product,
+            field=PACKAGES_FIELD,
+            product_id=product.product_id,
+            package_index=index,
         )
 
 
