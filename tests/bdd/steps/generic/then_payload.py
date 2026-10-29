@@ -53,10 +53,11 @@ def then_all_formats(ctx: dict) -> None:
     """Assert the response covers EVERY format the registry serves -- identity, not count.
 
     "Registered" is what the env's registry serves on this transport
-    (``CreativeFormatsEnv.served_registry_formats``): the Given's formats in process, the
-    whole reference catalog over e2e, where the live stack serves it whichever subset the
-    Given named. ``pagination.total_count`` must equal that catalog's size, every returned
-    format must be one of it, and a response with no further page must hold all of it.
+    (``CreativeFormatsEnv.served_registry_formats``): the Given's formats on every
+    transport, served by the seller's own peer creative agent with the standard agent not
+    federated, or the reference catalog when no Given named any. ``pagination.total_count``
+    must equal that catalog's size, every returned format must be one of it, and a
+    response with no further page must hold all of it.
 
     The e2e branch this replaces asserted ``display``/``video``/``audio`` categories read
     off ``type``, which ``core/format.json`` has not declared since the 3.0 major, so it

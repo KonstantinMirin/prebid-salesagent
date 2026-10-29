@@ -331,19 +331,21 @@ class CreativeAgentRegistry:
         """Get list of creative agents for a tenant.
 
         Returns:
-            List of CreativeAgent instances (default + tenant-specific)
+            List of CreativeAgent instances: the deployment's default agent unless the
+            tenant does not federate it (``tenants.use_default_creative_agent``), then the
+            tenant's own enabled agents.
         """
-        agents = [self.DEFAULT_AGENT]
-
         if not tenant_id:
-            return agents
+            return [self.DEFAULT_AGENT]
 
         # Load tenant-specific agents from database
         from src.core.database.database_session import get_db_session
         from src.core.database.repositories.agent import CreativeAgentRepository
 
         with get_db_session() as session:
-            db_agents = CreativeAgentRepository(session, tenant_id).get_enabled()
+            repo = CreativeAgentRepository(session, tenant_id)
+            agents = [self.DEFAULT_AGENT] if repo.federates_default_agent() else []
+            db_agents = repo.get_enabled()
 
             # config_for, not a second mapping: the inline block here also wrote an
             # auth["header"] key with ZERO readers in src/, while auth_header was
@@ -725,7 +727,10 @@ class CreativeAgentRegistry:
                 agent, await self._fetch_formats_raw_mcp(agent, provenance=provenance), has_filters=False
             )
 
-        if (reference := self._operator_formats_override()) is not None:
+        # The override stands in for the OPERATOR agent only. A tenant's own configured agent
+        # is dialled on every path -- the listing and a single-format lookup alike -- so what
+        # the seller does with a real peer's catalog is what a test deployment grades.
+        if is_operator_agent(agent.agent_url) and (reference := self._operator_formats_override()) is not None:
             return PeerCatalog(formats=reference)
 
         return await self._dialled_catalog(agent, filters=filters, force_refresh=force_refresh, tenant_id=tenant_id)
@@ -839,8 +844,8 @@ class CreativeAgentRegistry:
         for agent in agents:
             logger.info(f"list_all_formats: Fetching from {agent.agent_url}")
             try:
-                catalog = await self._listed_catalog(
-                    agent, filters=filters, force_refresh=force_refresh, tenant_id=tenant_id
+                catalog = await self._agent_catalog(
+                    agent, filters=filters, force_refresh=force_refresh, provenance=None, tenant_id=tenant_id
                 )
             except Exception as e:
                 logger.error(f"Failed to fetch formats from {agent.agent_url}: {e}", exc_info=True)
@@ -895,14 +900,6 @@ class CreativeAgentRegistry:
         """
         errors.append(AdCPResponseError.of(code, field="formats"))
         failed_agent_urls.append(agent.agent_url)
-
-    async def _listed_catalog(
-        self, agent: CreativeAgent, *, filters: dict[str, Any], force_refresh: bool, tenant_id: str | None
-    ) -> PeerCatalog:
-        """The catalog one of the tenant's agents contributes to a listing."""
-        return await self._agent_catalog(
-            agent, filters=filters, force_refresh=force_refresh, provenance=None, tenant_id=tenant_id
-        )
 
     async def search_formats(
         self, query: str, tenant_id: str | None = None, type_filter: str | None = None
@@ -1137,23 +1134,14 @@ class ReferenceFormatsRegistry(CreativeAgentRegistry):
     in-process and e2e servers agree by construction. Counterparty URLs still go through the
     egress seam.
 
-    A tenant's OWN configured agents are dialled when the tenant's catalog is listed. A
-    ``creative_agents`` row is operator configuration a deployment can hold, and dialling it
-    is how a test grades what this seller does with a real peer's catalog -- a reference
-    catalog served in its place would ingest nothing. Lookups of a single agent
-    (``get_formats_for_agent``, ``get_format``) still answer from the reference catalog."""
+    A tenant's OWN configured agents are dialled, on the listing path and on a single-agent
+    lookup (``get_formats_for_agent``, ``get_format``) alike: ``_agent_catalog`` applies the
+    override only to the operator agent. A ``creative_agents`` row is operator configuration
+    a deployment can hold, and dialling it is how a test grades what this seller does with a
+    real peer's catalog -- a reference catalog served in its place would ingest nothing."""
 
     def _operator_formats_override(self) -> list[Format] | None:
         return _get_reference_formats()
-
-    async def _listed_catalog(
-        self, agent: CreativeAgent, *, filters: dict[str, Any], force_refresh: bool, tenant_id: str | None
-    ) -> PeerCatalog:
-        # Through the override hook, not the capture directly: a subclass that narrows what
-        # the default agent serves (the BDD harness does) narrows the listing too.
-        if agent is self.DEFAULT_AGENT and (reference := self._operator_formats_override()) is not None:
-            return PeerCatalog(formats=reference)
-        return await self._dialled_catalog(agent, filters=filters, force_refresh=force_refresh, tenant_id=tenant_id)
 
 
 _registry: CreativeAgentRegistry | None = None
