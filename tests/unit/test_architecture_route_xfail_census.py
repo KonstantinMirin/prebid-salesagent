@@ -86,7 +86,8 @@ _CEILINGS: dict[str, int] = {
     # a list. The UC-002 and UC-003 catch-alls (385 and 381) drained to zero: their rows
     # lost their xfail_reason, and what fails is named per scenario in the BDD conftest's
     # _UC002_UC003_LEDGER (measure_innet_291026_1202).
-    "uc010-not-wired": 28,
+    # 21 at integrate/wave1 a3687d971.
+    "uc010-not-wired": 21,
     # Per-tag UC-010 dormancy rows, generated from `_UC010_PARKED_TAGS`. Their reasons
     # cite issues and `test_architecture_uc010_dormancy_citations` grades the citation;
     # only the size was uncounted.
@@ -124,8 +125,10 @@ _MIN_ROUTED_COMBINATIONS = 15
 #: or off (the nested collection drops it). Measured by resolving both lists over the bound
 #: features at the commit that named each park's rows (measure_innet_291026_1202).
 _LEDGER_CEILINGS: dict[str, tuple[int, int]] = {
-    "_UC002_UC003_LEDGER": (107, 890),
-    "_UC002_UC003_VACUOUS_PARKS": (55, 823),
+    # Wave 5 graduated 65 ledger and 52 park entries (integrate/wave1 a3687d971), measured
+    # by this file's derivation over the merged tree.
+    "_UC002_UC003_LEDGER": (42, 192),
+    "_UC002_UC003_VACUOUS_PARKS": (3, 16),
 }
 
 _LEDGER_TRANSPORTS = ("a2a", "mcp", "rest", "e2e_rest")
