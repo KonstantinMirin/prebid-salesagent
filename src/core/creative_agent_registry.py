@@ -19,6 +19,7 @@ Testing:
 """
 
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -52,6 +53,7 @@ from src.core.security.outbound_http import (
     is_counterparty,
     refusal_field,
 )
+from src.core.signing.canonical import origin_of
 from src.core.utils.operator_mcp import ProbeResult, call_operator_mcp_tool, probe_failure
 
 logger = logging.getLogger(__name__)
@@ -152,12 +154,31 @@ def _get_reference_formats() -> list[Format]:
 # Canonical URL of the AdCP standard creative agent. This is the FEDERATION
 # IDENTITY half of a format reference — (agent_url, id) — and must stay stable
 # across deployments; it is NOT necessarily where connections go (see
-# _connection_agent_url).
+# _connection_agent_url). It is also the operator agent's identity when
+# CREATIVE_AGENT_ORIGIN is unset.
 PUBLIC_DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 
-def _is_operator_agent(agent_url: str) -> bool:
-    """Whether *agent_url* names an agent THIS DEPLOYMENT stands behind.
+def _agent_origin(agent_url: str) -> str | None:
+    """The origin of *agent_url* after the spec's canonicalization: a creative agent's identity.
+
+    The path is not part of an agent's identity, so ``https://x.org`` and
+    ``https://x.org/api/creative-agent`` name one agent. The URL is canonicalized first
+    (``canonical_agent_url``: scheme and host case, default port, userinfo), then reduced
+    to ``scheme://host[:port]``. Only operator-agent recognition
+    and the connection reroute compare this; a format reference's own identity
+    (``format_id_identity``, the cache key) keeps the canonical URL with its path.
+    """
+    return origin_of(canonical_agent_url(agent_url))
+
+
+def _operator_agent_origin() -> str | None:
+    """The identity of the agent THIS DEPLOYMENT stands behind: CREATIVE_AGENT_ORIGIN, else the public agent."""
+    return _agent_origin(get_settings().integrations.creative_agent_origin or PUBLIC_DEFAULT_AGENT_URL)
+
+
+def is_operator_agent(agent_url: str) -> bool:
+    """Whether *agent_url* names the agent THIS DEPLOYMENT stands behind, compared by origin.
 
     A buyer naming the seller's own default agent — the overwhelmingly common
     case — is not choosing a destination; they are echoing back the one we
@@ -169,32 +190,39 @@ def _is_operator_agent(agent_url: str) -> bool:
     and an unrelated scenario failed on the seam's delivery error. The narrow
     rule keeps the short-circuit where it was designed to help while still
     letting a genuinely foreign destination reach the seam and be refused.
+
+    CREATIVE_AGENT_URL is not consulted here: it is the endpoint the seller dials, not
+    an identity a reference can name.
     """
-    known = {canonical_agent_url(PUBLIC_DEFAULT_AGENT_URL)}
-    configured = get_settings().integrations.creative_agent_url
-    if configured:
-        known.add(canonical_agent_url(configured))
-    return canonical_agent_url(agent_url) in known
+    return _agent_origin(agent_url) == _operator_agent_origin()
+
+
+def names_listed_agent(agent_url: str, agent_urls: Collection[str]) -> bool:
+    """Whether *agent_url* names one of the agents *agent_urls* lists.
+
+    A listed URL matches as spelled; the caller puts both sides in one form. The operator
+    agent matches by ORIGIN instead: when *agent_url* and a listed URL both name it, they are
+    one agent whatever paths they carry, because its identity is an origin while the
+    references its catalog publishes carry the path it is mounted at (the reference agent's
+    are ``<origin>/api/creative-agent``). Every other agent keeps the exact comparison.
+    """
+    return agent_url in agent_urls or (is_operator_agent(agent_url) and any(map(is_operator_agent, agent_urls)))
 
 
 def _connection_agent_url(agent_url: str) -> str:
     """Resolve the TRANSPORT url for an agent reference.
 
-    When CREATIVE_AGENT_URL is set (test/CI stacks run a pinned container
-    serving the standard catalog), references to the PUBLIC default agent
-    connect there instead of the live public host — which rate-limits under
-    CI load and must never be a test dependency (the catalog also drifts).
-    Only the connection reroutes: cache keys and format_id federation
-    identity stay on the canonical url. Non-default agents are untouched.
+    A reference to the operator agent (by origin, see :func:`is_operator_agent`) connects
+    to CREATIVE_AGENT_URL, the MCP endpoint itself, when one is configured. Test/CI stacks
+    use this to reach a pinned container serving the standard catalog instead of the live
+    public host, which rate-limits under CI load and must never be a test dependency (the
+    catalog also drifts). Only the connection reroutes: cache keys and format_id
+    federation identity stay on the reference. Every other agent is untouched.
     """
-    configured = get_settings().integrations.creative_agent_url
-    if not configured:
-        return agent_url
-    if canonical_agent_url(agent_url) != canonical_agent_url(PUBLIC_DEFAULT_AGENT_URL):
-        return agent_url
-    if canonical_agent_url(configured) == canonical_agent_url(agent_url):
-        return agent_url
-    return configured
+    endpoint = get_settings().integrations.creative_agent_url
+    if endpoint and is_operator_agent(agent_url):
+        return endpoint
+    return agent_url
 
 
 # The format-discovery filter parameter names shared by every layer that
@@ -268,11 +296,12 @@ class CreativeAgentRegistry:
     def __init__(self):
         """Initialize registry with empty cache and the deployment's default agent."""
         self._format_cache: dict[str, CachedFormats] = {}  # Key: normalized agent_url
-        # Default creative agent (always available). agent_url is the base URL; the MCP
-        # endpoint (/mcp) is appended by the client. CREATIVE_AGENT_URL lets CI point it at
-        # a containerized agent.
+        # Default creative agent (always available). agent_url is its IDENTITY, the origin
+        # CREATIVE_AGENT_ORIGIN names (else the public agent): it keys the cache, is
+        # advertised as the creative_agents referral, and is what the registration check
+        # recognizes. Where it is dialled is _connection_agent_url's answer.
         self.DEFAULT_AGENT = CreativeAgent(
-            agent_url=get_settings().integrations.creative_agent_url or PUBLIC_DEFAULT_AGENT_URL,
+            agent_url=get_settings().integrations.creative_agent_origin or PUBLIC_DEFAULT_AGENT_URL,
             name="AdCP Standard Creative Agent",
             enabled=True,
             priority=1,
@@ -686,7 +715,7 @@ class CreativeAgentRegistry:
         # test — not whether it happens to carry a field — so a stored creative's
         # agent_url (``CounterpartyUrl(field=None)``, no canonical request path)
         # still takes this branch instead of falling through to the short-circuit.
-        if is_counterparty(provenance) and not _is_operator_agent(agent.agent_url):
+        if is_counterparty(provenance) and not is_operator_agent(agent.agent_url):
             # Straight to the seam: it refuses or it sends. Nothing is validated
             # first — a pre-check would add a TOCTOU window and a second copy of a
             # decision the seam already owns. The SDK client is not usable here at

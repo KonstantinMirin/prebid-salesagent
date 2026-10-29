@@ -22,7 +22,7 @@ from tests.helpers.creative_test_helpers import creative_payload
 
 #: The agent the committed capture was taken FROM, which is the only agent_url whose
 #: ``(agent_url, id)`` pair ``find_format`` matches against the capture and the only one
-#: ``_is_operator_agent`` admits -- so the one that resolves without dialling. The
+#: ``is_operator_agent`` admits -- so the one that resolves without dialling. The
 #: previous value ``https://creative.test.example.com`` did neither; it worked only while
 #: the registry was a stand-in (salesagent-6xtxb).
 DEFAULT_AGENT_URL = CreativeSyncEnv.DEFAULT_AGENT_URL

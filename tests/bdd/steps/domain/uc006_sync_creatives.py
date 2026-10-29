@@ -2572,8 +2572,9 @@ def given_creative_already_exists_identical(ctx: dict) -> None:
 #: Every axis touches ONLY the scheme, the host or the userinfo, and that restriction is
 #: the whole design. Two earlier axes -- appending "/" and appending ":443" -- were
 #: identity-preserving for a bare authority and NOT for an agent URL carrying a port or a
-#: path, which is what e2e_rest serves
-#: (``https://creative-agent.adcp.test:8443/api/creative-agent``). Measured there:
+#: path, which is what e2e_rest seeded when it named the stack agent's transport URL as the
+#: identity (``https://creative-agent.adcp.test:8443/api/creative-agent``; every transport
+#: now names the public agent, whose origin the stack agent stands in for). Measured there:
 #: appending "/" turns ``/api/creative-agent`` into a genuinely different path, because
 #: canonicalization deliberately does not rstrip -- the spec keeps ``/a`` and ``/a/``
 #: distinct, and step 5 covers an EMPTY path only. Appending ":443" to ``:8443`` produced

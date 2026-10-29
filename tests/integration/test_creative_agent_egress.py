@@ -29,7 +29,7 @@ What does NOT move to the seam, and is therefore graded here:
 ``ADCP_TESTING=true`` is autouse for the whole suite (``tests/conftest.py``), and
 the public entry point (``get_formats_for_agent``) skips this path entirely for
 an operator agent — only a COUNTERPARTY ``agent_url`` reaches it, ahead of the
-testing short-circuit (see ``_is_operator_agent`` in creative_agent_registry.py).
+testing short-circuit (see ``is_operator_agent`` in creative_agent_registry.py).
 The fetch is therefore driven directly — as the unit tests it replaces did —
 because a test that went through the public entry points would assert on
 formats that were never fetched.

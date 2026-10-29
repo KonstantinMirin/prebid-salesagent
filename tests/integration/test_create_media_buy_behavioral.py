@@ -1330,6 +1330,50 @@ class TestInlineCreativeObligations:
         assert result == [{"agent_url": "https://creative.example.com/", "id": "display_300x250_image"}]
 
     @pytest.mark.asyncio
+    async def test_the_operator_agent_is_registered_by_origin_and_no_other_agent_is(self, integration_db, monkeypatch):
+        """The operator agent's references pass the registration check by ORIGIN; no other agent does.
+
+        CREATIVE_AGENT_ORIGIN names an origin that is not the public agent's, and the tenant
+        registers no agent there, so only the operator rule can admit the operator's
+        mount-path reference. A foreign origin is still refused, and a tenant-registered agent
+        still matches with its path preserved.
+        """
+        from src.core.exceptions import AdCPAuthorizationError
+        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
+        from tests.factories import CreativeAgentFactory
+
+        operator = "https://creative.seller.example"
+        monkeypatch.setenv("CREATIVE_AGENT_ORIGIN", operator)
+        # Both are read once and cached; drop them so this test's environment is the one read.
+        monkeypatch.setattr("src.core.config._settings", None)
+        monkeypatch.setattr("src.core.creative_agent_registry._registry", None)
+
+        with MediaBuyCreateEnv() as env:
+            tenant, _principal = env.setup_default_data()
+            CreativeAgentFactory(tenant=tenant, agent_url="https://partner.example/api/creative-agent", enabled=True)
+
+            async def validate(agent_url: str) -> list[dict[str, str]]:
+                return await _validate_and_convert_format_ids(
+                    format_ids=[{"agent_url": agent_url, "id": "display_300x250_image"}],
+                    tenant_id=tenant.tenant_id,
+                    package_idx=0,
+                )
+
+            mounted = await validate(f"{operator}/api/creative-agent")
+            registered = await validate("https://partner.example/api/creative-agent")
+            with pytest.raises(AdCPAuthorizationError) as foreign:
+                await validate("https://creative.other.example/api/creative-agent")
+            with pytest.raises(AdCPAuthorizationError) as other_path:
+                await validate("https://partner.example/other-agent")
+
+        assert mounted == [{"agent_url": f"{operator}/api/creative-agent", "id": "display_300x250_image"}]
+        assert registered == [
+            {"agent_url": "https://partner.example/api/creative-agent", "id": "display_300x250_image"}
+        ]
+        assert foreign.value.error_code == "PERMISSION_DENIED"
+        assert other_path.value.error_code == "PERMISSION_DENIED"
+
+    @pytest.mark.asyncio
     async def test_unapproved_creatives_may_trigger_manual_approval(self):
         """Unapproved creatives may trigger manual approval path.
 

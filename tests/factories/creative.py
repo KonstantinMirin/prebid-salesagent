@@ -24,7 +24,7 @@ from .principal import PrincipalFactory
 #:
 #: DERIVED from production's own constant, not re-typed, because the two must be the same
 #: string for a fixture's reference to behave like a buyer's. It is a federated IDENTITY and
-#: not a destination: ``_is_operator_agent`` counts this url as an agent the deployment
+#: not a destination: ``is_operator_agent`` counts this url as an agent the deployment
 #: stands behind, so a reference naming it takes ``ReferenceFormatsRegistry``'s catalog
 #: answer under ``ADCP_TESTING`` and ``_connection_agent_url``'s reroute to the pinned
 #: container otherwise. Any OTHER url -- including the dialable ``CREATIVE_AGENT_URL`` the

@@ -416,7 +416,7 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
     #: name and resolve on all four transports. Two reasons, both measured in this
     #: worktree at ADCP_TESTING=true:
     #:
-    #: 1. ``_is_operator_agent`` is True for it, so ``_validation.py``'s
+    #: 1. ``is_operator_agent`` is True for it, so ``_validation.py``'s
     #:    ``get_format(..., provenance=CounterpartyUrl(...))`` reaches the capture
     #:    override instead of the egress seam. With the previous value
     #:    (``https://creative.test.example.com``) the same call DIALLED
@@ -1461,7 +1461,7 @@ class LibraryUpsertCreativeSyncEnv(RealRegistryCreativeSyncEnv):
            get_format(harness_url, id,        provenance=Counterparty)  DIALLED
 
        ``get_format`` delegates to ``get_formats_for_agent``, which takes the egress-seam
-       branch only when the provenance is a counterparty AND ``_is_operator_agent`` is
+       branch only when the provenance is a counterparty AND ``is_operator_agent`` is
        False -- otherwise it consults the override. The nine dials that were measured were
        all on the previous ``DEFAULT_AGENT_URL`` (``https://creative.test.example.com``),
        which is not an operator agent. With the harness naming the capture's own agent the

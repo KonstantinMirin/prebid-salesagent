@@ -2190,7 +2190,7 @@ async def _validate_and_convert_format_ids(
     Raises:
         ToolError: If any format_id is invalid, unregistered, or doesn't exist
     """
-    from src.core.creative_agent_registry import get_creative_agent_registry
+    from src.core.creative_agent_registry import get_creative_agent_registry, names_listed_agent
 
     if not format_ids:
         return []
@@ -2252,8 +2252,10 @@ async def _validate_and_convert_format_ids(
             )
 
         # VALIDATION: Check agent is registered. `agent_url` is already canonical (above),
-        # and so is every member of `registered_agent_urls` — one form, both sides.
-        if agent_url not in registered_agent_urls:
+        # and so is every member of `registered_agent_urls` — one form, both sides. The
+        # operator's own agent, which the registry always lists, is recognized by ORIGIN
+        # instead (`names_listed_agent`); every other agent keeps the path-preserving match.
+        if not names_listed_agent(agent_url, registered_agent_urls):
             raise AdCPAuthorizationError(field=field, details=EntityRefDetails(**where, agent_url=agent_url))
 
         # VALIDATION: Verify format exists on agent

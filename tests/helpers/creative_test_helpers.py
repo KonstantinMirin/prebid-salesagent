@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 #: * the agent_url must be the one the capture was taken from, because
 #:   ``format_resolver.find_format`` matches on the PAIR ``(canonical agent_url, id)`` and
 #:   every captured format carries ``https://creative.adcontextprotocol.org``. It is also
-#:   the only value ``_is_operator_agent`` admits, so ``_validation.py``'s ``get_format``
+#:   the only value ``is_operator_agent`` admits, so ``_validation.py``'s ``get_format``
 #:   reaches the capture instead of the egress seam.
 #: * the id must be one the capture carries. ``display_300x250`` is NOT one of the 71
 #:   (the captured 300x250 formats are ``_image``, ``_image_2x``, ``_image_1x_2x``,
