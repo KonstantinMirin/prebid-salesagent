@@ -949,8 +949,13 @@ class TestMainFlowObligations:
         the storyboard tenant logged ``field=None details=None`` — salesagent-basxl).
 
         ``rejected_value`` and ``accepted_values`` are the declared keys those sentences
-        were carrying, and "the product has no format_ids configured" is
-        ``accepted_values == []`` rather than a second branch saying so in words.
+        were carrying.
+
+        The CODE is ``UNSUPPORTED_FEATURE``: ``media-buy/package-request.json`` @ 3.2.7,
+        "Format selector contract (normative)" -- "A single resolved route that does not
+        satisfy the product is rejected with ``UNSUPPORTED_FEATURE``". A product declaring
+        only the deprecated ``format_ids`` is satisfied by the deprecated lane, and the
+        reference it refuses is the one route's, so ``rejected_value`` is that one entry.
         """
         from src.core.format_resolver import format_display, format_identity
         from src.core.tools._wire import to_wire
@@ -971,11 +976,11 @@ class TestMainFlowObligations:
         with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             env.setup_product_chain(tenant, format_ids=[carried])
-            with raises_adcp(AdCPValidationError) as exc_info:
+            with raises_adcp(AdCPCapabilityNotSupportedError) as exc_info:
                 env.call_impl(req=req)
 
         envelope = to_wire(exc_info.value.response)
-        assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
+        assert_envelope_shape(envelope, "UNSUPPORTED_FEATURE", recovery="correctable")
 
         (error,) = envelope["errors"]
         assert error["field"] == "packages[0].format_ids", error
@@ -985,7 +990,7 @@ class TestMainFlowObligations:
         # `format_display` is the canonical rendering of the (agent_url, id) identity the
         # pinned core/format-id.json defines, so the values are compared through it rather
         # than restated as literals.
-        assert details["rejected_value"] == [format_display(format_identity(requested))], details
+        assert details["rejected_value"] == format_display(format_identity(requested)), details
         assert details["accepted_values"] == [format_display(format_identity(carried))], details
 
     def test_persistence_after_adapter_success(self, integration_db):

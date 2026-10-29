@@ -1585,17 +1585,18 @@ def canonical_refusal(
     chances to pick a different key, which is the defect ``CapabilityRefusalDetails`` was
     introduced to end.
 
-    Not used for :attr:`FormatRefusal.LEGACY_NOT_ACCEPTED`. That refusal is already graded
-    as ``VALIDATION_ERROR`` -- "violates business rules beyond schema validation" --
-    with per-site details the scenarios pin, and converging its code is not this change.
+    :attr:`FormatRefusal.LEGACY_NOT_ACCEPTED` reaches this from ONE site: the package
+    selector gate, where ``media-buy/package-request.json``'s "Format selector contract
+    (normative)" codes every lane's unsatisfied route ``UNSUPPORTED_FEATURE``. The creative
+    assignment sites still answer that refusal ``VALIDATION_ERROR`` by their own
+    condition, because the selector contract governs a package's selector and not a
+    creative's identity; whether their code converges too is a separate decision.
 
     ``entity`` names which thing the refusal is about (``creative_id``, ``product_id``,
     ``package_id``), passed through to :class:`CapabilityRefusalDetails`, which inherits
     those fields from ``EntityRefDetails``.
     """
-    assert verdict.refusal is not None and verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED, (
-        f"canonical_refusal called on {verdict.refusal!r}; the legacy lane raises VALIDATION_ERROR at its site"
-    )
+    assert verdict.refusal is not None, "canonical_refusal called on a satisfied verdict"
     return AdCPCapabilityNotSupportedError(
         details=CapabilityRefusalDetails(
             capability=str(verdict.refusal),

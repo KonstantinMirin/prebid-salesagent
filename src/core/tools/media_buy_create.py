@@ -802,7 +802,6 @@ def _resolve_package_selectors(
             placement uncovered. The pointer names the ARM the verdict came from.
     """
     from src.core.format_satisfaction import (
-        FormatRefusal,
         canonical_refusal,
         conflicting_selectors,
         resolve_routes,
@@ -835,10 +834,15 @@ def _resolve_package_selectors(
                 package_index=pkg_index + 1,
             )
         verdict = selector.refused
-        # A DEPRECATED-LANE refusal is left to the legacy branch in the package loop, which
-        # raises the graded VALIDATION_ERROR with both value lists; ``canonical_refusal``'s
-        # own assert refuses it here (salesagent-n1blr).
-        if verdict is not None and verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED:
+        # BOTH LANES answer here, the deprecated one included. ``media-buy/package-request.json``
+        # @ 3.2.7, "Format selector contract (normative)": "A single resolved route that does
+        # not satisfy the product is rejected with ``UNSUPPORTED_FEATURE``", and a legacy
+        # ``format_id`` that cannot be normalized takes the same code. A product declaring
+        # only ``format_ids`` is still a product the route has to satisfy, so a legacy
+        # reference outside its set is that refusal. The deprecated lane used to be skipped
+        # here and answered VALIDATION_ERROR by the package loop, which the contract leaves
+        # no room for.
+        if verdict is not None:
             assert verdict.field is not None, "a selector route always names its request field"
             raise canonical_refusal(
                 verdict,
@@ -3775,12 +3779,12 @@ async def _create_media_buy_impl(
             # If found and has format_ids, validate and use those
             if matching_package and matching_package.format_ids:
                 from src.core.format_resolver import format_identity_or_none, resolved_dimensions
-                from src.core.format_satisfaction import FormatRefusal
 
                 # Whether the requested formats are ones the product accepts was decided
-                # ONCE, by ``_resolve_package_selectors``, and is READ here. What is left to
-                # this site is the deprecated lane's refusal, which that resolution hands on
-                # rather than raising (see the LEGACY_NOT_ACCEPTED branch there).
+                # ONCE, by ``_resolve_package_selectors``, which refuses every lane's
+                # unsatisfied route UNSUPPORTED_FEATURE before this loop runs -- the
+                # deprecated lane included (media-buy/package-request.json, "Format selector
+                # contract (normative)"). Nothing is left to refuse here.
                 #
                 # This used to be a second, independent gate: the set difference of the
                 # request's raw ``(agent_url, id)`` keys against the product's
@@ -3794,33 +3798,6 @@ async def _create_media_buy_impl(
                 # display_image 300x250), and ANY legacy selector against a canonical-only
                 # product, whose empty arm made every key "unsupported"
                 # (salesagent-ol033.20.26).
-                resolution = selector_resolutions.get(pkg_index)
-                not_accepted = [
-                    verdict
-                    for _, verdict in (resolution.routes if resolution is not None else ())
-                    if verdict.refusal is FormatRefusal.LEGACY_NOT_ACCEPTED
-                ]
-
-                if not_accepted:
-                    # The two branches this replaces built a diagnostic sentence into a
-                    # local and then raised bare, so the string was DEAD -- neither the
-                    # buyer nor the log ever saw it, and the refusal named nothing at all
-                    # (measured: 25 of 27 create refusals on the storyboard tenant logged
-                    # `field=None details=None`, salesagent-basxl). No raise site authors
-                    # text (ADR-010); the facts those sentences carried are `rejected_value`
-                    # and `accepted_values`, which are declared keys.
-                    #
-                    # The values are the verdicts' own: each refused route's reference and the
-                    # product's accepted references, parameters included, as the deprecated
-                    # lane renders them -- so a refusal from a product sized 300x250 says so.
-                    raise AdCPValidationError(
-                        field=package_field_path("format_ids", pkg_index),
-                        details=ValidationDetails(
-                            product_id=pkg_product.product_id,
-                            rejected_value=[verdict.rejected_value for verdict in not_accepted],
-                            accepted_values=list(not_accepted[0].accepted_values),
-                        ),
-                    )
 
                 # Merge dimensions from product's format_ids if request format_ids don't have them.
                 # This handles the case where buyer specifies a format but not dimensions.

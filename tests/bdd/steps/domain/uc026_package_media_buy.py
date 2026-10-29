@@ -17,6 +17,8 @@ from tests.bdd.steps._outcome_helpers import (
     payload_or_none,
     require_payload,
     stored_package_config,
+    wire_entry,
+    wire_field,
 )
 from tests.bdd.steps.generic._table import as_bool
 from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
@@ -1766,27 +1768,26 @@ def then_package_pricing(ctx: dict, pricing_option_id: str) -> None:
     assert actual == expected, f"Expected pricing_option_id '{expected}', got '{actual}'"
 
 
-@then("the package should contain format_ids defaulting to all product formats")
-def then_package_default_formats(ctx: dict) -> None:
-    """Assert package format_ids default to all product formats."""
+@then("the package carries no format_ids, since the request carried none")
+def then_package_omits_unrequested_format_ids(ctx: dict) -> None:
+    """Assert the created package does not echo a ``format_ids`` the buyer never sent.
 
-    packages = _get_packages(ctx)
-    pkg = packages[0]
-    pkg_id = _pkg_field(pkg, "package_id")
-    assert pkg_id, "Package has no package_id — cannot verify format_ids"
-    format_ids = _pkg_field(pkg, "format_ids")
-    if format_ids is None:
-        raise AssertionError(
-            "format_ids not defaulted to the product formats when omitted; the pinned 3.1 core/package.json declares format_ids"
-        )
-    assert isinstance(format_ids, list), f"Expected format_ids to be a list, got {type(format_ids)}"
-    assert format_ids, "Expected format_ids to default to all product formats, got empty list"
-    product = ctx["default_product"]
-    product_format_ids = product.format_ids or []
-    expected_ids = {_extract_format_id(f) for f in product_format_ids}
-    actual_ids = {_extract_format_id(f) for f in format_ids}
-    assert actual_ids == expected_ids, (
-        f"Package format_ids should default to all product formats. Expected {expected_ids}, got {actual_ids}"
+    ``core/package.json`` @ 3.2.7 defines the response field as "Legacy named-format IDs
+    supplied for this package on create_media_buy" and gives its absence one meaning:
+    "Omitted means the request did not carry legacy format_ids". A seller that wrote the
+    product's defaulted formats here would be telling the buyer it sent them. The default
+    itself ("If omitted and no canonical selector is present, all formats supported by the
+    product are active", ``media-buy/package-request.json``) is applied, not reported on
+    this field.
+
+    Asserted on the ENTRY DICT through ``wire_entry``, which proves the package is on the
+    wire first, so the absence cannot pass on a response that dropped the package.
+    """
+    assert len(wire_field(ctx, "packages")) == 1, "the request built one package, so the wire must carry one"
+    package = wire_entry(ctx, "packages", index=0)
+    assert "format_ids" not in package, (
+        f"the request carried no format_ids, yet the package echoes {package['format_ids']!r}; "
+        "core/package.json: 'Omitted means the request did not carry legacy format_ids'"
     )
 
 
@@ -2845,22 +2846,6 @@ def then_pricing_defaults(ctx: dict) -> None:
             f"core/package.json declares price_breakdown. Catalog-side option values: "
             f"pricing_model={pricing_model}, currency={currency}, rate={rate}, is_fixed={is_fixed}"
         )
-
-
-@then(parsers.parse("the package should be created with format_ids {fmt_ids}"))
-def then_created_with_formats(ctx: dict, fmt_ids: str) -> None:
-    """Assert package was created with specific format_ids."""
-    pkgs = _assert_has_packages(ctx)
-    actual_format_ids = _pkg_field(pkgs[0], "format_ids")
-    assert actual_format_ids is not None, "format_ids not echoed in response — production should echo format_ids"
-    try:
-        expected = json.loads(fmt_ids)
-    except (json.JSONDecodeError, TypeError):
-        inner = fmt_ids.strip("[]")
-        expected = [s.strip().strip('"') for s in inner.split(",")]
-    actual_set = {_extract_format_id(f) for f in actual_format_ids}
-    expected_set = set(expected)
-    assert expected_set == actual_set, f"Expected format_ids {expected_set}, got {actual_set}"
 
 
 @then(parsers.parse("the package should be created with paused={paused}"))

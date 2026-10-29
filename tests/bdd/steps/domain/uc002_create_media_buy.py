@@ -606,9 +606,10 @@ def given_package_format_id_plain_string(ctx: dict, format_id: str) -> None:
 def given_package_format_id_unregistered_agent(ctx: dict) -> None:
     """Set a well-formed FormatId whose agent_url is not a registered creative agent.
 
-    Production gap: _validate_and_convert_format_ids (the unregistered-agent
-    check) is dead code — never called — so the unregistered agent_url is not
-    detected (ext-h-agent wants a 'not registered' error).
+    The seeded product declares only legacy ``format_ids`` at the reference agent, so
+    this reference satisfies none of them and the package selector gate refuses it
+    UNSUPPORTED_FEATURE (``media-buy/package-request.json`` @ 3.2.7, "Format selector
+    contract (normative)").
     """
     pkg = _first_package(ctx)
     pkg["format_ids"] = [{"agent_url": "https://unregistered-agent.example.com", "id": "banner_300x250"}]

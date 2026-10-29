@@ -677,14 +677,22 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: creative/format_id validation errors lack suggestion field
     # ext-g: _validate_creatives_before_adapter_call raises INVALID_CREATIVES without suggestion
     # ext-h: plain string format_id caught by Pydantic, not structured AdCPSalesAgentError
-    # ext-h-agent: _validate_and_convert_format_ids is dead code — unregistered agent not detected
     # Graduated 2026-09-01: the reason named the defect exactly -- "produces Pydantic error,
     # not AdCPSalesAgentError with suggestion". d2d6609da maps a pydantic ValidationError to
     # AdCPInvalidRequestError, so the boundary now emits the typed error WITH a suggestion and
     # the scenario's three wire assertions (fails, code INVALID_REQUEST, suggestion present)
     # all hold. Inspected per .claude/rules/workflows/xpass-graduation.md: the assertions are
     # wire-level, not truthiness, so the pass is not vacuous.
-    "T-UC-002-ext-h-agent": "unregistered agent_url validation not wired — _validate_and_convert_format_ids is dead code",
+    # Graduated: T-UC-002-ext-h-agent. media-buy/package-request.json @ 3.2.7, "Format
+    # selector contract (normative)", codes a legacy format_id that does not normalize, or
+    # resolves and satisfies nothing the product declares, UNSUPPORTED_FEATURE. 88edb921b
+    # corrected the scenario from REFERENCE_NOT_FOUND to that code. c0e130f1b makes the
+    # package selector gate refuse the deprecated lane too: the seeded product declares only
+    # display_300x250_image at the reference agent, so a format_id at an unregistered agent is
+    # LEGACY_NOT_ACCEPTED and canonical_refusal raises AdCPCapabilityNotSupportedError, whose
+    # suggestion comes from CODE_TABLE. The Thens are wire-level (code, suggestion present),
+    # and the scenario is not in e2e_rest_known_failures.txt, so all four transports are
+    # graded. The serial box run of the UC-002 module that confirms plain PASS is the lead's.
     # Graduated: T-UC-002-ext-i, for the same reason as ext-f above -- the auth error was
     # never reached. With the raw dispatch the request crosses the transport, the auth
     # boundary answers, and its envelope does carry a suggestion (prkv.33).
@@ -4479,11 +4487,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # on a2a, mcp and rest alike. The outlines that fail only some rows are in
             # _UC026_PARTITION_SELECTIVE below, keyed by the row.
             #
-            # format_ids: not defaulted to the product's formats when the package omits
-            # them. The pinned core/package.json declares the field on the returned
-            # package; 3.2.1 marks it deprecated-until-4.0 and still says "Sellers SHOULD
-            # echo this field whenever the request included it", so the obligation holds
-            # under the current pin. Only the DEFAULTING half is still missing.
+            # format_ids is echoed only when the request carried it. core/package.json @
+            # 3.2.7: "Omitted means the request did not carry legacy format_ids", so a
+            # package that omits them gets none back, and 10c593143 corrected the scenario
+            # to assert exactly that, which production already does. The expected remaining
+            # failure is the format_ids_to_provide line: on a product with no canonical
+            # snapshot, _legacy_formats_to_provide returns the request's format_ids, which
+            # are absent here, so the Then reads None. Not yet measured on a box run.
             "T-UC-026-main-required-fields",
             # Graduated: T-UC-026-main-explicit-formats (innet_091026_1343, all four
             # transports xpass) -- the other half of that note is fixed: a package that
@@ -4514,6 +4524,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             #   is not told which field violated the const. The refusal is right and the
             #   field pointer is wrong.
             "T-UC-026-alt-cancel-irreversible",
+            # Expected to pass, pending a graduation measurement (xpass-graduation.md). Both
+            # scenarios were corrected against the pin, and production already answers what
+            # they now demand. Each one's measured 2026-10-17 failure is recorded in the
+            # comment under this set.
+            #   ext-e: production answers UNSUPPORTED_FEATURE since c0e130f1b, the code
+            #   media-buy/package-request.json @ 3.2.7 ("Format selector contract
+            #   (normative)") gives a format_id the product does not accept; 10c593143
+            #   corrected the scenario from INVALID_REQUEST to it.
+            #   inv-197-3: production applies the omitted-format_ids default without
+            #   echoing it, and core/package.json @ 3.2.7 says "Omitted means the request
+            #   did not carry legacy format_ids"; 10c593143 corrected the scenario to assert
+            #   the absence instead of an echo.
+            "T-UC-026-inv-197-3",
+            "T-UC-026-ext-e",
             # HARNESS gap, not a production one, and the distinction is the point. The
             # scenario opens "the Buyer owns a media buy with a package that has already
             # SETTLED", and nothing reaches that state: settlement is billing-side, no
@@ -4523,8 +4547,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # is not failing here -- it is being asked a different question than the
             # scenario means to ask. Graduating this needs a way to persist a settled
             # package, after which the scenario grades the refusal for real.
-            "T-UC-026-inv-197-3",
-            "T-UC-026-ext-e",
             "T-UC-026-ext-j",
         }
         # THE SHARED REASON BELOW MISDESCRIBES AT LEAST TWO OF ITS MEMBERS, measured
@@ -4532,13 +4554,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # group. Neither is AffectedPackage, keyword ops, or a missing error code:
         #
         #   T-UC-026-ext-e      "Expected error code 'INVALID_REQUEST', got 'VALIDATION_ERROR'".
-        #     Production DOES refuse a format_id the product does not carry. The scenario is
-        #     over-specified on the CODE, and the pin backs production -- see the two
-        #     T-UC-026-*-format-ids rows in _UC026_PARTITION_SELECTIVE for the citation.
-        #     Needs upstream reconciliation of the demanded code, not a production change.
-        #   T-UC-026-inv-197-3  "format_ids not echoed in response — production should echo
-        #     format_ids". A REAL production gap, and a different one: the defaulted arm is
-        #     applied but not echoed. Unrelated to the code-mapping class above.
+        #     Both codes were wrong under media-buy/package-request.json @ 3.2.7, which codes
+        #     the refusal UNSUPPORTED_FEATURE. 10c593143 corrected the scenario and c0e130f1b
+        #     the production code.
+        #   T-UC-026-inv-197-3  "format_ids not echoed in response". The scenario demanded
+        #     an echo the pin forbids: core/package.json @ 3.2.7, "Omitted means the request
+        #     did not carry legacy format_ids". Production was right not to echo; 10c593143
+        #     corrected the scenario to assert the absence.
         #
         # Left in the group rather than re-homed because moving a tag between structures
         # changes its strictness and ordering; the correction owed here is the CAUSE, and a
@@ -4616,6 +4638,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "`the outcome should be success...` grades no effect because update_media_buy "
             "returns affected_packages=[] — see § REST update rows above"
         )
+        _UC026_FORMAT_IDS_PENDING = (
+            "production answers UNSUPPORTED_FEATURE since c0e130f1b, the code "
+            "media-buy/package-request.json @ 3.2.7 ('Format selector contract (normative)') "
+            "gives a well-formed format_id the product does not accept, and 10c593143 "
+            "corrected these rows from INVALID_REQUEST to it; expected to pass, pending a "
+            "graduation measurement"
+        )
         _UC026_PARTITION_SELECTIVE: list[tuple[str, set[str], str]] = [
             # Moved here from _UC026_XFAIL_TAGS, narrowed from the whole tag to one row.
             # T-UC-026-ext-b has three rows and two of them -- product_id and
@@ -4653,34 +4682,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             (
                 "T-UC-026-boundary-format-ids",
                 {"format_id from different product", "one unsupported format_id among valid ones"},
-                "scenario is OVER-SPECIFIED on the error CODE, and production is right: it "
-                "DOES refuse, naming field packages[0].format_ids with details "
-                "{product_id, rejected_value, accepted_values}. It answers VALIDATION_ERROR "
-                "and the scenario demands INVALID_REQUEST. The pin backs production: "
-                "core/product-format-declaration.json makes the REJECTION the MUST and the "
-                "code permissive ('typically with UNSUPPORTED_FEATURE or a seller-specific "
-                "code'), and enums/error-code.json reserves INVALID_REQUEST for 'malformed, "
-                "missing required fields, or violates schema constraints' while "
-                "VALIDATION_ERROR is 'violates business rules beyond schema validation' -- "
-                "which a well-formed reference outside a product's accepted set is. Needs "
-                "UPSTREAM RECONCILIATION of the demanded code, not graduation and not a "
-                "production change (salesagent-xpass sweep, 2026-10-17)",
+                _UC026_FORMAT_IDS_PENDING,
             ),
             (
                 "T-UC-026-partition-format-ids",
                 {"unsupported_format"},
-                "scenario is OVER-SPECIFIED on the error CODE, and production is right: it "
-                "DOES refuse, naming field packages[0].format_ids with details "
-                "{product_id, rejected_value, accepted_values}. It answers VALIDATION_ERROR "
-                "and the scenario demands INVALID_REQUEST. The pin backs production: "
-                "core/product-format-declaration.json makes the REJECTION the MUST and the "
-                "code permissive ('typically with UNSUPPORTED_FEATURE or a seller-specific "
-                "code'), and enums/error-code.json reserves INVALID_REQUEST for 'malformed, "
-                "missing required fields, or violates schema constraints' while "
-                "VALIDATION_ERROR is 'violates business rules beyond schema validation' -- "
-                "which a well-formed reference outside a product's accepted set is. Needs "
-                "UPSTREAM RECONCILIATION of the demanded code, not graduation and not a "
-                "production change (salesagent-xpass sweep, 2026-10-17)",
+                _UC026_FORMAT_IDS_PENDING,
             ),
             # Keyword / negative-keyword conflict and empty-value validation. Every
             # failing row is REST-only, which matches the REST update-dispatch note
@@ -7090,11 +7097,14 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
         seed=_seed_media_buy_chain,
     ),
+    # Wired, not parked: the scenario needs what the uc002-ext rows need -- the create chain
+    # plus dispatch_mode="create", so the shared When dispatches the request its Given broke
+    # -- and its refusal is the transport boundary's, which every transport reaches.
     EnvRoute(
         tag="uc002-inv-015-6",
         when=_uc("UC-002", lambda m: "T-UC-002-inv-015-6" in m),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
-        xfail_reason="T-UC-002-inv-015-6 create_media_buy harness wiring is tracked in #1652",
+        seed=_seed_media_buy_chain_create_dispatch,
     ),
     # The sandbox-isolation pair (@T-UC-002-sandbox-no-live-ad-server and its
     # instrument check @T-UC-002-live-ad-server-reached). A row of its own, ABOVE the

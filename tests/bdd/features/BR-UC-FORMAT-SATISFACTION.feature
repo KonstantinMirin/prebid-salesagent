@@ -1135,7 +1135,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Given the seller publishes only a deprecated format sized 300x250
     And the buyer's package selects "legacy_display_728x90"
     When the Buyer Agent sends the create_media_buy request
-    Then the buyer is refused VALIDATION_ERROR naming the 300x250 it accepts
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "format_ids" selector and the 300x250 it accepts
 
   # The deprecated lane's half of malformed_agent_display_300x250 in the refusal outline above:
   # the same id the product publishes, at the creative agent's host spelled with two trailing
@@ -1147,7 +1147,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Given the seller publishes only a deprecated format sized 300x250
     And the buyer's package selects "malformed_agent_display_300x250"
     When the Buyer Agent sends the create_media_buy request
-    Then the buyer is refused VALIDATION_ERROR naming the 300x250 it accepts
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "format_ids" selector and the 300x250 it accepts
 
   # ── The same agent, spelled differently, is the same format ───────────────────────────
   #
@@ -1203,7 +1203,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Given the seller publishes only a deprecated format sized 300x250 at the creative agent's url with a different path
     And the buyer's package selects "legacy_display_300x250"
     When the Buyer Agent sends the create_media_buy request
-    Then the buyer is refused VALIDATION_ERROR naming the 300x250 it accepts
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "format_ids" selector and the 300x250 it accepts
 
   # ── MANIFEST IDENTITY: which arm a creative names, and what the seller does with it ───
   #

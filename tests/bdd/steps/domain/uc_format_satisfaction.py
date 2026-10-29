@@ -1598,10 +1598,11 @@ def then_refused_legacy_not_accepted(ctx: dict, width: int, height: int) -> None
     """The DEPRECATED lane's refusal, and the dimensions have to be in it.
 
     A DIFFERENT CODE from the canonical sibling, and that is production's documented
-    decision rather than this scenario's preference: ``canonical_refusal`` asserts it is
-    never called for ``LEGACY_NOT_ACCEPTED``, because the legacy lane raises
-    ``AdCPValidationError`` at its own site -- "violates business rules beyond schema
-    validation". A row asserting UNSUPPORTED_FEATURE here would be asserting the canonical
+    decision rather than this scenario's preference: the creative ASSIGNMENT sites skip
+    ``canonical_refusal`` for ``LEGACY_NOT_ACCEPTED`` and raise ``AdCPValidationError``
+    themselves -- "violates business rules beyond schema validation". (A package's own
+    format selector is a different site, coded UNSUPPORTED_FEATURE by
+    ``media-buy/package-request.json``'s selector contract.) A row asserting UNSUPPORTED_FEATURE here would be asserting the canonical
     lane's code against the deprecated lane's refusal, which is the mistake this Then was
     written to replace. No ``field``: the site carries none, for the same reason the bare
     UNSUPPORTED_FEATURE sibling asserts none.
@@ -1623,6 +1624,31 @@ def then_refused_legacy_not_accepted(ctx: dict, width: int, height: int) -> None
     of ``test_architecture_bdd_wire_discipline`` caught the first version of this step.
     """
     ctx["result"].assert_wire_error("VALIDATION_ERROR")
+    _assert_accepted_size_named(ctx, width, height)
+
+
+@then(
+    parsers.parse(
+        'the buyer is refused UNSUPPORTED_FEATURE naming the "format_ids" selector and the {width:d}x{height:d} it accepts'
+    )
+)
+def then_refused_legacy_selector_not_accepted(ctx: dict, width: int, height: int) -> None:
+    """The deprecated lane's refusal of a PACKAGE selector: UNSUPPORTED_FEATURE, and the size.
+
+    ``media-buy/package-request.json``'s "Format selector contract (normative)": "A single
+    resolved route that does not satisfy the product is rejected with
+    ``UNSUPPORTED_FEATURE``", and "a legacy ``format_id`` that cannot be normalized ...
+    MUST be rejected with ``UNSUPPORTED_FEATURE``". A legacy-only product is still a product
+    the route has to satisfy, so its selector refusal carries this code and the
+    ``format_ids`` pointer, where the creative assignment sites above keep VALIDATION_ERROR.
+    The accepted size is graded for the reason :func:`then_refused_legacy_not_accepted` gives.
+    """
+    ctx["result"].assert_wire_error("UNSUPPORTED_FEATURE", field="packages[0].format_ids")
+    _assert_accepted_size_named(ctx, width, height)
+
+
+def _assert_accepted_size_named(ctx: dict, width: int, height: int) -> None:
+    """Assert the refusal's ``details.accepted_values`` tells the buyer the size accepted."""
     accepted = str(wire_envelope_errors(ctx)[0].get("details", {}).get("accepted_values"))
     for value in (width, height):
         assert str(value) in accepted, (
