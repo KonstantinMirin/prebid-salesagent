@@ -145,19 +145,25 @@ class TestReDialOfBuyerProvenanceUrlIsNotOperatorMisclassified:
         from src.core.format_resolver import fetch_format_spec
 
         third_party_agent_url = "https://169.254.169.254"
+        # A literal ``format_id_glob`` in registries/v1-canonical-mapping.json, which
+        # projects to ``image`` at ANY agent. ``display_300x250_image`` stood here, and the
+        # SDK maps that v1 name only for a reference at the reference agent's origin, so at
+        # this third-party url it had no canonical kind and the factory's own projection
+        # refused it (UNSUPPORTED_FEATURE) before the re-dial this class grades was reached.
+        format_id = "display_300x250"
 
         with MediaBuyCreateEnv() as env:
             tenant, principal = env.setup_default_data(human_review_required=False)
             AuthorizedPropertyFactory(tenant=tenant)
             product, _pricing_option = env.setup_product_chain(
                 tenant,
-                format_ids=[{"agent_url": third_party_agent_url, "id": "display_300x250_image"}],
+                format_ids=[{"agent_url": third_party_agent_url, "id": format_id}],
             )
             CreativeFactory(
                 tenant=tenant,
                 principal=principal,
                 creative_id="c_third_party",
-                format="display_300x250_image",
+                format=format_id,
                 agent_url=third_party_agent_url,
                 data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
             )

@@ -39,6 +39,7 @@ from src.core.schemas import (
 )
 from src.core.schemas.creative import ListCreativesRequest
 from tests.factories import PricingOptionFactory, stamp_format_identity
+from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.credentials import credential_headers
@@ -155,15 +156,17 @@ class TestCreativeLifecycleMCP:
     def mock_format_registry(self):
         """Mock creative agent format registry to avoid real API calls.
 
-        THE VIDEO ID IS A REGISTRY GLOB and not an invented one. ``video_instream_15s``
-        stood here, and this fixture patches ``get_format`` only -- the EXISTENCE check --
-        while the canonical projection resolves its spec from ``list_all_formats``, keyed
-        on the whole ``(agent_url, id)`` identity. These references name
-        ``https://test.com``, which no catalog serves, so the projection falls through to
-        the registry glob and an invented id has no canonical kind: the write gate refused
-        the creative and three tests here went red. ``video_pre_roll_15s`` is one of the
-        registry's own 38 globs and projects to ``video_hosted`` from the id alone, with no
-        catalog and no agent_url agreement needed. The two display ids already were globs.
+        EVERY REFERENCE HERE NAMES THE REFERENCE AGENT, and each id projects to a canonical
+        kind; the write gate refuses a creative whose reference does not
+        (``format_resolver.creative_identity_of``). ``video_pre_roll_15s`` is a literal glob
+        in ``registries/v1-canonical-mapping.json`` and projects to ``video_hosted`` from the
+        id alone. The two display ids are v1 names the SDK upgrades to the ``display_image``
+        template, and it does that ONLY for a reference whose ``agent_url`` is the reference
+        agent's origin: the same ids at ``https://test.com`` had no mapping, so the write gate
+        refused them and four tests here went red.
+
+        This fixture patches ``get_format`` only -- the EXISTENCE check -- while the
+        projection resolves its spec from ``list_all_formats``.
         """
         from tests.helpers.adcp_factories import create_test_format
 
@@ -293,9 +296,9 @@ class TestCreativeLifecycleMCP:
                 name="Test Product",
                 description="Test product for creative lifecycle test",
                 format_ids=[
-                    {"agent_url": "https://test.com", "id": "display_300x250_image"},
-                    {"agent_url": "https://test.com", "id": "video_pre_roll_15s"},
-                    {"agent_url": "https://test.com", "id": "display_728x90_image"},
+                    {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250_image"},
+                    {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "video_pre_roll_15s"},
+                    {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_728x90_image"},
                 ],
                 targeting_template={},
                 delivery_type="non_guaranteed",
@@ -330,25 +333,26 @@ class TestCreativeLifecycleMCP:
 
         NOTE: Uses structured format objects with agent_url to avoid deprecated string format_ids.
         Available formats from creative agent: display_300x250_image, display_728x90_image, etc.
-        Uses "https://test.com" as agent_url to match test products in setup_test_data.
+        Uses the reference agent's origin as agent_url, to match the test product in
+        setup_test_data and so the legacy ids project to a canonical kind.
         """
         return [
             {
                 "creative_id": "creative_display_1",
                 "name": "Banner Ad 300x250",
-                "format_id": {"agent_url": "https://test.com", "id": "display_300x250_image"},
+                "format_id": {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250_image"},
                 "assets": build_assets(image_spec("banner")),
             },
             {
                 "creative_id": "creative_video_1",
                 "name": "Video Ad 30sec",
-                "format_id": {"agent_url": "https://test.com", "id": "video_pre_roll_15s"},
+                "format_id": {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "video_pre_roll_15s"},
                 "assets": build_assets(image_spec("banner")),
             },
             {
                 "creative_id": "creative_display_2",
                 "name": "Leaderboard Ad 728x90",
-                "format_id": {"agent_url": "https://test.com", "id": "display_728x90_image"},
+                "format_id": {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_728x90_image"},
                 "assets": build_assets(image_spec("banner")),
             },
         ]
@@ -432,7 +436,7 @@ class TestCreativeLifecycleMCP:
             {
                 "creative_id": "creative_update_test",
                 "name": "Updated Creative Name",
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+                "format_id": {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250_image"},
                 "assets": build_assets(image_spec("banner")),
             }
         ]
@@ -544,7 +548,7 @@ class TestCreativeLifecycleMCP:
             {
                 "creative_id": "valid_creative",
                 "name": "Valid Creative",
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+                "format_id": {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250_image"},
                 "assets": build_assets(image_spec("banner")),
             },
             {
@@ -553,7 +557,7 @@ class TestCreativeLifecycleMCP:
                 # otherwise schema-valid on purpose. A schema-invalid entry (e.g. no assets)
                 # would reject the whole request, which is correct but grades something else:
                 # partial success is for per-creative business failures.
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+                "format_id": {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250_image"},
                 "assets": build_assets(image_spec("banner")),
             },
         ]
