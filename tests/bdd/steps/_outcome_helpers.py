@@ -363,6 +363,25 @@ def stored_package_config(ctx: dict, media_buy_id: str, package_id: str) -> dict
         return dict(row.package_config or {})
 
 
+def stored_creative_column(ctx: dict, creative_id: str, column: str) -> Any:
+    """One column of the scenario principal's stored creative *creative_id*, through the repository.
+
+    The same reason as :func:`stored_package_config`: a sync response does not carry what a
+    seller stored, so a scenario claiming the seller RECORDED something reads the record.
+    The value is read INSIDE the unit of work, because a row returned past the block is
+    detached and every attribute read raises DetachedInstanceError.
+    """
+    from src.core.database.repositories.uow import CreativeUoW
+
+    tenant, principal = ctx.get("tenant"), ctx.get("principal")
+    assert tenant is not None and principal is not None, "No tenant/principal in ctx — conftest must seed them"
+    with CreativeUoW(tenant.tenant_id) as uow:
+        assert uow.creatives is not None
+        row = uow.creatives.get_by_id(creative_id, principal.principal_id)
+        assert row is not None, f"no creative {creative_id!r} was stored for principal {principal.principal_id!r}"
+        return getattr(row, column)
+
+
 def parked_media_buy(ctx: dict) -> Any:
     """The one media buy the scenario's tenant holds, through the repository.
 

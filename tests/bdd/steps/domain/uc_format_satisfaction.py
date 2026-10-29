@@ -1488,19 +1488,11 @@ def _stored_synced_creative_column(ctx: dict, column: str) -> Any:
     Read off the row because the column is the subject -- a constraint is satisfied by any
     value, so what has to be shown is that the value is the one the buyer's identity names.
     """
-    from src.core.database.repositories.uow import CreativeUoW
+    from tests.bdd.steps._outcome_helpers import stored_creative_column
 
     result = ctx["result"]
     assert result.is_success, f"the sync was expected to succeed but answered {result.error!r}"
-    # Read the VALUES inside the UoW, not the rows out of it: a ``Creative`` returned past
-    # the block is detached and every attribute read raises DetachedInstanceError.
-    with CreativeUoW(ctx["tenant"].tenant_id) as uow:
-        assert uow.creatives is not None
-        stored = {
-            c.creative_id: getattr(c, column) for c in uow.creatives.list_by_principal(ctx["principal"].principal_id)
-        }
-    assert _SYNC_CREATIVE_ID in stored, f"no creative {_SYNC_CREATIVE_ID!r} was stored; library holds {sorted(stored)}"
-    return stored[_SYNC_CREATIVE_ID]
+    return stored_creative_column(ctx, _SYNC_CREATIVE_ID, column)
 
 
 @then("the buyer is refused UNSUPPORTED_FEATURE and nothing is stored")

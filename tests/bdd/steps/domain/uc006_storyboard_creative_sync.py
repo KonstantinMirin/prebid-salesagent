@@ -34,11 +34,18 @@ logic.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import assert_listed_on_canonical_kind, is_e2e, payload_or_none, wire_dict
+from tests.bdd.steps._outcome_helpers import (
+    assert_listed_on_canonical_kind,
+    is_e2e,
+    payload_or_none,
+    stored_creative_column,
+    wire_dict,
+)
 from tests.bdd.steps.domain.uc006_sync_creatives import (
     _action_str,
     _build_creative_payload,
@@ -686,6 +693,36 @@ def given_sync_canonical_creative_with_option_ref(ctx: dict, kind: str, scope: s
     buyer sends is recorded in ``ctx`` so the readback compares against what was SENT,
     never against a value recomputed in the Then.
     """
+    _sync_canonical_creative(ctx, kind, scope)
+
+
+@given(
+    parsers.parse(
+        'the buyer syncs a creative carrying only a tag_url, identified by canonical kind "{kind}" '
+        "with a {scope}-scope format_option_ref"
+    )
+)
+def given_sync_canonical_tag_creative_with_option_ref(ctx: dict, kind: str, scope: str) -> None:
+    """The same canonical claim, whose one asset is the slot ``display_tag`` requires.
+
+    formats/canonical/display_tag.json (v3.2.7) declares one required slot, ``tag_url`` of
+    asset type ``url``. The default payload's image asset satisfies no slot of that kind,
+    and the pinned reference agent refuses a manifest missing a required slot, so the
+    scenario that sends this creative to the agent sends the asset the kind asks for.
+    """
+    _sync_canonical_creative(ctx, kind, scope, assets=build_assets(url_spec("tag_url", url=_TAG_URL)))
+
+
+#: The tag a display_tag creative serves. HTTPS and credential-free, which is what the
+#: reference agent requires of a url-typed slot.
+_TAG_URL = "https://ads.example.com/tag.js"
+
+
+def _sync_canonical_creative(ctx: dict, kind: str, scope: str, **members: Any) -> None:
+    """ONE canonical sync payload: ``format_kind`` plus a *scope* option ref, no format_id key.
+
+    The reference is recorded in ``ctx`` so a readback compares against what was SENT.
+    """
     reference = format_option_ref_for_scope(scope)
     ctx["creatives"] = [
         CreativeAssetRequestFactory.payload(
@@ -693,9 +730,23 @@ def given_sync_canonical_creative_with_option_ref(ctx: dict, kind: str, scope: s
             format_id=OMIT,
             format_kind=kind,
             format_option_ref=reference,
+            **members,
         )
     ]
     ctx["sent_format_option_ref"] = reference
+
+
+@given("the operator's creative agent previews that creative's canonical identity")
+def given_operator_agent_previews_canonical_identity(ctx: dict) -> None:
+    """The creative the scenario will sync is one the operator's creative agent can preview.
+
+    The kind and the option ref are read off the payload a prior Given built, so the
+    agent is configured for exactly the identity that goes on the wire. The env checks
+    the precondition both legs need and, in process, answers only a request that routes
+    that identity canonically (``operator_agent_previews_canonical_identity``).
+    """
+    sent = ctx["creatives"][-1]
+    ctx["env"].operator_agent_previews_canonical_identity(sent["format_kind"], sent.get("format_option_ref"))
 
 
 @given(parsers.parse("the resync narrows the same creative to a {scope}-scope format_option_ref"))
@@ -732,3 +783,23 @@ def then_listed_back_with_canonical_identity(ctx: dict, kind: str) -> None:
     """
     entry = _listed_back(ctx, latest_creative_id(ctx))
     assert_listed_on_canonical_kind(entry, kind, option_ref=ctx["sent_format_option_ref"])
+
+
+@then("the stored creative carries the preview the operator's creative agent returned")
+def then_stored_with_operator_agent_preview(ctx: dict) -> None:
+    """The seller asked the operator's agent for a preview and kept what it answered.
+
+    Read off the stored row because the preview is not on the wire:
+    sync-creatives-response.json carries ``preview_url`` only for generative formats, and
+    list-creatives-response.json has no preview member. What is graded is that a preview
+    with at least one render was requested AND stored -- not what the render looks like,
+    which is the agent's business. A seller that never previews a creative identified by
+    ``format_kind`` (the gate this scenario exists for) stores no preview at all; one that
+    sends the request without the canonical identity is answered with no previews.
+    """
+    data = stored_creative_column(ctx, latest_creative_id(ctx), "data") or {}
+    previews = (data.get("preview_response") or {}).get("previews") or []
+    assert previews and previews[0].get("renders"), (
+        "the seller stored no preview from the operator's creative agent for a creative identified by "
+        f"format_kind; stored preview_response={data.get('preview_response')!r}"
+    )
