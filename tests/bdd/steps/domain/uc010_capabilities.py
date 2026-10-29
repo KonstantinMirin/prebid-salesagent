@@ -2214,41 +2214,12 @@ def then_experimental_features_contains(ctx: dict, feature: str) -> None:
 # ══════════════════════════════════════════════════════════════════════════
 # Batch 6 (salesagent-e4ad): compliance_testing / specialisms / advisory errors
 #
-# The capabilities builder (src/core/tools/capabilities.py) emits only
-# adcp / supported_protocols / a HARD-CODED specialisms=[sales-non-guaranteed] /
-# media_buy{features,execution}. It never emits the compliance_testing block, a
-# top-level errors[] array, or a config-derived specialisms set, and advertises
-# only the media_buy protocol. The Givens record declared intent; the Thens grade
-# the exact v3.1.1-pinned shape on the wire. Every scenario in this batch strict-
-# xfails on the genuinely-unemitted block (per-family GH homes: #1855/#1856/#1724), never a dormant skip.
+# The capabilities builder never emits the compliance_testing block (#1724), so its
+# Given records intent and the scenario xfails at the first Then. specialisms and
+# supported_protocols are declaration-driven: the specialisms scenario declares
+# through ``the tenant declares specialisms ... with supported_protocols ...``
+# (a real tenant write) and grades the emitted union on the wire.
 # ══════════════════════════════════════════════════════════════════════════
-
-
-#: 3.1.1 specialism enum, closed 22-value kebab-case set (enums/specialism.json#/enum).
-SPECIALISM_ENUM = {
-    "audience-sync",
-    "brand-rights",
-    "collection-lists",
-    "content-standards",
-    "creative-ad-server",
-    "creative-generative",
-    "creative-template",
-    "creative-transformers",
-    "governance-aware-seller",
-    "governance-delivery-monitor",
-    "governance-spend-authority",
-    "property-lists",
-    "sales-broadcast-tv",
-    "sales-catalog-driven",
-    "sales-guaranteed",
-    "sales-non-guaranteed",
-    "sales-proposal-mode",
-    "sales-social",
-    "signal-marketplace",
-    "signal-owned",
-    "signed-requests",
-    "sponsored-intelligence",
-}
 
 
 # ── Givens: declared-intent recorders (production has no config surface) ──
@@ -2259,25 +2230,6 @@ def given_compliance_scenarios(ctx: dict) -> None:
     """Declare compliance_testing support. Production emits no compliance_testing
     block (#1592) — records intent; the scenario xfails at the first Then."""
     _config(ctx)["compliance_testing"] = True
-
-
-@given('"creative" and "media_buy" are in supported_protocols')
-def given_creative_and_media_buy_protocols(ctx: dict) -> None:
-    """Declare both protocols so the specialism roll-up parents are present.
-    Production advertises only media_buy, so the creative roll-up parent is
-    missing on the wire (#1592) — records intent."""
-    protocols = _config(ctx).setdefault("supported_protocols", [])
-    for protocol in ("creative", "media_buy"):
-        if protocol not in protocols:
-            protocols.append(protocol)
-
-
-@given(parsers.parse("the tenant claims specialisms {specialisms}"))
-def given_tenant_specialisms(ctx: dict, specialisms: str) -> None:
-    """Declare a config-derived specialisms set. Production hard-codes
-    specialisms=[sales-non-guaranteed] regardless of tenant config (#1592) —
-    records intent; the equality Then xfails."""
-    _config(ctx)["specialisms"] = _quoted_list(specialisms)
 
 
 @given("the seller surfaces an advisory warning during discovery")
@@ -2431,13 +2383,14 @@ def then_rejection_names(ctx: dict, capability: str, value: str) -> None:
     )
 
 
-@then("each specialism should be a member of the 3.1.1 specialism enum")
+@then("each specialism should be a member of the pinned specialism enum")
 def then_specialisms_enum(ctx: dict) -> None:
-    """Every specialisms entry is a member of the closed 22-value kebab-case enum
-    (enums/specialism.json#/enum)."""
+    """Every specialisms entry is a member of the closed kebab-case enum the pinned
+    capabilities response's ``specialisms.items`` names (enums/specialism.json#/enum)."""
     actual = wire_field(ctx, "specialisms")
-    invalid = set(actual) - SPECIALISM_ENUM
-    assert not invalid, f"specialisms carries non-enum values: {sorted(invalid)}"
+    allowed = _pinned_items_enum(_CAPABILITIES_RESPONSE, "properties", "specialisms")
+    invalid = set(actual) - allowed
+    assert not invalid, f"specialisms carries non-enum values {sorted(invalid)}; pinned enum {sorted(allowed)}"
 
 
 @then(

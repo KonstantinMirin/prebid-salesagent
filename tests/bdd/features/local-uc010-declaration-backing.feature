@@ -8,9 +8,8 @@
 # of the declaration store — a tenant must not be able to make the wire promise
 # behavior production lacks — so the backing rules would otherwise ship ungraded.
 #
-# The generated `T-UC-010-v31-specialisms` scenario cannot grade them: it declares
-# `creative-generative` AND requires the `creative` protocol, both unbacked, so it
-# stays xfailed against #1724 rather than being weakened to pass.
+# The generated `T-UC-010-v31-specialisms` scenario grades only the accepted path: it
+# declares the two specialisms this seller backs, so it cannot reach the rejections below.
 #
 # Reconcile upstream in adcp-req (a "seller rejects an unbacked capability
 # declaration" scenario), then retire this file in favor of the regenerated one.
@@ -88,6 +87,11 @@ Feature: UC-010 get_adcp_capabilities — capability declarations must be implem
     # so the flag's VALUE is the obligation, not only its boolean shape (which
     # @T-UC-010-main grades). The acceptance half is graded on all four transports by
     # @T-UC-002-ext-canonical-product-slots-inline (an inline creative is uploaded to the
-    # library and assigned to the package the create made).
+    # library and assigned to the package the create made); the update half by
+    # @T-UC-003-local-inline-creatives-replace and @T-UC-003-local-inline-creatives-keep-library.
+    # At the pin the flag is `deprecated: true` with `x-removed-in: 4.0.0` ("Deprecated 3.x
+    # compatibility capability for creatives provided inline in create_media_buy and
+    # update_media_buy package payloads"). Deprecated is not removed: a 3.x seller that
+    # accepts inline creatives still declares it, and the MUST-honor rule still binds.
     # @source repo=adcp ref=v3.2.7 path=docs/creative/sales-agent-creative-capabilities.mdx section="Creative management modes"
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/media-buy-features.json pointer=/properties/inline_creative_management
