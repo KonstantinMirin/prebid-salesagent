@@ -32,6 +32,7 @@ from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPCreativeNotFoundError,
     AdCPGoneError,
+    AdCPInvalidRequestError,
     AdCPPackageNotFoundError,
     AdCPValidationError,
 )
@@ -283,7 +284,7 @@ class TestFlightDateValidationAndPersistence:
             env.mock["uow"].return_value.media_buys.update_fields.assert_called()
 
     def test_invalid_date_range_returns_error(self):
-        """When end_time <= start_time, returns code='invalid_date_range'."""
+        """When end_time <= start_time, raises INVALID_REQUEST on end_time."""
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
             mock_session = env.mock["uow"].return_value.session
 
@@ -316,13 +317,14 @@ class TestFlightDateValidationAndPersistence:
                 start_time=start,
                 end_time=end,
             )
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPInvalidRequestError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.error_code == "INVALID_REQUEST"
+            assert exc_info.value.field == "end_time"
 
     def test_end_equals_start_returns_error(self):
-        """When end_time == start_time, returns code='invalid_date_range'."""
+        """When end_time == start_time, raises INVALID_REQUEST on end_time."""
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
             mock_session = env.mock["uow"].return_value.session
 
@@ -352,10 +354,11 @@ class TestFlightDateValidationAndPersistence:
                 start_time=same_time,
                 end_time=same_time,
             )
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPInvalidRequestError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.error_code == "INVALID_REQUEST"
+            assert exc_info.value.field == "end_time"
 
 
 # ---------------------------------------------------------------------------
@@ -1945,7 +1948,7 @@ class TestUC003ExtE:
     """Date range validation obligations."""
 
     def test_end_equals_start_returns_error(self):
-        """end_time == start_time returns invalid_date_range.
+        """end_time == start_time raises INVALID_REQUEST on end_time.
 
         Covers: UC-003-EXT-E-01
         """
@@ -1975,10 +1978,11 @@ class TestUC003ExtE:
                 start_time=same_time,
                 end_time=same_time,
             )
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPInvalidRequestError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.error_code == "INVALID_REQUEST"
+            assert exc_info.value.field == "end_time"
 
     def test_end_before_existing_start(self):
         """end_time before existing start_time (only end_time updated).
@@ -2010,10 +2014,11 @@ class TestUC003ExtE:
                 media_buy_id="mb_end_before",
                 end_time=datetime(2025, 3, 10, tzinfo=UTC),
             )
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPInvalidRequestError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.error_code == "INVALID_REQUEST"
+            assert exc_info.value.field == "end_time"
 
     def test_start_after_existing_end(self):
         """start_time after existing end_time (only start_time updated).
@@ -2045,10 +2050,11 @@ class TestUC003ExtE:
                 media_buy_id="mb_start_after",
                 start_time=datetime(2025, 4, 15, tzinfo=UTC),
             )
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPInvalidRequestError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.error_code == "INVALID_REQUEST"
+            assert exc_info.value.field == "end_time"
 
 
 # ---------------------------------------------------------------------------

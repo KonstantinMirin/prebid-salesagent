@@ -93,7 +93,11 @@ from src.core.tools.financial_validation import (
     validate_min_package_budget,
 )
 from src.core.utils import utc_flight_start
-from src.core.validation_helpers import package_field_path, refuse_duplicate_catalog_types
+from src.core.validation_helpers import (
+    package_field_path,
+    refuse_duplicate_catalog_types,
+    refuse_inverted_flight,
+)
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
@@ -1578,8 +1582,8 @@ def _update_media_buy_impl(
                             end_val if isinstance(end_val, datetime) else datetime.fromisoformat(str(end_val))
                         )
 
-                    if final_start_time and final_end_time and final_end_time <= final_start_time:
-                        raise AdCPValidationError(field="end_time")
+                    if final_start_time and final_end_time:
+                        refuse_inverted_flight(final_start_time, final_end_time)
 
                     uow.media_buys.update_fields(req.media_buy_id, **update_values)
                     logger.warning(

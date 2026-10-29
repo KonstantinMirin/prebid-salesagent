@@ -10,12 +10,15 @@ import json
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime
 
 from adcp.types import Catalog, Duration
 from pydantic import ValidationError
 
 from src.core.enum_helpers import enum_value
+from src.core.errors.details import TimeWindowDetails
 from src.core.exceptions import (
+    AdCPInvalidRequestError,
     AdCPValidationError,
     adcp_error_for,
 )
@@ -226,6 +229,21 @@ def campaign_interval_violated(duration: Duration | None) -> bool:
     validation", enums/error-code.json).
     """
     return duration is not None and enum_value(duration.unit) == "campaign" and duration.interval != 1
+
+
+def refuse_inverted_flight(start: datetime, end: datetime) -> None:
+    """Refuse a buy-level flight whose end is not after its start: INVALID_REQUEST on ``end_time``.
+
+    create_media_buy.mdx "Flight date validation": "Out-of-range or inverted dates SHOULD
+    return an ``INVALID_REQUEST`` error". The create path checks the requested window and the
+    update path checks the window the update would leave, and both answer here, so one rule
+    has one code whichever task reached it.
+    """
+    if end <= start:
+        raise AdCPInvalidRequestError(
+            details=TimeWindowDetails(start_time=str(start), end_time=str(end)),
+            field="end_time",
+        )
 
 
 def format_validation_error(validation_error: ValidationError, label: str = "request") -> str:

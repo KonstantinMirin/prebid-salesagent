@@ -1235,10 +1235,17 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: the first valid row was status "pending_activation", which is not a
+    # value of the pinned enums/media-buy-status.json. The state gate finds no actions for
+    # it in the SDK state machine and then allows every action, so that row could not fail
+    # whatever the rule for a buy awaiting its start. It is now "pending_start", the pinned
+    # status for that state, which the gate checks: a budget update maps to update_budget
+    # and update_packages, and pending_start must allow both for the row to succeed.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/media-buy-status.json
 
     Examples: Valid partitions
       | partition                  | status               | outcome |
-      | status_pending_activation  | pending_activation   | success |
+      | status_pending_start       | pending_start        | success |
       | status_active              | active               | success |
       | paused_budget_change       | paused               | accepted |
 
@@ -2120,7 +2127,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-end-time @partition @end_time
   Scenario Outline: End time partition validation - <partition>
-    Given the existing media buy has start_time "2026-04-01T00:00:00Z"
+    Given the existing media buy has start_time "2099-04-01T00:00:00Z"
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
@@ -2128,15 +2135,25 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: the invalid rows said `error with suggestion`, which names no code
+    # and accepted any refusal, so a seller refusing for a reason other than the inverted
+    # window passed them. They now name the code and the field. The pinned
+    # create_media_buy.mdx "Flight date validation" says "Out-of-range or inverted dates
+    # SHOULD return an INVALID_REQUEST error"; the pinned update page states no other code
+    # for the same rule, and @T-UC-003-ext-e / -ext-e-equal grade INVALID_REQUEST already.
+    # The dates moved from 2026 to 2099: a window in the past let a refusal of a past
+    # end_time stand in for the inversion this outline grades.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
 
     Examples: Valid partitions
       | partition          | end_value                | outcome |
-      | after_start_time   | 2026-06-30T23:59:59Z     | success |
+      | after_start_time   | 2099-06-30T23:59:59Z     | success |
 
     Examples: Invalid partitions
-      | partition          | end_value                | outcome                  |
-      | equal_to_start     | 2026-04-01T00:00:00Z     | error with suggestion    |
-      | before_start       | 2026-03-15T00:00:00Z     | error with suggestion    |
+      | partition          | end_value                | outcome                                         |
+      | equal_to_start     | 2099-04-01T00:00:00Z     | error "INVALID_REQUEST" on end_time with suggestion |
+      | before_start       | 2099-03-15T00:00:00Z     | error "INVALID_REQUEST" on end_time with suggestion |
 
   @T-UC-003-boundary-end-time @boundary @end_time
   Scenario Outline: End time boundary validation - <boundary_point>
@@ -2855,18 +2872,30 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-new-packages-incomplete @invariant @BR-RULE-217 @error @schema-v3.1 @post-f2 @post-f3
   Scenario: New package entry missing a required package-request field is rejected (INV-3)
-    Given the media buy's valid_actions advertises "add_packages"
-    And a valid update_media_buy request with:
+    Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
     And the request includes new_packages with an entry missing product_id
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
+    And the error field should contain "new_packages[0].product_id"
     And the error should include "suggestion" field
     # BR-RULE-217 INV-3: each new_packages entry must be a complete package-request (product_id, budget, pricing_option_id)
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # CORRECTED against the pin. new_packages items are package-request.json, which lists
+    # product_id in /required, so an entry without it fails the request schema. A missing
+    # required field is INVALID_REQUEST ("missing required fields, or violates schema
+    # constraints", enums/error-code.json), not VALIDATION_ERROR ("beyond schema
+    # validation"), and L1/security.mdx "Schema validation runs first" puts that refusal
+    # ahead of everything the seller decides. So the refusal does not depend on whether the
+    # seller supports mid-flight additions, and the "valid_actions advertises add_packages"
+    # precondition is dropped (this seller does not advertise it, which made the scenario
+    # stop at its own Given). The field Then pins which entry and member were refused.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/new_packages
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/required
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx
 
   @T-UC-003-new-packages-duplicate @invariant @BR-RULE-010 @error @schema-v3.1 @post-f1 @post-f2
   Scenario: New package duplicating an existing product on the media buy is rejected (BR-RULE-010 INV-4)

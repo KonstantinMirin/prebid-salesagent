@@ -135,6 +135,7 @@ from src.core.validation_helpers import (
     format_validation_error,
     package_field_path,
     refuse_duplicate_catalog_types,
+    refuse_inverted_flight,
 )
 from src.core.webhook_validator import (
     reject_unsafe_webhook_registration_url,
@@ -2845,16 +2846,9 @@ async def _create_media_buy_impl(
         if computed_end_time.tzinfo is None:
             computed_end_time = computed_end_time.replace(tzinfo=UTC)
 
-        if computed_end_time <= computed_start_time:
-            # computed_* are the UNWRAPPED, tz-normalized values — see the start_time branch
-            # above for why req.start_time must never be stringified into details.
-            raise AdCPInvalidRequestError(
-                details=TimeWindowDetails(
-                    start_time=str(computed_start_time),
-                    end_time=str(computed_end_time),
-                ),
-                field="end_time",
-            )
+        # computed_* are the UNWRAPPED, tz-normalized values — see the start_time branch
+        # above for why req.start_time must never be stringified into details.
+        refuse_inverted_flight(computed_start_time, computed_end_time)
 
         # Assign computed times to local variables for use throughout the function
         start_time_val = computed_start_time
