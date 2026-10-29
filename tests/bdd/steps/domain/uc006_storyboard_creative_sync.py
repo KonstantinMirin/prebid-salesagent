@@ -207,7 +207,6 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
     ensure_tenant_principal(ctx, env)
     env.serve_reference_catalog()
     display = _creative_format_id_entry(ctx, env)
-    agent_url = display["agent_url"]
     # The video and native formats must be ones the transport's agent SERVES: on
     # e2e_rest the real reference agent (v3.1.1 catalog, mirrored by the SDK's
     # v1-reference-formats.json) answers, and an unserved id is a failed entry with no
@@ -238,6 +237,9 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
             image_spec("main_image", url="https://example.com/native.png"),
         )
 
+    # Each format is named at the agent the env says publishes it, the display one included
+    # (``_creative_format_id_entry`` asks the same question): on e2e that is the tenant's
+    # hosted agent, which publishes only the formats it is asked for.
     creatives = [
         CreativeAssetRequestFactory.payload(
             creative_id="creative-bulk-display-001",
@@ -248,13 +250,13 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
         CreativeAssetRequestFactory.payload(
             creative_id="creative-bulk-video-001",
             name="Bulk Video Creative",
-            format_id={"id": video_id, "agent_url": agent_url},
+            format_id={"id": video_id, "agent_url": env.catalog_agent_url(video_id)},
             assets=video_assets,
         ),
         CreativeAssetRequestFactory.payload(
             creative_id="creative-bulk-native-001",
             name="Bulk Native Creative",
-            format_id={"id": native_id, "agent_url": agent_url},
+            format_id={"id": native_id, "agent_url": env.catalog_agent_url(native_id)},
             assets=native_assets,
         ),
     ]

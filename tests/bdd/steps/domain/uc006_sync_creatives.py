@@ -15,8 +15,8 @@ Three rules follow from its override contract (tests/factories/request.py):
 
 * ``format_id`` is ALWAYS stated. The factory's default normalises ``AGENT_URL`` to
   a trailing slash and names ``creative.adcontextprotocol.org``, while these
-  scenarios talk to ``env.DEFAULT_AGENT_URL`` — inheriting it would silently change
-  WHICH creative agent the payload names.
+  scenarios talk to ``env.catalog_agent_url(...)`` (through :func:`_format_payload`) —
+  inheriting it would silently change WHICH creative agent the payload names.
 * ``assets`` is stated only when it differs from the conformant baseline. A step
   that says nothing about assets means "any valid asset will do", which is exactly
   what the baseline supplies.
@@ -71,8 +71,8 @@ if TYPE_CHECKING:
 
 #: The format every transport names. A CAPTURED id -- one of the 71 in
 #: tests/fixtures/creative_formats/reference_formats.json, which both the in-process
-#: registry and the e2e server answer from. Paired with ``env.DEFAULT_AGENT_URL``, which
-#: is the agent the capture was taken from; the pair is what ``find_format`` matches on,
+#: registry and the e2e server answer from. Paired with ``env.catalog_agent_url``, the
+#: agent that publishes it for this scenario; the pair is what ``find_format`` matches on,
 #: so naming either half differently resolves to nothing. Replaces the
 #: in-process/e2e_rest switch on ``_E2E_FORMAT_ID`` -- see ``_format_payload``.
 _CATALOG_FORMAT_ID = "display_300x250_image"
@@ -113,6 +113,12 @@ def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
     the one reference is the one both can resolve, and ``identity_spec`` is non-None on
     both, which is what makes step 1 of the projection order graded rather than skipped.
 
+    The AGENT is the env's to name (``env.catalog_agent_url``), because a static creative
+    in this format is previewed by dialling that agent: in process it is the standard
+    agent the capture came from, whose previews the harness records; on e2e it is the
+    tenant's hosted agent publishing the same entry, so a sync never dials the shared
+    reference agent and its 60-a-minute limit (adcontextprotocol/adcp#8574).
+
     ``ctx`` stays in the signature: callers pass it and the e2e/in-process distinction
     may matter again for a different fact. It is deliberately NOT consulted for the
     format.
@@ -124,7 +130,7 @@ def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
     """
     return (
         _CATALOG_FORMAT_ID,
-        env.DEFAULT_AGENT_URL,
+        env.catalog_agent_url(_CATALOG_FORMAT_ID),
         build_assets(
             image_spec("banner_image", url="https://example.com/banner.png"),
             url_spec("click_url", url="https://example.com/landing"),
@@ -6229,7 +6235,8 @@ def given_creative_already_assigned_to_package_partition(ctx: dict) -> None:
     ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
+    # The row names the agent the synced creative names, or the sync re-points it.
+    agent_url = _scenario_format_entry(ctx, env)["agent_url"]
     creative_format = _scenario_format_id(ctx, env)
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")

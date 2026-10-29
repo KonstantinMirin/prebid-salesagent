@@ -84,8 +84,8 @@ from src.core.schemas import Format, SyncCreativesRequest, SyncCreativesResponse
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
-from tests.harness.egress import EgressHatchMixin
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
+from tests.harness.peer_agent import PeerCreativeAgentMixin
 from tests.harness.transport import DeliverResult
 from tests.helpers.creative_test_helpers import creative_payload
 
@@ -257,6 +257,21 @@ def _the_pinned_agent_answers_for_itself(self: CreativeSyncEnv, *args: Any, **kw
     """
 
 
+def _the_tenants_hosted_agent_publishes_it(self: CreativeSyncEnv, format_id: str) -> str:
+    """The e2e leg of :meth:`CreativeSyncEnv.catalog_agent_url`: the tenant's hosted agent.
+
+    The e2e server answers the standard creative agent's CATALOG from the capture, but it
+    PREVIEWS each static creative in one of its formats by dialling that agent at
+    CREATIVE_AGENT_URL -- the pinned reference agent, which allows each client 60 MCP POSTs
+    a minute (adcontextprotocol/adcp#8574) and refused UC-006 syncs with a 429 in box run
+    innet_291026_0008. So on e2e the format is named at the creative agent the stack hosts
+    for this tenant (:meth:`PeerCreativeAgentMixin.host_reference_format`): the capture's
+    own entry under that agent's URL, which the server lists from that agent, looks up
+    from it and previews against it, as it does for any agent a seller configured.
+    """
+    return self.host_reference_format(format_id)
+
+
 class HarnessCreativeAgentRegistry(ReferenceFormatsRegistry):
     """PRODUCTION's testing-mode registry, used as itself rather than stood in for.
 
@@ -378,7 +393,7 @@ def creative_fingerprint(creative: Any) -> tuple[str, str]:
     return (creative.status, repr(creative.data))
 
 
-class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
+class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
     """Integration test environment for _sync_creatives_impl.
 
     Only mocks external services (creative agent registry, async runner,
@@ -976,6 +991,24 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
             }
 
         self.mock["registry"].return_value.preview_creative = AsyncMock(side_effect=_preview)
+
+    @realize_e2e(_the_tenants_hosted_agent_publishes_it)
+    def catalog_agent_url(self, format_id: str) -> str:
+        """The creative agent a scenario names the reference capture's *format_id* at.
+
+        Either way the format is the capture's own declaration, published by a creative
+        agent this seller federates, and its preview is answered by something other than
+        the rate-limited reference agent.
+
+        In process it is the standard creative agent the capture was taken from
+        (:attr:`DEFAULT_AGENT_URL`): this env's registry answers it from the capture and
+        records its previews, so nothing is dialled. The in-process peer agent is not used
+        here because it is addressed by IP (``127.0.0.1``), and a host with no letter case
+        cannot grade BR-RULE-039 INV-1 ("agent_url host case does not split format
+        identity"), which re-spells this URL's host. On e2e it is the tenant's hosted agent;
+        see :func:`_the_tenants_hosted_agent_publishes_it`.
+        """
+        return self.DEFAULT_AGENT_URL
 
     def served_format(self, format_id: str, *, generative: bool | None = None) -> Format:
         """The CAPTURE's own declaration for *format_id*. A FILTER, never a fabrication.
