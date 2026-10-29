@@ -708,31 +708,43 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-e @extension @ext-e @error @post-f1 @post-f2 @post-f3
   Scenario: Date range invalid -- end_time before start_time
-    Given the existing media buy has start_time "2026-04-01T00:00:00Z"
+    Given the existing media buy has start_time "2099-04-01T00:00:00Z"
     And a valid update_media_buy request with:
     | field        | value                    |
     | media_buy_id | mb_existing              |
-    | end_time     | 2026-03-15T00:00:00Z     |
+    | end_time     | 2099-03-15T00:00:00Z     |
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the response error field is end_time
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error explains date range invalid
     # POST-F3: Suggestion for recovery
+    # LOCAL CORRECTION (with -ext-e-equal): POST-F2 was ungraded, so a refusal naming any
+    # other field passed; the error field now names end_time, the member the inverted window
+    # is refused at. The dates moved from 2026 to 2099, as in @T-UC-003-partition-end-time:
+    # a window in the past let a refusal of a past end_time stand in for the inversion.
+    # INVALID_REQUEST is the code production answers (refuse_inverted_flight) and the code
+    # create_media_buy.mdx "Flight date validation" names: "Out-of-range or inverted dates
+    # SHOULD return an INVALID_REQUEST error". The error-compliance storyboard's
+    # reversed_dates_error step accepts it ("INVALID_REQUEST is accepted").
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/error-compliance.yaml pointer=/phases/1/steps/3/narrative
 
   @T-UC-003-ext-e-equal @extension @ext-e @error @post-f1 @post-f2 @post-f3
   Scenario: Date range invalid -- end_time equals start_time
-    Given the existing media buy has start_time "2026-04-01T00:00:00Z"
+    Given the existing media buy has start_time "2099-04-01T00:00:00Z"
     And a valid update_media_buy request with:
     | field        | value                    |
     | media_buy_id | mb_existing              |
-    | end_time     | 2026-04-01T00:00:00Z     |
+    | end_time     | 2099-04-01T00:00:00Z     |
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the response error field is end_time
     And the error should include "suggestion" field
     # BR-RULE-013 INV-3: end_time <= start_time rejected
     # POST-F3: Suggestion for recovery

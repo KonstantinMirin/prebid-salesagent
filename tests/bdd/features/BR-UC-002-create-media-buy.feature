@@ -894,12 +894,23 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
-    And the error code should be "UNSUPPORTED_FEATURE"
+    And the error code should be "TERMS_REJECTED"
     And the error recovery should be "correctable"
+    And the response error field is packages[0].optimization_goals[0]
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
+    # CORRECTED to the pin: the code was UNSUPPORTED_FEATURE. A metric goal MUST match the
+    # product's declared capability, and the pin names the refusal: "A package's
+    # optimization_goals[] entry MUST match a product capability —
+    # metric_optimization.supported_metrics for kind: "metric" ... Sellers reject mismatches
+    # with TERMS_REJECTED." The seeded product declares no metric_optimization, and
+    # core/product.json says its "Presence indicates the product supports optimization_goals
+    # with kind: 'metric'", so this goal matches no capability. The field names the
+    # mismatched entry. Production accepts the goal today (prebid/salesagent#2479).
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/media-buys/optimization-reporting.mdx section="Required coherence between layers"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/metric_optimization/description
 
   @T-UC-002-ext-u-event @extension @ext-u @error
   Scenario: Optimization goal with unregistered event source
@@ -1399,7 +1410,11 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
+    And the response error field is packages[0].optimization_goals[0].event_sources
     And the error should include "suggestion" field
+    # The field is the member at fault, as the per_ad_spend row of
+    # @T-UC-002-boundary-optimization-goals and the value_target_without_value_field row of
+    # @T-UC-002-partition-optimization-goals name it for the same rule.
     # optimization-goal.json value_field: "sellers must reject these target kinds when no event
     # source entry includes value_field". The schema does not encode it (no if/then ties
     # target.kind to value_field), so the refusal is a business rule beyond schema validation:
@@ -1773,8 +1788,16 @@ Feature: BR-UC-002 Create Media Buy
     #   includes value_field") is a business rule the schema does not express, and
     #   enums/error-code.json VALIDATION_ERROR is "violates business rules beyond schema
     #   validation".
+    # - unsupported_metric is TERMS_REJECTED on packages[0].optimization_goals[0], not
+    #   UNSUPPORTED_FEATURE: "A package's optimization_goals[] entry MUST match a product
+    #   capability — metric_optimization.supported_metrics for kind: "metric" ... Sellers
+    #   reject mismatches with TERMS_REJECTED." The seeded product declares no
+    #   metric_optimization, so the attention_score goal matches no capability. Production
+    #   accepts it today (prebid/salesagent#2479).
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/optimization-goal.json pointer=/description
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/max_optimization_goals
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/media-buys/optimization-reporting.mdx section="Required coherence between layers"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/metric_optimization/description
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/VALIDATION_ERROR
 
     Examples: Valid partitions
@@ -1795,7 +1818,7 @@ Feature: BR-UC-002 Create Media Buy
 
     Examples: Invalid partitions
       | partition                              | outcome                                          |
-      | unsupported_metric                     | error UNSUPPORTED_FEATURE with suggestion          |
+      | unsupported_metric                     | error TERMS_REJECTED on packages[0].optimization_goals[0] with suggestion |
       | unregistered_event_source              | error INVALID_REQUEST with suggestion              |
       | unsupported_view_duration              | error INVALID_REQUEST with suggestion              |
       | unsupported_reach_unit                 | error UNSUPPORTED_FEATURE with suggestion          |

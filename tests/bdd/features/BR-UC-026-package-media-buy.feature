@@ -372,6 +372,7 @@ Feature: BR-UC-026 Package Media Buy
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
+    And the response error field is packages[0].catalogs
     And the error should include "suggestion" field
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
@@ -380,7 +381,9 @@ Feature: BR-UC-026 Package Media Buy
     # CORRECTED to the pin: the code was INVALID_REQUEST. package-request.json catalogs:
     # "sellers MUST reject requests containing multiple catalogs of the same type with a
     # validation_error", so the code is VALIDATION_ERROR (the title keeps its old wording so
-    # the test id is unchanged).
+    # the test id is unchanged). POST-F2 is graded by the field: packages[0].catalogs, the
+    # member production refuses (refuse_duplicate_catalog_types) and the one the UC-002 and
+    # UC-003 catalog rows name for the same rule.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/catalogs
 
   @T-UC-026-ext-g-product @extension @ext-g @error @post-f1 @post-f2 @post-f3 @invariant @BR-RULE-198

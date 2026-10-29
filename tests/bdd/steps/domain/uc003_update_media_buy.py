@@ -33,6 +33,7 @@ from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic._table import as_bool, drop_header_if
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
 from tests.factories.mint import mint
+from tests.factories.request import OMIT
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 
 #: The package budget an update scenario asks for. Deliberately NOT the 5000 the
@@ -1797,15 +1798,19 @@ def given_update_request_with_identification(ctx: dict, id_config: str) -> None:
     id_config formats:
     - 'media_buy_id=<label>' — the buy the label names, resolved as the table Given resolves it
       (the Background registers ``mb_existing`` for the seeded buy)
-    - '<none>' — set neither (expect error)
+    - '<none>' — send no media_buy_id (expect error)
     """
     kwargs: dict[str, Any] = {}
     stripped = id_config.strip()
 
     if stripped == "<none>":
-        # Neither identifier — kwargs stays empty, expecting INVALID_REQUEST error.
-        # Explicit guard: if kwargs somehow got pre-populated, that's a test setup bug.
-        assert not kwargs, f"Expected empty kwargs for '<none>' identification, got {kwargs!r}"
+        # The OMIT sentinel, not an absent key. ``MediaBuyDualEnv`` picks the TOOL from the
+        # bag's content, and ``media_buy_id`` is the key it reads: a bag without one was sent
+        # to create_media_buy, which refused the update's package (no product_id) at
+        # ``packages[0].package_id``. The rows asserting INVALID_REQUEST on media_buy_id then
+        # failed on a field the update was never asked about. The key present with OMIT routes
+        # the bag to update_media_buy, and ``_flatten_update_request`` strips it at the wire.
+        kwargs["media_buy_id"] = OMIT
     else:
         for part in stripped.split(","):
             key, _, val = part.strip().partition("=")
