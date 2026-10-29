@@ -240,20 +240,6 @@ def given_supports_conversion_tracking(ctx: dict) -> None:
     _config(ctx)["conversion_tracking"] = True
 
 
-@given('"creative" is in supported_protocols')
-def given_creative_in_supported_protocols(ctx: dict) -> None:
-    """Declare the creative protocol. Production advertises only the media_buy
-    protocol, so the creative section is not emitted (#1724) — records intent."""
-    _config(ctx).setdefault("supported_protocols", []).append("creative")
-
-
-@given("the tenant declares creative supports_compliance true")
-def given_creative_supports_compliance(ctx: dict) -> None:
-    """Declare the optional creative.supports_compliance value. Records intent;
-    production does not emit the creative section yet (#1724)."""
-    _config(ctx)["creative_supports_compliance"] = True
-
-
 @given("the adapter is unavailable")
 @given("a tenant is resolvable but adapter is unavailable")
 def given_adapter_unavailable(ctx: dict) -> None:
@@ -885,6 +871,15 @@ def then_supported_protocols_contains(ctx: dict, protocol: str) -> None:
     assert protocol in wire_field(ctx, "supported_protocols")
 
 
+@then(parsers.parse('supported_protocols should not contain "{protocol}"'))
+def then_supported_protocols_lacks(ctx: dict, protocol: str) -> None:
+    """The seller does not claim *protocol*. supported_protocols is schema-required, so
+    ``wire_field`` refuses a response that omits it rather than reading absence as a
+    negative claim."""
+    protocols = wire_field(ctx, "supported_protocols")
+    assert protocol not in protocols, f"supported_protocols claims {protocol!r}: {protocols!r}"
+
+
 @then("each value in supported_protocols should be a member of the pinned supported_protocols enum")
 def then_supported_protocols_in_enum(ctx: dict) -> None:
     allowed = _pinned_items_enum(_CAPABILITIES_RESPONSE, "properties", "supported_protocols")
@@ -1235,14 +1230,6 @@ def then_conversion_field_equals(ctx: dict, field: str, expected: str) -> None:
     _assert_wire_equals(ctx, f"media_buy.conversion_tracking.{field}", expected)
 
 
-@then(parsers.parse("creative.{field} should equal {expected}"))
-def then_creative_field_equals(ctx: dict, field: str, expected: str) -> None:
-    """Exact value on a creative sub-field (e.g. supports_compliance should equal
-    true). Pinned to the declared fixture value — the creative block is optional
-    and only present when creative is in supported_protocols."""
-    _assert_wire_equals(ctx, f"creative.{field}", expected)
-
-
 @then(parsers.parse("the response should include media_buy.portfolio with publisher_domains {domains}"))
 def then_portfolio_domains(ctx: dict, domains: str) -> None:
     actual = wire_field(ctx, "media_buy.portfolio.publisher_domains")
@@ -1329,9 +1316,12 @@ def then_schema_valid(ctx: dict) -> None:
     _assert_schema_valid(ctx)
 
 
-@then("the response should NOT include account section")
-def then_no_account(ctx: dict) -> None:
-    wire_absent(ctx, "account")
+@then(parsers.re(r"the response should NOT include the (?P<section>account|creative) section$"))
+def then_section_absent(ctx: dict, section: str) -> None:
+    """The top-level block is absent from the wire body. ``wire_absent`` refuses a
+    present key, a JSON null included, and an errored dispatch, so the assert cannot
+    pass on a response that never arrived."""
+    wire_absent(ctx, section)
 
 
 # ── Thens: read-only invariant ───────────────────────────────────────

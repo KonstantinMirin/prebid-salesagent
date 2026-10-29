@@ -19,6 +19,18 @@
 #     requested"): sandbox provisioning happens at sync_accounts time — rescoped to UC-011
 #     (the UC-011 feature owner is adding the sync_accounts-side scenario).
 #
+# Retired 2026-10-29 (this seller does not claim the creative protocol, owner decision):
+#   - @T-UC-010-degradation-creative, @T-UC-010-v31-creative-extended,
+#     @T-UC-010-v31-creative-multiplicity and @T-UC-010-v31-creative-agentic-flags: each
+#     declared "creative" in supported_protocols and graded fields of the creative block. The
+#     pin claims the protocol only for an endpoint that builds, validates or previews
+#     creatives (docs/creative/sales-agent-creative-capabilities.mdx), and the block is "Only
+#     present if creative is in supported_protocols", so for this seller every one of them
+#     reduces to "no claim, no block". @T-UC-010-creative-caps grades that on the wire,
+#     @T-UC-010-local-unbacked-protocol grades that the claim cannot be declared, and the
+#     creative_absent row of @T-UC-010-degradation-partitions was degradation-creative's
+#     row 1 already.
+#
 # Transport policy (#1592): every scenario runs on all 4 transports (impl, a2a, mcp, rest)
 # via harness parametrization — When steps are transport-neutral, the auth outline
 # (@T-UC-010-auth) included: it once carried a channel column and an invalid-token pair
@@ -49,7 +61,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
   #             media_buy.audience_targeting object indicates support at 3.1.1)
   #   POST-S13: Buyer knows the conversion tracking capabilities when supported (presence of
   #             media_buy.conversion_tracking object indicates support at 3.1.1)
-  #   POST-S14: Buyer knows the creative protocol capabilities when creative protocol supported
+  #   POST-S14: Buyer knows whether the seller offers creative protocol operations (this seller
+  #             does not: no "creative" claim and no creative block)
   #   POST-S15: Buyer knows the adcp.idempotency capabilities
   #   POST-S16: Buyer knows the supported_versions
   #   POST-S17: Buyer knows the build_version
@@ -67,9 +80,9 @@ Feature: BR-UC-010 Discover Seller Capabilities
   #   POST-S29: Buyer knows advisory errors when present
   #   POST-S30: Buyer knows the account establishment surface (require_operator_auth,
   #             authorization_endpoint, required_for_products, supported_billing, account_financials)
-  #   POST-S31: Buyer knows the 3.1.1 pre-call discriminators (creative.multiplicity,
-  #             creative.supports_* fan-out/refinement flags, media_buy.creative_approval_mode,
-  #             media_buy.governance_aware, media_buy.vendor_metric_optimization)
+  #   POST-S31: Buyer knows the 3.1.1 pre-call discriminators (media_buy.creative_approval_mode,
+  #             media_buy.governance_aware, media_buy.vendor_metric_optimization; the creative.*
+  #             discriminators exist only on a seller that claims the creative protocol)
   #   POST-F1: System state is unchanged on failure (read-only operation)
   #   POST-F2: Buyer knows what failed and the specific error code
   #   POST-F3: Application context is still echoed when possible
@@ -303,24 +316,26 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # @source repo=adcp ref=v3.2.7 path=docs/protocol/get_adcp_capabilities.mdx (L184: flag replaced by object presence)
 
   @T-UC-010-creative-caps @main-flow @post-s14
-  Scenario: Capabilities response includes creative protocol when supported
+  Scenario: A seller that does not claim the creative protocol emits no creative section
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
-    And "creative" is in supported_protocols
-    And the tenant declares creative supports_compliance true
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
-    And the response should include the creative section
-    And creative.supports_compliance should equal true
-    # POST-S14: Buyer knows creative protocol capabilities
-    # NOT-IN-SPEC direction note: schema says the block is "Only present if creative is in
-    # supported_protocols" (necessary condition); emitting it whenever the protocol is
-    # declared is the local choice. supports_compliance is an optional boolean — pinned to
-    # the declared fixture value (salesagent-ytq6, was "equal the tenant-configured value"
-    # with no declared fixture; mirrors the concrete sibling row). Production emits only the
-    # media_buy protocol (creative not in supported_protocols), so the scenario executes and
-    # fails at "should include the creative section" (strict xfail, #1724).
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/creative/properties/supports_compliance
+    And supported_protocols should not contain "creative"
+    And the response should NOT include the creative section
+    # POST-S14: Buyer knows the seller does not offer creative protocol operations
+    # CORRECTED against the pin (was "includes creative protocol when supported", which
+    # declared "creative" and asserted creative.supports_compliance on the wire). This
+    # seller builds, validates and previews no creative, and the pin ties the claim to
+    # exactly those operations: "If the same endpoint can build, validate, or preview
+    # creatives, include `creative` in `supported_protocols`". A stable protocol value also
+    # commits the agent to that protocol's baseline storyboard, so the claim is absent, and
+    # with it the creative block, which is "Only present if creative is in
+    # supported_protocols". Even a tenant configured with every capability emits neither.
+    # That an operator cannot make the claim is graded by @T-UC-010-local-unbacked-protocol.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/sales-agent-creative-capabilities.mdx section="Creative operations are capability-scoped"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/supported_protocols/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/creative/description
 
   # NOT transport-specific. Auth policy is a property of the TOOL, not of the channel: this
   # outline names no channel, and the harness runs every row on mcp/a2a/rest alike, so a
@@ -516,24 +531,6 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | conversion_tracking_absent adapter fails → conversion_tracking section absent             | unavailable   | conversion tracking | enabled          | conversion_tracking  | absent        |
       | full_response conversion tracking enabled AND adapter succeeds → section present          | available     | conversion tracking | enabled          | conversion_tracking  | present       |
       | conversion_tracking_absent conversion tracking disabled → section absent                  | available     | conversion tracking | disabled         | conversion_tracking  | absent        |
-
-  @T-UC-010-degradation-creative @extension @degradation @partition @boundary @post-s14
-  Scenario Outline: Creative section presence depends on protocol support
-    Given a tenant is resolvable from the request context
-    And the tenant has full capabilities configured
-    And <creative_condition>
-    When the Buyer Agent calls get_adcp_capabilities
-    Then the response is compliant with the get_adcp_capabilities spec
-    And the creative section should be <creative_state>
-    # Row 1 is spec-true (schema: creative "Only present if creative is in supported_protocols").
-    # Row 2 (present-when-declared) is NOT-IN-SPEC strictly — "only present if" is a necessary
-    # condition, not an emission mandate; presence-when-declared is the sensible local choice.
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/creative
-
-    Examples:
-      | partition_boundary                                                             | creative_condition                        | creative_state |
-      | creative_absent creative not in supported_protocols → creative section absent  | "creative" is NOT in supported_protocols  | absent         |
-      | full_response creative in supported_protocols → creative section present       | "creative" is in supported_protocols      | present        |
 
   # The invalid-credential scenario that stood here ("An invalid credential is not checked on
   # a public task", @T-UC-010-ext-c-invalid-credential) is gone. It had replaced an A2A/MCP
@@ -1577,27 +1574,6 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/errors
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json pointer=/required
 
-  @T-UC-010-v31-creative-extended @v31 @main-flow @post-s14
-  Scenario: creative-extended — creative protocol exposes library / generation / transformation in v3.1
-    Given a tenant is resolvable from the request context
-    And "creative" is in supported_protocols
-    And the tenant declares creative posture supports_compliance=true has_creative_library=true supports_generation=false supports_transformation=false
-    When the Buyer Agent calls get_adcp_capabilities
-    Then the response is compliant with the get_adcp_capabilities spec
-    And creative.supports_compliance should equal true
-    And creative.has_creative_library should equal true
-    And creative.supports_generation should be absent or false
-    And creative.supports_transformation should be absent or false
-    # Fixed 2026-07-13: none of the four fields is required — "should be a boolean" failed
-    # against a valid response that omits them; the Given now declares the posture and the
-    # Thens assert declared==returned (absent-or-false for the false-valued defaults). The
-    # 3.1.1 creative block additionally carries supports_transformers, supports_refinement,
-    # supports_spend_controls, supports_evaluator, refinable_retention_seconds, multiplicity,
-    # supported_formats, bills_through_adcp, canonical_catalog_version — covered by the
-    # @T-UC-010-v31-creative-multiplicity / @T-UC-010-v31-creative-agentic-flags scenarios.
-    # POST-S14 (v3.1 extension)
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/creative/properties
-
   @T-UC-010-v31-version-unsupported @v31 @extension @ext-f @error @post-f2 @post-f4 @partition
   Scenario: version-unsupported — VERSION_UNSUPPORTED error carries authoritative supported_versions
     Given a tenant is resolvable from the request context
@@ -1969,53 +1945,6 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/billing-party.json pointer=/enum
 
   # ── New scenarios (2026-07-13, P0.2 gap closure): fields new at 3.1.1 ───────────────
-
-  @T-UC-010-v31-creative-multiplicity @v31 @main-flow @post-s31 @partition
-  Scenario: creative-multiplicity — build_creative fan-out pre-call discriminators
-    Given a tenant is resolvable from the request context
-    And "creative" is in supported_protocols
-    And the tenant declares creative.multiplicity supports_catalog_fanout=true max_creatives_limit=50 supports_variants=true max_variants_limit=8 variant_dimensions=["voice","theme"]
-    When the Buyer Agent calls get_adcp_capabilities
-    Then the response is compliant with the get_adcp_capabilities spec
-    And creative.multiplicity.supports_catalog_fanout should equal true
-    And creative.multiplicity.max_creatives_limit should equal 50
-    And creative.multiplicity.supports_variants should equal true
-    And creative.multiplicity.max_variants_limit should equal 8
-    And creative.multiplicity.variant_dimensions should equal ["voice", "theme"]
-    And each variant_dimensions value should be one of "voice", "theme", "best_of_n", "transformer_config", "custom"
-    # DORMANT: no Given/Then step definitions exist for this scenario yet, so it
-    # never runs — it does not xfail on a graded production gap.
-    # NEW at 3.1.1: pre-call discriminators so a buyer knows BEFORE sending max_creatives /
-    # max_variants whether fan-out is supported and the ceilings (over-limit requests are
-    # CLAMPED, not rejected). Absent means no fan-out. Experimental members
-    # (supports_signal_fanout, max_signal_conditions_limit, selection_strategies) require
-    # creative.signal_fanout in experimental_features when declared — not in this fixture.
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/creative/properties/multiplicity
-
-  @T-UC-010-v31-creative-agentic-flags @v31 @main-flow @post-s31 @partition
-  Scenario: creative-agentic-flags — 3.1.1 creative refinement/transformer/spend-control/evaluator discriminators
-    Given a tenant is resolvable from the request context
-    And "creative" is in supported_protocols
-    And the tenant declares creative posture supports_refinement=true refinable_retention_seconds=86400 supports_transformers=true supports_spend_controls=true supports_evaluator=true
-    When the Buyer Agent calls get_adcp_capabilities
-    Then the response is compliant with the get_adcp_capabilities spec
-    And creative.supports_refinement should equal true
-    And creative.refinable_retention_seconds should equal 86400
-    And creative.supports_transformers should equal true
-    And creative.supports_spend_controls should equal true
-    And creative.supports_evaluator should equal true
-    And experimental_features should contain "creative.evaluator"
-    # DORMANT: no Given/Then step definitions exist for this scenario yet, so it
-    # never runs — it does not xfail on a graded production gap.
-    # NEW at 3.1.1, all default false: supports_refinement (refine_from_build_variant_id;
-    # false/absent -> UNSUPPORTED_FEATURE), refinable_retention_seconds (guaranteed-MINIMUM
-    # refinability window, integer >= 0, only meaningful with supports_refinement),
-    # supports_transformers (list_transformers surface), supports_spend_controls (max_spend
-    # ceiling + mode:estimate; meaningful only alongside bills_through_adcp true),
-    # supports_evaluator (experimental — MUST also list creative.evaluator in
-    # experimental_features, hence the coupling assert).
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/creative/properties/supports_refinement
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/creative/properties/supports_evaluator
 
   @T-UC-010-v31-creative-approval-mode @v31 @main-flow @post-s31 @partition
   Scenario Outline: creative-approval-mode — tenant-wide creative approval applicability signal
