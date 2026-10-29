@@ -96,7 +96,13 @@ from fastmcp.client.transports import (
 )
 
 from src.core.errors.details import AdapterFailureDetails, ConfigurationDetails
-from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPRateLimitError, clamp_retry_after
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPConfigurationError,
+    AdCPRateLimitError,
+    AdCPSalesAgentError,
+    clamp_retry_after,
+)
 from src.core.security.egress.attempts import Attempts
 from src.core.security.outbound_http import (
     _SIGNER_RESERVED_HEADERS,
@@ -420,6 +426,70 @@ def _build_auth_headers(auth: dict[str, Any] | None, auth_header: str | None = N
     return headers
 
 
+def _terminal_failure(
+    e: Exception, throttle: _Throttle, url: str, attempt: int, candidate_attempts: int
+) -> BaseException | None:
+    """The exception that ends :func:`call_mcp_tool` at once for attempt failure *e*, or None to retry.
+
+    Each case is one the attempt budget cannot fix, so spending it would only report the
+    wrong failure later.
+    """
+    # A dial-time egress refusal is TERMINAL: the attempt budget does not apply to a
+    # destination the policy already refused. Let it out with its own type, before any
+    # retry bookkeeping.
+    #
+    # It has to be recovered from the chain rather than caught by type, because fastmcp
+    # re-raises it as a bare RuntimeError ("Client failed to connect: ..."). An
+    # `except OutboundError` branch reads like it closes the case and catches nothing --
+    # the shape this epic exists to delete -- so the unwrap is the one mechanism, not a
+    # decoration in front of one.
+    #
+    # validate_url above the loop does NOT make this unreachable: it resolves separately
+    # from guarded_client_factory's resolution inside `async with client`, and the two can
+    # disagree under DNS rebind, which is precisely when retrying a refusal is worst.
+    refusal = find_wrapped(e, OutboundError)
+    if refusal is not None:
+        return refusal
+
+    # An unsignable request is TERMINAL for the same reason a refused destination is:
+    # the attempt budget cannot fix it, and spending it here would only produce three
+    # more chances to leave unsigned before reporting the wrong failure. Recovered from
+    # the chain, not caught by type, because fastmcp re-raises a hook failure as its own
+    # RuntimeError -- an `except MCPSigningError` arm would read like it closes the case
+    # and catch nothing.
+    unsignable = find_wrapped(e, MCPSigningError)
+    if unsignable is not None:
+        return unsignable
+
+    # A 429 is TERMINAL too, and is RATE_LIMITED rather than the SERVICE_UNAVAILABLE
+    # exhaustion would report: the agent answered, and what it answered is "not now, and
+    # not from you". Retrying on the 1s/2s/4s schedule only spends the caller's limit
+    # faster -- a limiter counts every POST of a session -- and the ``/mcp`` fallback is
+    # a second path to the same limiter. The wait the agent named rides out as the pinned
+    # top-level ``retry_after`` (core/error.json), so the buyer is told when to come back
+    # instead of being retried for.
+    if throttle.observed:
+        logger.warning(
+            "MCP agent %s rate-limited attempt %s/%s (HTTP 429, retry_after=%s); not retrying",
+            url,
+            attempt,
+            candidate_attempts,
+            throttle.retry_after,
+        )
+        return AdCPRateLimitError(retry_after=clamp_retry_after(throttle.retry_after), internal_detail=e)
+
+    # A known compatibility issue between FastMCP SDK versions.
+    if "notifications/initialized" in str(e):
+        logger.warning(
+            f"MCP SDK compatibility issue with {url}: "
+            f"Server doesn't support 'notifications/initialized' notification. "
+            f"This is a known issue between FastMCP SDK versions."
+        )
+        return MCPCompatibilityError(details=AdapterFailureDetails(url=url), internal_detail=e)
+
+    return None
+
+
 async def call_mcp_tool(
     agent_url: str,
     tool: str,
@@ -563,72 +633,16 @@ async def call_mcp_tool(
                 logger.debug(f"MCP tool {tool!r} on {current_url} succeeded on attempt {attempt}")
                 return result
 
+            except AdCPSalesAgentError:
+                # Already typed by this seam or its hooks: its own code and recovery go
+                # out as they are, not re-classified as an exhausted connection.
+                raise
             except Exception as e:
-                # A dial-time egress refusal is TERMINAL: the attempt budget does
-                # not apply to a destination the policy already refused. Let it
-                # out with its own type, before any retry bookkeeping.
-                #
-                # It has to be recovered from the chain rather than caught by
-                # type, because fastmcp re-raises it as a bare RuntimeError
-                # ("Client failed to connect: ..."). An `except OutboundError`
-                # branch here reads like it closes the case and catches nothing --
-                # the shape this epic exists to delete -- so the unwrap is the
-                # one mechanism, not a decoration in front of one.
-                #
-                # validate_url above the loop does NOT make this unreachable: it
-                # resolves separately from guarded_client_factory's resolution
-                # inside `async with client`, and the two can disagree under DNS
-                # rebind, which is precisely when retrying a refusal is worst.
-                refusal = find_wrapped(e, OutboundError)
-                if refusal is not None:
-                    raise refusal from e
-
-                # An unsignable request is TERMINAL for the same reason a refused
-                # destination is: the attempt budget cannot fix it, and spending it
-                # here would only produce three more chances to leave unsigned before
-                # reporting the wrong failure. Recovered from the chain, not caught by
-                # type, because fastmcp re-raises a hook failure as its own
-                # RuntimeError -- an `except MCPSigningError` arm would read like it
-                # closes the case and catch nothing.
-                unsignable = find_wrapped(e, MCPSigningError)
-                if unsignable is not None:
-                    raise unsignable from e
-
-                # A 429 is TERMINAL too, and is RATE_LIMITED rather than the
-                # SERVICE_UNAVAILABLE exhaustion would report: the agent answered, and
-                # what it answered is "not now, and not from you". Retrying on this
-                # loop's 1s/2s/4s schedule only spends the caller's limit faster -- a
-                # limiter counts every POST of a session -- and the ``/mcp`` fallback
-                # is a second path to the same limiter. The wait the agent named rides
-                # out as the pinned top-level ``retry_after`` (core/error.json), so the
-                # buyer is told when to come back instead of being retried for.
-                if throttle.observed:
-                    logger.warning(
-                        "MCP agent %s rate-limited attempt %s/%s (HTTP 429, retry_after=%s); not retrying",
-                        current_url,
-                        attempt,
-                        candidate_attempts,
-                        throttle.retry_after,
-                    )
-                    raise AdCPRateLimitError(
-                        retry_after=clamp_retry_after(throttle.retry_after),
-                        internal_detail=e,
-                    ) from e
+                terminal = _terminal_failure(e, throttle, current_url, attempt, candidate_attempts)
+                if terminal is not None:
+                    raise terminal from e
 
                 last_exception = e
-                error_msg = str(e)
-
-                # Check for known compatibility issues
-                if "notifications/initialized" in error_msg:
-                    logger.warning(
-                        f"MCP SDK compatibility issue with {current_url}: "
-                        f"Server doesn't support 'notifications/initialized' notification. "
-                        f"This is a known issue between FastMCP SDK versions."
-                    )
-                    raise MCPCompatibilityError(
-                        details=AdapterFailureDetails(url=current_url),
-                        internal_detail=e,
-                    ) from e
 
                 attempts.record_transport_failure()
 
