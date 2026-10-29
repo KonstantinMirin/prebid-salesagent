@@ -1398,6 +1398,16 @@ class AdCPBudgetTooLowError(AdCPSalesAgentError[BudgetDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_TOO_LOW
 
 
+class AdCPTermsRejectedError(AdCPSalesAgentError[EntityRefDetails]):
+    """Buyer-proposed ``measurement_terms`` the seller will not accept (422, TERMS_REJECTED).
+
+    ``enums/error-code.json``: "The error details SHOULD identify which specific term was
+    rejected". ``field`` is that locator -- the term inside ``packages[i].measurement_terms``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.TERMS_REJECTED
+
+
 class AdCPInvalidPricingOptionError(AdCPSalesAgentError[PricingValidationDetails]):
     """A package names a ``pricing_option_id`` its product does not offer (INVALID_PRICING_OPTION).
 

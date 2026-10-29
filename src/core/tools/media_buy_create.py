@@ -54,6 +54,7 @@ from src.core.exceptions import (
     AdCPPersistedStateError,
     AdCPProductNotFoundError,
     AdCPSalesAgentError,
+    AdCPTermsRejectedError,
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
@@ -2028,6 +2029,68 @@ def push_creative_to_existing_buy(
         return False, str(e)
 
 
+#: Event-goal target kinds that aggregate conversion value, so a goal carrying one needs a
+#: value-bearing event source (core/optimization-goal.json event_sources[].value_field).
+_VALUE_TARGET_KINDS = frozenset({"per_ad_spend", "maximize_value"})
+
+
+def _refuse_package_terms_it_cannot_honor(pkg_index: int, package: PackageRequest) -> None:
+    """Refuse a package asking for something this seller cannot honor, before anything is read.
+
+    Each rule is a MUST of the pinned schema (v3.2.7), checked on the request alone:
+
+    - ``media-buy/package-request.json`` catalogs: "sellers MUST reject requests containing
+      multiple catalogs of the same type with a validation_error".
+    - ``core/optimization-goal.json`` target_frequency: "When both min and max are present,
+      max must be greater than or equal to min".
+    - ``core/optimization-goal.json`` value_field: "sellers must reject these target kinds
+      [per_ad_spend, maximize_value] when no event source entry includes value_field".
+    - ``media-buy/package-request.json`` measurement_terms: the seller "accepts (echoed on
+      confirmed package), rejects with TERMS_REJECTED, or adjusts". This seller negotiates no
+      measurement terms and declares none on its products, so it can honor no proposal;
+      the error names the first proposed term, as TERMS_REJECTED asks.
+    """
+    catalog_types = [enum_value(catalog.type) for catalog in package.catalogs or ()]
+    duplicate_types = sorted({t for t in catalog_types if catalog_types.count(t) > 1})
+    if duplicate_types:
+        raise AdCPValidationError(
+            field=package_field_path("catalogs", pkg_index),
+            details=ValidationDetails(package_index=pkg_index, rejected_value=duplicate_types),
+        )
+
+    for goal_index, goal in enumerate(package.optimization_goals or ()):
+        goal_field = package_field_path(f"optimization_goals[{goal_index}]", pkg_index)
+        frequency = getattr(goal, "target_frequency", None)
+        if frequency is not None and frequency.min is not None and frequency.max is not None:
+            if frequency.max < frequency.min:
+                raise AdCPValidationError(
+                    field=f"{goal_field}.target_frequency",
+                    details=ValidationDetails(package_index=pkg_index, index=goal_index),
+                )
+        target = getattr(goal, "target", None)
+        event_sources = getattr(goal, "event_sources", None)
+        if (
+            event_sources is not None
+            and target is not None
+            and enum_value(target.kind) in _VALUE_TARGET_KINDS
+            and not any(source.value_field for source in event_sources)
+        ):
+            raise AdCPValidationError(
+                field=f"{goal_field}.event_sources",
+                details=ValidationDetails(package_index=pkg_index, index=goal_index),
+            )
+
+    terms = package.measurement_terms
+    proposed = None
+    if terms is not None:
+        proposed = next((name for name in type(terms).model_fields if getattr(terms, name) is not None), None)
+    if proposed is not None:
+        raise AdCPTermsRejectedError(
+            details=EntityRefDetails(package_index=pkg_index),
+            field=package_field_path(f"measurement_terms.{proposed}", pkg_index),
+        )
+
+
 def _validate_pricing_model_selection(
     package: Package | PackageRequest | AdcpPackageRequest,
     product: Any,  # ProductModel from database
@@ -2752,6 +2815,7 @@ async def _create_media_buy_impl(
                 # Check product_id field per AdCP spec
                 if not package.product_id:
                     raise AdCPValidationError(field=package_field_path("product_id", pkg_index))
+                _refuse_package_terms_it_cannot_honor(pkg_index, package)
 
             # Check for duplicate product_ids across packages
             product_id_counts: dict[str, int] = {}
