@@ -1431,6 +1431,19 @@ class AdCPCapabilityNotSupportedError(AdCPSalesAgentError[CapabilityRefusalDetai
     _code: ClassVar[ErrorCodeT] = ErrorCode.UNSUPPORTED_FEATURE
 
 
+class AdCPTermsRejectedError(AdCPSalesAgentError[CapabilityRefusalDetails]):
+    """Buyer-proposed package terms exceed what the product offers (422, TERMS_REJECTED).
+
+    media-buy/package-request.json negotiates ``committed_metrics``, ``measurement_terms`` and
+    ``performance_standards`` one way: the seller accepts, normalizes, or "rejects with
+    ``TERMS_REJECTED`` (with explanation of which entries were unworkable)". ``field`` points at
+    the offending entry; the details carry the refused value and the product's accepted range,
+    which the code's own description asks for.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.TERMS_REJECTED
+
+
 class AdCPConflictingSelectorsError(AdCPSalesAgentError[SelectorConflictDetails]):
     """A package's format selector routes resolve to different product options (422).
 
