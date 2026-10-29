@@ -3051,18 +3051,27 @@ Feature: BR-UC-003 Update Media Buy
     # supplied" describe a create request's package set. On update, packages[] items are
     # package-update.json, whose root `not` rejects product_id (so no update can name a
     # product there), and update-media-buy-request.json declares no proposal_id. The
-    # new_packages rows are the update's own product-uniqueness surface and stay; their
-    # "rejected (duplicate)" outcome now names the code @T-UC-003-new-packages-duplicate
-    # grades for the same refusal.
+    # new_packages rows are the update's own product-uniqueness surface and stay.
+    # REGROUNDED: all three rows are refused with UNSUPPORTED_FEATURE on new_packages.
+    # update-media-buy-request.json /properties/new_packages: "Sellers that do not support
+    # this MUST reject with ACTION_NOT_ALLOWED (preferred) or UNSUPPORTED_FEATURE (legacy)".
+    # This seller does not add packages to a live buy and does not advertise add_packages
+    # (@T-UC-003-ext-u-valid-actions grades that on the wire). The MUST covers every
+    # new_packages request, so the refusal comes before the product set is examined: a
+    # duplicate set is refused for the same reason as a distinct one. The rows used to expect
+    # "accepted" and VALIDATION_ERROR, which is the obligation of a seller that supports
+    # mid-flight additions. They grade that no package set, distinct or duplicate, gets past
+    # the refusal. Each row's request carries only new_packages, so no other field can earn
+    # the refusal.
     # ---------- approval_workflow submitted-envelope boundaries (approval_workflow.yaml) ----------
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/not
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/new_packages
 
     Examples: product uniqueness across packages (BR-UC-002/003)
-      | boundary                                                                | outcome              |
-      | update new_packages[] adds a product_id not present elsewhere           | accepted             |
-      | update new_packages[] product_id duplicates an existing media buy package | error "VALIDATION_ERROR" — rejected (duplicate) |
-      | update new_packages[] contains two entries with the same product_id     | error "VALIDATION_ERROR" — rejected (duplicate) |
+      | boundary                                                                  | outcome                                                    |
+      | update new_packages[] adds a product_id not present elsewhere             | error "UNSUPPORTED_FEATURE" on new_packages with suggestion |
+      | update new_packages[] product_id duplicates an existing media buy package | error "UNSUPPORTED_FEATURE" on new_packages with suggestion |
+      | update new_packages[] contains two entries with the same product_id       | error "UNSUPPORTED_FEATURE" on new_packages with suggestion |
 
   @T-UC-003-bva-approval-workflow @boundary @approval_workflow @schema-v3.1 @post-s7 @post-s8
   Scenario Outline: approval workflow submitted-envelope boundary - <boundary>
