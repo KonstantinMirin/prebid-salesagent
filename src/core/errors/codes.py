@@ -416,6 +416,10 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
         # canonical_formats.yaml says in its own words (negative_path:
         # payload_well_formed).
         ErrorCode.CONFLICTING_SELECTORS: 422,
+        # Correctable per the pin ("emit only the 3.2 bidding block or only one legacy
+        # representation"), and refused on its merits, not malformed: both members are
+        # declared properties of the package.
+        ErrorCode.AMBIGUOUS_BIDDING_POLICY: 422,
         # 429 — correct, but too often.
         ErrorCode.RATE_LIMITED: 429,
         # 5xx — the buyer cannot fix it. CONFIGURATION_ERROR and

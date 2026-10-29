@@ -6429,7 +6429,8 @@ _UC003_MANUAL_APPROVAL_TAGS = frozenset(
 )
 # The package-update root `not` scenarios (media-buy/package-update.json). Their Givens need
 # exactly the uc003-ext seed -- an existing buy with pkg_001 -- and the refusal they grade is
-# raised by the request model before any of it is read. They sat on the uc003-not-wired
+# raised before any of it is read: by the request model, or for bidding beside bid_price by
+# update_media_buy above the UoW (AMBIGUOUS_BIDDING_POLICY). They sat on the uc003-not-wired
 # catch-all, which xfails at setup, so the outline added with the refusal had never run.
 _UC003_PACKAGE_UPDATE_NOT_TAGS = frozenset(
     {"T-UC-003-package-update-immutable-keyword", "T-UC-003-package-update-bidding-with-bid-price"}

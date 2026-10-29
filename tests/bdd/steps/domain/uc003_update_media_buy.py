@@ -17,6 +17,7 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import (
     WIRE_MISSING,
+    assert_wire_rejection,
     payload_or_none,
     require_payload,
     wire_absent,
@@ -2722,18 +2723,14 @@ def then_package_update_field_refused_by_keyword(ctx: dict, name: str, keyword: 
     )
 
 
-@then(parsers.parse("the update is refused INVALID_REQUEST naming the package update itself under keyword {keyword}"))
-def then_package_update_refused_by_keyword(ctx: dict, keyword: str) -> None:
-    """The refusal names the PACKAGE, with the schema keyword *keyword*.
+@then("the update is refused AMBIGUOUS_BIDDING_POLICY naming the package update itself")
+def then_package_update_refused_ambiguous_bidding(ctx: dict) -> None:
+    """AMBIGUOUS_BIDDING_POLICY, correctable, naming the PACKAGE.
 
-    For a forbidden shape of two members no one member is at fault, so the pointer is where
-    a JSON Schema validator reports a failed root ``not``: the package-update object itself.
+    enums/error-code.json classifies the code correctable. Neither ``bidding`` nor
+    ``bid_price`` alone is at fault, so ``field`` is the package-update object itself.
     """
-    ctx["result"].assert_wire_error(
-        "INVALID_REQUEST",
-        field="packages[0]",
-        issues=[{"pointer": "/packages/0", "keyword": keyword}],
-    )
+    assert_wire_rejection(ctx, "AMBIGUOUS_BIDDING_POLICY", recovery="correctable", field="packages[0]")
 
 
 #: idempotency_key boundary rows -> the value sent. update-media-buy-request.json requires

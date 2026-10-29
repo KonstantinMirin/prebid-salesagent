@@ -2755,20 +2755,23 @@ Feature: BR-UC-003 Update Media Buy
       | budget_cap_timezone |
 
   @T-UC-003-package-update-bidding-with-bid-price @immutable_field_guard @error @schema-v3.1 @post-f2
-  Scenario: a package update carrying a bidding object beside bid_price is refused by the root not
+  Scenario: a package update carrying a bidding object beside bid_price is refused AMBIGUOUS_BIDDING_POLICY
     Given a valid update_media_buy request for "mb_existing"
     And the request includes a package update where the payload carries bidding with bid_price
     When the Buyer Agent sends the update_media_buy request
-    Then the update is refused INVALID_REQUEST naming the package update itself under keyword not
+    Then the update is refused AMBIGUOUS_BIDDING_POLICY naming the package update itself
     # LOCAL ADDITION. package-update.json's root `not` has one branch of two members:
     # required [bidding, bid_price] with bidding typed object. bid_price's own description:
     # "A package update MUST NOT supply both a non-null bidding object and bid_price. During
-    # migration, bidding:null MAY accompany bid_price". Both members are declared, so nothing
-    # stripped them and the update reached the capability refusal instead. No single member is
-    # at fault, so the pointer is the package object, where a JSON Schema validator reports a
-    # failed `not`.
+    # migration, bidding:null MAY accompany bid_price". The pinned enum has a code for exactly
+    # this condition, AMBIGUOUS_BIDDING_POLICY: "The same effective package combines the
+    # canonical bidding block with legacy bid_price ... Sellers MUST reject rather than
+    # choosing a winner. Recovery: correctable". Both members are declared, so nothing strips
+    # them; the refusal must come ahead of the UNSUPPORTED_FEATURE either member earns alone.
+    # No single member is at fault, so the field is the package object.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/not
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/bid_price
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/AMBIGUOUS_BIDDING_POLICY
 
   @T-UC-003-partition-immutable-package-field @partition @immutable_field_guard @schema-v3.1
   Scenario Outline: Immutable package-field guard partition validation - <partition>

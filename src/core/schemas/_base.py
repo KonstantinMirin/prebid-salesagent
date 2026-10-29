@@ -3487,6 +3487,14 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
     # model: see ``UpdateMediaBuyRequest._refuse_forbidden_package_shapes`` for why it has to
     # run there.
 
+    #: The one forbidden shape the pin answers with its own code rather than the schema
+    #: keyword's: a non-null ``bidding`` object beside ``bid_price``. enums/error-code.json
+    #: AMBIGUOUS_BIDDING_POLICY: "The same effective package combines the canonical bidding
+    #: block with legacy bid_price ... Sellers MUST reject rather than choosing a winner."
+    #: ``_refuse_forbidden_package_shapes`` leaves it to ``update_media_buy``, which raises
+    #: ``AdCPAmbiguousBiddingPolicyError``.
+    AMBIGUOUS_BIDDING_MEMBERS: ClassVar[tuple[str, ...]] = ("bidding", "bid_price")
+
     @model_validator(mode="before")
     @classmethod
     def _validate_package_update_shape(cls, data: Any) -> Any:
@@ -3659,6 +3667,13 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
         own description: "A package update MUST NOT supply both a non-null bidding object and
         bid_price"). The six were a hand-kept list, and the other three were accepted.
 
+        EXCEPT the bidding/bid_price pair. The pin gives that one its own code,
+        ``AMBIGUOUS_BIDDING_POLICY`` (enums/error-code.json; package-request.json's
+        ``bidding``: "Sellers MUST reject ... with AMBIGUOUS_BIDDING_POLICY"), and the owner's
+        rule is the specific code where one applies. Both members are declared properties, so
+        the strip cannot drop them and ``update_media_buy`` refuses the pair, above the UoW and
+        ahead of the capability refusal of either member alone.
+
         HERE, on the request, because it has to run BEFORE the accepted-shape strip
         (``BuyerRequest._accept_only_declared_fields``). Most of these members are not
         declared properties of package-update.json, so the strip removes them first: in dev
@@ -3674,9 +3689,9 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
         offender and ``field`` derives from ``issues[0]``, as core/error.json requires. The
         keyword is ``not``, the one in package-update.json that rejects them, because
         core/error.json's ``issues[].keyword`` is "the validator's native keyword name". The
-        pointer is the one member a single-member shape names; a shape of two members
-        (``bidding`` with ``bid_price``) has no one member at fault, so it names the package,
-        which is where a JSON Schema validator reports a failed ``not``.
+        pointer is the one member a single-member shape names; a shape of several members has
+        no one member at fault, so it names the package, which is where a JSON Schema
+        validator reports a failed ``not``.
         """
         from src.core.schemas._pinned_fields import package_update_forbidden_shapes
 
@@ -3694,7 +3709,8 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
             for index, package in enumerate(packages)
             if isinstance(package, dict)
             for required, objects in package_update_forbidden_shapes()
-            if all(name in package for name in required)
+            if required != AdCPPackageUpdate.AMBIGUOUS_BIDDING_MEMBERS
+            and all(name in package for name in required)
             and all(isinstance(package[name], dict) for name in objects if name in package)
         ]
         if errors:

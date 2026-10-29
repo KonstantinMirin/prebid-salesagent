@@ -29,6 +29,7 @@ from sqlalchemy import select
 
 from src.core.exceptions import (
     AdCPAdapterError,
+    AdCPAmbiguousBiddingPolicyError,
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
@@ -357,6 +358,24 @@ def _refuse_unapplied_package_fields(req: UpdateMediaBuyRequest) -> None:
                 raise AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(capability=name))
 
 
+def _refuse_ambiguous_bidding(req: UpdateMediaBuyRequest) -> None:
+    """Refuse a package update carrying a non-null ``bidding`` object beside ``bid_price``.
+
+    ``enums/error-code.json`` AMBIGUOUS_BIDDING_POLICY: "Sellers MUST reject rather than
+    choosing a winner." Raised ahead of :func:`_refuse_unapplied_package_fields`, which
+    would otherwise answer UNSUPPORTED_FEATURE for either member alone and hide the more
+    specific refusal. ``bidding: null`` beside ``bid_price`` is allowed by the pin and reads
+    as ``None`` here, so it passes. The members are read by attribute with no default, so a
+    pin that renames one fails loudly here instead of never matching.
+    """
+    for index, pkg_update in enumerate(req.packages or ()):
+        if all(getattr(pkg_update, name) is not None for name in AdCPPackageUpdate.AMBIGUOUS_BIDDING_MEMBERS):
+            raise AdCPAmbiguousBiddingPolicyError(
+                details=EntityRefDetails(package_id=pkg_update.package_id, package_index=index),
+                field=f"packages[{index}]",
+            )
+
+
 def _refuse_unsupported_actions(req: UpdateMediaBuyRequest) -> None:
     """Refuse an update asking for an action this seller does not perform, whatever the buy's state.
 
@@ -662,6 +681,7 @@ def _update_media_buy_impl(
 
     # Capability refusal, above the UoW for the same reason the webhook gates are: the spec
     # puts this rejection "before any mutation", so no transaction may be open when it fires.
+    _refuse_ambiguous_bidding(req)
     _refuse_unapplied_package_fields(req)
     _refuse_unsupported_actions(req)
 
