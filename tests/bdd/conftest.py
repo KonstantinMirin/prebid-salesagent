@@ -4366,6 +4366,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # replace or merge into, and the snapshot reads back only what the update wrote.
             # It grades replacement once create stores the catalogs core/package.json says
             # it echoes.
+            # XPASSED again on all four transports in innet_291026_0257, still vacuous for
+            # the same reason, so still not graduated. Create now records the request's
+            # catalogs in package_config (both arms of media_buy_create.py), so the update
+            # replaces a stored cat-1 and a merging seller would report both. Graduates on
+            # the first box run of that change that shows it passing on every transport.
             "T-UC-026-inv-201-1",
             "T-UC-026-inv-201-2",
             "T-UC-026-inv-201-3",
@@ -4499,16 +4504,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         #     already-paused rows now start from a package created paused, so a seller that
         #     ignored the resume reports the stored pause and fails.
         # The two "existing values preserved" REST rows stay routed below, with their own
-        # reason: their xpass is vacuous on the claim the row names.
+        # reason: their xpass is vacuous on the claim the row names. They XPASSED again in
+        # innet_291026_0257 on the same vacuous Then, so they are not graduated from it. The
+        # vacuity is now removed: the Given creates the package with catalogs, create records
+        # them in package_config, and _assert_unnamed_catalogs_preserved compares the
+        # snapshot's catalogs with the created ones (3.2.7 media-buy/package-update.json,
+        # "Omit to leave catalogs unchanged"). They graduate, with their a2a, mcp and
+        # e2e_rest siblings now graded by the same check, on the first box run of that change.
         _UC026_SHAPE_ROW_ANSWERED_UNSUPPORTED = (
             "answered UNSUPPORTED_FEATURE where the row expects INVALID_REQUEST, on a2a, mcp, "
             "rest and e2e_rest (innet_291026_0008)"
         )
         _UC026_PRESERVATION_UNGRADED = (
-            "the row claims existing array values are preserved, but the Given creates a package "
-            "with none and the effect check reads only the requested budget, so the xpass grades "
-            "nothing about preservation; seeding catalogs would not help yet, because create does "
-            "not persist catalogs into package_config"
+            "the row's xpass in innet_291026_0257 graded nothing about preservation (the package "
+            "was created with no catalogs); the Given now seeds catalogs, create persists them and "
+            "the effect check compares them, so this row graduates on the first box run that "
+            "measures that change"
         )
         _UC026_PARTITION_SELECTIVE: list[tuple[str, set[str], str]] = [
             # Moved here from _UC026_XFAIL_TAGS, narrowed from the whole tag to one row.
@@ -4675,9 +4686,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             ),
             # Replacement: creative_assignments/optimization_goals on every transport, plus
             # the REST "existing values preserved" rows, which are routed for their own
-            # reason (_UC026_PRESERVATION_UNGRADED). Their a2a, mcp and e2e_rest siblings pass
-            # unrouted on the same vacuous Then; a Given that seeds array values is what
-            # grades them, and it waits on create persisting catalogs.
+            # reason (_UC026_PRESERVATION_UNGRADED). Their a2a, mcp and e2e_rest siblings run
+            # unrouted; the Given now seeds catalogs and create persists them, so all four
+            # rows grade preservation (see the note above _UC026_SHAPE_ROW_ANSWERED_UNSUPPORTED).
             #
             # Graduated: replace_catalogs on every transport, and the REST siblings
             # [rest-replace_catalogs / [rest-catalogs provided / [rest-only scalar fields

@@ -229,7 +229,8 @@ def _affected_package(
     WHAT IS STILL MISSING, and why it is not here. The snapshot carries the three columns
     (``budget``, ``bid_price``, ``pacing``), the two ``package_config`` scalars this file
     already trusted (``product_id``, ``paused``) and the one ``package_config`` document
-    this tool itself writes (``catalogs``). It does NOT carry ``format_ids``,
+    written only from a validated request (``catalogs``, by create and by this tool). It
+    does NOT carry ``format_ids``,
     ``impressions``, ``start_time`` or ``end_time``, which also sit in ``package_config``:
     those are untyped blobs written by past clients, so reading them needs the
     corrupt-row tolerance ``get_media_buys`` owns (``_resolve_blob_field``, which answers a
@@ -265,8 +266,9 @@ def _affected_package(
         # THIS session, so the row already answers with what this update applied.
         pacing=stored.pacing if stored is not None else None,
         product_id=config.get("product_id"),
-        # Written by the catalogs branch below and by nothing else, so the stored document
-        # is this tool's own shape — not a blob some past client's create left behind.
+        # Written by create_media_buy from the validated request and by the catalogs branch
+        # below, both from the pinned core/catalog.json model, so the stored document has
+        # one shape -- not a blob some past client left behind.
         catalogs=config.get("catalogs"),
     )
 

@@ -1632,11 +1632,17 @@ def given_boundary_paused(ctx: dict, boundary_point: str) -> None:
 # --- Replacement semantics partition/boundary ---
 
 
+#: The catalogs a "preserved" row creates its package with, so the update that omits every
+#: array field has a stored list to leave unchanged -- and a seller that dropped it fails.
+_PRESERVED_CATALOGS: list[dict[str, str]] = [{"type": "product", "catalog_id": "cat-kept"}]
+
+
 @given(parsers.re(r"a package update request per replacement semantics (?P<partition>.+)"))
 def given_partition_replacement(ctx: dict, partition: str) -> None:
     """Build update request per partition for replacement semantics."""
-    update_kwargs, pkg_update = _setup_update_partition(ctx)
     partition = partition.strip()
+    seed = {"catalogs": _PRESERVED_CATALOGS} if partition == "omit_array_fields" else {}
+    update_kwargs, pkg_update = _setup_update_partition(ctx, **seed)
     if partition == "replace_catalogs":
         pkg_update["catalogs"] = [{"type": "store", "catalog_id": "cat-new"}]
     elif partition == "replace_optimization_goals":
@@ -1656,8 +1662,9 @@ def given_partition_replacement(ctx: dict, partition: str) -> None:
 @given(parsers.parse("a package update request per replacement boundary {boundary_point}"))
 def given_boundary_replacement(ctx: dict, boundary_point: str) -> None:
     """Build update request per boundary for replacement semantics."""
-    update_kwargs, pkg_update = _setup_update_partition(ctx)
     bp = boundary_point.strip()
+    seed = {"catalogs": _PRESERVED_CATALOGS} if "all array fields omitted" in bp else {}
+    update_kwargs, pkg_update = _setup_update_partition(ctx, **seed)
     if "catalogs provided" in bp:
         pkg_update["catalogs"] = [{"type": "store", "catalog_id": "cat-new"}]
     elif "optimization_goals provided" in bp:
@@ -2138,6 +2145,40 @@ def _assert_keyword_op(pkg: Any, overlay_field: str, entries: list, *, present: 
             assert hit is None, f"Requested removal of ({keyword!r}, {match_type!r}) left it in {overlay_field}"
 
 
+def _catalog_identities(catalogs: list) -> list[tuple[str, Any]]:
+    """The (type, catalog_id) pairs of *catalogs*, sorted: what the buyer named each catalog by."""
+    pairs = []
+    for item in catalogs:
+        doc = _normalize_item(item)
+        kind = doc.get("type")
+        pairs.append((str(getattr(kind, "value", kind)), doc.get("catalog_id")))
+    return sorted(pairs)
+
+
+def _assert_unnamed_catalogs_preserved(ctx: dict, pkg: Any, want: dict[str, Any]) -> None:
+    """An update that does not name catalogs reports the catalogs the package was created with.
+
+    3.2.7 media-buy/package-update.json on ``catalogs``: "Omit to leave catalogs unchanged",
+    and media-buy/update-media-buy-response.json makes ``affected_packages`` "full Package
+    objects showing complete post-update state". Applies only to an update of a package the
+    scenario created with catalogs (``ctx["existing_package"]`` is the create echo), so the
+    preserved list is the one the Given sent rather than an empty one a dropped list matches.
+    """
+    existing = ctx.get("existing_package")
+    created = _pkg_field(existing, "catalogs") if existing is not None and ctx.get("update_kwargs") else None
+    if not created or "catalogs" in want:
+        return
+    actual = _pkg_field(pkg, "catalogs")
+    assert actual, (
+        f"the package was created with catalogs {_catalog_identities(created)} and the update did "
+        "not name catalogs, yet the snapshot carries none"
+    )
+    assert _catalog_identities(actual) == _catalog_identities(created), (
+        f"catalogs changed by an update that did not name them: created {_catalog_identities(created)}, "
+        f"now {_catalog_identities(actual)}"
+    )
+
+
 def _assert_requested_package_effects(ctx: dict) -> None:
     """Assert the response package reflects every field the request asked for.
 
@@ -2157,6 +2198,7 @@ def _assert_requested_package_effects(ctx: dict) -> None:
 
     for index, want in enumerate(requested):
         pkg = packages[index] if index < len(packages) else packages[0]
+        _assert_unnamed_catalogs_preserved(ctx, pkg, want)
         for field, value in want.items():
             if field in ("keyword_targets_add", "negative_keywords_add"):
                 _assert_keyword_op(pkg, field.removesuffix("_add"), value, present=True)

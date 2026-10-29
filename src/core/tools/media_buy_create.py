@@ -3429,6 +3429,7 @@ async def _create_media_buy_impl(
                         "targeting_overlay": req_pkg.targeting_overlay,
                         "creative_ids": _get_creative_ids(req_pkg),
                         "format_ids": req_pkg.format_ids,
+                        "catalogs": req_pkg.catalogs,
                         # The same two fields the auto path records, from the same source and
                         # through the same helper -- so a parked buy and an executed one
                         # answer one obligation rather than two. ``minItems: 1`` on
@@ -4123,6 +4124,13 @@ async def _create_media_buy_impl(
                         "targeting_overlay": getattr(resp_package, "targeting_overlay", None),
                         "creative_ids": getattr(resp_package, "creative_ids", None),
                         "creative_assignments": getattr(resp_package, "creative_assignments", None),
+                        # The buyer's catalogs, recorded so a later update_media_buy can
+                        # report them: its affected_packages are "full Package objects
+                        # showing complete post-update state" (media-buy/
+                        # update-media-buy-response.json), and an update that does not name
+                        # catalogs leaves them as created (media-buy/package-update.json:
+                        # "Omit to leave catalogs unchanged").
+                        "catalogs": request_pkg.catalogs if request_pkg else None,
                         "formats_to_provide": list(pkg_snapshots) or None,
                         "format_ids_to_provide": _legacy_formats_to_provide(pkg_snapshots, request_pkg),
                         "paused": paused,  # Store paused state
