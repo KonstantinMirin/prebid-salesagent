@@ -289,12 +289,13 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      # 60s, not creative-agent's 30s (below) -- adcp-server does more work
-      # at startup (DB migrations, etc.) and is the service that actually
-      # showed this bug live: marked genuinely UNHEALTHY (not just
-      # `starting`) under heavy concurrent test-suite load, because there
-      # was no grace period for Docker to report `starting` during
-      start_period: 60s
+      # adcp-server replays the whole migration chain on a fresh database before it
+      # listens: about 120s from container start on the CI box (2026-10-29), against
+      # a 60s grace period plus three 30s probes. One run crossed that 150s line and
+      # failed the stack as unhealthy. The grace period now covers the replay, and the
+      # 5s start_interval marks a ready server healthy without waiting out a 30s interval.
+      start_period: 300s
+      start_interval: 5s
 
   # ─── The agent the STORYBOARD grades, and only the storyboard ───────────────
   #
