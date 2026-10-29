@@ -1835,6 +1835,12 @@ Feature: BR-UC-002 Create Media Buy
     # created_at; sort.direction defaults to desc. "domain" is not a sort field: the pin names
     # that axis protocol.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/list-tasks-request.json pointer=/properties/sort
+    # The protocol row claims no order. The only task types this seller lists are
+    # create_media_buy, update_media_buy and sync_creatives, and the pin puts all three in
+    # the media-buy domain, so every task has the same protocol and any order is "sorted by
+    # protocol". The row grades what can be observed: sort.field protocol is accepted, and
+    # every task is listed with its pinned task_type, status and domain.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/task-type.json pointer=/enumDescriptions
 
     Examples: Valid partitions
       | partition       | outcome                               |
@@ -1842,7 +1848,7 @@ Feature: BR-UC-002 Create Media Buy
       | updated_at      | tasks sorted by updated_at desc        |
       | status          | tasks sorted by status desc            |
       | task_type       | tasks sorted by task_type desc         |
-      | protocol        | tasks sorted by protocol desc          |
+      | protocol        | tasks of every protocol                |
       | omitted         | tasks sorted by created_at desc        |
 
     Examples: Invalid partitions
@@ -2351,11 +2357,14 @@ Feature: BR-UC-002 Create Media Buy
     # sort.field enum [created_at, updated_at, status, task_type, protocol]: protocol, not
     # domain, is the last member.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/list-tasks-request.json pointer=/properties/sort
+    # The protocol row claims no order: every task this seller lists is in the media-buy
+    # domain; the partition outline above says why.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/task-type.json pointer=/enumDescriptions
 
     Examples: Boundary values
       | boundary_point                            | config          | outcome                                          |
       | created_at (first enum value, default)    | created_at      | tasks sorted by created_at desc                  |
-      | protocol (last enum value)                | protocol        | tasks sorted by protocol desc                    |
+      | protocol (last enum value)                | protocol        | tasks of every protocol                          |
       | Not provided (uses default created_at)    | omitted         | tasks sorted by created_at desc                  |
       | priority (not in enum)                    | priority        | error INVALID_REQUEST correctable on sort.field  |
 
