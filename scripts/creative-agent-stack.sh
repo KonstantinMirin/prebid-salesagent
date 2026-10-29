@@ -31,8 +31,21 @@ ADCP_PIN="8d1d3244b2ef"
 # the wrong agent after a bump). The un-keyed alias is what
 # docker-compose.e2e.yml and the standalone `up` path run; _ensure_image
 # repoints it at this pin before every run.
+#
+# The tag also carries a checksum of this file's two source patches below (the Fly size check
+# and the MCP rate limit), read from the script's own text. Changing either patch changes the
+# tag, locally and on ghcr.io, so no host reuses an image built with an older patch or with
+# none (an image from before the rate-limit patch carries the bare pin as its tag).
+_PATCHES="$(awk '/^(_dockerfile_without_fly_size_check|_raise_mcp_rate_limit)[(][)] [{]$/ { n++; on = 1 }
+                 on { print }
+                 on && /^}$/ { on = 0 }
+                 END { exit n == 2 ? 0 : 1 }' "${BASH_SOURCE[0]}")" || {
+    echo "[creative-agent] ERROR: the source patch functions were not found in ${BASH_SOURCE[0]}" >&2
+    exit 1
+}
+IMAGE_TAG="${ADCP_PIN}-p$(printf '%s\n' "$_PATCHES" | cksum | cut -d' ' -f1)"
 IMAGE_ALIAS="adcp-creative-agent"
-IMAGE="${IMAGE_ALIAS}:${ADCP_PIN}"
+IMAGE="${IMAGE_ALIAS}:${IMAGE_TAG}"
 NET="creative-net"
 PG="adcp-postgres"
 AGENT="creative-agent"
@@ -92,10 +105,11 @@ _ensure_tarball() {
         echo "[creative-agent] fetching adcp@${ADCP_PIN}"
         _retry 3 _fetch_tarball
     fi
+    _raise_mcp_rate_limit
 }
 
 _ghcr_ref() {
-    echo "${CREATIVE_AGENT_GHCR_IMAGE}:${ADCP_PIN}"
+    echo "${CREATIVE_AGENT_GHCR_IMAGE}:${IMAGE_TAG}"
 }
 
 _ghcr_image_exists() {
@@ -122,6 +136,34 @@ _dockerfile_without_fly_size_check() {
          skip { if ($0 !~ /\\$/) skip = 0; next }
          { print }' "${SRC}/Dockerfile" > "$out"
     echo "$out"
+}
+
+# The reference agent limits POST /api/creative-agent/mcp to 60 requests a minute per client IP
+# (mcpRateLimiter in server/src/creative-agent/index.ts). Every test reaches it from one address
+# and one seller preview costs about five of those requests, so the serial in-network BDD run
+# sends up to 155 a minute (CI run 40822932801) and the excess comes back 429. This copy of the
+# source raises that one limiter's max to 1000, about six times the measured peak, so a growing
+# suite or a local run with several workers still fits. Nothing else changes; the preview-asset
+# limiter (30 a minute) is left alone because no run has tripped it. Upstream request to make
+# both limits configurable: adcontextprotocol/adcp#8574. Remove this once a release that carries
+# it is pinned.
+#
+# index.ts is rewritten from a pristine copy saved on first use, so a cached source tree is
+# patched once and only once. The build fails when the limiter's text is not found: a pin that
+# moved or renamed the limiter must not build an image that silently keeps the old limit.
+_raise_mcp_rate_limit() {
+    local file="${SRC}/server/src/creative-agent/index.ts"
+    local pristine="${SRC}/creative-agent-index.ts.orig"
+    [ -f "$pristine" ] || cp "$file" "$pristine"
+    if ! awk '/^  const mcpRateLimiter = rateLimit[(][{]$/ { limiter = 1 }
+              limiter && /^    max: 60,$/ { sub(/60/, "1000"); raised++ }
+              limiter && /^  [}][)];$/ { limiter = 0 }
+              { print }
+              END { exit raised == 1 ? 0 : 1 }' "$pristine" > "$file"; then
+        echo "[creative-agent] ERROR: 'max: 60,' in mcpRateLimiter not found in ${file}" \
+            "(adcp@${ADCP_PIN}); update _raise_mcp_rate_limit for this pin" >&2
+        return 1
+    fi
 }
 
 _build_image_local() {
