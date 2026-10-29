@@ -37,6 +37,7 @@ from src.core.exceptions import (
 )
 from src.core.schemas import (
     Error,
+    TargetingInput,
     UpdateMediaBuyRequest,
     UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
@@ -1540,12 +1541,16 @@ class TestUC003UpdateTargetingOverlay:
     """Targeting overlay update obligations."""
 
     def test_update_targeting_overlay_on_package(self):
-        """Targeting overlay replaces existing targeting in package_config.
+        """Targeting overlay patches the stored overlay per dimension in package_config.
+
+        update_media_buy.mdx (Package Update Object, targeting_overlay): "Omit the overlay
+        or a dimension inside it to leave that dimension unchanged; provide a non-null
+        value to replace it".
 
         Covers: UC-003-ALT-UPDATE-TARGETING-OVERLAY-01
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            mock_pkg = stub_package_row(package_config={"targeting_overlay": {"old": True}})
+            mock_pkg = stub_package_row(package_config={"targeting_overlay": {"geo_regions": ["US-NY"]}})
             env.mock["uow"].return_value.media_buys.get_package.return_value = mock_pkg
 
             identity = env.identity
@@ -1558,9 +1563,11 @@ class TestUC003UpdateTargetingOverlay:
             result = _update_media_buy_impl(req=req, identity=identity)
 
             assert isinstance(result, UpdateMediaBuySuccess)
-            # targeting_overlay should have been replaced (stored as Pydantic model or dict)
+            # The sent dimension replaces its value; the stored dimension the update omitted survives.
             stored = mock_pkg.package_config["targeting_overlay"]
-            assert stored is not None
+            assert [region.root for region in stored.geo_regions] == ["US-NY"]
+            assert [country.root for country in stored.geo_countries] == ["US"]
+            assert stored == TargetingInput(geo_regions=["US-NY"], geo_countries=["US"])
 
     def test_targeting_update_no_adapter_call(self):
         """Targeting changes are database-only; no adapter call.

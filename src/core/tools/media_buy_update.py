@@ -53,6 +53,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.context_manager import get_context_manager
 from src.core.database.models import (
     MediaBuy,
+    MediaPackage,
     ObjectWorkflowMapping,
     PersistedMediaBuyStatus,
 )
@@ -76,6 +77,7 @@ from src.core.schemas import (
     AffectedPackage,
     CreativeFormatIdentity,
     SyncCreativesRequest,
+    TargetingInput,
     UpdateMediaBuyRequest,
     UpdateMediaBuyResult,
     UpdateMediaBuySubmitted,
@@ -446,6 +448,24 @@ def _replace_package_assignments(
         elif assignment.inline or not inline:
             uow.assignments.delete_row(assignment)
     return {assignment.creative_id for assignment in existing}
+
+
+def _patched_overlay(package: MediaPackage | None, overlay: TargetingInput) -> TargetingInput:
+    """The package's stored overlay patched by the dimensions *overlay* sends.
+
+    update_media_buy.mdx (Package Update Object, targeting_overlay): "Omit the overlay or a
+    dimension inside it to leave that dimension unchanged; provide a non-null value to
+    replace it; provide ``null`` to clear it." The dimensions the buyer sent, an explicit
+    null among them, are the overlay's ``model_fields_set``; every other stored dimension is
+    kept. A package that does not exist has nothing stored, so the sent overlay is the result.
+
+    The cross-dimension rules run on this result and this result is what gets stored, so the
+    overlay that is validated is the overlay that is stored: a stored ``geo_regions`` plus a
+    sent ``geo_regions_exclude`` of the same value is the overlap create_media_buy refuses.
+    """
+    stored = (package.package_config.get("targeting_overlay") or {}) if package is not None else {}
+    kept = {name: value for name, value in stored.items() if value is not None}
+    return TargetingInput.model_validate(kept | {name: getattr(overlay, name) for name in overlay.model_fields_set})
 
 
 def _validate_creatives_for_assignment(
@@ -831,11 +851,22 @@ def _update_media_buy_impl(
                 # Run the same per-package targeting validators the create path runs, so a buyer
                 # can't bypass unknown-field rejection, managed-only dimension checks, or
                 # same-value geo inclusion/exclusion overlap by sending changes through update.
+                # The rules run on the stored overlay as the update patches it, and the write
+                # below stores exactly that patched overlay.
                 overlay_violations: dict[str, object] = {}
+                patched_overlays: dict[str, TargetingInput] = {}
                 for pkg_update in req.packages:
                     if pkg_update.targeting_overlay is None:
                         continue
-                    overlay_violations.update(collect_targeting_violations(pkg_update.targeting_overlay))
+                    stored_package = (
+                        uow.media_buys.get_package(req.media_buy_id, pkg_update.package_id)
+                        if pkg_update.package_id
+                        else None
+                    )
+                    patched = _patched_overlay(stored_package, pkg_update.targeting_overlay)
+                    if pkg_update.package_id:
+                        patched_overlays[pkg_update.package_id] = patched
+                    overlay_violations.update(collect_targeting_violations(patched))
                 if overlay_violations:
                     # Canonical code per the generated storyboard (UC-002 @ext-f and UC-003
                     # @*-targeting-overlay both grade targeting validation as INVALID_REQUEST);
@@ -1472,24 +1503,10 @@ def _update_media_buy_impl(
                         # property_targeting_allowed validation runs earlier (before dry_run gate);
                         # by this point the request is known-valid against that rule.
 
-                        # A per-dimension patch of the stored overlay. update_media_buy.mdx
-                        # (Package Update Object, targeting_overlay): "Omit the overlay or a
-                        # dimension inside it to leave that dimension unchanged; provide a
-                        # non-null value to replace it; provide `null` to clear it." The
-                        # dimensions the buyer sent, an explicit null among them, are the
-                        # overlay's ``model_fields_set``; every other stored dimension is kept.
-                        # The model is stored directly: the engine's pydantic_core.to_json
-                        # serializer handles it.
-                        overlay = pkg_update.targeting_overlay
-                        stored_overlay = media_package.package_config.get("targeting_overlay") or {}
-                        kept = {
-                            name: value
-                            for name, value in stored_overlay.items()
-                            if value is not None and name in type(overlay).model_fields
-                        }
-                        media_package.package_config["targeting_overlay"] = type(overlay).model_validate(
-                            kept | {name: getattr(overlay, name) for name in overlay.model_fields_set}
-                        )
+                        # The per-dimension patch the targeting rules validated before the
+                        # dry_run gate (``_patched_overlay``). The model is stored directly:
+                        # the engine's pydantic_core.to_json serializer handles it.
+                        media_package.package_config["targeting_overlay"] = patched_overlays[pkg_update.package_id]
                         # Flag the JSON field as modified so SQLAlchemy persists it
                         attributes.flag_modified(media_package, "package_config")
                         session.flush()

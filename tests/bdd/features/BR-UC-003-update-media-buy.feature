@@ -1868,6 +1868,12 @@ Feature: BR-UC-003 Update Media Buy
       | frequency_cap_missing_fields | {"frequency_cap": {"max_impressions": 3}}                                              | error "INVALID_REQUEST" with suggestion       |
       | keyword_duplicate            | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}, {"keyword": "shoes", "match_type": "broad"}]} | error "INVALID_REQUEST" with suggestion |
       | keyword_targeting            | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}]}                     | error "UNSUPPORTED_FEATURE" on packages[0].targeting_overlay.keyword_targets with suggestion |
+      | stored_geo_overlap           | {"geo_regions_exclude": ["US-NY"]}                                                     | error "INVALID_REQUEST" with suggestion       |
+    # stored_geo_overlap: the sent overlay alone has no overlap, but it patches the package's
+    # effective targeting, which already holds geo_regions ["US-NY"] from the earlier update.
+    # core/targeting.json geo_regions_exclude: "values also present in geo_regions are
+    # invalid", so the patched result is refused rather than stored.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/geo_regions_exclude
     # LOCAL CORRECTION, three parts.
     # (1) The valid rows asserted a bare "success", which a seller that dropped the overlay
     # answers too. An update's overlay is a per-dimension patch (update_media_buy.mdx, Package
