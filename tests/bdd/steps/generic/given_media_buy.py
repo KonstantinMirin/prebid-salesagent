@@ -232,6 +232,31 @@ def _sync_adapter_error_to_db(
     set_adapter_test_behavior(env, tenant.tenant_id, **kwargs)
 
 
+def set_update_adapter_outcome(ctx: dict, error: Exception | None) -> None:
+    """Make the adapter the UPDATE path calls succeed (``error`` None) or raise ``error``.
+
+    In process that adapter is ``env.mock['update_adapter']`` (MediaBuyDualEnv); the
+    create-module ``env.mock['adapter']`` is never asked during an update, so a Given
+    that configured only that one changed nothing the update could observe. Success
+    restores the harness's own adapter contract rather than clearing the side effect,
+    which would leave a bare MagicMock as the adapter's answer. The DB knob carries the
+    same outcome to the live server's mock adapter on e2e_rest, which raises its
+    default transient class (SERVICE_UNAVAILABLE) — the class given here in process.
+    """
+    from tests.harness._mixins import make_adapter_update_side_effect
+
+    env = ctx["env"]
+    if "update_adapter" in env.mock:
+        env.mock["update_adapter"].return_value.update_media_buy.side_effect = (
+            make_adapter_update_side_effect() if error is None else error
+        )
+    _sync_adapter_error_to_db(
+        ctx,
+        fail_on_update=error is not None,
+        error_message=None if error is None else "Ad server returned error during update",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Tenant configuration
 # ═══════════════════════════════════════════════════════════════════════
@@ -1438,10 +1463,32 @@ def _set_minimums(ctx: dict, *, product_min: float | None, tenant_min: float | N
     po = ctx["default_pricing_option"]
     po.min_spend_per_package = Decimal(str(product_min)) if product_min is not None else None
 
-    # Tenant-level minimum: the tenant's existing USD CurrencyLimit row.
+    _set_tenant_min_package_budget(env, tenant_min)
+
+
+def _set_tenant_min_package_budget(env: Any, tenant_min: float | None) -> None:
+    """Write the tenant's USD ``CurrencyLimit.min_package_budget`` (None clears it).
+
+    The tenant-level seller minimum, on its existing USD row; committed through the env,
+    so on e2e_rest it is the live server's row that changes.
+    """
     cl = env.get_currency_limit("USD")
     cl.min_package_budget = Decimal(str(tenant_min)) if tenant_min is not None else None
     env._commit_factory_data()
+
+
+@given("the tenant sets no min_package_budget")
+def given_no_tenant_min_package_budget(ctx: dict) -> None:
+    """Clear the seller's tenant-level package minimum (the seeded tenant's is 100).
+
+    For rows that grade the request's own budget rules: with the minimum in place, any
+    amount under 100 is refused BUDGET_TOO_LOW by it, so a 0.01 row could not succeed and
+    a 0 row passed whether or not the positivity rule ran.
+    """
+    _set_tenant_min_package_budget(ctx["env"], None)
+    assert ctx["env"].get_currency_limit("USD").min_package_budget is None, (
+        "step claims the tenant sets no min_package_budget, but its USD CurrencyLimit still has one"
+    )
 
 
 @given(parsers.parse("the minimum spend scenario is {partition}"))
@@ -3138,9 +3185,9 @@ def given_adapter_success(ctx: dict) -> None:
     else:
         # Fallback: just clear error injection; return_value may already be set
         mock_adapter.create_media_buy.side_effect = None
-    mock_adapter.update_media_buy.side_effect = None
-    # Also reset DB test_behavior so Docker adapter stops raising errors
-    _sync_adapter_error_to_db(ctx, fail_on_create=False, fail_on_update=False)
+    # The update path's adapter, in process and (through the DB knob, which also clears
+    # fail_on_create) on the live server.
+    set_update_adapter_outcome(ctx, None)
 
 
 @given("a create_media_buy request")

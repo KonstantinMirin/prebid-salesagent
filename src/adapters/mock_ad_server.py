@@ -1,7 +1,6 @@
 import logging
 import random
 from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -1457,13 +1456,17 @@ class MockAdServer(AdServerAdapter):
         packages". This method used to return ``[]`` unconditionally — including out of
         the branch that had just rewritten a package's budget.
 
-        The mock's simulated ad server IS the stored package: ``package_config`` is where
-        it records a budget change, and ``paused`` there is what ``get_media_buys`` serves
-        back (``media_buy_list.py:343``). So the two package-level actions write that
-        record and report it, and the actions that touch no package report the empty array
-        the pin permits, because for them it is true:
+        The mock's simulated ad server IS the stored package: ``paused`` in
+        ``package_config`` is what ``get_media_buys`` serves back (``media_buy_list.py:343``).
+        The two package-level actions report that package, and the actions that touch no
+        package report the empty array the pin permits, because for them it is true:
 
-        * ``update_package_budget`` — writes the budget, reports that package.
+        * ``update_package_budget`` — writes NOTHING and reports that package with the
+          budget it was called with. The update tool writes ``media_packages.budget``
+          inside the request's unit of work after this call returns, so the write rolls
+          back with a later refusal; a second write here, committed in its own session,
+          survived that rollback and could store a different value (``budget`` arrives
+          as an ``int``).
         * ``pause_package`` / ``resume_package`` — write ``paused``, report that package.
           Nothing recorded a package's pause state on update before this (no update path
           under ``src/`` wrote ``package_config["paused"]``), so a pause neither stuck nor
@@ -1491,18 +1494,17 @@ class MockAdServer(AdServerAdapter):
         # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
         self._raise_injected_failure("fail_on_update")
 
-        # One place decides what this action changes about a package record, so the write
-        # and the report below cannot disagree about whether anything happened.
-        change: tuple[str, str, Any] | None = None  # (package_id, package_config key, value)
+        # One place decides which package this action reports and whether the mock writes
+        # its pause state, so the write and the report below cannot disagree.
+        paused_value: bool | None = None
         if action == "update_package_budget" and package_id and budget is not None:
-            change = (package_id, "budget", float(budget))
+            changed_package_id = package_id
         elif action in ("pause_package", "resume_package") and package_id:
-            change = (package_id, "paused", action == "pause_package")
-
-        if change is None:
+            changed_package_id = package_id
+            paused_value = action == "pause_package"
+        else:
             return AdapterUpdateResult(media_buy_id=media_buy_id, affected_packages=[])
 
-        changed_package_id, config_key, config_value = change
         with get_db_session() as session:
             repo = MediaBuyRepository(session, self.tenant_id)
             media_package = repo.get_package(media_buy_id, changed_package_id)
@@ -1517,28 +1519,27 @@ class MockAdServer(AdServerAdapter):
                     details=EntityRefDetails(package_id=changed_package_id, media_buy_id=media_buy_id)
                 )
 
-            media_package.package_config[config_key] = config_value
-            if config_key == "budget":
-                # The dedicated column is what get_media_buys reads (media_buy_list.py:338),
-                # so writing only the JSON left the two halves of one package disagreeing
-                # about its budget. update_media_package_fields is NOT the helper for this:
-                # called with budget alone it also nulls bid_price and pacing.
-                media_package.budget = Decimal(str(config_value))
-            # Flag the JSON field as modified so SQLAlchemy persists it
-            attributes.flag_modified(media_package, "package_config")
-            session.commit()
-            logger.info(f"[MockAdapter] Set package {changed_package_id} {config_key} to {config_value}")
+            if paused_value is not None:
+                media_package.package_config["paused"] = paused_value
+                # Flag the JSON field as modified so SQLAlchemy persists it
+                attributes.flag_modified(media_package, "package_config")
+                session.commit()
+                logger.info(f"[MockAdapter] Set package {changed_package_id} paused to {paused_value}")
 
             return AdapterUpdateResult(
                 media_buy_id=media_buy_id,
                 affected_packages=[
                     AffectedPackage(
                         package_id=changed_package_id,
-                        # Read back off the record just written, never a plausible default:
-                        # a budget update reports the pause state the package really has,
-                        # and a pause reports the value this call stored.
+                        # Read off the record, never a plausible default: a budget update
+                        # reports the pause state the package really has, and a pause
+                        # reports the value this call stored.
                         paused=bool(media_package.package_config.get("paused", False)),
-                        budget=float(media_package.budget) if media_package.budget is not None else None,
+                        # A budget update reports the budget it was called with (the tool
+                        # writes the record); a pause reports the stored one.
+                        budget=float(budget)
+                        if budget is not None
+                        else (float(media_package.budget) if media_package.budget is not None else None),
                         product_id=media_package.package_config.get("product_id"),
                     )
                 ],

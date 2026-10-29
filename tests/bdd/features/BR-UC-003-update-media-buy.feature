@@ -1309,6 +1309,7 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | <amount> |
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
+    And the tenant sets no min_package_budget
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
@@ -1321,6 +1322,10 @@ Feature: BR-UC-003 Update Media Buy
     # LOCAL CORRECTION: "amount negative" asserted BUDGET_TOO_LOW. The pinned package-update.json
     # gives budget "minimum": 0, so -1 is a schema violation, answered INVALID_REQUEST.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/budget
+    # LOCAL CORRECTION: the outline grades the request's budget boundaries, which the pin sets
+    # at "minimum": 0; a seller's own package minimum is policy layered on top. The seeded
+    # tenant's min_package_budget of 100 refused 0.01 BUDGET_TOO_LOW and made the 0 row pass
+    # with or without the positivity rule, so the outline clears it.
 
   @T-UC-003-partition-daily-spend-cap @partition @daily_spend_cap
   Scenario Outline: Daily spend cap partition validation - <partition>
@@ -2181,14 +2186,22 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition               | placement_config                       | outcome |
-      | all_valid_for_product   | placement_ids=[plc_a, plc_b] (valid)   | success |
-      | no_placement_ids        | no placement_ids specified             | success |
+      | partition               | placement_config                       | outcome                                                           |
+      | all_valid_for_product   | placement_ids=[plc_a, plc_b] (valid)   | success with each assignment's placement_ids stored as requested |
+      | no_placement_ids        | no placement_ids specified             | success with each assignment's placement_ids stored as requested |
 
     Examples: Invalid partitions
       | partition                    | placement_config                              | outcome                                          |
       | invalid_placement_id         | placement_ids=[plc_invalid] (not in product)  | error "VALIDATION_ERROR" with suggestion     |
       | product_no_placement_support | placement_ids=[plc_a] (product unsupported)   | error "UNSUPPORTED_FEATURE" with suggestion     |
+    # LOCAL CORRECTION: the two valid rows read "success", which checked only that some
+    # response came back. A placement_id routes a creative "within already-purchased
+    # inventory", so the success the rows claim is the routing the seller recorded: the
+    # outcome now reads the package's stored assignments back. The product declares
+    # plc_a and plc_b (mode included, which every package buys) on every row but the
+    # unsupported one, so the rows differ in the product as well as in the request.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-assignment.json pointer=/properties/placement_ids
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/mode
 
   @T-UC-003-boundary-placement-id @boundary @placement_id_validation
   Scenario Outline: Placement ID validation boundary - <boundary_point>

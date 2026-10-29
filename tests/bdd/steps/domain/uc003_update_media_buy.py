@@ -149,6 +149,22 @@ def _stored_package(ctx: dict, label: str) -> tuple[Any, dict[str, Any]]:
         return row.budget, dict(row.package_config or {})
 
 
+def _stored_assignment_routing(ctx: dict, label: str) -> dict[str, list[str] | None]:
+    """``{creative_id: placement_ids}`` of the assignments persisted on package *label*.
+
+    Read through ``MediaBuyUoW`` for the reason ``_stored_package`` gives: the claim is
+    what the seller recorded, and on e2e_rest only the live server's database holds it.
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    mb = _existing_media_buy(ctx)
+    package_id = _resolve_package_id(ctx, label)
+    with MediaBuyUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.assignments is not None
+        rows = uow.assignments.get_by_media_buy_and_package(mb.media_buy_id, package_id)
+        return {row.creative_id: row.placement_ids for row in rows}
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — Background + request construction
 # ═══════════════════════════════════════════════════════════════════════
@@ -2107,28 +2123,9 @@ def given_creative_assignments_with_state(ctx: dict, creative_state: str) -> Non
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _package_product(ctx: dict) -> Any:
-    """The product the Background's package was bought from: the row whose placements it uses."""
-    product = ctx.get("default_product")
-    if product is None:
-        # UC-003 harness doesn't store product in ctx — look up from existing package
-        pkg_obj = ctx.get("existing_package")
-        if pkg_obj is not None:
-            product_id = (pkg_obj.package_config or {}).get("product_id")
-            if product_id:
-                from sqlalchemy import select
-
-                from src.core.database.models import Product as ProductModel
-
-                with db_session(ctx) as session:
-                    product = session.scalars(
-                        select(ProductModel).filter_by(product_id=product_id, tenant_id=ctx["tenant"].tenant_id)
-                    ).first()
-    assert product is not None, (
-        "Scenario names the package's product's placements but no product found in ctx or DB — "
-        "ensure a Given step sets ctx['default_product'] or the harness creates a product"
-    )
-    return product
+#: The placements the package's product declares on the placement-validation rows; the
+#: '(valid)' row names exactly these, the '(not in product)' row names one outside them.
+_PRODUCT_PLACEMENT_IDS = ("plc_a", "plc_b")
 
 
 @given(
@@ -2142,8 +2139,20 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
     - 'no placement_ids specified' — no placement_ids
     - 'placement_ids=[plc_invalid] (not in product)' — invalid IDs
     - 'placement_ids=[plc_a] (product unsupported)' — product doesn't support placements
+
+    The PRODUCT is part of every row's fixture, because the rows differ in it: the
+    package's product declares the placements ``plc_a`` and ``plc_b`` on every row but
+    '(product unsupported)', where it declares none. Seeded only on that row, the product
+    had no placements anywhere, so '(valid)' and '(not in product)' were refused
+    UNSUPPORTED_FEATURE and the unsupported row passed whether or not its own fixture ran.
+    The placements are ``mode: included``: pinned core/placement.json (v3.2.7) makes an
+    included placement "fixed product inventory" that every package buys, and creative
+    assignments "may then route creatives only within the purchased set" — a
+    ``targetable`` one is purchased only through placement_selection.
     """
     import re
+
+    from tests.factories.product import StoredPlacementFactory
 
     env = ctx["env"]
     kwargs = _ensure_update_defaults(ctx)
@@ -2169,22 +2178,19 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
             assignment["placement_ids"] = placement_ids
             ctx["referenced_placement_ids"] = placement_ids
 
-    # The package's product decides which placement_ids exist. Every configuration that sends
-    # placement_ids starts from a product defining plc_a and plc_b, so a valid id is one the
-    # product defines and an invalid one is one it does not. "(product unsupported)" then
-    # clears them: a product with no placements refuses every placement_id with
-    # UNSUPPORTED_FEATURE, and without the clear plc_a is a valid id and that row succeeds.
-    if "placement_ids" in assignment:
-        from tests.factories.product import StoredPlacementFactory
-
-        product = _package_product(ctx)
-        product.placements = [
-            StoredPlacementFactory(placement_id="plc_a"),
-            StoredPlacementFactory(placement_id="plc_b"),
-        ]
-        if "product unsupported" in stripped:
-            product.placements = None
-        env._commit_factory_data()
+    # The package's product: the one the update path reads placements from.
+    product = ctx["default_product"]
+    package_product_id = (ctx["existing_package"].package_config or {}).get("product_id")
+    assert package_product_id == product.product_id, (
+        f"pkg_001 sells product {package_product_id!r}, not the seeded default product "
+        f"{product.product_id!r} whose placements this step declares"
+    )
+    product.placements = (
+        None
+        if "product unsupported" in stripped
+        else [StoredPlacementFactory(placement_id=pid, mode="included") for pid in _PRODUCT_PLACEMENT_IDS]
+    )
+    env._commit_factory_data()
 
     pkg["creative_assignments"] = [assignment]
     ctx["referenced_creative_ids"] = [cid]
@@ -2341,35 +2347,28 @@ def given_adapter_manual_approval_flag(ctx: dict, adapter_flag: str) -> None:
 def given_tenant_approval_mode(ctx: dict, approval_mode: str) -> None:
     """Configure the tenant's approval mode.
 
-    'auto-approval' — tenant human_review_required=False, adapter manual_approval_required=False
-    'manual' — tenant human_review_required=True
+    'auto-approval' — tenant human_review_required=False, no adapter gates the operation
+    'manual' — tenant human_review_required=True, every adapter gates create and update
+
+    Delegates to the shared tenant-approval writers, which configure EVERY adapter the env
+    exposes plus the identity's tenant and the live server's adapter row. The update
+    path's approval gate reads its own adapter (``env.mock['update_adapter']``), which the
+    body this replaced never touched, so its 'manual' row ran the auto path in process.
     """
-    from tests.factories.core import set_adapter_test_behavior
+    from tests.bdd.steps.generic.given_media_buy import (
+        _configure_adapter_manual_approval,
+        given_tenant_auto_approval,
+        given_tenant_manual_approval,
+    )
 
     stripped = approval_mode.strip()
-    tenant = ctx.get("tenant")
-    assert tenant is not None, "No tenant in ctx — cannot configure approval mode"
-    env = ctx["env"]
-
     if stripped == "auto-approval":
-        tenant.human_review_required = False
-        if "adapter" in env.mock:
-            env.mock["adapter"].return_value.manual_approval_required = False
-        # Also write to DB so Docker adapter reads the correct config
-        set_adapter_test_behavior(env, tenant.tenant_id, manual_approval_required=False)
+        given_tenant_auto_approval(ctx)
+        _configure_adapter_manual_approval(ctx["env"], required=False)
     elif stripped == "manual":
-        tenant.human_review_required = True
-        if "adapter" in env.mock:
-            env.mock["adapter"].return_value.manual_approval_required = True
-            env.mock["adapter"].return_value.manual_approval_operations = {
-                "create_media_buy",
-                "update_media_buy",
-            }
-        # Also write to DB so Docker adapter reads the correct config
-        set_adapter_test_behavior(env, tenant.tenant_id, manual_approval_required=True)
+        given_tenant_manual_approval(ctx)
     else:
         raise ValueError(f"Unknown approval mode: {stripped}")
-    env._commit_factory_data()
 
 
 @given(parsers.re(r"the adapter (?P<adapter_result>returns \w+|not yet called)"))
@@ -2382,35 +2381,27 @@ def given_adapter_result(ctx: dict, adapter_result: str) -> None:
 
     Uses regex to avoid matching 'the adapter manual_approval_required is ...'
     which is a separate step for approval workflow partition/boundary scenarios.
+
+    The adapter configured is the one the UPDATE path calls (``update_media_buy`` on
+    ``env.mock['update_adapter']``). This used to set ``update_order`` -- a method no
+    adapter has -- on the create-module mock, so in process the error row never failed.
+    The error is the ad server's outage class, ``AdCPAdapterError``: SERVICE_UNAVAILABLE,
+    the code the rows expect and the class the live server's mock adapter raises.
     """
-    from tests.factories.core import set_adapter_test_behavior
+    from src.core.exceptions import AdCPAdapterError
+    from tests.bdd.steps.generic.given_media_buy import set_update_adapter_outcome
 
     stripped = adapter_result.strip()
     env = ctx["env"]
+    assert "update_adapter" in env.mock, (
+        f"Step claims 'the adapter {stripped}' but the env registers no update-path adapter "
+        f"(env.mock['update_adapter']); {type(env).__name__} does not drive update_media_buy."
+    )
 
     if stripped == "returns success":
-        # Default behavior — adapter returns normally
-        assert "adapter" in env.mock, (
-            "Step claims 'the adapter returns success' but no adapter mock is registered in env.mock. "
-            "Ensure the test environment sets up the adapter mock before this step."
-        )
-        env.mock["adapter"].return_value.update_order.side_effect = None
-        # Also reset DB test_behavior
-        tenant = ctx.get("tenant")
-        if tenant is not None:
-            set_adapter_test_behavior(env, tenant.tenant_id, fail_on_update=False)
+        set_update_adapter_outcome(ctx, None)
     elif stripped == "returns error":
-        assert "adapter" in env.mock, (
-            "Step claims 'the adapter returns error' but no adapter mock is registered in env.mock. "
-            "Ensure the test environment sets up the adapter mock before this step."
-        )
-        env.mock["adapter"].return_value.update_order.side_effect = Exception("Adapter error: update failed")
-        # Also write to DB so Docker adapter raises the same error
-        tenant = ctx.get("tenant")
-        if tenant is not None:
-            set_adapter_test_behavior(
-                env, tenant.tenant_id, fail_on_update=True, error_message="Adapter error: update failed"
-            )
+        set_update_adapter_outcome(ctx, AdCPAdapterError())
     elif stripped == "not yet called":
         # Manual approval — adapter won't be called
         pass
@@ -3270,9 +3261,27 @@ def _assert_submitted(ctx: dict) -> None:
     then_response_contains_task_id(ctx)
 
 
+def _assert_assignment_routing_persisted(ctx: dict) -> None:
+    """Synchronous success, and the package now holds exactly the requested assignments,
+    each routed to the placement_ids it asked for -- none where it named none.
+
+    creative_assignments replaces the package's set (BR-RULE-024), so the stored set is
+    compared whole: a refusal, a dropped assignment, or routing the seller did not record
+    all fail here, where a bare "success" read nothing back.
+    """
+    _assert_synchronous_success(ctx)
+    requested = {
+        assignment["creative_id"]: assignment.get("placement_ids")
+        for assignment in ctx["update_kwargs"]["packages"][0]["creative_assignments"]
+    }
+    stored = _stored_assignment_routing(ctx, "pkg_001")
+    assert stored == requested, f"the seller stored the assignments {stored!r}, not the requested {requested!r}"
+
+
 _UPDATE_OUTCOMES = {
     "accepted": _assert_synchronous_success,
     "accepted with the frequency cap stored": _assert_frequency_cap_stored,
+    "success with each assignment's placement_ids stored as requested": _assert_assignment_routing_persisted,
     "success with persisted records": _assert_persisted_success,
     "success with pending status": _assert_submitted,
     "submitted task envelope (awaiting approval)": _assert_submitted,
