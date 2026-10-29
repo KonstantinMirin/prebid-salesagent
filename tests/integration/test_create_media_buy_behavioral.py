@@ -66,6 +66,7 @@ from src.core.schemas import (
     PricingOption,
 )
 from tests.factories import stamp_format_identity
+from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.helpers.envelope_assertions import assert_envelope_shape, raises_adcp
@@ -282,9 +283,10 @@ class TestCreativeMissingUrl:
         # Build a mock DB creative that is missing URL
         mock_creative = MagicMock()
         mock_creative.creative_id = "creative_1"
-        stamp_format_identity(
-            mock_creative, format_id="display_300x250_image", agent_url="https://creative.example.com"
-        )
+        # No agent_url: the factory's default is the reference agent's origin, the only one
+        # at which the SDK maps this v1 id to a canonical kind. At a made-up agent the id
+        # has no kind and the stamp itself is refused, before the code under test runs.
+        stamp_format_identity(mock_creative, format_id="display_300x250_image")
         mock_creative.data = {}  # No URL field
 
         # Build a mock format spec (non-generative, so URL is required)
@@ -326,9 +328,8 @@ class TestCreativeMissingUrl:
 
         mock_creative = MagicMock()
         mock_creative.creative_id = "creative_1"
-        stamp_format_identity(
-            mock_creative, format_id="display_300x250_image", agent_url="https://creative.example.com"
-        )
+        # The reference agent's origin, by default, for the reason the test above gives.
+        stamp_format_identity(mock_creative, format_id="display_300x250_image")
         mock_creative.data = {"url": "https://example.com/ad.jpg"}
 
         mock_format_spec = MagicMock()
@@ -445,7 +446,7 @@ class TestInlineCreativesProcessedBeforeApproval:
                             "creative_id": "inline_creative_1",
                             "name": "Test Ad",
                             "format_id": {
-                                "agent_url": "https://creative.example.com/",
+                                "agent_url": DEFAULT_CREATIVE_AGENT_URL,
                                 "id": "display_300x250_image",
                             },
                             "assets": build_assets(image_spec("banner_image")),

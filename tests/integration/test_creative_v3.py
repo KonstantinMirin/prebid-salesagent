@@ -34,6 +34,7 @@ from src.core.database.models import (
 )
 from src.core.database.models import Product as DBProduct
 from src.core.schemas import CreativeStatusEnum, SyncCreativesRequest, SyncCreativesResponse
+from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.credentials import credential_headers
@@ -45,8 +46,15 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-DEFAULT_AGENT_URL = "https://test-agent.example.com"
+# The reference agent's origin, because DEFAULT_FORMAT_ID is a v1 name: the SDK upgrades it
+# to a canonical kind only for a reference at that origin, and the write gate refuses a
+# creative whose reference projects to none (format_resolver.creative_identity_of). At the
+# made-up agent that stood here every sync in this file failed per creative.
+DEFAULT_AGENT_URL = DEFAULT_CREATIVE_AGENT_URL
 DEFAULT_FORMAT_ID = "display_300x250_image"
+# A registry literal (registries/v1-canonical-mapping.json -> video_hosted), so the
+# video-only product names a legacy reference that maps, not an id nothing maps.
+VIDEO_FORMAT_ID = "video_15s"
 
 
 # ---------------------------------------------------------------------------
@@ -117,8 +125,8 @@ def mock_format_registry():
             name="Display 300x250 Image",
             type="display",
         ),
-        "video_instream_15s": create_test_format(
-            format_id="video_instream_15s",
+        VIDEO_FORMAT_ID: create_test_format(
+            format_id=VIDEO_FORMAT_ID,
             name="Video Instream 15s",
             type="video",
         ),
@@ -556,14 +564,14 @@ class TestFormatCompatibility:
                     platform_mappings={"mock": {"id": "fmt_adv"}},
                 )
             )
-            # Product that only supports video_instream_15s
+            # Product that only supports a video format
             product = DBProduct(
                 tenant_id=self.TENANT_ID,
                 product_id="prod_video_only",
                 name="Video Only Product",
                 description="Only supports video",
                 format_ids=[
-                    {"agent_url": DEFAULT_AGENT_URL, "id": "video_instream_15s"},
+                    {"agent_url": DEFAULT_AGENT_URL, "id": VIDEO_FORMAT_ID},
                 ],
                 targeting_template={},
                 delivery_type="non_guaranteed",
