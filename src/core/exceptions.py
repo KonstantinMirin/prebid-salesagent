@@ -1465,6 +1465,19 @@ class AdCPAmbiguousBiddingPolicyError(AdCPSalesAgentError[EntityRefDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.AMBIGUOUS_BIDDING_POLICY
 
 
+class AdCPTermsRejectedError(AdCPSalesAgentError[ValidationDetails]):
+    """The seller refuses the buy's terms as a combination (422, TERMS_REJECTED).
+
+    ``create_media_buy.mdx``: "Every selected pricing option MUST declare that currency
+    ... This one-currency rule also applies to fixed AdCP-authored buys ... Sellers reject
+    incompatible product combinations, currencies, pricing terms, or delivery constraints
+    with ``TERMS_REJECTED`` ... and identify the incompatible package." ``field`` names that
+    package; ``details`` carries the refused value beside the accepted one.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.TERMS_REJECTED
+
+
 class AdCPIdempotencyConflictError(AdCPConflictError):
     """idempotency_key reused with a different request payload (409, IDEMPOTENCY_CONFLICT).
 

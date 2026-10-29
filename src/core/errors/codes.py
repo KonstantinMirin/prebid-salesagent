@@ -427,6 +427,10 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
         # representation"), and refused on its merits, not malformed: both members are
         # declared properties of the package.
         ErrorCode.AMBIGUOUS_BIDDING_POLICY: 422,
+        # Correctable per the pin ("adjust the proposed terms and retry"): a mixed-currency
+        # buy is well-formed and refused on its merits (create_media_buy.mdx, the
+        # one-currency rule).
+        ErrorCode.TERMS_REJECTED: 422,
         # 429 — correct, but too often.
         ErrorCode.RATE_LIMITED: 429,
         # 5xx — the buyer cannot fix it. CONFIGURATION_ERROR and

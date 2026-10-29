@@ -1455,9 +1455,16 @@ Feature: BR-UC-002 Create Media Buy
       | currency_in_tenant_table | currency validation passes   |
       | currency_in_ad_server    | currency validation passes   |
 
+    # CORRECTED against the pin. mixed_currencies is not an unsupported seller feature: the
+    # media buy has one currency for every seller, and "Every selected pricing option MUST
+    # declare that currency". The refusal the pin names for an incompatible currency is
+    # TERMS_REJECTED identifying the incompatible package -- the second, since the first
+    # package's option sets the buy's currency.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/domains/media-buy/scenarios/seller_optimized_budget.yaml
     Examples: Invalid partitions
       | partition                  | outcome                                   |
-      | mixed_currencies           | error UNSUPPORTED_FEATURE with suggestion  |
+      | mixed_currencies           | error TERMS_REJECTED on packages[1].pricing_option_id with suggestion |
       | currency_not_in_tenant     | error UNSUPPORTED_FEATURE with suggestion  |
       | currency_not_in_ad_server  | error UNSUPPORTED_FEATURE with suggestion  |
 
@@ -2012,14 +2019,17 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
     # --- product_uniqueness boundaries (BR-RULE-010) ---
+    # CORRECTED against the pin, for the reason the currency partition outline records: two
+    # currencies in one buy are refused TERMS_REJECTED naming the incompatible package.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
 
     Examples: Boundary values
       | boundary_point                           | config           | outcome                                  |
       | single package (trivially valid)         | 1 pkg USD        | currency validation passes               |
       | two packages, same currency              | 2 pkg USD+USD    | currency validation passes               |
       | two packages, same currency (via pricing options) | 2 pkg same pricing_option_id currency | currency validation passes      |
-      | two packages, different currencies       | 2 pkg USD+EUR    | error UNSUPPORTED_FEATURE with suggestion |
-      | two packages, different currencies (via pricing options) | 2 pkg divergent pricing_option_id currency | error UNSUPPORTED_FEATURE with suggestion |
+      | two packages, different currencies       | 2 pkg USD+EUR    | error TERMS_REJECTED on packages[1].pricing_option_id with suggestion |
+      | two packages, different currencies (via pricing options) | 2 pkg divergent pricing_option_id currency | error TERMS_REJECTED on packages[1].pricing_option_id with suggestion |
       | currency not in tenant table             | 1 pkg XYZ        | error UNSUPPORTED_FEATURE with suggestion |
       | currency not in ad-server network currencies | 1 pkg JPY (GAM no JPY) | error UNSUPPORTED_FEATURE with suggestion |
 

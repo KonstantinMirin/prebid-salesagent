@@ -54,6 +54,7 @@ from src.core.exceptions import (
     AdCPPersistedStateError,
     AdCPProductNotFoundError,
     AdCPSalesAgentError,
+    AdCPTermsRejectedError,
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
@@ -2122,6 +2123,22 @@ def _validate_pricing_model_selection(
                 product_id=product.product_id,
                 available_pricing_options=available_options,
                 rejected_value=pricing_option_id,
+            ),
+        )
+
+    # One currency per media buy (create_media_buy.mdx, Pricing & Currency): "Every selected
+    # pricing option MUST declare that currency ... Split products requiring another
+    # currency into a separate media buy." The refusal is TERMS_REJECTED naming the
+    # incompatible package (same document, seller-optimized allocation, which extends the
+    # rule to fixed buys; graded by seller_optimized_budget.yaml
+    # reject_mixed_currency_shared_buy).
+    if campaign_currency and selected_option.currency != campaign_currency:
+        raise AdCPTermsRejectedError(
+            field=package_field_path("pricing_option_id", package_index),
+            details=PricingValidationDetails(
+                product_id=product.product_id,
+                rejected_value=selected_option.currency,
+                accepted_values=[campaign_currency],
             ),
         )
 
