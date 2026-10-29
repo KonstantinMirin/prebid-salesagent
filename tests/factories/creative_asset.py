@@ -160,6 +160,18 @@ def image_spec(
     return AssetSpec(role, "image", {"url": url, "width": width, "height": height}, multiple)
 
 
+#: The file size a canonical manifest's image states: under the smallest cap any scenario
+#: declares (200 KB). ``core/assets/image-asset.json``: ``file_size_bytes`` is "Required by
+#: agents that advertise a max_file_size_kb constraint", and the seller refuses a manifest
+#: silent about a cap the selected declaration states.
+MANIFEST_IMAGE_BYTES = 50 * 1024
+
+
+def manifest_image_spec(role: str = "image_main", *, width: int = 300, height: int = 250) -> AssetSpec:
+    """An image as a canonical manifest carries it: its dimensions and its file size."""
+    return image_spec(role, width=width, height=height).with_fields(file_size_bytes=MANIFEST_IMAGE_BYTES)
+
+
 def text_spec(role: str, *, content: str, multiple: bool = False) -> AssetSpec:
     """AssetSpec for a text asset."""
     return AssetSpec(role, "text", {"content": content}, multiple)
@@ -216,7 +228,7 @@ def canonical_assets(kind: str) -> dict:
     from src.core.format_satisfaction import declared_slots_by_kind
 
     builders = {
-        "image": image_spec,
+        "image": manifest_image_spec,
         "video": video_spec,
         "audio": lambda group: asset_spec(group, "audio", url="https://example.com/spot.mp3"),
     }

@@ -1442,6 +1442,9 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | two_image_options | image_300x250       |
       | two_image_options | image_728x90        |
       | two_mrec_options  | image_300x250_gif   |
+      | retina_300x250    | image_600x500_2x    |
+      | retina_300x250    | image_600x500       |
+      | retina_300x250    | image_300x250       |
 
   @T-UC-FORMAT-SATISFACTION-manifest-sync-refused @format_satisfaction_sync @requires_db
   Scenario Outline: sync_creatives refuses an assignment whose manifest fails the selected declaration - <declaration> <manifest>
@@ -1458,6 +1461,8 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | fixed_300x250     | image_300x250_gif   | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main.format          | gif    | jpg, png |
       | fixed_300x250     | image_main_as_text  | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main.asset_type      | text   | image    |
       | two_image_options | image_160x600       | CREATIVE_SIZE_MISMATCH             | assets.image_main.width           | 160    | 300      |
+      | plain_300x250     | image_600x500_2x    | CREATIVE_SIZE_MISMATCH             | assets.image_main.pixel_ratio     | 2      | 1        |
+      | plain_300x250     | image_600x500       | CREATIVE_SIZE_MISMATCH             | assets.image_main.width           | 600    | 300      |
 
     # THE PAIRS. Against fixed_300x250 (image 300x250, max_file_size_kb 200, image_formats
     # jpg/png): 728x90 against 300x250 is the creative half of formats.mdx's fifth rule; 500
@@ -1468,6 +1473,39 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # fits neither and 300x250 and 728x90 each fit one: the size refusal reports the first
     # declaration's dimensions, and the selection is the one the manifest satisfies, not the
     # first declared.
+    #
+    # DENSITY IS ITS OWN AXIS. A declaration's width and height are LOGICAL; an image asset's
+    # are intrinsic. formats/canonical/image.json: "an accepted asset's intrinsic width is
+    # width x pixel_ratio", pixel_ratios "[1, 2] accepts both standard and Retina
+    # renditions", "Absence means [1]", and "SDKs determine the effective ratio from
+    # asset.pixel_ratio when supplied, otherwise infer it from intrinsic asset dimensions
+    # divided by the matched logical size". So a 600x500 image -- its ratio stated as 2, or
+    # left to inference -- is accepted by retina_300x250 above, and refused by
+    # plain_300x250, which differs from it only in stating no pixel_ratios: stated, the
+    # ratio 2 is outside [1]; inferred, the only ratio left is 1 and the image is 600 wide.
+    # A density outside the accepted set is an intrinsic size the declaration does not
+    # accept, so it is CREATIVE_SIZE_MISMATCH. The 300x250 row above is the control that a
+    # [1, 2] declaration still takes a standard rendition.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image.json pointer=/properties/pixel_ratios
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/image-asset.json pointer=/properties/pixel_ratio
+
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-file-size-unstated @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives refuses an assignment whose manifest is silent about a capped file size
+    Given a packaged product declaring canonical format options "fixed_300x250"
+    And the buyer syncs a canonical "image" creative carrying the "image_300x250_unsized" manifest
+    When the Buyer Agent assigns it to that package
+    Then the creative is refused CREATIVE_VALIDATION_FAILED_GENERIC
+    And the refusal names "assets.image_main.file_size_bytes" missing where "200" is accepted
+
+    # A CAP THE MANIFEST DOES NOT ANSWER CANNOT BE CHECKED. core/assets/image-asset.json:
+    # file_size_bytes is "Required by agents that advertise a max_file_size_kb constraint",
+    # and fixed_300x250 advertises 200. The accept row is image_300x250 in the outline above,
+    # which differs from this one only in stating its file size; accepting the silent one
+    # would "silently relax the target contract" (creative-manifests.mdx § Validation step 5).
+    # A package SELECTOR silent about the cap still inherits it -- the canonical_formats
+    # storyboard's equivalent-direct-legacy step grades that -- because a selector names a
+    # format and a manifest is the creative.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/image-asset.json pointer=/properties/file_size_bytes
 
   @T-UC-FORMAT-SATISFACTION-manifest-ambiguous @format_satisfaction_sync @requires_db
   Scenario: an assignment whose manifest fits two same-kind declarations and names no option ref is refused

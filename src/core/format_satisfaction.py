@@ -176,8 +176,11 @@ _RESOLUTION_FAILURES: frozenset[FormatRefusal] = frozenset(
 #: The declaration constraints that are a creative's SIZE. A manifest failing only these is
 #: ``CREATIVE_SIZE_MISMATCH``: "The submitted creative dimensions do not match any size accepted
 #: by the selected packages" (enums/error-code.json). Any other failure is not about size.
+#: ``pixel_ratios`` is among them: a density the declaration does not accept is an intrinsic
+#: size it does not accept -- "an accepted asset's intrinsic width is ``width x pixel_ratio``"
+#: (formats/canonical/image.json).
 _DIMENSION_CONSTRAINTS: frozenset[str] = frozenset(
-    {"width", "height", "min_width", "max_width", "min_height", "max_height", "sizes"}
+    {"width", "height", "min_width", "max_width", "min_height", "max_height", "sizes", "pixel_ratios"}
 )
 
 
@@ -565,8 +568,17 @@ def _range_unsatisfied(claim: Any, low: float, high: float) -> bool:
 #: ``image_formats``, and grades it ACCEPTED with every route evaluated independently.
 _MUST_BE_STATED: frozenset[str] = frozenset({"width", "height", "duration_ms_exact", "duration_ms_range"})
 
+#: What a creative MANIFEST must state, which is more than a selector must. A selector names
+#: a format and inherits every cap it is silent about; a manifest is the creative itself, and
+#: a cap it does not answer cannot be checked, so accepting it would "silently relax the
+#: target contract" (creative-manifests.mdx § Validation step 5; step 4 lists "file-size
+#: limits" among what is checked). ``core/assets/image-asset.json`` states it for the image
+#: cap outright -- ``file_size_bytes`` is "Required by agents that advertise a
+#: max_file_size_kb constraint" -- and the video and audio cap is the same check in megabytes.
+_MANIFEST_MUST_BE_STATED: frozenset[str] = _MUST_BE_STATED | {"max_file_size_kb", "max_file_size_mb"}
 
-def _constraint_unsatisfied(key: str, bound: Any, claim: Any) -> bool:
+
+def _constraint_unsatisfied(key: str, bound: Any, claim: Any, must_state: frozenset[str] = _MUST_BE_STATED) -> bool:
     """Whether *claim* fails the single declaration constraint ``key: bound``.
 
     SILENCE is decided first and by name, because the pin decides it by name: a claim
@@ -589,11 +601,14 @@ def _constraint_unsatisfied(key: str, bound: Any, claim: Any) -> bool:
 
     ``slots`` is not graded here: it is the one constraint whose failure names WHICH slot,
     so it has its own reader (:func:`_slot_shortfall`) and its own caller.
+
+    *must_state* is the silence list: :data:`_MUST_BE_STATED` for a selector, the wider
+    :data:`_MANIFEST_MUST_BE_STATED` for a creative manifest.
     """
     if bound is None:
         return False
     if claim is None:
-        return key in _MUST_BE_STATED
+        return key in must_state
     if _is_number(bound) and key.startswith("max_"):
         return _is_number(claim) and claim > bound
     if _is_number(bound) and key.startswith("min_"):
@@ -608,7 +623,9 @@ def _constraint_unsatisfied(key: str, bound: Any, claim: Any) -> bool:
     return claim != bound
 
 
-def _unsatisfied_params(claimed: Mapping[str, Any], accepted: Mapping[str, Any]) -> list[str]:
+def _unsatisfied_params(
+    claimed: Mapping[str, Any], accepted: Mapping[str, Any], must_state: frozenset[str] = _MUST_BE_STATED
+) -> list[str]:
     """The declaration's params *claimed* fails, named by key. Empty means it satisfies.
 
     Directional, as both authorities say compatibility is: only the TARGET's constraints
@@ -638,7 +655,7 @@ def _unsatisfied_params(claimed: Mapping[str, Any], accepted: Mapping[str, Any])
             claim = claimed.get("duration_ms_exact")
         if key == "slots":
             failures.extend(f"slots.{group}" for group in _slot_shortfall(claim, bound))
-        elif _constraint_unsatisfied(key, bound, claim):
+        elif _constraint_unsatisfied(key, bound, claim, must_state):
             failures.append(key)
     return failures
 
@@ -673,8 +690,8 @@ def _stated_constraints(accepted: Mapping[str, Any], claimed: Mapping[str, Any])
 #: A key absent here is a constraint no asset of that type can speak to, and it is not
 #: graded on a manifest at all: a manifest cannot be held to a fact it has no member for.
 #: A key present here and missing from the asset is graded as SILENCE, which fails only
-#: for the constraints the pin says a creative "MUST declare and match"
-#: (:data:`_MUST_BE_STATED`) and is inherited for every other.
+#: for the constraints a manifest must state (:data:`_MANIFEST_MUST_BE_STATED`: the fixed
+#: dimensions and durations, and a file-size cap) and is inherited for every other.
 _ASSET_FACTS: Mapping[str, tuple[tuple[str, str], ...]] = {
     "image": (
         ("width", "width"),
@@ -801,13 +818,25 @@ def _manifest_slot_shortfalls(
     return shortfalls
 
 
-def _asset_claim(asset: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+#: The asset members a declaration states in LOGICAL pixels. An image asset carries its
+#: INTRINSIC width and height, and the declaration's ``width``/``height``/``sizes``/bounds are
+#: logical render sizes: ``formats/canonical/image.json`` -- "an accepted asset's intrinsic
+#: width is ``width x pixel_ratio``" -- so the asset's members are divided by its ratio before
+#: they are compared.
+_INTRINSIC_MEMBERS: frozenset[str] = frozenset({"width", "height"})
+
+
+def _asset_claim(asset: Mapping[str, Any], ratio: float = 1) -> tuple[dict[str, Any], dict[str, str]]:
     """What one media asset states, in the declaration's vocabulary, and from which member.
 
     The claim is what :func:`_unsatisfied_params` grades, so a manifest is held to a
     declaration by the same matcher as a selector. Every key the asset's type CAN state is
     in the claim, ``None`` where the asset is silent, which is what makes silence about a
-    fixed width a failure and silence about a file-size cap an inheritance.
+    fixed width a failure.
+
+    *ratio* is the asset's effective pixel ratio (:func:`_candidate_ratios`). The dimensions
+    are claimed in logical pixels -- intrinsic over the ratio -- and the ratio itself is the
+    claim against ``pixel_ratios``, so a 600x500 image at 2x claims 300x250 at density 2.
 
     ``sizes`` is one more key, built from both dimensions: an image or video declaration may
     state its accepted sizes as a list of ``{width, height}`` rather than one fixed pair.
@@ -817,8 +846,10 @@ def _asset_claim(asset: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, st
     claim: dict[str, Any] = {}
     for constraint, member in facts:
         value = _plain(asset.get(member))
-        divisor = _BYTES_PER_UNIT.get(constraint)
-        claim[constraint] = value / divisor if divisor and _is_number(value) else value
+        divisor = _BYTES_PER_UNIT.get(constraint) or (ratio if member in _INTRINSIC_MEMBERS else 1)
+        claim[constraint] = value / divisor if divisor != 1 and _is_number(value) else value
+    if "pixel_ratios" in members:
+        claim["pixel_ratios"] = ratio
     if "width" in members:
         width, height = claim["width"], claim["height"]
         claim["sizes"] = None if width is None or height is None else {"width": width, "height": height}
@@ -826,6 +857,26 @@ def _asset_claim(asset: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, st
     if "duration_ms_exact" in members:
         members["duration_ms_range"] = members["duration_ms_exact"]
     return claim, members
+
+
+def _candidate_ratios(asset: Mapping[str, Any], declared: Mapping[str, Any]) -> tuple[float, ...]:
+    """The pixel ratios *asset* may be graded at against *declared*.
+
+    ``formats/canonical/image.json`` ``pixel_ratios``: "SDKs determine the effective ratio from
+    ``asset.pixel_ratio`` when supplied, otherwise infer it from intrinsic asset dimensions
+    divided by the matched logical size." So a stated ratio is the only candidate, and an
+    unstated one is each ratio the declaration accepts: the asset satisfies when one of them
+    turns its intrinsic size into an accepted logical size, which is the inference for a
+    fixed size, for each entry of ``sizes[]`` and for a bounded range alike. Width and height
+    are divided by the same ratio, so "Width and height ratios MUST agree" is built in.
+
+    One candidate, ratio 1, where the ratio does not apply: an asset type with no
+    ``pixel_ratio`` member, or a declaration whose kind has no ``pixel_ratios`` parameter.
+    """
+    if "pixel_ratios" not in dict(_ASSET_FACTS[str(asset.get("asset_type"))]) or "pixel_ratios" not in declared:
+        return (1,)
+    stated = _plain(asset.get("pixel_ratio"))
+    return (stated,) if _is_number(stated) else tuple(declared["pixel_ratios"])
 
 
 def _primary_media_slot(slots: Sequence[Mapping[str, Any]]) -> str | None:
@@ -854,29 +905,49 @@ def _manifest_shortfalls(declaration: LibraryFormatDeclaration, manifest: Mappin
     The slots first (:func:`_manifest_slot_shortfalls`), then the main media asset's facts
     against the declaration's params (:func:`_asset_claim` graded by
     :func:`_unsatisfied_params`). Only the constraints the asset type can state are graded
-    (:func:`_stated_constraints` over the claim's keys); among those, silence fails exactly
-    where the pin requires a creative to declare the constraint. A main slot the manifest
-    leaves empty is reported once, as the missing slot, and its facts are not graded.
+    (:func:`_stated_constraints` over the claim's keys); among those, silence fails where
+    the pin requires a creative to declare the constraint (:data:`_MANIFEST_MUST_BE_STATED`).
+    A main slot the manifest leaves empty is reported once, as the missing slot, and its
+    facts are not graded.
+
+    An absent ``pixel_ratios`` is ``[1]``: "Absence means ``[1]`` for backward compatibility"
+    (``formats/canonical/image.json``). The asset is graded at each candidate ratio
+    (:func:`_candidate_ratios`) and the fewest shortfalls are reported, which is none when
+    any candidate satisfies.
     """
-    declared = _declared_params(declaration)
+    declared = dict(_declared_params(declaration))
+    if "pixel_ratios" in declared and declared["pixel_ratios"] is None:
+        declared["pixel_ratios"] = [1]
     slots = tuple(slot for slot in declared.get("slots") or () if isinstance(slot, Mapping))
     shortfalls = _manifest_slot_shortfalls(slots, manifest)
     primary = _primary_media_slot(slots)
     asset = manifest.get(primary) if primary is not None else None
-    if not isinstance(asset, Mapping) or str(asset.get("asset_type")) not in _ASSET_FACTS:
+    if primary is None or not isinstance(asset, Mapping) or str(asset.get("asset_type")) not in _ASSET_FACTS:
         return shortfalls
-    claim, members = _asset_claim(asset)
-    for constraint in _unsatisfied_params(claim, _stated_constraints(declared, claim)):
-        member = members[constraint]
-        shortfalls.append(
-            ManifestShortfall(
-                field=f"assets.{primary}.{member}",
-                constraint=constraint,
-                rejected_value=None if asset.get(member) is None else _shown(asset.get(member)),
-                accepted_values=_shown_all(declared[constraint]),
-            )
+    graded = (_asset_shortfalls(primary, asset, declared, ratio) for ratio in _candidate_ratios(asset, declared))
+    return [*shortfalls, *min(graded, key=len)]
+
+
+def _asset_shortfalls(
+    slot: str, asset: Mapping[str, Any], declared: Mapping[str, Any], ratio: float
+) -> list[ManifestShortfall]:
+    """What the asset in *slot* fails in *declared* at pixel *ratio*, as values.
+
+    ``rejected_value`` is what the asset STATES -- the intrinsic member, not the logical size
+    it was compared as -- because that is the value the buyer can find in what they sent.
+    """
+    claim, members = _asset_claim(asset, ratio)
+    return [
+        ManifestShortfall(
+            field=f"assets.{slot}.{members[constraint]}",
+            constraint=constraint,
+            rejected_value=None if asset.get(members[constraint]) is None else _shown(asset.get(members[constraint])),
+            accepted_values=_shown_all(declared[constraint]),
         )
-    return shortfalls
+        for constraint in _unsatisfied_params(
+            claim, _stated_constraints(declared, claim), must_state=_MANIFEST_MUST_BE_STATED
+        )
+    ]
 
 
 def _manifest_verdict(

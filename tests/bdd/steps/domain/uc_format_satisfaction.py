@@ -216,6 +216,24 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "params": {"duration_ms_exact": 15000},
         }
     ],
+    # A 300x250 image declaration with no other constraint, and the same declaration
+    # accepting Retina renditions. The pair differs ONLY in ``pixel_ratios``, which
+    # formats/canonical/image.json makes the density axis: "Absence means [1]", and with
+    # ``[1, 2]`` "a 600x500 intrinsic asset at 2x satisfies a logical 300x250 size".
+    "plain_300x250": [
+        {
+            "format_kind": "image",
+            "format_option_id": _PRODUCT_OPTION_ID,
+            "params": {"width": 300, "height": 250},
+        }
+    ],
+    "retina_300x250": [
+        {
+            "format_kind": "image",
+            "format_option_id": _PRODUCT_OPTION_ID,
+            "params": {"width": 300, "height": 250, "pixel_ratios": [1, 2]},
+        }
+    ],
     # ``fixed_300x250`` with the ``v1_format_ref`` assertion REMOVED, and nothing else
     # changed. That one difference decides whether the accepted package's deprecated
     # ``format_ids_to_provide`` projection has a source at all, which is the pair the two
@@ -244,16 +262,24 @@ def _manifest(name: str) -> dict[str, Any]:
     so a refusal row and its accept row differ in the fact under test and nothing else.
     Built per call because a scenario may mutate what it was handed.
     """
-    from tests.factories.creative_asset import build_assets, image_spec, text_spec
+    from tests.factories.creative_asset import build_assets, image_spec, manifest_image_spec, text_spec
 
-    mrec = image_spec("image_main")
+    mrec = manifest_image_spec("image_main")
     manifests: dict[str, Any] = {
         "image_300x250": lambda: build_assets(mrec),
-        "image_728x90": lambda: build_assets(image_spec("image_main", width=728, height=90)),
-        "image_160x600": lambda: build_assets(image_spec("image_main", width=160, height=600)),
+        "image_728x90": lambda: build_assets(manifest_image_spec("image_main", width=728, height=90)),
+        "image_160x600": lambda: build_assets(manifest_image_spec("image_main", width=160, height=600)),
         # 200 KB exactly, the cap ``fixed_300x250`` declares, and 500 KB over it.
         "image_300x250_200kb": lambda: build_assets(mrec.with_fields(file_size_bytes=200 * 1024)),
         "image_300x250_500kb": lambda: build_assets(mrec.with_fields(file_size_bytes=500 * 1024)),
+        # The 300x250 image silent about its file size -- the member a capped declaration needs.
+        "image_300x250_unsized": lambda: build_assets(image_spec("image_main")),
+        # A Retina rendition of the 300x250: 600x500 intrinsic pixels, the ratio stated or
+        # left for the seller to infer (core/assets/image-asset.json ``pixel_ratio``).
+        "image_600x500_2x": lambda: build_assets(
+            manifest_image_spec("image_main", width=600, height=500).with_fields(pixel_ratio=2)
+        ),
+        "image_600x500": lambda: build_assets(manifest_image_spec("image_main", width=600, height=500)),
         # One of the image_formats ``fixed_300x250`` declares, and one it does not.
         "image_300x250_png": lambda: build_assets(mrec.with_fields(format="png")),
         "image_300x250_gif": lambda: build_assets(mrec.with_fields(format="gif")),
@@ -824,7 +850,9 @@ def _seed_canonical_creative(
 
     The default asset key is ``image_main``, which ``formats/canonical/image.json`` declares
     as the ``image`` kind's required image slot -- so a caller that does not care about the
-    key gets the one the pin names rather than a convention this seller invented.
+    key gets the one the pin names rather than a convention this seller invented. The image
+    states its file size (``manifest_image_spec``), because a declaration capping it is owed
+    the member.
 
     CANONICAL ONLY. This grew a ``format_id`` arm for a legacy caller and then lost that
     caller, and the dead parameter is removed rather than left: it built a creative carrying
@@ -836,14 +864,14 @@ def _seed_canonical_creative(
     door.
     """
     from tests.factories.creative import CreativeFactory
-    from tests.factories.creative_asset import build_assets, image_spec
+    from tests.factories.creative_asset import build_assets, manifest_image_spec
 
     arm: dict[str, Any] = {"canonical_kind": kind}
     creative = CreativeFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
         status=status,
-        data={"assets": assets if assets is not None else build_assets(image_spec(asset_key))},
+        data={"assets": assets if assets is not None else build_assets(manifest_image_spec(asset_key))},
         **arm,
         **row,
     )
