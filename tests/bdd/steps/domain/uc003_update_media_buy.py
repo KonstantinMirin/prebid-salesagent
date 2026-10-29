@@ -1830,21 +1830,18 @@ def given_new_end_time_after_existing_start(ctx: dict) -> None:
 
 @given(parsers.parse("the budget {amount:d} is greater than zero"))
 def given_budget_greater_than_zero(ctx: dict, amount: int) -> None:
-    """Declarative guard — verify the budget value from the datatable is positive.
+    """Declarative guard — the budget the package update carries is *amount*, and positive.
 
-    This is a precondition assertion: the scenario's datatable already set the
-    budget on update_kwargs; this step verifies the value is > 0 as the step
-    text claims.
+    The request's budget is the package update's: the pinned
+    ``media-buy/update-media-buy-request.json`` (adcp v3.2.7) declares no top-level
+    ``budget`` (its aggregate is ``total_budget``, an ``{amount, currency}`` object), and
+    ``media-buy/package-update.json`` declares ``budget``. This guard read a top-level
+    ``budget`` key no Given of its one scenario writes, so it refused every run before
+    dispatch.
     """
     assert amount > 0, f"Budget {amount} is not greater than zero — step precondition violated"
-    kwargs = _ensure_update_defaults(ctx)
-    actual_budget = kwargs.get("budget")
-    assert actual_budget is not None, (
-        "update_kwargs has no 'budget' — step claims budget is greater than zero "
-        "but no budget was set by a prior Given step"
-    )
-    assert float(actual_budget) == float(amount), (
-        f"Budget in update_kwargs ({actual_budget}) does not match step text ({amount})"
+    assert _requested_budget(ctx) == float(amount), (
+        f"the package update carries budget {_requested_budget(ctx)}, not the step's {amount}"
     )
 
 
