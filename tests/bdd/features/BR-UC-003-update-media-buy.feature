@@ -2224,7 +2224,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-boundary-end-time @boundary @end_time
   Scenario Outline: End time boundary validation - <boundary_point>
-    Given the existing media buy has start_time "2026-04-01T00:00:00Z"
+    Given the existing media buy has start_time "2099-04-01T00:00:00Z" and end_time "2099-05-31T23:59:59Z"
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
@@ -2232,13 +2232,32 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: the rows were graded by "error with suggestion", which accepts any
+    # refusal, and by a bare "success", which reads nothing back. The refusal rows now pin
+    # the code and the field: INVALID_REQUEST on end_time, the one code for this rule that
+    # create and update share (refuse_inverted_flight) and that @T-UC-003-partition-end-time
+    # and @T-UC-003-ext-e / -ext-e-equal grade for the same inputs. create_media_buy.mdx
+    # "Flight date validation": inverted dates "SHOULD return an INVALID_REQUEST error". The
+    # error-compliance storyboard's reversed_dates_error step (a create_media_buy step) calls
+    # VALIDATION_ERROR canonical but states "INVALID_REQUEST is accepted", so INVALID_REQUEST
+    # is the code every pinned text accepts. The accepted rows read the stored flight. The
+    # dates moved to 2099 so the only defect in a refused row is the order of the two
+    # times, and the seeded end_time differs from every requested one.
+    # LOCAL CORRECTION: the "absent (null)" row sent end_time "", which is neither absent nor
+    # null, and expected a refusal. end_time is optional on update ("No" in the request
+    # table, and absent from the request schema's required list), so an update that omits
+    # it is accepted and leaves the stored end_time as it was.
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/error-compliance.yaml pointer=/phases/1/steps/3/narrative
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx section="Flight date validation"
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx (request table: end_time optional)
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/required
 
     Examples: Boundary values
-      | boundary_point                   | end_value                | outcome                  |
-      | end_time after start_time        | 2026-06-30T23:59:59Z     | success                  |
-      | end_time = start_time (rejected) | 2026-04-01T00:00:00Z     | error with suggestion    |
-      | end_time before start_time       | 2026-03-15T00:00:00Z     | error with suggestion    |
-      | absent (null)                    |                          | error with suggestion    |
+      | boundary_point                   | end_value                | outcome                                             |
+      | end_time after start_time        | 2099-06-30T23:59:59Z     | accepted with the requested end_time stored         |
+      | end_time = start_time (rejected) | 2099-04-01T00:00:00Z     | error "INVALID_REQUEST" on end_time with suggestion |
+      | end_time before start_time       | 2099-03-15T00:00:00Z     | error "INVALID_REQUEST" on end_time with suggestion |
+      | absent (omitted)                 | (omitted)                | accepted with the stored flight unchanged           |
 
   @T-UC-003-partition-approval-workflow @partition @approval_workflow
   Scenario Outline: Approval workflow partition validation - <partition>
@@ -3233,7 +3252,8 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     And the update resolves to the <shape> response shape because <trigger>
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy spec
+    Then the response is compliant with the update_media_buy error spec
+    And the error code should be "<error_code>"
     And the response payload should NOT contain a "sandbox" field
     # BR-RULE-209 INV-10: update_media_buy three-way oneOf -- sandbox appears only on synchronous success
     # LOCAL CORRECTION: the "submitted task" row is removed. The pinned
@@ -3242,12 +3262,20 @@ Feature: BR-UC-003 Update Media Buy
     # submitted arm, whose `not` lists only media_buy_id and warnings and whose
     # additionalProperties is true. Asserting "forbidden" there grades a prohibition the
     # pin does not make.
+    # LOCAL CORRECTION: the terminal-failure row was triggered by a negative package budget,
+    # which the request schema refuses before the boundary resolves the account, so the
+    # sandbox account never reached the refusal and a failure builder that stamped sandbox
+    # from it could not show. The row now names a package the buy does not hold: that
+    # refusal happens inside the update, after the sandbox account is resolved, and its code
+    # is pinned so a refusal from any earlier stage fails the row. The compliance check
+    # names the error arm, the one that carries the prohibition.
     # ---------- BR-RULE-013 INV-6: package-level start_time 'asap' forbidden ----------
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json pointer=/oneOf/1/not
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx (error table: PACKAGE_NOT_FOUND)
 
     Examples:
-      | shape            | trigger                                            |
-      | terminal failure | a validation error rejects the update              |
+      | shape            | trigger                                                        | error_code        |
+      | terminal failure | the package update names a package the media buy does not hold | PACKAGE_NOT_FOUND |
 
   @T-UC-003-package-start-time-asap @invariant @BR-RULE-013 @error @schema-v3.1 @post-f2 @post-f3
   Scenario: Package-level start_time 'asap' is schema-forbidden (INV-6)

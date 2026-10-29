@@ -41,6 +41,10 @@ from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 #: persistence assertion would hold vacuously.
 _UPDATED_BUDGET = 7500.0
 
+#: The value cell that leaves its field out of the update request (``a valid
+#: update_media_buy request with:``), for an outline row that omits a field the others send.
+_OMITTED = "(omitted)"
+
 # ═══════════════════════════════════════════════════════════════════════
 # Label mapping — Gherkin package labels → real package_ids
 # ═══════════════════════════════════════════════════════════════════════
@@ -165,6 +169,30 @@ def _stored_assignment_routing(ctx: dict, label: str) -> dict[str, list[str] | N
         assert uow.assignments is not None
         rows = uow.assignments.get_by_media_buy_and_package(mb.media_buy_id, package_id)
         return {row.creative_id: row.placement_ids for row in rows}
+
+
+def _original_flight(ctx: dict) -> tuple[datetime, datetime]:
+    """The flight the Given 'the existing media buy has start_time ... and end_time ...' stored."""
+    original_start = ctx.get("original_start_time")
+    original_end = ctx.get("original_end_time")
+    assert original_start is not None and original_end is not None, (
+        "original_start_time/original_end_time not in ctx — "
+        "missing prior Given step 'the existing media buy has start_time ... and end_time ...'"
+    )
+    return original_start, original_end
+
+
+def _assert_stored_flight(stored: SimpleNamespace, *, start: datetime, end: datetime) -> None:
+    """The seller's record of the buy (``uc002_invariants._stored_buy``) holds the flight *start*..*end*.
+
+    The response does not carry the flight at all, so the stored record is the only place a
+    flight change, or its absence, can be read.
+    """
+    from tests.bdd.steps.domain.uc002_invariants import _as_utc
+
+    for field, expected in (("start_time", start), ("end_time", end)):
+        actual = getattr(stored, field)
+        assert actual is not None and _as_utc(actual) == expected, f"stored {field} is {actual}, expected {expected}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -381,7 +409,10 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
             f"step silently drops it. Supported: {sorted(_supported_fields)}. "
             f"Add handling for '{field}' if it's a valid UpdateMediaBuyRequest field."
         )
-        if field == "media_buy_id":
+        if value == _OMITTED:
+            # An Examples cell that leaves the field out of the request altogether.
+            kwargs.pop(field, None)
+        elif field == "media_buy_id":
             # Resolve Gherkin label (e.g. "mb_existing") to real factory ID
             kwargs["media_buy_id"] = _resolve_media_buy_id(ctx, value)
         elif field == "paused":
@@ -1040,30 +1071,10 @@ def then_start_end_time_unchanged(ctx: dict) -> None:
     Reloads the media buy from DB and compares against the values stored in ctx
     by the Given step 'the existing media buy has start_time ... and end_time ...'.
     """
+    from tests.bdd.steps.domain.uc002_invariants import _stored_buy
 
-    from sqlalchemy import select
-
-    from src.core.database.models import MediaBuy
-
-    original_start = ctx.get("original_start_time")
-    original_end = ctx.get("original_end_time")
-    assert original_start is not None and original_end is not None, (
-        "original_start_time/original_end_time not in ctx — "
-        "missing prior Given step 'the existing media buy has start_time ... and end_time ...'"
-    )
-    mb = ctx["existing_media_buy"]
-    with db_session(ctx) as session:
-        refreshed = session.scalars(select(MediaBuy).filter_by(media_buy_id=mb.media_buy_id)).first()
-        assert refreshed is not None, f"Media buy {mb.media_buy_id} not found in DB after update"
-        actual_start = refreshed.start_time
-        actual_end = refreshed.end_time
-    # Normalize to UTC for comparison (DB may return timezone-aware or naive)
-    if actual_start is not None and actual_start.tzinfo is not None:
-        actual_start = actual_start.astimezone(UTC)
-    if actual_end is not None and actual_end.tzinfo is not None:
-        actual_end = actual_end.astimezone(UTC)
-    assert actual_start == original_start, f"start_time changed: expected {original_start}, got {actual_start}"
-    assert actual_end == original_end, f"end_time changed: expected {original_end}, got {actual_end}"
+    start, end = _original_flight(ctx)
+    _assert_stored_flight(_stored_buy(ctx, _existing_media_buy(ctx).media_buy_id), start=start, end=end)
 
 
 @then("the media buy's stored start_time should be the instant the update took effect")
@@ -3284,22 +3295,41 @@ def given_update_request_with_account(ctx: dict, account_context: str) -> None:
     _update_request_for(ctx, None)
 
 
+#: The package update that makes a terminal-failure row fail, by the trigger the row names.
+#: Both are refused inside the update, AFTER the boundary resolved the account, so a failure
+#: builder that read the resolved account would show on the refusal. ``None`` (the sentence
+#: without "because ...") is a package budget of 0, which the schema admits
+#: (package-update.json /properties/budget minimum 0) and the seller's own budget rule
+#: refuses with :data:`_TERMINAL_FAILURE_REFUSAL`; a negative budget would be refused by the
+#: request schema before the account is resolved. A package the buy does not hold is
+#: refused with PACKAGE_NOT_FOUND (update_media_buy.mdx error table).
+_TERMINAL_FAILURE_PACKAGE: dict[str | None, dict[str, Any]] = {
+    None: {"package_id": "pkg_001", "budget": 0.0},
+    "the package update names a package the media buy does not hold": {
+        "package_id": "pkg_not_in_buy",
+        "budget": _UPDATED_BUDGET,
+    },
+}
+
+
 @given(parsers.parse("the update resolves to the {shape} response shape"))
 @given(parsers.parse("the update resolves to the {shape} response shape because {trigger}"))
 def given_update_response_shape(ctx: dict, shape: str, trigger: str | None = None) -> None:
     """Arrange the request and the approval path so the update answers with *shape*.
 
     synchronous success: auto-approval and a valid package budget change. terminal
-    failure: auto-approval and a package budget of 0, which the schema admits
-    (package-update.json budget ``minimum: 0``) and the seller's own budget rule refuses
-    with :data:`_TERMINAL_FAILURE_REFUSAL`. That refusal is made inside the update, after
-    the boundary resolved the account, so a sandbox account is in hand when the error is
-    built; the negative budget this sent before was refused by the request schema before
-    the account was resolved at all. submitted task: manual approval of a valid change.
+    failure: auto-approval and the package update :data:`_TERMINAL_FAILURE_PACKAGE` names
+    for *trigger*. Each is refused inside the update, after the boundary resolved the
+    account, so a sandbox account is in hand when the error is built; a negative budget
+    would be refused by the request schema before the account was resolved at all.
+    submitted task: manual approval of a valid change.
     """
     kwargs = _ensure_update_defaults(ctx)
     if shape == "terminal failure":
-        kwargs["packages"] = [{"package_id": "pkg_001", "budget": 0.0}]
+        assert trigger in _TERMINAL_FAILURE_PACKAGE, (
+            f"unknown terminal-failure trigger {trigger!r}; known: {sorted(map(str, _TERMINAL_FAILURE_PACKAGE))}"
+        )
+        kwargs["packages"] = [dict(_TERMINAL_FAILURE_PACKAGE[trigger])]
         given_tenant_human_review_flag(ctx, "false")
         return
     kwargs.setdefault("packages", [{"package_id": "pkg_001", "budget": _UPDATED_BUDGET}])
@@ -3528,11 +3558,16 @@ def _assert_start_time_stored_as_now(ctx: dict) -> None:
     _assert_start_resolved_to(stored.start_time, stored.updated_at, "the update")
 
 
+def _sent_instant(sent: str) -> datetime:
+    """The UTC instant of a date-time string the update sent."""
+    return datetime.fromisoformat(sent.replace("Z", "+00:00")).astimezone(UTC)
+
+
 def _assert_instant_stored_as_sent(field: str, sent: str, stored: datetime | None) -> None:
     """The concrete date-time the update sent for *field* is the instant the seller stored."""
     from tests.bdd.steps.domain.uc002_invariants import _as_utc
 
-    expected = datetime.fromisoformat(sent.replace("Z", "+00:00")).astimezone(UTC)
+    expected = _sent_instant(sent)
     assert stored is not None and _as_utc(stored) == expected, (
         f"the update sent {field} {sent!r}, but the seller stored {stored}"
     )
@@ -3569,6 +3604,18 @@ def _assert_success_at_revision(ctx: dict, revision: int) -> None:
     )
 
 
+def _assert_end_time_stored(ctx: dict) -> None:
+    """Synchronous success; the seller stored the requested end_time and kept the start."""
+    start, _end = _original_flight(ctx)
+    _assert_stored_flight(_stored_existing_buy(ctx), start=start, end=_sent_instant(ctx["update_kwargs"]["end_time"]))
+
+
+def _assert_flight_unchanged(ctx: dict) -> None:
+    """Synchronous success, and the stored flight is the one the Given seeded."""
+    start, end = _original_flight(ctx)
+    _assert_stored_flight(_stored_existing_buy(ctx), start=start, end=end)
+
+
 _UPDATE_OUTCOMES = {
     "accepted": _assert_synchronous_success,
     "accepted with the frequency cap stored": _assert_frequency_cap_stored,
@@ -3576,6 +3623,8 @@ _UPDATE_OUTCOMES = {
     "accepted with no package modified": _assert_accepted_unmodified,
     "success (completed)": _assert_completed,
     "success (submitted)": _assert_submitted,
+    "accepted with the requested end_time stored": _assert_end_time_stored,
+    "accepted with the stored flight unchanged": _assert_flight_unchanged,
     "success with persisted records": _assert_persisted_success,
     "success with pending status": _assert_submitted,
     "submitted task envelope (awaiting approval)": _assert_submitted,
