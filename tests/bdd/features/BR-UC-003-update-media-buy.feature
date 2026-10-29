@@ -2644,18 +2644,30 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-new-packages-incomplete @invariant @BR-RULE-217 @error @schema-v3.1 @post-f2 @post-f3
   Scenario: New package entry missing a required package-request field is rejected (INV-3)
-    Given the media buy's valid_actions advertises "add_packages"
-    And a valid update_media_buy request with:
+    Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
     And the request includes new_packages with an entry missing product_id
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
+    And the error field should contain "new_packages[0].product_id"
     And the error should include "suggestion" field
     # BR-RULE-217 INV-3: each new_packages entry must be a complete package-request (product_id, budget, pricing_option_id)
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # CORRECTED against the pin. new_packages items are package-request.json, which lists
+    # product_id in /required, so an entry without it fails the request schema. A missing
+    # required field is INVALID_REQUEST ("missing required fields, or violates schema
+    # constraints", enums/error-code.json), not VALIDATION_ERROR ("beyond schema
+    # validation"), and L1/security.mdx "Schema validation runs first" puts that refusal
+    # ahead of everything the seller decides. So the refusal does not depend on whether the
+    # seller supports mid-flight additions, and the "valid_actions advertises add_packages"
+    # precondition is dropped (this seller does not advertise it, which made the scenario
+    # stop at its own Given). The field Then pins which entry and member were refused.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/new_packages
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/required
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L1/security.mdx
 
   @T-UC-003-new-packages-duplicate @invariant @BR-RULE-010 @error @schema-v3.1 @post-f1 @post-f2
   Scenario: New package duplicating an existing product on the media buy is rejected (BR-RULE-010 INV-4)
