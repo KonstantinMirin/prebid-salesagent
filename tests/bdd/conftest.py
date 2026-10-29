@@ -1371,15 +1371,16 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "_build_account_block always emits require_operator_auth/sandbox as real values "
         "— #1856 account-config surface",
     ),
-    # creative_approval_mode now derives from tenant.approval_mode through
-    # TenantContext.auto_approves_creatives, the predicate sync_creatives' routing applies,
-    # so approval_auto is expected to pass: a graduation candidate, left routed here until a
-    # box run shows it XPASS on every transport (xpass-graduation.md).
-    (
-        "T-UC-010-v31-creative-approval-mode",
-        {"approval_auto"},
-        "media_buy.creative_approval_mode=auto_approve has no backing config surface (Q2 deferred) — #1724",
-    ),
+    # Graduated: T-UC-010-v31-creative-approval-mode approval_auto. Its reason ("no backing
+    # config surface (Q2 deferred) — #1724") stopped being true when the signal moved onto
+    # the creative-review setting: the Given writes tenant.approval_mode="auto-approve",
+    # describe_seller (seller_capabilities.py) advertises auto_approve from
+    # TenantContext.auto_approves_creatives, and _apply_approval_mode (creatives/
+    # _processing.py) asks the same predicate and sets status=approved at sync -- the
+    # auto-approval behaviour #1724 requires before the claim. approval_human and approval_ai
+    # take the require_human branch of the same expression. No transport carries its own
+    # leg: the Given writes the DB row every wire resolver reads, and the scenario has no
+    # line in e2e_rest_known_failures.txt.
     # Moved from _XFAIL_TAGS: request_signing/webhook_signing={supported:false}
     # now emitted, so "valid" rows (asserting schema-valid relations/bounds against an
     # unsupported posture) pass; "invalid" rows (requiring the builder to REJECT a
@@ -5453,7 +5454,7 @@ def _uc010_wired_tags() -> frozenset[str]:
             # Batch 9 — version negotiation + idempotency posture
             "T-UC-010-v31-idempotency-supported",
             "T-UC-010-v31-idempotency-in-flight-bound",
-            # Batch 10 — creative_approval_mode (a recorded gap R7)
+            # Batch 10 — creative_approval_mode (tenant.approval_mode)
             "T-UC-010-v31-creative-approval-mode",
             # Batch 11 — trusted_match surfaces
             "T-UC-010-v31-trusted-match-surfaces",
