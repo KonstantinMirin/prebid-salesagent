@@ -547,7 +547,7 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
         """Set up happy-path defaults for external mocks."""
         #: {format_id: declaration} for every format this env has been told to serve, so a
         #: step that seeds a row in one can reach the declaration the sync path resolves
-        #: against (``served_format_spec``). Reset per env, with the mocks.
+        #: against (``published_format_spec``). Reset per env, with the mocks.
         self._served_formats: dict[str, Format] = {}
         # The registry is PRODUCTION's testing-mode registry, serving the committed
         # capture through its own override hook -- the same bytes the e2e server reads.
@@ -1164,25 +1164,6 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
         reaching into the registry keeps the step out of the env's internals.
         """
         return format_id in self._served_formats
-
-    def served_format_spec(self, format_id: str) -> Format:
-        """The declaration this env already configured for *format_id*.
-
-        For a step that SEEDS an existing row in a format this env serves, so the seed and
-        the sync resolve the same declaration. Since :meth:`served_format` now reads the
-        shared capture, this answers the SAME ``Format`` ``CreativeFactory`` would find on
-        its own -- which is the point: the two agreeing is no longer something the harness
-        has to arrange.
-
-        Raises rather than answering None for an id no step configured: a silent None
-        would hide a Given that never ran.
-        """
-        if format_id not in self._served_formats:
-            raise KeyError(
-                f"{format_id!r} is not a format this env serves. Call setup_generative_build() or "
-                f"configure_agent_served_creative() for it first; configured: {sorted(self._served_formats)}"
-            )
-        return self._served_formats[format_id]
 
     def published_format_spec(self, agent_url: str, format_id: str) -> Format | None:
         """The declaration a sync naming ``(agent_url, format_id)`` resolves against, or None.

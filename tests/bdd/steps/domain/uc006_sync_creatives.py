@@ -5383,16 +5383,10 @@ def given_generative_creative_exists_with_content(ctx: dict) -> None:
         principal=principal,
         creative_id=creative_id,
         name="Existing Generative Creative",
-        # The agent the update names (``fmt``), so the row and the resync carry one
-        # identity on every transport: the standard agent in process, the tenant's
-        # hosted agent over e2e_rest.
-        agent_url=fmt["agent_url"],
-        format=_CATALOG_GENERATIVE_FORMAT_ID,
-        # The declaration the env serves, which since salesagent-6xtxb IS the shared
-        # reference capture's -- so this is the same Format the factory would resolve on
-        # its own. Passed anyway, because the seed and the sync agreeing is the
-        # precondition, and spelling it keeps the step readable if either side moves.
-        format_spec=env.served_format_spec(_CATALOG_GENERATIVE_FORMAT_ID),
+        # The format the update names (``fmt``), so the row and the resync carry one
+        # identity on every transport. setup_generative_build already refused a format
+        # the capture does not serve as generative.
+        **seeded_format_columns(env, fmt),
         data=existing_data,
     )
     env._commit_factory_data()
