@@ -2545,8 +2545,14 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy success spec
     And the response status should be "completed"
-    And the response should not include a sandbox field
+    And the response sandbox field should be absent or false
     # BR-RULE-209 INV-5: production account -> sandbox absent
+    # LOCAL CORRECTION: the Then required sandbox to be absent. The pin describes only
+    # sandbox: true ("When true, this response contains simulated data") and sandbox.mdx says
+    # sellers "SHOULD include sandbox: true" for a sandbox account, so a production response
+    # carrying sandbox: false is conformant. The Then grades absent or false on the wire.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-response.json
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/sandbox.mdx
 
   @T-UC-002-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid budget returns real validation error
