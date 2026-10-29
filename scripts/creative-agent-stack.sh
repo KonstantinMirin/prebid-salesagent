@@ -15,6 +15,8 @@
 #   scripts/creative-agent-stack.sh down    # stop+rm containers+network (keeps image/tarball cache)
 #   scripts/creative-agent-stack.sh url     # print CREATIVE_AGENT_URL (the MCP endpoint)
 #   scripts/creative-agent-stack.sh origin  # print CREATIVE_AGENT_ORIGIN (the agent's identity)
+#   scripts/creative-agent-stack.sh env     # print the exports a host process needs to dial it:
+#                                           #   eval "$(scripts/creative-agent-stack.sh env)"
 #   scripts/creative-agent-stack.sh publish # build+push pin-keyed image to ghcr.io (CI publish workflow)
 set -euo pipefail
 
@@ -176,6 +178,22 @@ cmd_publish() {
 cmd_url() { echo "$CREATIVE_AGENT_URL"; }
 cmd_origin() { echo "$CREATIVE_AGENT_ORIGIN"; }
 
+# Everything a process on THIS HOST needs to dial the stack, as shell exports: the
+# endpoint and identity above, plus the two the URL alone does not carry.
+# ADCP_OUTBOUND_ALLOW_PRIVATE opens the egress seam's private-range hatch, because
+# agent.localhost is a reserved loopback address src/core/security/outbound_http.py
+# refuses without it (an ad-hoc run that set only the URL got that refusal back as a
+# bare CONFIGURATION_ERROR, salesagent-ol033.18). SSL_CERT_FILE is the COMBINED bundle
+# (system CA + the generated private CA), so the process trusts the TLS front without
+# losing the public roots. TEST PATH ONLY: an env carrying the hatch cannot grade a
+# private-range refusal, so only a run that brought this stack up evals it.
+cmd_env() {
+    echo "export CREATIVE_AGENT_URL=\"${CREATIVE_AGENT_URL}\""
+    echo "export CREATIVE_AGENT_ORIGIN=\"${CREATIVE_AGENT_ORIGIN}\""
+    echo "export ADCP_OUTBOUND_ALLOW_PRIVATE=\"true\""
+    echo "export SSL_CERT_FILE=\"$(pwd)/.test-tls/combined-ca.pem\""
+}
+
 # Fetch the pinned source + build the image only. Idempotent. Shared by `up`
 # (standalone host run) and `build` (in-network: docker-compose.e2e.yml reuses
 # the resulting `adcp-creative-agent` image as a network service, no :9999).
@@ -281,6 +299,7 @@ case "${1:-}" in
     down) cmd_down ;;
     url) cmd_url ;;
     origin) cmd_origin ;;
+    env) cmd_env ;;
     publish) cmd_publish ;;
-    *) echo "usage: $0 {up|build|down|url|origin|publish}" >&2; exit 2 ;;
+    *) echo "usage: $0 {up|build|down|url|origin|env|publish}" >&2; exit 2 ;;
 esac

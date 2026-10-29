@@ -26,7 +26,10 @@ made this suite red non-deterministically .
 CREATIVE_AGENT_URL must point at the pinned reference agent. The authoritative
 runner brings it up automatically (run_all_tests.sh → scripts/creative-agent-stack.sh,
 mirroring the CI `creative` matrix group, single-sourced pin). To run ad-hoc:
-``scripts/creative-agent-stack.sh up`` then export the URL. If it is unset or
+``scripts/creative-agent-stack.sh up`` then ``eval "$(scripts/creative-agent-stack.sh env)"``,
+which exports the endpoint and identity plus the egress hatch and CA bundle a host process
+needs to reach agent.localhost -- the URL alone is refused by the egress seam, and that
+refusal came back as a bare CONFIGURATION_ERROR (salesagent-ol033.18). If it is unset or
 points at the public host, the guard below FAILS LOUD with instructions — it
 does not hit the internet (set ALLOW_LIVE_CREATIVE_AGENT=1 to deliberately
 override for manual prod testing).
@@ -75,7 +78,7 @@ def _require_controlled_creative_agent():
             f"{url!r} — unset or the live public host. These tests must NOT hit "
             "https://creative.adcontextprotocol.org (its catalog drifts). Bring up the pinned "
             "reference agent: `scripts/creative-agent-stack.sh up` then "
-            "`export CREATIVE_AGENT_URL=$(scripts/creative-agent-stack.sh url)`. The authoritative "
+            '`eval "$(scripts/creative-agent-stack.sh env)"`. The authoritative '
             "runner does this automatically. Deliberate prod test: ALLOW_LIVE_CREATIVE_AGENT=1.",
             pytrace=False,
         )
