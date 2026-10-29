@@ -60,6 +60,7 @@ from src.core.database.models import (
     Product as DBProduct,
 )
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
+from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import (
     AdapterFailureDetails,
     CapabilityRefusalDetails,
@@ -1269,8 +1270,18 @@ def _update_media_buy_impl(
                                 if c.creative_id
                             ],
                         )
+                        # Joined, not a unit of the sync's own: update_media_buy.mdx
+                        # § Compatibility transaction boundary makes this request "one
+                        # atomic mutation" in which "No package, assignment, library
+                        # creative, or MediaBuy field from the rejected update may change".
+                        # A sync that committed on its own exit kept the uploaded creative
+                        # and its assignment when a later check refused the update.
                         sync_response = sync_creatives(
-                            sync_req, identity=identity, principal_id=principal_id, tenant=tenant
+                            sync_req,
+                            identity=identity,
+                            principal_id=principal_id,
+                            tenant=tenant,
+                            uow=uow.join(CreativeUoW),
                         )
 
                         # Check for sync errors

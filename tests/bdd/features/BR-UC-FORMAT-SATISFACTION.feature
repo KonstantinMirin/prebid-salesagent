@@ -838,6 +838,13 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   # format_options "the selected creative set MUST cover every included placement;
   # uncovered inventory MUST be rejected or refined, never silently omitted".
   #
+  # The refusal is the whole request's: update_media_buy.mdx § Compatibility transaction
+  # boundary, "One update_media_buy request is one atomic mutation ... No package,
+  # assignment, library creative, or MediaBuy field from the rejected update may change".
+  # The new bodies are written before the drop the refusal grades, and the wire envelope
+  # reads the same whether or not they stayed, so the refusal rows read the package and the
+  # creative library back as well.
+  #
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/creatives/description
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
   # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx
@@ -864,6 +871,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     And the package already carries library canonical "image" creatives carrying the "image_160x600" manifests
     When the Buyer Agent replaces the package's inline creatives through update_media_buy with canonical "image" creatives carrying the "<uploaded>" manifests
     Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "packages[0].creatives" for leaving placement "<placement>" uncovered
+    And the package keeps the creatives it held and none of the uploaded creatives is stored
 
     Examples:
       | uploaded      | placement                     |

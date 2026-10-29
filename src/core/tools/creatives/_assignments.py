@@ -140,8 +140,9 @@ def _process_assignments(
     of opening one. sync_creatives passes its own under ``dry_run`` so the
     creative writes and these assignment writes share a single transaction that
     is rolled back as a unit — which is also what lets this stage read those
-    creatives as flushed rows. Passing nothing opens (and commits) a transaction
-    of its own, the live behavior.
+    creatives as flushed rows — and passes its caller's when it joined one, so
+    both commit or roll back with that caller. Passing nothing opens (and
+    commits) a transaction of its own, the live behavior.
 
     Returns:
         List of ``CreativeAssignment`` schema objects created or updated.
