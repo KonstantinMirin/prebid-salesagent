@@ -1368,12 +1368,12 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition          | id_config                        | outcome |
-      | media_buy_id_only  | media_buy_id=mb_existing         | success |
+      | partition          | id_config                        | outcome  |
+      | media_buy_id_only  | media_buy_id=mb_existing         | accepted |
 
     Examples: Invalid partitions
       | partition       | id_config                                   | outcome                                      |
-      | neither_provided | <none>                                      | error "INVALID_REQUEST" with suggestion       |
+      | neither_provided | <none>                                      | error "INVALID_REQUEST" on media_buy_id with suggestion |
 
   @T-UC-003-boundary-media-buy-identification @boundary @media_buy_identification
   Scenario Outline: Media buy identification boundary validation - <boundary_point>
@@ -1390,8 +1390,14 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Boundary values
       | boundary_point                       | id_config                                   | outcome                                  |
-      | media_buy_id only (primary path)     | media_buy_id=mb_existing                    | success                                  |
-      | neither identifier (missing)         | <none>                                       | error "INVALID_REQUEST" with suggestion  |
+      | media_buy_id only (primary path)     | media_buy_id=mb_existing                    | accepted                                 |
+      | neither identifier (missing)         | <none>                                       | error "INVALID_REQUEST" on media_buy_id with suggestion  |
+    # LOCAL CORRECTION (both identification outlines): the success rows ended in bare
+    # "success", which any non-error answer satisfies, so a seller that updated some other
+    # buy passed; "accepted" requires the success response's media_buy_id to be the buy the
+    # request named. The missing-identifier rows pin the field the refusal names: media_buy_id
+    # is in the request's required list.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/required
 
   @T-UC-003-partition-frequency-cap-suppress @partition @frequency_cap_suppress
   Scenario Outline: Frequency cap suppress partition validation - <partition>

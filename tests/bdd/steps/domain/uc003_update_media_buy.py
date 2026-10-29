@@ -1623,7 +1623,8 @@ def given_update_request_with_identification(ctx: dict, id_config: str) -> None:
     """Build update request with specific identification fields.
 
     id_config formats:
-    - 'media_buy_id=<existing>' — use the existing media buy's ID
+    - 'media_buy_id=<label>' — the buy the label names, resolved as the table Given resolves it
+      (the Background registers ``mb_existing`` for the seeded buy)
     - '<none>' — set neither (expect error)
     """
     kwargs: dict[str, Any] = {}
@@ -1636,15 +1637,8 @@ def given_update_request_with_identification(ctx: dict, id_config: str) -> None:
     else:
         for part in stripped.split(","):
             key, _, val = part.strip().partition("=")
-            key = key.strip()
-            val = val.strip()
-            if key == "media_buy_id":
-                if val == "<existing>":
-                    mb = ctx.get("existing_media_buy")
-                    assert mb is not None, "media_buy_id=<existing> but no existing_media_buy in ctx"
-                    kwargs["media_buy_id"] = mb.media_buy_id
-                else:
-                    kwargs["media_buy_id"] = val
+            assert key.strip() == "media_buy_id", f"unrecognized identification field {key!r} in {id_config!r}"
+            kwargs["media_buy_id"] = _resolve_media_buy_id(ctx, val.strip())
 
     ctx["update_kwargs"] = kwargs
 
