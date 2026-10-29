@@ -149,6 +149,22 @@ def _stored_package(ctx: dict, label: str) -> tuple[Any, dict[str, Any]]:
         return row.budget, dict(row.package_config or {})
 
 
+def _stored_assignment_routing(ctx: dict, label: str) -> dict[str, list[str] | None]:
+    """``{creative_id: placement_ids}`` of the assignments persisted on package *label*.
+
+    Read through ``MediaBuyUoW`` for the reason ``_stored_package`` gives: the claim is
+    what the seller recorded, and on e2e_rest only the live server's database holds it.
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    mb = _existing_media_buy(ctx)
+    package_id = _resolve_package_id(ctx, label)
+    with MediaBuyUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.assignments is not None
+        rows = uow.assignments.get_by_media_buy_and_package(mb.media_buy_id, package_id)
+        return {row.creative_id: row.placement_ids for row in rows}
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — Background + request construction
 # ═══════════════════════════════════════════════════════════════════════
@@ -2100,6 +2116,11 @@ def given_creative_assignments_with_state(ctx: dict, creative_state: str) -> Non
 # ═══════════════════════════════════════════════════════════════════════
 
 
+#: The placements the package's product declares on the placement-validation rows; the
+#: '(valid)' row names exactly these, the '(not in product)' row names one outside them.
+_PRODUCT_PLACEMENT_IDS = ("plc_a", "plc_b")
+
+
 @given(
     parsers.parse("the package update includes creative_assignments with placement configuration: {placement_config}")
 )
@@ -2111,10 +2132,21 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
     - 'no placement_ids specified' — no placement_ids
     - 'placement_ids=[plc_invalid] (not in product)' — invalid IDs
     - 'placement_ids=[plc_a] (product unsupported)' — product doesn't support placements
+
+    The PRODUCT is part of every row's fixture, because the rows differ in it: the
+    package's product declares the placements ``plc_a`` and ``plc_b`` on every row but
+    '(product unsupported)', where it declares none. Seeded only on that row, the product
+    had no placements anywhere, so '(valid)' and '(not in product)' were refused
+    UNSUPPORTED_FEATURE and the unsupported row passed whether or not its own fixture ran.
+    The placements are ``mode: included``: pinned core/placement.json (v3.2.7) makes an
+    included placement "fixed product inventory" that every package buys, and creative
+    assignments "may then route creatives only within the purchased set" — a
+    ``targetable`` one is purchased only through placement_selection.
     """
     import re
 
     from tests.factories.creative import CreativeFactory
+    from tests.factories.product import StoredPlacementFactory
 
     env = ctx["env"]
     kwargs = _ensure_update_defaults(ctx)
@@ -2148,30 +2180,19 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
             assignment["placement_ids"] = placement_ids
             ctx["referenced_placement_ids"] = placement_ids
 
-    # Handle "product unsupported" — configure product to not support placements
-    if "product unsupported" in stripped:
-        product = ctx.get("default_product")
-        if product is None:
-            # UC-003 harness doesn't store product in ctx — look up from existing package
-            pkg_obj = ctx.get("existing_package")
-            if pkg_obj is not None:
-                product_id = (pkg_obj.package_config or {}).get("product_id")
-                if product_id:
-                    from sqlalchemy import select
-
-                    from src.core.database.models import Product as ProductModel
-
-                    with db_session(ctx) as session:
-                        product = session.scalars(
-                            select(ProductModel).filter_by(product_id=product_id, tenant_id=ctx["tenant"].tenant_id)
-                        ).first()
-        assert product is not None, (
-            "Scenario requires '(product unsupported)' but no product found in ctx or DB — "
-            "ensure a Given step sets ctx['default_product'] or the harness creates a product"
-        )
-        # The model column is `placements`; clearing it disables placement-level targeting.
-        product.placements = None
-        env._commit_factory_data()
+    # The package's product: the one the update path reads placements from.
+    product = ctx["default_product"]
+    package_product_id = (ctx["existing_package"].package_config or {}).get("product_id")
+    assert package_product_id == product.product_id, (
+        f"pkg_001 sells product {package_product_id!r}, not the seeded default product "
+        f"{product.product_id!r} whose placements this step declares"
+    )
+    product.placements = (
+        None
+        if "product unsupported" in stripped
+        else [StoredPlacementFactory(placement_id=pid, mode="included") for pid in _PRODUCT_PLACEMENT_IDS]
+    )
+    env._commit_factory_data()
 
     pkg["creative_assignments"] = [assignment]
     ctx["referenced_creative_ids"] = [cid]
@@ -3227,8 +3248,26 @@ def _assert_submitted(ctx: dict) -> None:
     then_response_contains_task_id(ctx)
 
 
+def _assert_assignment_routing_persisted(ctx: dict) -> None:
+    """Synchronous success, and the package now holds exactly the requested assignments,
+    each routed to the placement_ids it asked for -- none where it named none.
+
+    creative_assignments replaces the package's set (BR-RULE-024), so the stored set is
+    compared whole: a refusal, a dropped assignment, or routing the seller did not record
+    all fail here, where a bare "success" read nothing back.
+    """
+    _assert_synchronous_success(ctx)
+    requested = {
+        assignment["creative_id"]: assignment.get("placement_ids")
+        for assignment in ctx["update_kwargs"]["packages"][0]["creative_assignments"]
+    }
+    stored = _stored_assignment_routing(ctx, "pkg_001")
+    assert stored == requested, f"the seller stored the assignments {stored!r}, not the requested {requested!r}"
+
+
 _UPDATE_OUTCOMES = {
     "accepted": _assert_synchronous_success,
+    "success with each assignment's placement_ids stored as requested": _assert_assignment_routing_persisted,
     "success with persisted records": _assert_persisted_success,
     "success with pending status": _assert_submitted,
     "submitted task envelope (awaiting approval)": _assert_submitted,

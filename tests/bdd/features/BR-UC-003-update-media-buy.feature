@@ -2125,14 +2125,22 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition               | placement_config                       | outcome |
-      | all_valid_for_product   | placement_ids=[plc_a, plc_b] (valid)   | success |
-      | no_placement_ids        | no placement_ids specified             | success |
+      | partition               | placement_config                       | outcome                                                           |
+      | all_valid_for_product   | placement_ids=[plc_a, plc_b] (valid)   | success with each assignment's placement_ids stored as requested |
+      | no_placement_ids        | no placement_ids specified             | success with each assignment's placement_ids stored as requested |
 
     Examples: Invalid partitions
       | partition                    | placement_config                              | outcome                                          |
       | invalid_placement_id         | placement_ids=[plc_invalid] (not in product)  | error "VALIDATION_ERROR" with suggestion     |
       | product_no_placement_support | placement_ids=[plc_a] (product unsupported)   | error "UNSUPPORTED_FEATURE" with suggestion     |
+    # LOCAL CORRECTION: the two valid rows read "success", which checked only that some
+    # response came back. A placement_id routes a creative "within already-purchased
+    # inventory", so the success the rows claim is the routing the seller recorded: the
+    # outcome now reads the package's stored assignments back. The product declares
+    # plc_a and plc_b (mode included, which every package buys) on every row but the
+    # unsupported one, so the rows differ in the product as well as in the request.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-assignment.json pointer=/properties/placement_ids
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/mode
 
   @T-UC-003-boundary-placement-id @boundary @placement_id_validation
   Scenario Outline: Placement ID validation boundary - <boundary_point>
