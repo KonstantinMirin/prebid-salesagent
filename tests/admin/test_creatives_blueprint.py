@@ -101,7 +101,9 @@ def _create_creative(tenant_id: str, status: str = "pending") -> str:
     The format identity is stamped by ``stamp_format_identity`` rather than spelled as
     columns: the creative-identity collapse dropped ``agent_url`` and ``format`` from the
     table in favour of the four columns ``_identity_columns`` derives, and the shared helper
-    derives them through the same mapping ``CreativeRepository.create`` uses.
+    derives them through the same mapping ``CreativeRepository.create`` uses. Its default
+    reference is a format the reference agent serves; a legacy id stamped at any other
+    agent has no canonical projection and production refuses it.
     """
     creative_id = f"cre_{uuid.uuid4().hex[:12]}"
     now = datetime.now(UTC)
@@ -115,7 +117,7 @@ def _create_creative(tenant_id: str, status: str = "pending") -> str:
         created_at=now,
         updated_at=now,
     )
-    stamp_format_identity(creative, format_id="display_300x250_image", agent_url="https://creatives.example.com")
+    stamp_format_identity(creative)
     with get_db_session() as session:
         session.add(creative)
         session.commit()
@@ -233,8 +235,6 @@ def _create_creative_for_retro_push(session, tenant_id: str, status: str = "pend
         status=status,
         creative_id=f"cre_{uuid.uuid4().hex[:12]}",
         name="Test Creative",
-        agent_url="https://creatives.example.com",
-        format="display_300x250_image",
     )
     return creative.creative_id
 
