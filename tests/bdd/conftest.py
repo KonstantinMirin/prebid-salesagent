@@ -470,18 +470,18 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: UC-003 ext-t — invoice_recipient authorization (BR-RULE-214) not implemented;
     # production accepts the override without an authorization check, so no VALIDATION_ERROR is raised.
     "T-UC-003-ext-t": "invoice_recipient authorization not implemented (BR-RULE-214) — production gap",
-    # FIXME: UC-003 ext-u — graduation candidate, held only for the box run that graduation
-    # requires (.claude/rules/workflows/xpass-graduation.md step 9). The production gap is
-    # closed: update_media_buy refuses new_packages UNSUPPORTED_FEATURE above the UoW
-    # (media_buy_update._refuse_unsupported_actions), and add_packages is out of every
-    # valid_actions[] (_media_buy_status.seller_valid_actions). Inspected without a run: the
-    # scenario states the full obligation (BR-RULE-217 INV-1, code, suggestion); the Givens
-    # build a complete package-request through the shared builder and read the seller's
-    # advertisement from _adcp_status_and_actions on the uc003-ext seed (pending_approval,
-    # flight starting now: non-empty, no add_packages); the Thens grade the wire envelope.
-    # Not in e2e_rest_known_failures.txt. Predicted XPASS(strict), reported FAILED, on a2a,
-    # mcp, rest and e2e_rest: delete this entry with a "# Graduated:" note citing that run.
-    "T-UC-003-ext-u": "new_packages refusal implemented (BR-RULE-217) — awaiting box-run graduation",
+    # Graduated: T-UC-003-ext-u (new_packages refused UNSUPPORTED_FEATURE). XPASS(strict) on
+    # a2a, mcp, rest and e2e_rest in box run innet_291026_0131. Inspected per
+    # .claude/rules/workflows/xpass-graduation.md: the scenario states the full obligation
+    # (BR-RULE-217 INV-1, code, suggestion), and the code is the one
+    # media-buy/update-media-buy-request.json /properties/new_packages permits at the pin
+    # ("MUST reject with ACTION_NOT_ALLOWED (preferred) or UNSUPPORTED_FEATURE (legacy)").
+    # The Givens build a complete package-request through the shared builder and read the
+    # seller's advertisement from _adcp_status_and_actions (non-empty, no add_packages); the
+    # Thens grade the wire envelope (_wire_code, no reconstructed fallback). Production:
+    # media_buy_update._refuse_unsupported_actions raises AdCPCapabilityNotSupportedError
+    # above the UoW from UNSUPPORTED_ACTIONS, the declaration that also keeps add_packages out
+    # of valid_actions[]. Not in e2e_rest_known_failures.txt.
     # FIXME: UC-002 ASAP — response doesn't expose resolved start_time
     "T-UC-002-alt-asap": "response lacks resolved start_time field — spec-production gap",
     # FIXME: UC-002 error code mismatch — Pydantic VALIDATION_ERROR vs spec INVALID_REQUEST
@@ -1861,14 +1861,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # so [rest] serializes the request body and filters for real — the former
         # _REST_XFAIL_TAGS block is gone (see note above the function).
 
-        # E2E_REST: Docker always has the creative agent — can't test empty catalog
-        if is_e2e_rest and "T-UC-005-empty-catalog" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="E2E Docker always has creative agents — cannot test empty catalog",
-                    strict=True,
-                )
-            )
+        # Graduated: the e2e_rest route for T-UC-005-empty-catalog ("E2E Docker always has
+        # creative agents — cannot test empty catalog"). XPASS(strict) on e2e_rest in box run
+        # innet_291026_0131, and passed on a2a, mcp and rest in the same run. Its premise is
+        # gone: the Given seeds the catalog through set_registry_formats ->
+        # seed_own_creative_agent, which serves the empty catalog from the tenant's own peer
+        # creative agent and turns off use_default_creative_agent, so the live server's
+        # registry (_get_tenant_agents) lists that peer alone. The scenario now also grades
+        # that no errors[] rides the response, so a peer that failed (AGENT_UNREACHABLE,
+        # zero formats) cannot satisfy it.
 
         # E2E_REST: the 3 UC-003 manual-approval scenarios (T-UC-003-alt-manual,
         # T-UC-003-approval-tenant, T-UC-003-approval-adapter) GRADUATED — the old

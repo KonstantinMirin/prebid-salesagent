@@ -469,6 +469,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Then the response is compliant with the list_creative_formats spec
     And no formats should be returned
     And no error should be returned
+    And the response should NOT have an "errors" field
     # Edge case: PRE-B1 boundary — no formats available
 
   # A creative agent's catalog is a peer's document, parsed by this seller. One entry the
