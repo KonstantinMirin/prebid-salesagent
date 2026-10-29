@@ -1,7 +1,6 @@
 """Products management blueprint for admin UI."""
 
 import asyncio
-import functools
 import json
 import logging
 import uuid
@@ -11,7 +10,7 @@ from typing import Any
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
 from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import joinedload
 from werkzeug.exceptions import HTTPException
@@ -26,6 +25,7 @@ from src.core.database.product_pricing import get_product_pricing_options
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.format_resolver import linked_format_contract
+from src.core.publisher_format_catalog import PublisherCatalog, format_declarations_type
 from src.core.schemas import Format
 from src.services.gam_product_config_service import GAMProductConfigService
 
@@ -102,24 +102,12 @@ def _parse_format_entries(formats_parsed: list[dict]) -> list[dict]:
     return entries
 
 
-@functools.cache
-def _format_options_type() -> TypeAdapter:
-    """The pinned type of a product's ``format_options``, read off the DTO that serves it.
-
-    Read rather than restated. The operator form must refuse exactly what
-    ``convert_product_model_to_schema`` would refuse later, and validating against the
-    same annotation is the only way to guarantee that -- a second spelling of
-    core/product-format-declaration.json here would drift from the pin on the next bump.
-    """
-    from src.core.schemas.product import Product as ProductSchema
-
-    return TypeAdapter(ProductSchema.model_fields["format_options"].annotation)
-
-
-def _parse_authored_format_options(raw: str | None) -> list[dict] | None:
+def _parse_authored_format_options(raw: str | None, catalog: PublisherCatalog) -> list[dict] | None:
     """The canonical arm of core/product.json's root anyOf, as the operator authored it.
 
-    Validated at AUTHOR time against the pinned discriminated union. An invalid
+    Validated at AUTHOR time against the pinned discriminated union
+    (``format_declarations_type``, read off the DTO that serves the column, so the form
+    refuses exactly what ``convert_product_model_to_schema`` would refuse later). An invalid
     declaration does not fail on the row -- it fails in
     ``convert_product_model_to_schema``, which ``get_products`` runs in a loop that
     re-raises, so one mis-authored product answers INTERNAL_ERROR for the whole tenant's
@@ -131,6 +119,10 @@ def _parse_authored_format_options(raw: str | None) -> list[dict] | None:
     NULL rather than as ``[]``. The pin gives ``format_options`` ``minItems: 1``, and the
     deprecated arm is satisfied by its KEY alone -- an empty array asserts a declaration
     that is not there.
+
+    A declaration naming a publisher option in this seller's OWN namespace must name one its
+    publisher format catalog declares (*catalog*, read off the tenant by the caller): RFC S3,
+    see ``src/core/publisher_format_catalog.py``.
     """
     if not raw or not raw.strip():
         return None
@@ -141,13 +133,14 @@ def _parse_authored_format_options(raw: str | None) -> list[dict] | None:
     if not document:
         return None
     try:
-        _format_options_type().validate_python(document)
+        format_declarations_type().validate_python(document)
     except ValidationError as e:
         first = e.errors()[0]
         location = "/".join(str(part) for part in first["loc"]) or "format_options"
         raise ValueError(
             f"format_options is not a valid canonical format declaration ({location}: {first['msg']})"
         ) from e
+    catalog.refuse_unresolved(document)
     return document
 
 
@@ -876,7 +869,9 @@ def add_product(tenant_id):
                 # that declares formats is not made to author declarations its profile
                 # then overrides.
                 try:
-                    format_options = _parse_authored_format_options(form_data.get("format_options"))
+                    format_options = _parse_authored_format_options(
+                        form_data.get("format_options"), PublisherCatalog.of(tenant)
+                    )
                     # ``None`` for the legacy arm, literally: a product created here HAS no
                     # legacy arm, and its canonical declarations come from the product or
                     # its profile, never from a legacy-only profile's ``format_ids``.
@@ -1061,9 +1056,12 @@ def add_product(tenant_id):
                     "implementation_config": implementation_config,
                 }
 
-                # Inventory profile association (optional), resolved and checked above.
+                # Inventory profile association (optional), resolved and checked above. The
+                # relationship too, so ``Product.format_contract`` reads the profile before the
+                # row is flushed.
                 if profile is not None:
                     product_kwargs["inventory_profile_id"] = profile.id
+                    product_kwargs["inventory_profile"] = profile
 
                 # Only add countries if explicitly set
                 if countries is not None:
@@ -1336,6 +1334,15 @@ def add_product(tenant_id):
                 # Create product with correct fields matching the Product model
                 product = Product(**product_kwargs)
                 db_session.add(product)
+                # The contract the product is SERVED, whichever arm supplies it: a linked
+                # profile announces its declarations on the product's behalf, and those were
+                # checked against the catalog when the profile was authored, not since.
+                try:
+                    PublisherCatalog.of(tenant).refuse_unresolved(product.format_contract.format_options)
+                except ValueError as e:
+                    db_session.rollback()
+                    flash(str(e), "error")
+                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
                 db_session.flush()  # Flush to get product ID before creating pricing options
 
                 # Create pricing options (already parsed above)
@@ -1447,7 +1454,9 @@ def edit_product(tenant_id, product_id):
     if request.method == "POST":
         if format_options_submitted:
             try:
-                authored_format_options = _parse_authored_format_options(request.form.get("format_options"))
+                authored_format_options = _parse_authored_format_options(
+                    request.form.get("format_options"), PublisherCatalog.of(tenant)
+                )
             except ValueError as e:
                 flash(str(e), "error")
                 return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
@@ -1476,9 +1485,6 @@ def edit_product(tenant_id, product_id):
                 # Handle inventory profile association (optional)
                 # Check for inventory_profile_id directly (no need for inventory_mode radio button)
                 inventory_profile_id = form_data.get("inventory_profile_id", "").strip()
-                # The profile the edited product links, which supplies its format contract
-                # (``Product.format_contract``); the anyOf below is checked against it.
-                linked_profile = None
                 if inventory_profile_id:
                     try:
                         profile_id = int(inventory_profile_id)
@@ -1495,14 +1501,17 @@ def edit_product(tenant_id, product_id):
                             return redirect(
                                 url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
                             )
+                        # The relationship too, so ``Product.format_contract`` reads the new link
+                        # before the row is flushed.
                         product.inventory_profile_id = profile_id
-                        linked_profile = profile
+                        product.inventory_profile = profile
                     except (ValueError, TypeError):
                         flash("Invalid inventory profile ID", "error")
                         return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
                 else:
                     # No profile selected - clear inventory profile association
                     product.inventory_profile_id = None
+                    product.inventory_profile = None
 
                 # Apply the canonical arm (validated above, outside the session).
                 #
@@ -1520,13 +1529,13 @@ def edit_product(tenant_id, product_id):
 
                     attributes.flag_modified(product, "format_options")
 
-                # The anyOf, now that both arms carry their post-edit values, over the
-                # contract the product will be served: a linked profile's declarations count.
+                # The anyOf, and the served contract's own-namespace options, now that both arms
+                # and the profile link carry their post-edit values: the contract the product
+                # will be served, so a linked profile's declarations count.
                 try:
-                    contract = linked_format_contract(
-                        profile=linked_profile, format_options=product.format_options, format_ids=product.format_ids
-                    )
+                    contract = product.format_contract
                     _refuse_a_product_with_no_format_arm(list(contract.format_ids), contract.format_options)
+                    PublisherCatalog.of(tenant).refuse_unresolved(contract.format_options)
                 except ValueError as e:
                     flash(str(e), "error")
                     return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
