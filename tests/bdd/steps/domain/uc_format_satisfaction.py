@@ -146,6 +146,16 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "params": {"duration_ms_exact": 30000},
         }
     ],
+    # BOTH duration keys, so the pin's "Duration precedence is duration_ms_exact >
+    # duration_ms_range" (core/product-format-declaration.json) decides which one a selector
+    # is held to: the exact value is ``exact_duration``'s, the range ``duration_range``'s.
+    "exact_over_range": [
+        {
+            "format_kind": "video_hosted",
+            "format_option_id": "satisfaction_video_exact_in_range",
+            "params": {"duration_ms_exact": 30000, "duration_ms_range": [5000, 60000]},
+        }
+    ],
     # A REQUIRED SLOT, which formats.mdx grades on both the group and the asset type.
     "required_slots": [
         {
@@ -226,14 +236,21 @@ _MREC, _LEADERBOARD = _DECLARATIONS["two_image_options"]
 
 
 def _placement(placement_id: str, mode: str, *accepted: dict[str, Any]) -> dict[str, Any]:
-    """One stored ``core/placement.json`` document: a seller-inline placement narrowing inline."""
-    return {
+    """One stored ``core/placement.json`` document: a seller-inline placement narrowing inline.
+
+    With no *accepted* declaration the placement states no ``format_options`` at all:
+    core/product.json, "An omitted optional layer is unconstrained", so it inherits the
+    product's set. An EMPTY list would be a present layer admitting nothing.
+    """
+    placement: dict[str, Any] = {
         "kind": "seller_inline",
         "placement_id": placement_id,
         "name": placement_id,
         "mode": mode,
-        "format_options": list(accepted),
     }
+    if accepted:
+        placement["format_options"] = list(accepted)
+    return placement
 
 
 #: What the seller STORES in ``placements``, per name, for the coverage scenarios. Every
@@ -273,6 +290,43 @@ _PLACEMENTS: dict[str, list[dict[str, Any]]] = {
             "satisfaction_inline_slot", "included", {"format_kind": "image", "params": {"width": 728, "height": 90}}
         ),
     ],
+    # Two included placements that narrow NOTHING, so each inherits the product's whole set
+    # and any selection the product accepts covers both.
+    "unnarrowed": [
+        _placement("satisfaction_mrec_slot", "included"),
+        _placement("satisfaction_leaderboard_slot", "included"),
+    ],
+    # Stored beside ``fixed_300x250`` (image 300x250, max_file_size_kb 200, jpg/png): one
+    # included placement narrowing ONLY the file-size cap, to 150, with no
+    # ``format_option_id``. It states no width or height, so it inherits the option's fixed
+    # 300x250 (canonical-formats.mdx § "Narrows": "when v2.params omits a parameter that v1
+    # specified, v2 inherits v1's value"); a seller grading the placement's silence about
+    # the size as a conflict refuses it.
+    "narrowed_file_size": [
+        _placement(
+            "satisfaction_small_mrec_slot", "included", {"format_kind": "image", "params": {"max_file_size_kb": 150}}
+        ),
+    ],
+    # Stored beside ``duration_range``: an included placement BROADER than the option, its
+    # range [1000, 120000] containing the product's [5000, 60000]. The option is the narrower
+    # side here, so the match is the reverse direction.
+    "widened_inline": [
+        _placement(
+            "satisfaction_long_video_slot",
+            "included",
+            {"format_kind": "video_hosted", "params": {"duration_ms_range": [1000, 120000]}},
+        ),
+    ],
+    # Stored beside ``exact_duration`` (``duration_ms_exact`` 30000): an included placement
+    # stating only a range that EXCLUDES the option's exact duration. Neither side satisfies
+    # the other, so the placement admits nothing the product sells.
+    "short_range_inline": [
+        _placement(
+            "satisfaction_short_video_slot",
+            "included",
+            {"format_kind": "video_hosted", "params": {"duration_ms_range": [5000, 20000]}},
+        ),
+    ],
     # Stored beside ``duration_range`` (video_hosted, ``duration_ms_range`` [5000, 60000]):
     # one included placement NARROWING it to [5000, 30000] with no ``format_option_id``. The
     # placement is the narrower side, so it matches; graded the other way round it does not.
@@ -301,6 +355,10 @@ _SELECTORS: dict[str, dict[str, Any]] = {
         "params": {"width": 300, "height": 250, "max_file_size_kb": 200, "image_formats": ["jpg", "png"]},
     },
     "product_option_ref": {"format_option_refs": [{"scope": "product", "format_option_id": _PRODUCT_OPTION_ID}]},
+    # ``two_image_options``'s OTHER option, the 728x90, alone.
+    "leaderboard_option_ref": {
+        "format_option_refs": [{"scope": "product", "format_option_id": _LEADERBOARD["format_option_id"]}]
+    },
     # BOTH of ``two_image_options``'s product-local options on one arm: a SET, which is how a
     # buyer covers two included placements that accept one option each.
     "both_option_refs": {
@@ -1182,6 +1240,28 @@ def then_refused_unsupported_feature(ctx: dict, arm: str) -> None:
     ``0].format_kind`` (salesagent-8qela.159 is that corruption measured on another suite).
     """
     ctx["result"].assert_wire_error("UNSUPPORTED_FEATURE", field=f"packages[0].{arm}")
+
+
+@then(
+    parsers.parse(
+        'the buyer is refused UNSUPPORTED_FEATURE naming the "{arm}" selector '
+        'for an uncovered placement of "{selected}"'
+    )
+)
+def then_refused_uncovered_placement(ctx: dict, arm: str, selected: str) -> None:
+    """The selector refusal above, narrowed to the placement-coverage rule by its details.
+
+    ``details.capability`` names the rule that refused, which is what separates this
+    refusal from an unpublished option ref or an unsatisfied param on the same arm and code.
+    ``details.rejected_value`` is the declaration the package selected, compared to the
+    option id the scenario names. ``core/error.json`` defines it as "the offending value the
+    buyer supplied", and here that is the selection the placement does not admit.
+    """
+    ctx["result"].assert_wire_error(
+        "UNSUPPORTED_FEATURE",
+        field=f"packages[0].{arm}",
+        details={"capability": "placement_uncovered", "rejected_value": selected},
+    )
 
 
 @then("the update is accepted")

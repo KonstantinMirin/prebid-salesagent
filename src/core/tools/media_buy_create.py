@@ -2756,8 +2756,14 @@ async def _create_media_buy_impl(
                 for product_id, row in product_map.items()
             }
             # The placements each product stores, captured beside its arms for the same
-            # reason: the gate's coverage rule reads them after this unit closes.
-            declared_placements = {product_id: list(row.placements or []) for product_id, row in product_map.items()}
+            # reason: the gate's coverage rule reads them after this unit closes. Read through
+            # ``served_placements``, the reading ``get_products`` serves, so the gate grades
+            # the ``mode`` the buyer was shown.
+            from src.core.product_conversion import served_placements
+
+            declared_placements = {
+                product_id: served_placements(row.placements) for product_id, row in product_map.items()
+            }
 
             # AdCP spec (core/targeting.json): "Sellers SHOULD return a validation
             # error if the product has property_targeting_allowed: false."

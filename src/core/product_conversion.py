@@ -354,6 +354,16 @@ def _normalize_legacy_placement(placement: dict) -> dict:
     return normalized
 
 
+def served_placements(stored: list | None) -> list:
+    """A product row's ``placements`` as the wire serves them, legacy defaults applied.
+
+    The one reading of the column. ``get_products`` serves it, and ``create_media_buy``
+    grades a package's format coverage against it, so a placement's ``mode`` is the same
+    value in both: a stored row that states none is ``targetable`` everywhere.
+    """
+    return [_normalize_legacy_placement(p) if isinstance(p, dict) else p for p in stored or []]
+
+
 def default_reporting_capabilities() -> LibraryReportingCapabilities:
     """The reporting_capabilities a row that stores NULL is served with.
 
@@ -514,9 +524,7 @@ def convert_product_model_to_schema(
         # inline, so they are seller_inline, not publisher_ref: default kind="seller_inline"
         # (spec requires publisher_domain for publisher_ref, which legacy rows lack, but name
         # for seller_inline, which they usually carry) and mode="targetable".
-        product_data["placements"] = [
-            _normalize_legacy_placement(p) if isinstance(p, dict) else p for p in product_model.placements
-        ]
+        product_data["placements"] = served_placements(product_model.placements)
     # core/product.json requires reporting_capabilities; the column is still nullable
     # (salesagent-3cs7o.21 makes it NOT NULL with a backfill). The default is supplied HERE,
     # at the row-to-model edge, never by the wire model: Product inherits the field as

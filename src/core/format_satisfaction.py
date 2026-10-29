@@ -69,6 +69,7 @@ from adcp.canonical_formats import upgrade_legacy_format_id
 from adcp.canonical_formats.format_options import FormatKindNotInClosedSetError
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from adcp.types.domains.core.format_option_ref import FormatOptionReference as LibraryFormatOptionReference
+from adcp.types.domains.core.placement import Mode as LibraryPlacementMode
 from adcp.types.domains.core.product_format_declaration import (
     ProductFormatDeclaration as LibraryFormatDeclaration,
 )
@@ -1074,8 +1075,9 @@ def included_placement_layers(placements: Iterable[Any] | None) -> tuple[Placeme
     Only ``mode: included`` counts. ``core/placement.json`` makes ``included`` "fixed product
     inventory: it cannot be independently selected", so every package buys it, while a
     ``targetable`` placement is purchased only through ``placement_selection``, which this
-    seller does not accept. A stored row with no ``mode`` is served as ``targetable``
-    (``product_conversion._normalize_legacy_placement``), so it is not included here either.
+    seller does not accept. *placements* is the SERVED reading
+    (``product_conversion.served_placements``), where a stored row stating no ``mode`` is
+    ``targetable``, so the gate grades the mode the buyer was shown.
 
     A placement that states no inline ``format_options`` is left out: "An omitted optional
     layer is unconstrained", so it accepts every product declaration. A placement whose
@@ -1089,7 +1091,7 @@ def included_placement_layers(placements: Iterable[Any] | None) -> tuple[Placeme
     """
     layers = []
     for placement in placements or []:
-        if not isinstance(placement, Mapping) or placement.get("mode") != "included":
+        if not isinstance(placement, Mapping) or placement.get("mode") != LibraryPlacementMode.included:
             continue
         if placement.get("format_options") is None:
             continue
@@ -1109,25 +1111,36 @@ def _placement_accepts(selected: LibraryFormatDeclaration, accepted: LibraryForm
     "Match publisher-declared options by {publisher_domain, format_option_id}, match
     product-local options by format_option_id when publisher_domain is omitted, and
     otherwise match declarations with the same format_kind whose narrower parameters
-    satisfy the broader declaration." The last case is directional, and the PLACEMENT is
-    the narrower side: ``core/placement.json`` says its inline declarations "are
-    intersected with the product-level format_options and MUST NOT introduce a format
-    outside that product upper bound". So the placement's declaration is the claim and the
-    selected product declaration is the target -- a placement narrowing ``[5000, 60000]``
-    to ``[5000, 30000]`` matches, which the reverse reading refused.
+    satisfy the broader declaration." The last case is directional, and either side can be
+    the narrower one, so both directions are asked:
 
-    Only the params the placement STATES are graded. ``canonical-formats.mdx``'s "narrows"
-    definition: "when v2.params omits a parameter that v1 specified, v2 inherits v1's
-    value", and the same document says "A placement without a locale policy inherits the
-    matching product format option's policy". A placement restating the kind without a
-    duration has inherited the product's, not failed to state it.
+    * FORWARD, the placement narrower: ``core/placement.json`` says its inline declarations
+      "are intersected with the product-level format_options and MUST NOT introduce a
+      format outside that product upper bound", so the placement's declaration is the claim
+      and the selected product declaration is the target -- a placement narrowing
+      ``[5000, 60000]`` to ``[5000, 30000]`` matches. Only the params the placement STATES
+      are graded. ``canonical-formats.mdx``'s "narrows" definition: "when v2.params omits a
+      parameter that v1 specified, v2 inherits v1's value", and the same document says "A
+      placement without a locale policy inherits the matching product format option's
+      policy". A placement restating the kind without a duration has inherited the
+      product's, not failed to state it. One exception: a placement stating only a
+      ``duration_ms_range`` still speaks to the option's ``duration_ms_exact``, so an exact
+      duration outside that range does not match by inheritance.
+    * REVERSE, the selected option narrower: the option is the claim and the placement's
+      declaration the target, so a placement broader than the option it admits (a wider
+      duration range, a larger file-size cap) matches, and an exact duration inside the
+      placement's range matches through the cross-key rule of :func:`_unsatisfied_params`.
     """
     if (option := _option_identity(accepted)) is not None:
         return option == _option_identity(selected)
+    if str(accepted.format_kind) != str(selected.format_kind):
+        return False
     claim = {key: value for key, value in _declared_params(accepted).items() if value is not None}
-    return str(accepted.format_kind) == str(selected.format_kind) and not _unsatisfied_params(
-        claim, _stated_constraints(_declared_params(selected), claim)
-    )
+    offered = {key: value for key, value in _declared_params(selected).items() if value is not None}
+    inherited = _stated_constraints(offered, claim)
+    if "duration_ms_range" in claim and "duration_ms_exact" in offered:
+        inherited["duration_ms_exact"] = offered["duration_ms_exact"]
+    return not _unsatisfied_params(claim, inherited) or not _unsatisfied_params(offered, claim)
 
 
 def _same_selection(
@@ -1251,6 +1264,9 @@ class SelectorResolution:
     #: Empty for every single-route caller (a stored creative), which is what keeps the
     #: coverage rule on the package path only.
     placements: tuple[PlacementLayer, ...] = dataclass_field(default=(), compare=False)
+    #: The product's canonical declarations, for :attr:`uncovered`'s ``accepted_values``:
+    #: the ones every included placement admits.
+    declarations: tuple[LibraryFormatDeclaration, ...] = dataclass_field(default=(), compare=False)
 
     @property
     def unresolved(self) -> FormatSatisfaction | None:
@@ -1391,7 +1407,19 @@ class SelectorResolution:
                     # One value when the arm selected one; a set has no single offending
                     # value, and the field pointer already names the arm.
                     rejected_value=labels[0] if len(labels) == 1 else None,
-                    accepted_values=tuple(sorted(_declaration_label(d) for d in layer.declarations)),
+                    # What this product would accept from this package on its own: the
+                    # declarations every included placement admits. Empty when the
+                    # placements share none, which is when only a set can cover them.
+                    accepted_values=tuple(
+                        sorted(
+                            _declaration_label(d)
+                            for d in self.declarations
+                            if all(
+                                any(_placement_accepts(d, accepted) for accepted in each.declarations)
+                                for each in self.placements
+                            )
+                        )
+                    ),
                     summary=f"selected formats {labels!r} do not cover included placement {layer.placement_id!r}",
                     field=self.routes[0][0].field,
                 )
@@ -1447,7 +1475,7 @@ def resolve_routes(
     beside an UNPROJECTABLE legacy id was accepted on the option route and the legacy
     route was never resolved at all.
 
-    *placements* is the product's stored ``placements`` column, for the coverage rule
+    *placements* is the product's ``placements`` as served (``served_placements``), for the coverage rule
     (:attr:`SelectorResolution.uncovered`). Read on the canonical lane only: a placement's
     inline narrowing is a set of canonical declarations, and the deprecated lane selects
     none to compare it with.
@@ -1480,6 +1508,7 @@ def resolve_routes(
             for route in routes
         ),
         placements=included_placement_layers(placements) if declared else (),
+        declarations=declared,
     )
 
 

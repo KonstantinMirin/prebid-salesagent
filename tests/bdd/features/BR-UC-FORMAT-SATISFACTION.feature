@@ -85,6 +85,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | text_limited_300x250 | exact_300x250                  |
       | duration_range       | exact_duration_in_range        |
       | exact_duration       | exact_duration_in_range        |
+      | exact_over_range     | exact_duration_in_range        |
       | fixed_300x250        | product_option_ref             |
       | fixed_300x250        | legacy_display_300x250         |
       | duration_range       | contained_range                |
@@ -175,6 +176,8 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | duration_range       | range_over_upper_bound           | format_kind        |
       | exact_duration       | exact_duration_mismatched        | format_kind        |
       | exact_duration       | contained_range                  | format_kind        |
+      | exact_duration       | duration_omitted                 | format_kind        |
+      | exact_over_range     | exact_duration_mismatched        | format_kind        |
       | required_slots       | slot_wrong_asset_type            | format_kind        |
       | publisher_300        | wrong_publisher_option_id        | format_option_refs |
 
@@ -242,6 +245,13 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     #   - wrong_publisher_option_id names the RIGHT publisher_domain and an option id it does
     #     not publish; wrong_publisher_domain is the other half of "must match both
     #     publisher_domain and format_option_id".
+    #   - exact_duration | duration_omitted is the EXACT half of duration_range |
+    #     duration_omitted: silence about a fixed duration is refused as silence about a range is.
+    #   - exact_over_range declares both duration keys, and core/product-format-declaration.json
+    #     orders them: "Duration precedence is duration_ms_exact > duration_ms_range".
+    #     exact_duration_mismatched (15000) lies inside the range but is not the exact 30000, so
+    #     it is refused here, and exact_duration_in_range (30000) is accepted in the accept
+    #     outline. A seller that graded the range instead of the exact value accepts both.
     #
     # mismatched_160x600 is M2's refusal half: a selector that satisfies NEITHER of the two
     # image declarations the product publishes. Without it, the two M2 accept rows above are
@@ -418,6 +428,9 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | two_image_options | split                        | both_option_refs   |
       | two_image_options | shared_inline                | product_option_ref |
       | duration_range    | narrowed_inline              | contained_range    |
+      | duration_range    | widened_inline               | contained_range    |
+      | two_image_options | unnarrowed                   | product_option_ref |
+      | fixed_300x250     | narrowed_file_size           | product_option_ref |
 
     # both_option_refs is the spec-valid way to cover `split` explicitly: two
     # format_option_refs on ONE arm select a SET (package-request.json: "require each route
@@ -434,20 +447,33 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # narrowed_inline narrows the product's duration_ms_range [5000, 60000] to [5000,
     # 30000]: a seller that grades the product declaration against the placement's refuses
     # it. shared_inline restates 300x250 and pairs with split_inline below, which states
-    # 728x90 instead.
+    # 728x90 instead. widened_inline is the other direction: the placement's range [1000,
+    # 120000] is BROADER than the product's, so the selected option is the narrower side and
+    # satisfies the placement; a seller that only grades the placement against the option
+    # refuses it.
+    #
+    # unnarrowed names two included placements and narrows neither: "An omitted optional
+    # layer is unconstrained", so each inherits the product's set and one option covers both.
+    # narrowed_file_size narrows only max_file_size_kb under fixed_300x250, which fixes width
+    # and height; the placement states no size, so it inherits the option's 300x250
+    # (canonical-formats.mdx § "Narrows": "v2 inherits v1's value") and the package is
+    # accepted.
 
   @T-UC-FORMAT-SATISFACTION-placements-uncovered @format_satisfaction @requires_db
-  Scenario Outline: a selected format that leaves an included placement uncovered is refused - <placements> <selector>
-    Given the seller declares canonical format options "two_image_options" across placements "<placements>"
+  Scenario Outline: a selected format that leaves an included placement uncovered is refused - <declaration> <placements> <selector>
+    Given the seller declares canonical format options "<declaration>" across placements "<placements>"
     And the buyer's package selects "<selector>"
     When the Buyer Agent sends the create_media_buy request
-    Then the buyer is refused UNSUPPORTED_FEATURE naming the "<arm>" selector
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "<arm>" selector for an uncovered placement of "<selected>"
 
     Examples:
-      | placements   | selector           | arm                |
-      | split        | product_option_ref | format_option_refs |
-      | split        | exact_300x250      | format_kind        |
-      | split_inline | product_option_ref | format_option_refs |
+      | declaration       | placements                   | selector                | arm                | selected                       |
+      | two_image_options | split                        | product_option_ref      | format_option_refs | satisfaction_image_mrec        |
+      | two_image_options | split                        | exact_300x250           | format_kind        | satisfaction_image_mrec        |
+      | two_image_options | split_inline                 | product_option_ref      | format_option_refs | satisfaction_image_mrec        |
+      | two_image_options | shared                       | leaderboard_option_ref  | format_option_refs | satisfaction_image_leaderboard |
+      | two_image_options | split_leaderboard_targetable | leaderboard_option_ref  | format_option_refs | satisfaction_image_leaderboard |
+      | exact_duration    | short_range_inline           | exact_duration_in_range | format_kind        | satisfaction_video_exact       |
 
     # Each refusal row has an accept row that differs in ONE thing: `shared` (the second
     # placement also accepts 300x250), `split_leaderboard_targetable` (the second placement
@@ -459,6 +485,21 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # alone accepts it. The first two selectors select the same 300x250 declaration by
     # different routes, so the refusal is about the selected declaration and not the route
     # that named it.
+    #
+    # shared | leaderboard_option_ref keeps the placements of an accept row and changes only
+    # the selector: the 728x90 leaves the 300x250-only placement uncovered, so a seller that
+    # refused every product with placements is not the only one it catches.
+    # split_leaderboard_targetable | leaderboard_option_ref is refused where the same
+    # placements with product_option_ref are accepted: the included placement still
+    # constrains when a targetable one is present. exact_duration | short_range_inline is a
+    # placement stating only a duration_ms_range [5000, 20000] under an option fixed at an
+    # exact 30000 ms: the placement does not inherit the exact value it excludes, so a seller
+    # that grades only the params the placement states accepts it.
+    #
+    # The Then reads details.capability and details.rejected_value as well as the code and
+    # the field, because UNSUPPORTED_FEATURE naming format_option_refs is also what an
+    # unpublished option ref gets. The capability names the rule that refused, and the
+    # rejected value is the declaration the package selected.
 
   # ── The CREATIVE side of the same function ────────────────────────────────────────────
   #
