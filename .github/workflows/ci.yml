@@ -220,7 +220,7 @@ jobs:
     # yet, or a pull request whose token cannot read the package), the agent is built
     # from source first: 11m on a hosted runner for adcp@8d1d3244b2ef. 35m then ran out
     # mid-suite, so the ceiling covers the source build as well.
-    timeout-minutes: 55
+    timeout-minutes: 100
     strategy:
       fail-fast: false
       matrix:
@@ -305,8 +305,13 @@ jobs:
       # run_all_tests.sh's argument contract sends `ci <target> [args]` to the
       # HOST runner, so a marker-scoped run cannot stay in-network. See the
       # wall-clock note on salesagent-2xnqw.
+      - name: Sample runner resources
+        if: matrix.group == 'creative'
+        run: |
+          nohup sh -c 'while true; do date -u +%T; df -h / | tail -1; free -m | sed -n 2,3p; uptime; docker stats --no-stream --format "{{.Name}} {{.CPUPerc}} {{.MemUsage}}" 2>/dev/null; sleep 120; done' > /tmp/runner-resources.log 2>&1 &
       - name: Run integration suite in-network
         if: matrix.group == 'creative'
+        timeout-minutes: 90
         run: ./run_all_tests.sh integration
         env:
           DOCKER_BUILDKIT: 1
@@ -316,6 +321,17 @@ jobs:
           # The dedicated Security Audit check owns the uv-secure scan; letting
           # it run here would fail this job on an unrelated gate.
           RUN_ALL_SKIP_AUDIT: 1
+      - name: Show runner resources
+        if: always() && matrix.group == 'creative'
+        run: |
+          cat /tmp/runner-resources.log || true
+          df -h; docker system df || true; docker ps -a || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && matrix.group == 'creative'
+        with:
+          name: integration-in-network-results
+          path: test-results/innet_*/
+          if-no-files-found: warn
       - name: Cleanup Docker services
         if: always() && matrix.group == 'creative'
         run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
