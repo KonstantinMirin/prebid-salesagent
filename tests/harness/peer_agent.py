@@ -30,6 +30,7 @@ from tests.helpers.peer_creative_agent import (
     catalog_entry,
     new_peer_key,
     peer_agent_url,
+    peer_tool_calls,
     rehomed_reference_format,
     serve_peer_tool,
     single_preview_document,
@@ -59,6 +60,13 @@ def _peer_url_on_the_live_stack(env: PeerCreativeAgentMixin, key: str) -> str:
     from tests.e2e import _webhook_capture
 
     return _webhook_capture.peer_agent_url(key)
+
+
+def _peer_tool_calls_on_the_live_stack(env: PeerCreativeAgentMixin, key: str, tool: str) -> list[dict[str, Any]]:
+    """The *tool* calls the live server made of the capture service's peer under *key*."""
+    from tests.e2e import _webhook_capture
+
+    return _webhook_capture.peer_tool_calls(key, tool)
 
 
 class PeerCreativeAgentMixin(EgressHatchMixin):
@@ -102,6 +110,16 @@ class PeerCreativeAgentMixin(EgressHatchMixin):
             self.set_egress_hatches(private=True)
             self._peer_reachable = True
         return serve_peer_tool(key, tool, document)
+
+    @realize_e2e(_peer_tool_calls_on_the_live_stack)
+    def peer_tool_calls(self, key: str, tool: str) -> list[dict[str, Any]]:
+        """The arguments of every *tool* call a seller made of the peer under *key*, oldest first.
+
+        The peer records each call it answers, on either side of the process boundary, so
+        what the seller asked of its agent is read off the agent rather than off a recorder
+        inside the seller -- which over e2e_rest is in another process.
+        """
+        return peer_tool_calls(key, tool)
 
     def serve_peer_catalog(self, key: str, document: dict[str, Any]) -> str:
         """Serve *document* as the peer's ``list_creative_formats`` under *key*; return the URL a seller dials."""
@@ -193,3 +211,22 @@ class PeerCreativeAgentMixin(EgressHatchMixin):
             self._hosted_formats[format_id] = rehomed_reference_format(format_id, self.peer_url(self._hosted_key))
             self.serve_peer_catalog(self._hosted_key, {"formats": list(self._hosted_formats.values())})
         return self.peer_url(self._hosted_key)
+
+    def _require_hosted_key(self) -> str:
+        """The key :meth:`host_reference_format` serves its agent under; refuses before there is one."""
+        assert self._hosted_key is not None, (
+            "the tenant hosts no creative agent yet; host_reference_format() must publish a format first"
+        )
+        return self._hosted_key
+
+    def serve_hosted_tool(self, tool: str, document: dict[str, Any]) -> None:
+        """The tenant's hosted agent answers *tool* with *document* from now on."""
+        self.serve_peer_tool(self._require_hosted_key(), tool, document)
+
+    def hosted_agent_calls(self, tool: str) -> list[dict[str, Any]]:
+        """The arguments of every *tool* call the seller made of its hosted agent, oldest first.
+
+        Refuses rather than answering an empty list when no agent is hosted: "the seller
+        asked nothing" read off an agent nobody configured is true of every scenario.
+        """
+        return self.peer_tool_calls(self._require_hosted_key(), tool)

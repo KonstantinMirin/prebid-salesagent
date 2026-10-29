@@ -39,13 +39,15 @@ neither may be dropped:
 It also stands in for a PEER CREATIVE AGENT (#1333), because it is the one
 compose origin the deployed server can already reach and a test can program. A
 test stores the answer to each tool a creative agent serves here --
-``list_creative_formats`` and ``preview_creative`` -- under a key with
-``POST /control/peer/<key>/<tool>``, configures ``/peer/<key>/mcp`` as a tenant's
+``list_creative_formats``, ``preview_creative`` and ``build_creative`` -- under a key
+with ``POST /control/peer/<key>/<tool>``, configures ``/peer/<key>/mcp`` as a tenant's
 creative agent, and the server dials it over MCP through the TLS front exactly as
 it dials a real agent. Each answer is served verbatim, so a catalog entry the
 pinned schema cannot validate reaches the server's own parse. A preview answered
 here does not count against the shared reference creative agent's per-client rate
-limit (adcontextprotocol/adcp#8574).
+limit (adcontextprotocol/adcp#8574). Each tool call the server makes is recorded
+under the same key and read back like a delivery, which is how a test observes
+what the seller asked of its agent from outside the seller's process.
 
 Storage is keyed by an opaque per-test token (never a single global list) — the
 isolation mechanism concurrent e2e modules under xdist depend on.
@@ -103,10 +105,12 @@ _PEER_CONTROL_PATH_RE = re.compile(r"^/control/peer/(?P<key>[^/]+)/(?P<tool>[^/]
 PEER_CATALOG_TOOL = "list_creative_formats"
 #: The render a seller asks a peer creative agent for when it syncs a static creative.
 PEER_PREVIEW_TOOL = "preview_creative"
+#: The build a seller asks a peer creative agent for when it syncs a generative creative.
+PEER_BUILD_TOOL = "build_creative"
 #: The tools a peer creative agent serves here. A control POST naming any other is
 #: refused, so a mistyped tool fails where it is stored instead of as a missing tool at
 #: the seller.
-PEER_TOOLS = frozenset({PEER_CATALOG_TOOL, PEER_PREVIEW_TOOL})
+PEER_TOOLS = frozenset({PEER_CATALOG_TOOL, PEER_PREVIEW_TOOL, PEER_BUILD_TOOL})
 
 #: The query parameter that puts one delivery into ECHO mode (salesagent-mp53.4).
 _ECHO_PARAM = "echo"
@@ -346,8 +350,23 @@ class _CaptureRequestHandler(JsonRequestHandler):
 
         A tool with nothing stored is not served, so a call reaches the server as a tool
         error rather than as an invented empty catalog or an invented render.
+
+        Every ``tools/call`` is also RECORDED under *key*, in the same per-key store a
+        webhook delivery lands in and read back the same way (``GET /webhook/<key>``):
+        what a seller asked of its creative agent is an effect that happens inside the
+        seller's process, and the agent's side of the wire is the one place a test in
+        another process can observe it (:func:`tool_calls` reads it back). Only calls are
+        recorded; the session's ``initialize`` / ``tools/list`` are the client's
+        handshake, not requests the seller made of the agent.
         """
-        status, body = mcp_capabilities_post(self._read_raw_body(), self._store.peer_tools(key))
+        raw = self._read_raw_body()
+        try:
+            request = json.loads(raw) if raw else None
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            request = None
+        if isinstance(request, dict) and request.get("method") == "tools/call":
+            self._store.append(key, wire=self._wire_entry(raw), payload=request)
+        status, body = mcp_capabilities_post(raw, self._store.peer_tools(key))
         if body is None:
             self._write_empty(status)
         else:
@@ -441,6 +460,22 @@ def header_value(entry: dict, name: str) -> str | None:
         if key.lower() == lowered:
             return value
     return None
+
+
+def tool_calls(captures: dict[str, list[dict]], tool: str) -> list[dict]:
+    """The arguments of every *tool* call a peer key recorded, in arrival order.
+
+    *captures* is a key's readback (``{"received": [...], ...}``), from whichever side of
+    the process boundary the caller reads it. ONE reader for both: the in-process peer and
+    the compose service record the same JSON-RPC requests (``_handle_peer``), so a test
+    reads what its seller asked of the agent the same way on every transport.
+    """
+    return [
+        dict(params.get("arguments") or {})
+        for request in captures.get("received") or []
+        for params in [request.get("params")]
+        if request.get("method") == "tools/call" and isinstance(params, dict) and params.get("name") == tool
+    ]
 
 
 def start_capture_service(*, host: str, port: int, ssl_context: ssl.SSLContext | None = None) -> ThreadingHTTPServer:

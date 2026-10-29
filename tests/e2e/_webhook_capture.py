@@ -63,7 +63,14 @@ from collections.abc import Iterator
 
 import httpx
 
-from tests.e2e.webhook_capture_service import decode_body, header_value, peer_control_path, peer_path, webhook_path
+from tests.e2e.webhook_capture_service import (
+    decode_body,
+    header_value,
+    peer_control_path,
+    peer_path,
+    tool_calls,
+    webhook_path,
+)
 from tests.helpers.webhook_wire import CapturedWebhook
 
 #: Where the SERVER delivers under the outbound-origin namespace. Read back at
@@ -316,6 +323,15 @@ def serve_peer_tool(key: str, tool: str, document: dict) -> None:
     :func:`program_rejections`.
     """
     _readback_json(_readback_base_url(), "POST", peer_control_path(key, tool), body=document)
+
+
+def peer_tool_calls(key: str, tool: str) -> list[dict]:
+    """The arguments of every *tool* call the server made of the peer under *key*, oldest first.
+
+    Read back on the plain-HTTP port :func:`serve_peer_tool` programs through, from the
+    store the peer records each call in (``webhook_capture_service._handle_peer``).
+    """
+    return tool_calls(_readback_json(_readback_base_url(), "GET", webhook_path(key)), tool)
 
 
 def _assert_own_stack() -> None:

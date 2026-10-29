@@ -56,7 +56,6 @@ from tests.factories.creative_asset import (
 from tests.factories.malformed import malformed
 from tests.factories.principal import PrincipalFactory
 from tests.factories.request import OMIT, CreativeAssetRequestFactory
-from tests.harness.creative_sync import creative_fingerprint
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 from tests.helpers.account_seeding import seed_account_with_access, seed_natural_key_matches
 
@@ -3380,7 +3379,7 @@ def then_ai_review_observes_committed_creative(ctx: dict) -> None:
     (``None``), the update branch's is there carrying its PRE-update state.
     """
     _assert_success_response(ctx)
-    observed = ctx["env"].ai_review_commit_observations
+    observed = ctx["env"].ai_review_observations()
     expected_ids = [c["creative_id"] for c in ctx["creatives"]]
     committed = _persisted_creative_fingerprints(ctx)
 
@@ -3395,31 +3394,32 @@ def then_ai_review_observes_committed_creative(ctx: dict) -> None:
 
 
 def _creative_agent_calls(ctx: dict) -> list[str]:
-    """Outbound creative-agent calls the sync made, as method names.
+    """Outbound creative-agent operations the sync performed, by name.
 
-    ``registry`` is the patched external service
-    (CreativeSyncEnv.EXTERNAL_PATCHES), so build_creative / preview_creative
-    land on it as recorded calls. This is the ONLY way to grade the four
+    ``env.creative_agent_requests`` owns the per-transport answer: the registry's
+    recorders in process, and over e2e_rest the tool calls the tenant's hosted agent
+    recorded on its side of the wire. This is the ONLY way to grade the four
     outbound gates: they exist to make a preview DIFFER from a live run in side
     effects, and the dry_run parity oracle compares preview against live, so by
     construction it can never see them (a parity oracle scores un-gating as MORE
     parity, not less).
     """
-    registry = ctx["env"].mock.get("registry")
-    assert registry is not None, (
-        "CreativeSyncEnv must patch src.core.creative_agent_registry.get_creative_agent_registry "
-        "for the outbound creative-agent calls to be observable"
-    )
-    # Read the two methods directly rather than parent.method_calls: the env
-    # ASSIGNS build_creative as its own AsyncMock, which replaces the auto-created
-    # child and so never lands in the parent's method_calls -- an accessor reading
-    # only method_calls would report "no calls" for a live run and grade nothing.
-    agent_registry = registry.return_value
-    return [
-        name
-        for name in ("build_creative", "preview_creative")
-        if getattr(getattr(agent_registry, name, None), "call_count", 0)
-    ]
+    env = ctx["env"]
+    return [tool for tool in ("build_creative", "preview_creative") if env.creative_agent_requests(tool)]
+
+
+def _build_requests(ctx: dict) -> list[dict]:
+    """Every build_creative request the sync made of the creative agent, oldest first."""
+    return ctx["env"].creative_agent_requests("build_creative")
+
+
+def _last_build_prompt(ctx: dict) -> str:
+    """The prompt (``message``) of the last build_creative request; refuses when there was none."""
+    requests = _build_requests(ctx)
+    assert requests, "build_creative should have been called for generative format"
+    message = requests[-1].get("message")
+    assert message is not None, f"build_creative must be called with a message/prompt, got {requests[-1]}"
+    return message
 
 
 @given("a generative creative whose format is served by a creative agent")
@@ -3459,15 +3459,11 @@ def _persisted_creative_fingerprints(ctx: dict) -> dict[str, tuple]:
     -- and the update branch is exactly where that happens. Measured: with the
     transaction disposal inverted, the seeded rows came back carrying
     generative_build_result / preview_response and an id-set oracle still passed.
-    """
-    from src.core.database.repositories.uow import CreativeUoW
 
-    with CreativeUoW(ctx["tenant"].tenant_id) as uow:
-        assert uow.creatives is not None
-        return {
-            c.creative_id: creative_fingerprint(c)
-            for c in uow.creatives.list_by_principal(ctx["principal"].principal_id)
-        }
+    Read by the env, on the database the request wrote on every transport
+    (``CreativeSyncEnv.committed_creative_fingerprints``).
+    """
+    return ctx["env"].committed_creative_fingerprints()
 
 
 @given(parsers.parse("a {creative_state} creative on a {format_kind} format served by a creative agent"))
@@ -3913,8 +3909,6 @@ def given_creative_agent_is_reachable(ctx: dict) -> None:
     explicitly configures it to return a successful response for the creative's
     format, confirming the agent is reachable.
     """
-    from unittest.mock import AsyncMock
-
     env = ctx["env"]
     agent_url = env.DEFAULT_AGENT_URL
     format_id = _scenario_format_id(ctx, env)
@@ -3922,9 +3916,7 @@ def given_creative_agent_is_reachable(ctx: dict) -> None:
     from tests.factories.format import FormatFactory, FormatIdFactory
 
     fid = FormatIdFactory(agent_url=agent_url, id=format_id)
-    fmt = FormatFactory(format_id=fid)
-    registry = env.mock["registry"].return_value
-    registry.get_format = AsyncMock(return_value=fmt)
+    env.record_format_lookups(answering=FormatFactory(format_id=fid))
 
 
 # --- rx9u: asset-level provenance replaces creative-level (BR-RULE-094 INV-5) ---
@@ -4688,7 +4680,7 @@ def given_creative_with_generative_format(ctx: dict) -> None:
 
 @given("the Seller Agent does not have GEMINI_API_KEY configured")
 def given_no_gemini_api_key(ctx: dict) -> None:
-    """Remove GEMINI_API_KEY from the config mock."""
+    """The seller's tenant has no Gemini API key, which is the key the generative build reads."""
     ctx["env"].set_gemini_api_key(None)
 
 
@@ -4903,8 +4895,8 @@ def given_creative_with_unreachable_agent_format(ctx: dict) -> None:
 def _assert_standard_processing(ctx: dict) -> None:
     """Assert creative was processed as static (no generative build invoked).
 
-    Production returns action=created/updated. The registry.build_creative
-    mock must NOT have been called.
+    Production returns action=created/updated, and the creative agent receives no
+    build_creative request.
     """
     error = ctx.get("error")
     assert error is None, (
@@ -4917,12 +4909,8 @@ def _assert_standard_processing(ctx: dict) -> None:
         f"Expected created/updated/unchanged for static processing, got {actions}"
     )
     # Verify generative build was NOT invoked
-    env = ctx["env"]
-    registry = env.mock["registry"].return_value
-    if hasattr(registry.build_creative, "called"):
-        assert not registry.build_creative.called, (
-            "build_creative should NOT be called for static (non-generative) creatives"
-        )
+    builds = _build_requests(ctx)
+    assert builds == [], f"build_creative should NOT be called for static (non-generative) creatives, got {builds}"
 
 
 def _assert_generative_build(ctx: dict, prompt_source: str) -> None:
@@ -4942,20 +4930,8 @@ def _assert_generative_build(ctx: dict, prompt_source: str) -> None:
     assert any(a in ("created", "updated") for a in actions), (
         f"Expected created/updated for generative build, got {actions}"
     )
-    # Verify build_creative WAS invoked
-    env = ctx["env"]
-    registry = env.mock["registry"].return_value
-    assert registry.build_creative.called, "build_creative should have been called for generative format"
-    # Verify prompt content
-    call_kwargs = registry.build_creative.call_args
-    message_arg = call_kwargs.kwargs.get("message") or (call_kwargs.args[2] if len(call_kwargs.args) > 2 else None)
-    if message_arg is None:
-        # Try positional or named kwarg patterns
-        for kw_name in ("message", "prompt"):
-            message_arg = call_kwargs.kwargs.get(kw_name)
-            if message_arg:
-                break
-    assert message_arg is not None, "build_creative must be called with a message/prompt"
+    # Verify build_creative WAS invoked, and read its prompt
+    message_arg = _last_build_prompt(ctx)
     if prompt_source == "assets":
         assert "Create a creative for:" not in message_arg, (
             f"Expected prompt from assets, but got name fallback: {message_arg!r}"
@@ -5095,7 +5071,7 @@ def given_no_prompt_assets_or_inputs(ctx: dict) -> None:
 
 @given("message asset but no GEMINI_API_KEY")
 def given_message_asset_no_gemini_key(ctx: dict) -> None:
-    """Add a message asset but remove the GEMINI_API_KEY from config.
+    """Add a message asset and clear the tenant's Gemini API key.
 
     Production checks gemini_api_key early in the generative path and
     raises ValueError when missing (BR-RULE-036, INV formerly-2).
@@ -5245,18 +5221,8 @@ def then_invoke_generative_with_asset_prompt(ctx: dict) -> None:
     assert any(a in ("created", "updated") for a in actions), (
         f"Expected created/updated for generative build, got {actions}"
     )
-    env = ctx["env"]
-    registry = env.mock["registry"].return_value
-    assert registry.build_creative.called, "build_creative should have been called for generative format"
     # Positive assertion: the message arg matches the exact asset prompt from Given
-    call_kwargs = registry.build_creative.call_args
-    message_arg = call_kwargs.kwargs.get("message") or (call_kwargs.args[2] if len(call_kwargs.args) > 2 else None)
-    if message_arg is None:
-        for kw_name in ("prompt",):
-            message_arg = call_kwargs.kwargs.get(kw_name)
-            if message_arg:
-                break
-    assert message_arg is not None, "build_creative must be called with a message/prompt"
+    message_arg = _last_build_prompt(ctx)
     expected_prompt = ctx["expected_asset_prompt"]
     assert expected_prompt in message_arg, (
         f"Expected asset prompt {expected_prompt!r} in build_creative message, got {message_arg!r}"
@@ -5294,7 +5260,7 @@ def given_creative_format_with_output_format_ids(ctx: dict) -> None:
 
 @given("GEMINI_API_KEY is configured")
 def given_gemini_api_key_configured(ctx: dict) -> None:
-    """Ensure the GEMINI_API_KEY is set on the config mock.
+    """Ensure the tenant's Gemini API key is set.
 
     If setup_generative_build was already called, the key is already set.
     This step acts as an explicit guard / documentation step.
@@ -5411,7 +5377,10 @@ def given_generative_creative_exists_with_content(ctx: dict) -> None:
         principal=principal,
         creative_id=creative_id,
         name="Existing Generative Creative",
-        agent_url=env.DEFAULT_AGENT_URL,
+        # The agent the update names (``fmt``), so the row and the resync carry one
+        # identity on every transport: the standard agent in process, the tenant's
+        # hosted agent over e2e_rest.
+        agent_url=fmt["agent_url"],
         format=_CATALOG_GENERATIVE_FORMAT_ID,
         # The declaration the env serves, which since salesagent-6xtxb IS the shared
         # reference capture's -- so this is the same Format the factory would resolve on
@@ -5505,9 +5474,7 @@ def then_processed_as_generative(ctx: dict) -> None:
         f"Expected created/updated for generative processing, got {actions}"
     )
     # Verify build_creative WAS invoked (generative detection)
-    env = ctx["env"]
-    registry = env.mock["registry"].return_value
-    assert registry.build_creative.called, (
+    assert _build_requests(ctx), (
         "build_creative should have been called for generative format (output_format_ids present)"
     )
 
@@ -5543,9 +5510,7 @@ def then_creative_has_generated_content(ctx: dict) -> None:
     assert "generative_build_result" in creative_data, (
         f"Expected 'generative_build_result' in creative data, got keys: {list(creative_data.keys())}"
     )
-    env = ctx["env"]
-    registry = env.mock["registry"].return_value
-    assert registry.build_creative.called, "build_creative should have been called to generate content"
+    assert _build_requests(ctx), "build_creative should have been called to generate content"
 
 
 @then(parsers.parse('the generative build should use "{expected_prompt}" as the prompt'))
@@ -5561,24 +5526,7 @@ def then_generative_build_uses_prompt(ctx: dict, expected_prompt: str) -> None:
     )
     resp = require_payload(ctx)
 
-    env = ctx["env"]
-    registry = env.mock["registry"].return_value
-    assert registry.build_creative.called, "build_creative should have been called for generative format"
-    call_kwargs = registry.build_creative.call_args
-    # Extract the message argument (keyword or positional)
-    message_arg = call_kwargs.kwargs.get("message")
-    if message_arg is None:
-        # Try positional: build_creative(agent_url, format_id, message, ...)
-        if len(call_kwargs.args) > 2:
-            message_arg = call_kwargs.args[2]
-    if message_arg is None:
-        for kw_name in ("prompt", "text"):
-            message_arg = call_kwargs.kwargs.get(kw_name)
-            if message_arg:
-                break
-    assert message_arg is not None, (
-        f"build_creative must be called with a message/prompt, got args={call_kwargs.args}, kwargs={call_kwargs.kwargs}"
-    )
+    message_arg = _last_build_prompt(ctx)
     assert message_arg == expected_prompt, f"Expected prompt '{expected_prompt}', got '{message_arg}'"
 
 
@@ -5599,9 +5547,8 @@ def then_generative_build_skipped(ctx: dict) -> None:
         f"Expected updated/unchanged when build skipped, got {actions}"
     )
     # build_creative should NOT have been called
-    env = ctx["env"]
-    registry = env.mock["registry"].return_value
-    assert not registry.build_creative.called, "build_creative should NOT be called when update has no prompt"
+    builds = _build_requests(ctx)
+    assert builds == [], f"build_creative should NOT be called when update has no prompt, got {builds}"
 
 
 @then("the existing creative data should be preserved")
