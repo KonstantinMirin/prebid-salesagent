@@ -998,6 +998,11 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
         from tests.bdd.steps.domain.uc002_invariants import then_start_time_resolved
 
         then_start_time_resolved(ctx)
+    elif outcome == "start time accepted":
+        # Likewise for a concrete start: the seller must have taken the instant it was sent.
+        from tests.bdd.steps.domain.uc002_invariants import assert_start_time_stored_as_requested
+
+        assert_start_time_stored_as_requested(ctx)
 
 
 def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:

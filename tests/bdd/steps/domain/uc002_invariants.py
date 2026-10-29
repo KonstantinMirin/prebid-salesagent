@@ -403,6 +403,21 @@ def then_start_time_resolved(ctx: dict) -> None:
     )
 
 
+def assert_start_time_stored_as_requested(ctx: dict) -> None:
+    """A concrete start_time the seller accepted is the flight start it stored, unchanged.
+
+    A buy id alone does not show the start was taken: a seller that dropped it, or kept a
+    default date, answers the same. create_media_buy.mdx lists start_time as "ISO 8601
+    date-time"; nothing in the pin lets a seller move an accepted future start.
+    """
+    requested = ctx["request_kwargs"]["start_time"]
+    expected = _as_utc(datetime.fromisoformat(requested.replace("Z", "+00:00")))
+    stored = _stored_buy(ctx, _created_buy_id(ctx))
+    assert stored.start_time is not None and _as_utc(stored.start_time) == expected, (
+        f"the buyer sent start_time {requested}, the seller stored {stored.start_time}"
+    )
+
+
 @then("the campaign should be immediately activating")
 def then_campaign_activating(ctx: dict) -> None:
     """Created synchronously and not waiting for a flight date (media-buy-status.json pending_start)."""

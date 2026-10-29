@@ -1533,6 +1533,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a valid create_media_buy request
     And the account exists and is active
     And the start_time is <value>
+    And end_time is 2099-04-30T23:59:59Z
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
@@ -1540,6 +1541,12 @@ Feature: BR-UC-002 Create Media Buy
 
     # Future instants are written in 2099, as the pinned storyboards write theirs: a date
     # this close to the run expires, and a create refuses a start_time in the past.
+    # The end_time is written in 2099 too, after every start a row sends. The request's
+    # default end is a month from the run, so a 2099 start against it is an inverted
+    # flight, which the seller refuses on end_time ("Flight date validation": "Out-of-range
+    # or inverted dates SHOULD return an INVALID_REQUEST error"). The row was graded on the
+    # flight, not the start.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
     # future_naive_datetime is INVALID: start-timing.json types the instant as
     # "format": "date-time", which JSON Schema takes from RFC 3339, and an RFC 3339
     # date-time carries its offset (time-offset is not optional). A naive value violates
@@ -2087,10 +2094,15 @@ Feature: BR-UC-002 Create Media Buy
     Given a valid create_media_buy request
     And the account exists and is active
     And start_time is <value>
+    And end_time is 2099-04-30T23:59:59Z
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
     # --- end_time boundaries (BR-RULE-013) ---
+
+    # The end_time follows every start a row sends, so no row is an inverted flight; the
+    # partition outline above says why.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
 
     Examples: Boundary values
       | boundary_point             | value                    | outcome                               |
