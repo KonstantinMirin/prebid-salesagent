@@ -712,19 +712,19 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         trusted_match=declarations.trusted_match,
     )
 
-    # creative_approval_mode: require_human when this tenant's configuration
-    # genuinely requires manual review (resolve_manual_approval_signal, the
-    # same signal _create_media_buy_impl enforces); omit entirely otherwise --
-    # NEVER claim auto_approve without an explicit tenant-level affirmation
-    # that no product/account requires review (no such config surface exists
-    # yet, salesagent-y9ld plan Q2 -- declaring it would be a false
-    # conformance claim, not a "legacy-unspecified" honest omission).
-    from src.core.helpers.adapter_helpers import resolve_manual_approval_signal
-
-    manual_approval_signal = _resolve_or_degrade(
-        advisories, "manual approval signal", lambda: resolve_manual_approval_signal(tenant), default=False
+    # creative_approval_mode is the tenant-wide CREATIVE-review posture
+    # (protocol/get-adcp-capabilities-response.json, v3.2.7: "auto_approve means human
+    # review does not block serving eligibility after creatives are assigned and automated
+    # validation passes"; the pending_creatives_to_start storyboard: "Sellers with manual
+    # creative review declare ... require_human"). It derives from the one predicate
+    # sync_creatives' routing applies (_apply_approval_mode), so auto_approve is claimed
+    # exactly when synced creatives ARE approved at sync. Media-buy approval
+    # (human_review_required, the adapter's manual-approval columns) is a different
+    # decision and does not enter here. Always present: Tenant.approval_mode is NOT NULL,
+    # so this seller never has the legacy-unspecified posture omission describes.
+    creative_approval_mode = (
+        CreativeApprovalMode.auto_approve if tenant.auto_approves_creatives else CreativeApprovalMode.require_human
     )
-    creative_approval_mode = CreativeApprovalMode.require_human if manual_approval_signal else None
 
     # Build media_buy capabilities.
     # reporting_delivery_methods reaches the wire from the declaration store, which is

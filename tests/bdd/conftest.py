@@ -1371,15 +1371,10 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "_build_account_block always emits require_operator_auth/sandbox as real values "
         "— #1856 account-config surface",
     ),
-    # Wired (a recorded gap R7): approval_unspecified (creative_approval_mode omitted
-    # by default -- TenantFactory.human_review_required=False and no
-    # gam/kevel/mock_manual_approval_required column set) passes today with zero
-    # production change -- honest-absence regression armor. Graduated: approval_human
-    # now passes -- resolve_manual_approval_signal() derives require_human from
-    # tenant.human_review_required (adapter_helpers.py), wired into the MediaBuy build.
-    # approval_auto stays xfailed -- no config surface exists to affirmatively claim
-    # auto_approve (Q2, deferred; declaring it without certainty would be a false
-    # conformance claim).
+    # creative_approval_mode now derives from tenant.approval_mode through
+    # TenantContext.auto_approves_creatives, the predicate sync_creatives' routing applies,
+    # so approval_auto is expected to pass: a graduation candidate, left routed here until a
+    # box run shows it XPASS on every transport (xpass-graduation.md).
     (
         "T-UC-010-v31-creative-approval-mode",
         {"approval_auto"},

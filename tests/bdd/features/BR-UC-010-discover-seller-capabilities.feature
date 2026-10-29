@@ -2024,20 +2024,31 @@ Feature: BR-UC-010 Discover Seller Capabilities
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
     And media_buy.creative_approval_mode should be <expected>
-    # Partially graded: production emits the constant require_human (shipped #1721 C5) — that row
-    # passes; the <configured>=auto_approve row is strict-excluded (#1724: never claim
-    # auto_approve without auto-approval behavior) and the tenant-config surface is #1856.
     # NEW at 3.1.1: closed enum [auto_approve, require_human] — not a workflow, an
     # applicability signal; require_human is a worst-case ceiling across the portfolio; when
     # ABSENT approval behavior is legacy-unspecified and runners SHOULD NOT treat omission as
-    # an affirmative auto-approval claim (hence the omitted row asserts absence, not a default).
+    # an affirmative auto-approval claim.
+    # The signal is the tenant's CREATIVE-review setting (tenant.approval_mode), the one
+    # sync_creatives routes review on (UC-006 @approval-mode grades that behaviour). The
+    # pending_creatives_to_start storyboard: "Sellers with manual creative review declare
+    # media_buy.creative_approval_mode: require_human". auto-approve approves a synced
+    # creative at sync, which is the auto-approval behaviour #1724 requires before the claim.
+    # CORRECTED against the pin: the generated "approval_unspecified omitted -> absent" row
+    # configured a state this seller cannot be in. Tenant.approval_mode is NOT NULL (server
+    # default require-human), so the posture is always stated and omission, which the pin
+    # reserves for legacy-unspecified behaviour, never applies. The row is replaced by the
+    # third stored mode: ai-powered leaves a creative pending_review for a human on low
+    # confidence, a sensitive category or a review failure, so it may require manual review
+    # and takes the require_human ceiling ("ai_assisted is intentionally not part of the
+    # enum"). Mirror upstream.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/creative_approval_mode
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/pending_creatives_to_start.yaml
 
     Examples:
       | partition_boundary                                              | configured    | expected                  |
-      | approval_auto auto_approve declared                             | auto_approve  | equal to "auto_approve"   |
-      | approval_human require_human worst-case ceiling                 | require_human | equal to "require_human"  |
-      | approval_unspecified omitted (legacy-unspecified, no default)   | omitted       | absent                    |
+      | approval_auto auto_approve declared                             | auto-approve  | equal to "auto_approve"   |
+      | approval_human require_human worst-case ceiling                 | require-human | equal to "require_human"  |
+      | approval_ai ai-powered review may escalate to a human           | ai-powered    | equal to "require_human"  |
 
   @T-UC-010-v31-governance-aware @v31 @main-flow @post-s31 @partition
   Scenario Outline: governance-aware — opt-in to governance-denial grading
