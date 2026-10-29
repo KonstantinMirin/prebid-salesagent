@@ -1399,7 +1399,11 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
+    And the response error field is packages[0].optimization_goals[0].event_sources
     And the error should include "suggestion" field
+    # The field is the member at fault, as the per_ad_spend row of
+    # @T-UC-002-boundary-optimization-goals and the value_target_without_value_field row of
+    # @T-UC-002-partition-optimization-goals name it for the same rule.
     # optimization-goal.json value_field: "sellers must reject these target kinds when no event
     # source entry includes value_field". The schema does not encode it (no if/then ties
     # target.kind to value_field), so the refusal is a business rule beyond schema validation:
