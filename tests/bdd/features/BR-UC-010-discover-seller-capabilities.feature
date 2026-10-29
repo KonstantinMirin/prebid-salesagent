@@ -1526,18 +1526,25 @@ Feature: BR-UC-010 Discover Seller Capabilities
   @T-UC-010-v31-specialisms @v31 @main-flow @post-s28
   Scenario: specialisms — kebab-case specialism claims graded by AAO compliance runner
     Given a tenant is resolvable from the request context
-    And "creative" and "media_buy" are in supported_protocols
-    And the tenant claims specialisms ["creative-generative", "sales-non-guaranteed"]
+    And the tenant declares specialisms ["sales-non-guaranteed", "signal-owned"] with supported_protocols ["media_buy", "signals"]
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
-    And specialisms should equal ["creative-generative", "sales-non-guaranteed"]
-    And each specialism should be a member of the 3.1.1 specialism enum
-    And specialism "creative-generative" should roll up to "creative" in supported_protocols
+    And specialisms should equal ["sales-non-guaranteed", "signal-owned"]
+    And each specialism should be a member of the pinned specialism enum
+    And specialism "signal-owned" should roll up to "signals" in supported_protocols
     And specialism "sales-non-guaranteed" should roll up to "media_buy" in supported_protocols
-    # specialisms items $ref enums/specialism.json (closed 22-value kebab-case enum;
-    # uniqueItems); roll-up rule normative in the field description ("the runner rejects a
+    # specialisms items $ref enums/specialism.json (closed kebab-case enum, read from the
+    # pin; uniqueItems); roll-up rule normative in the field description ("the runner rejects a
     # specialism claim whose parent protocol is missing") — concrete mapping asserted for the
     # fixture values, whose parent protocols the Given declares.
+    # Corrected to this seller (was creative-generative under "creative"): the field
+    # description says "Only list specialisms your agent actually implements", and this
+    # seller implements no creative protocol and no generative creative, so it cannot make
+    # that claim; declaring it is refused (graded by @T-UC-010-local-unbacked-specialism and
+    # @T-UC-010-local-unbacked-protocol). The two claims here are the ones it backs. Both
+    # are declared explicitly, the default sales-non-guaranteed included, so the scenario
+    # grades that redeclaring a default specialism is accepted and echoed once
+    # (uniqueItems), which @T-UC-010-local-backed-specialism (signal-owned alone) does not.
     # POST-S28: Buyer knows the seller's specialisms
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/specialisms
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/specialism.json pointer=/enum

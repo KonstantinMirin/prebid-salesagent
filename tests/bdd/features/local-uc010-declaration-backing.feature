@@ -8,9 +8,8 @@
 # of the declaration store — a tenant must not be able to make the wire promise
 # behavior production lacks — so the backing rules would otherwise ship ungraded.
 #
-# The generated `T-UC-010-v31-specialisms` scenario cannot grade them: it declares
-# `creative-generative` AND requires the `creative` protocol, both unbacked, so it
-# stays xfailed against #1724 rather than being weakened to pass.
+# The generated `T-UC-010-v31-specialisms` scenario grades only the accepted path: it
+# declares the two specialisms this seller backs, so it cannot reach the rejections below.
 #
 # Reconcile upstream in adcp-req (a "seller rejects an unbacked capability
 # declaration" scenario), then retire this file in favor of the regenerated one.
