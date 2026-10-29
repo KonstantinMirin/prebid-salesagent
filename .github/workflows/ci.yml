@@ -307,8 +307,10 @@ jobs:
       # wall-clock note on salesagent-2xnqw.
       - name: Run integration suite in-network
         if: matrix.group == 'creative'
-        timeout-minutes: 55
+        timeout-minutes: 60
         run: |
+          sudo fallocate -l 8G /ci-swapfile && sudo chmod 600 /ci-swapfile
+          sudo mkswap /ci-swapfile && sudo swapon /ci-swapfile
           (while true; do date -u +%T; free -m | sed -n 2,3p; uptime; cat /proc/pressure/memory 2>/dev/null; docker stats --no-stream --format "{{.Name}} {{.MemUsage}} {{.CPUPerc}}" 2>/dev/null; ps -eo rss,comm,args --sort=-rss | head -12 | cut -c1-160; sleep 60; done) &
           ./run_all_tests.sh integration
         env:
@@ -319,6 +321,13 @@ jobs:
           # The dedicated Security Audit check owns the uv-secure scan; letting
           # it run here would fail this job on an unrelated gate.
           RUN_ALL_SKIP_AUDIT: 1
+          # A hosted runner has 16 GiB and 3 GiB of swap. Measured in-network with
+          # run_all_tests.sh's default of 4 workers: each worker ~1.4 GiB and
+          # growing, both app servers ~1.8 GiB, the nested BDD/storyboard pytest
+          # runs ~1 GiB each, and harden-runner's agent climbing past 2 GiB; RAM
+          # and swap were exhausted 16 minutes into the suite and the runner was
+          # shut down. Three workers plus the swapfile above leave room for it.
+          INTEGRATION_XDIST_N: 3
       - name: Show runner resources
         if: always() && matrix.group == 'creative'
         run: |
