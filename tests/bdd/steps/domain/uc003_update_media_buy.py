@@ -1441,11 +1441,11 @@ def _inline_creative_payload(creative_id: str, name: str) -> dict[str, Any]:
     )
 
 
-def _approved_display_creative(ctx: dict, creative_id: str) -> None:
+def _approved_display_creative(ctx: dict, creative_id: str) -> Any:
     """An approved display creative in the buyer's library, compatible with the display product."""
     from tests.factories.creative import CreativeFactory
 
-    CreativeFactory(
+    return CreativeFactory(
         creative_id=creative_id,
         tenant=ctx["tenant"],
         principal=ctx["principal"],
@@ -1850,20 +1850,6 @@ def given_budget_greater_than_zero(ctx: dict, amount: int) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _approved_display_creative(ctx: dict, creative_id: str) -> Any:
-    """An approved 300x250 display creative in the buyer's library, for the replacement rows."""
-    from tests.factories.creative import CreativeFactory
-
-    return CreativeFactory(
-        creative_id=creative_id,
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        format="display_300x250_image",
-        approved=True,
-        data={"assets": {"primary": {"url": f"https://example.com/{creative_id}.png", "width": 300, "height": 250}}},
-    )
-
-
 @given(parsers.parse('the package "{package_id}" has existing creative assignments [{assignments}]'))
 def given_package_existing_creatives(ctx: dict, package_id: str, assignments: str) -> None:
     """Assign the named creatives to the package, as CreativeAssignment rows.
@@ -2136,8 +2122,6 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
     """
     import re
 
-    from tests.factories.creative import CreativeFactory
-
     env = ctx["env"]
     kwargs = _ensure_update_defaults(ctx)
     if not kwargs.get("packages"):
@@ -2145,16 +2129,8 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
     pkg = kwargs["packages"][0]
     stripped = placement_config.strip()
 
-    # Create a creative for the assignment
     cid = "cr_placement_test"
-    CreativeFactory(
-        creative_id=cid,
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        format="display_300x250_image",
-        approved=True,
-        data={"assets": {"primary": {"url": f"https://example.com/{cid}.png", "width": 300, "height": 250}}},
-    )
+    _approved_display_creative(ctx, cid)
     env._commit_factory_data()
 
     assignment: dict[str, Any] = {"creative_id": cid, "weight": 1.0}
@@ -2170,21 +2146,21 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
             assignment["placement_ids"] = placement_ids
             ctx["referenced_placement_ids"] = placement_ids
 
-    # The package's product decides which placement_ids exist. "(product unsupported)" clears
-    # its placements; "(valid)" and "(not in product)" give it plc_a and plc_b, so a valid id
-    # is one the product defines and an invalid one is one it does not. A product with no
-    # placements refuses every placement_id with UNSUPPORTED_FEATURE, which is the third row.
-    if "product unsupported" in stripped:
-        # The model column is `placements`; clearing it disables placement-level targeting.
-        _package_product(ctx).placements = None
-        env._commit_factory_data()
-    elif "(valid)" in stripped or "(not in product)" in stripped:
+    # The package's product decides which placement_ids exist. Every configuration that sends
+    # placement_ids starts from a product defining plc_a and plc_b, so a valid id is one the
+    # product defines and an invalid one is one it does not. "(product unsupported)" then
+    # clears them: a product with no placements refuses every placement_id with
+    # UNSUPPORTED_FEATURE, and without the clear plc_a is a valid id and that row succeeds.
+    if "placement_ids" in assignment:
         from tests.factories.product import StoredPlacementFactory
 
-        _package_product(ctx).placements = [
+        product = _package_product(ctx)
+        product.placements = [
             StoredPlacementFactory(placement_id="plc_a"),
             StoredPlacementFactory(placement_id="plc_b"),
         ]
+        if "product unsupported" in stripped:
+            product.placements = None
         env._commit_factory_data()
 
     pkg["creative_assignments"] = [assignment]
