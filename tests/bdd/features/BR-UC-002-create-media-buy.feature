@@ -3425,9 +3425,10 @@ Feature: BR-UC-002 Create Media Buy
     Given the account has governance_agents configured
     And the buyer's governance agent has returned verdict "approved" for the exact proposed buy
     And the buyer attaches the governance_context from that verdict to the create_media_buy request
+    And the buyer sends create_media_buy without inline creatives
     When the Buyer Agent sends create_media_buy with the governance_context
     Then the response is compliant with the create_media_buy success spec
-    And the response should carry status "active" or "pending_start"
+    And the wire media_buy_status should be "pending_creatives"
     And the response should carry the media_buy_id
     And a get_media_buys readback of the buy should return the authorized total_budget and currency
     # governance_approved storyboard: the buyer's intent check returns verdict
@@ -3441,8 +3442,15 @@ Feature: BR-UC-002 Create Media Buy
     # storyboard says the response "need not echo the authorization context" and that
     # it "never treats a seller-to-buyer governance_context echo as evidence of
     # authorization" -- the readback is the evidence it grades instead.
+    # The scenario also used to assert status "active" or "pending_start". The
+    # storyboard's create_media_buy sample_request carries packages with only
+    # product_id, budget and pricing_option_id -- no creatives -- and the pin names that
+    # buy pending_creatives ("approved by the seller and has no creatives assigned").
+    # The lifecycle value is the wire media_buy_status; the wire status is the envelope
+    # task status. The Given now states the creative-less shape the storyboard sends.
     # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/governance_approved.yaml phase=buy_approved step=create_media_buy
     # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/governance_approved.yaml phase=committed_state_and_evidence step=get_media_buys_readback
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/media-buy-status.json pointer=/enumDescriptions/pending_creatives
 
   @T-UC-002-storyboard-governance-with-conditions @schema-v3.1 @v3-1 @governance @governance-decision @conditions
   Scenario: Governance conditions -- the buyer resolves them before the seller commits, and the seller commits only on an approved execution check
