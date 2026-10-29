@@ -17,6 +17,7 @@ from tests.factories.format import (
     FormatFactory,
     FormatIdFactory,
     make_asset,
+    make_disclosure_capabilities,
     make_fixed_renders,
     make_renders,
     make_responsive_renders,
@@ -265,6 +266,35 @@ def given_seller_various_disclosure(ctx: dict) -> None:
     ctx["registry_formats"] = [
         FormatFactory.build(name="prominent-ad", supported_disclosure_positions=["prominent"]),
         FormatFactory.build(name="footer-ad", supported_disclosure_positions=["footer"]),
+    ]
+    _sync_registry(ctx)
+
+
+@given("a seller with formats declaring various disclosure persistence capabilities")
+def given_seller_various_persistence(ctx: dict) -> None:
+    """Seller formats spanning every ``disclosure_persistence`` partition (partition/boundary).
+
+    Chosen so each row of the two outlines discriminates. Every mode is declared by some
+    format, ``continuous`` + ``initial`` only ACROSS two positions of one format (the request
+    schema: "Different positions may satisfy different modes"), no format covers
+    ``initial`` + ``flexible`` or all three, and ``positions-only`` declares a position
+    without ``disclosure_capabilities`` -- which carries no persistence, so any persistence
+    filter drops it.
+    """
+    ctx["registry_formats"] = [
+        FormatFactory.build(
+            name="continuous-ad", disclosure_capabilities=make_disclosure_capabilities(("prominent", ["continuous"]))
+        ),
+        FormatFactory.build(
+            name="split-ad",
+            disclosure_capabilities=make_disclosure_capabilities(
+                ("prominent", ["continuous"]), ("footer", ["initial"])
+            ),
+        ),
+        FormatFactory.build(
+            name="flexible-ad", disclosure_capabilities=make_disclosure_capabilities(("footer", ["flexible"]))
+        ),
+        FormatFactory.build(name="positions-only", supported_disclosure_positions=["prominent"]),
     ]
     _sync_registry(ctx)
 

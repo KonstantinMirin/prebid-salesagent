@@ -418,47 +418,67 @@ def _partition_wcag(ctx: dict, partition: str) -> None:
         _call_raw(ctx, wcag_level=partition)
 
 
-def _partition_disclosure(ctx: dict, partition: str) -> None:
-    """Map disclosure_positions partition label to filter and call harness."""
+def _partition_enum_list(ctx: dict, field: str, partition: str, valid: dict[str, list[str]]) -> None:
+    """Shared body for the two disclosure filters, both arrays of one enum.
+
+    ``disclosure_positions`` and ``disclosure_persistence`` partition the same way: a label
+    in *valid* names the members a typed request carries; ``omitted`` sends no filter;
+    ``empty_array`` and ``duplicate_*`` break the request schema's ``minItems: 1`` and
+    ``uniqueItems: true`` (duplicating the first valid row's first member); and any other
+    label goes out raw as the one member, so the SELLER refuses an unknown value.
+
+    The requested members are recorded under ``requested_<field>`` (``None`` when the
+    filter is absent or invalid), so a Then can compute what the filter must keep.
+    """
+    ctx[f"requested_{field}"] = valid.get(partition)
     if partition == "omitted":
         _call(ctx)
-    elif partition == "single_position":
-        _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["prominent"]))
-    elif partition == "multiple_positions_all_match":
-        _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["prominent", "footer"]))
-    elif partition == "all_positions":
-        # All 8 values of the DisclosurePosition enum (adcp library):
-        # prominent, footer, audio, subtitle, overlay, end_card, pre_roll,
-        # companion. Earlier wiring used stale literals (corner/inline/
-        # before/after) that no longer exist in the enum, so the request
-        # never built and the scenario passed vacuously under a blanket
-        # strict=False marker — a broken step, not a production gap.
-        _call(
-            ctx,
-            req=ListCreativeFormatsRequest(
-                disclosure_positions=[
-                    "prominent",
-                    "footer",
-                    "audio",
-                    "subtitle",
-                    "overlay",
-                    "end_card",
-                    "pre_roll",
-                    "companion",
-                ]
-            ),
-        )
-    elif partition == "no_matching_formats":
-        # "subtitle" is a valid DisclosurePosition the seeded formats
-        # (prominent-ad → ["prominent"], footer-ad → ["footer"]) do not
-        # support, so a working filter would yield zero matches.
-        _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["subtitle"]))
+    elif partition in valid:
+        _call(ctx, req=ListCreativeFormatsRequest(**{field: valid[partition]}))
     elif partition == "empty_array":
-        _call_raw(ctx, disclosure_positions=[])
-    elif partition == "duplicate_positions":
-        _call_raw(ctx, disclosure_positions=["prominent", "prominent"])
+        _call_raw(ctx, **{field: []})
+    elif partition.startswith("duplicate_"):
+        first = next(iter(valid.values()))[0]
+        _call_raw(ctx, **{field: [first, first]})
     else:
-        _call_raw(ctx, disclosure_positions=[partition])
+        _call_raw(ctx, **{field: [partition]})
+
+
+#: ``disclosure_positions`` partitions over the "various disclosure positions" seller
+#: (prominent-ad -> ["prominent"], footer-ad -> ["footer"]).
+_DISCLOSURE_POSITION_PARTITIONS: dict[str, list[str]] = {
+    "single_position": ["prominent"],
+    "multiple_positions_all_match": ["prominent", "footer"],
+    # All 8 values of the DisclosurePosition enum. Earlier wiring used stale literals
+    # (corner/inline/before/after) that no longer exist in the enum, so the request never
+    # built and the scenario passed vacuously under a blanket strict=False marker.
+    "all_positions": ["prominent", "footer", "audio", "subtitle", "overlay", "end_card", "pre_roll", "companion"],
+    # A valid position neither seeded format supports, so a working filter yields nothing.
+    "no_matching_formats": ["subtitle"],
+}
+
+#: ``disclosure_persistence`` partitions over the "various disclosure persistence
+#: capabilities" seller (given_entities.given_seller_various_persistence).
+_DISCLOSURE_PERSISTENCE_PARTITIONS: dict[str, list[str]] = {
+    "single_mode": ["continuous"],
+    # Satisfied only by split-ad, whose two positions declare one mode each.
+    "multiple_modes_satisfied_across_positions": ["continuous", "initial"],
+    "all_modes": ["continuous", "initial", "flexible"],
+    # Each mode is declared somewhere, but no one format declares both.
+    "no_matching_formats": ["initial", "flexible"],
+    # positions-only declares a position and no disclosure_capabilities, so it drops out.
+    "format_without_disclosure_capabilities": ["continuous"],
+}
+
+
+def _partition_disclosure(ctx: dict, partition: str) -> None:
+    """Map disclosure_positions partition label to filter and call harness."""
+    _partition_enum_list(ctx, "disclosure_positions", partition, _DISCLOSURE_POSITION_PARTITIONS)
+
+
+def _partition_persistence(ctx: dict, partition: str) -> None:
+    """Map disclosure_persistence partition label to filter and call harness."""
+    _partition_enum_list(ctx, "disclosure_persistence", partition, _DISCLOSURE_PERSISTENCE_PARTITIONS)
 
 
 def _partition_format_id_list(ctx: dict, partition: str, direction: str) -> None:
@@ -548,6 +568,11 @@ def when_partition_wcag(ctx: dict, partition: str) -> None:
 @when(parsers.parse('the Buyer Agent requests creative formats with disclosure_positions "{partition}"'))
 def when_partition_disclosure(ctx: dict, partition: str) -> None:
     _partition_disclosure(ctx, partition)
+
+
+@when(parsers.parse('the Buyer Agent requests creative formats with disclosure_persistence "{partition}"'))
+def when_partition_persistence(ctx: dict, partition: str) -> None:
+    _partition_persistence(ctx, partition)
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats with output_format_ids "{partition}"'))
@@ -648,6 +673,28 @@ def when_boundary_disclosure(ctx: dict, boundary_point: str) -> None:
         "duplicate positions ['prominent','prominent']": "duplicate_positions",
     }
     _partition_disclosure(ctx, mapping.get(boundary_point, boundary_point))
+
+
+@when(parsers.parse('the Buyer Agent requests creative formats at persistence boundary "{boundary_point}"'))
+def when_boundary_persistence(ctx: dict, boundary_point: str) -> None:
+    mapping = {
+        "single mode ['continuous'] (min array size)": "single_mode",
+        "all 3 modes (max array size)": "all_modes",
+        "two modes satisfied by different positions": "multiple_modes_satisfied_across_positions",
+        "omitted (no filter)": "omitted",
+        "format has no disclosure_capabilities (excluded)": "format_without_disclosure_capabilities",
+        "no format covers all requested modes": "no_matching_formats",
+        "empty array []": "empty_array",
+        "unknown mode string 'permanent'": "permanent",
+        "duplicate modes ['continuous','continuous']": "duplicate_modes",
+    }
+    _partition_persistence(ctx, mapping.get(boundary_point, boundary_point))
+
+
+@when("the Buyer Agent requests creative formats for that format")
+def when_request_that_format(ctx: dict) -> None:
+    """Request the format an earlier Given named (``ctx["target_format"]``) by its format_id."""
+    _call(ctx, req=ListCreativeFormatsRequest(format_ids=[ctx["target_format"].format_id]))
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats at output_format_ids boundary "{boundary_point}"'))

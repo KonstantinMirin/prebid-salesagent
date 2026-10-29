@@ -9,6 +9,7 @@ No stub mode. No dict intermediaries -- assertions access Format attributes dire
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Sequence
 from enum import Enum
@@ -320,6 +321,75 @@ def then_no_format_pricing(ctx: dict) -> None:
     assert not priced, f"formats carrying pricing_options on the wire: {priced}"
 
 
+@then(parsers.parse('each returned format should contain at least one asset of type "{asset_type}"'))
+def then_each_format_has_asset_type(ctx: dict, asset_type: str) -> None:
+    """Every format on the wire declares an *asset_type* asset, in a slot or a repeatable group.
+
+    The asset_types filter keeps "formats that include these asset types"
+    (list-creative-formats-request.json), so with one requested type every survivor carries
+    it. An empty answer fails: the Given seeded a format that does, so nothing returned
+    means the seller refused the value or dropped the format.
+    """
+    formats = wire_field(ctx, "formats")
+    assert formats, f"no formats on the wire for asset_types [{asset_type!r}] -- the seeded format was not returned"
+    lacking = [f.get("name") for f in formats if asset_type not in asset_types_of(f)]
+    assert not lacking, f"formats returned for asset_types [{asset_type!r}] without such an asset: {lacking}"
+
+
+def _requested_format_on_wire(ctx: dict) -> dict:
+    """The one format on the wire whose format_id is the one the request named (``ctx["target_format"]``)."""
+    target_id = ctx["target_format"].format_id.id
+    matches = [f for f in wire_field(ctx, "formats") if (f.get("format_id") or {}).get("id") == target_id]
+    assert len(matches) == 1, f"expected the requested format {target_id!r} once on the wire, found {len(matches)}"
+    return matches[0]
+
+
+@then(parsers.parse('the format\'s "{collection}" entry should expose "{key}" with value "{value}"'))
+def then_format_entry_exposes(ctx: dict, collection: str, key: str, value: str) -> None:
+    """The requested format's *collection* holds exactly one entry whose *key* is *value*; it becomes "the same entry"."""
+    entries = [e for e in _requested_format_on_wire(ctx).get(collection) or [] if e.get(key) == value]
+    assert len(entries) == 1, f"expected one {collection} entry with {key}={value!r} on the wire, found {len(entries)}"
+    ctx["wire_entry"] = entries[0]
+
+
+@then(parsers.parse('the same entry should expose "{key}" as {value}'))
+def then_same_entry_exposes_as(ctx: dict, key: str, value: str) -> None:
+    """The entry carries *key* at its own level with the JSON value *value* (type and value both)."""
+    entry, expected = ctx["wire_entry"], json.loads(value)
+    assert key in entry, f"{key!r} is absent from the entry on the wire: {entry}"
+    assert type(entry[key]) is type(expected) and entry[key] == expected, (
+        f"entry {key!r} is {entry[key]!r} on the wire, expected {expected!r}"
+    )
+
+
+@then(parsers.parse('the same entry should expose "{key}" with value {value:d} under "{parent}"'))
+def then_same_entry_exposes_under(ctx: dict, key: str, value: int, parent: str) -> None:
+    """The entry's *parent* object carries *key* = *value*."""
+    nested = ctx["wire_entry"].get(parent)
+    assert isinstance(nested, dict), f"entry has no {parent!r} object on the wire: {ctx['wire_entry']}"
+    assert key in nested and nested[key] == value, (
+        f"{parent}.{key} is {nested.get(key)!r} on the wire, expected {value}"
+    )
+
+
+@then(parsers.parse('the same entry should not expose "{key}" outside "{parent}"'))
+def then_same_entry_confines_key(ctx: dict, key: str, parent: str) -> None:
+    """*key* appears nowhere in the entry except inside its *parent* object, at any depth."""
+
+    def paths(node: Any, path: str) -> list[str]:
+        if isinstance(node, dict):
+            here = [f"{path}.{key}"] if key in node else []
+            return here + [p for k, v in node.items() for p in paths(v, f"{path}.{k}")]
+        if isinstance(node, list):
+            return [p for i, v in enumerate(node) for p in paths(v, f"{path}[{i}]")]
+        return []
+
+    outside = [p for k, v in ctx["wire_entry"].items() if k != parent for p in paths(v, k)]
+    if key in ctx["wire_entry"]:
+        outside.insert(0, key)
+    assert not outside, f"{key!r} appears outside {parent!r} in the entry on the wire at: {outside}"
+
+
 @then(parsers.parse('"{a}", "{b}", and "{c}" should all be returned'))
 def then_three_returned(ctx: dict, a: str, b: str, c: str) -> None:
     names = [_fmt_name(f) for f in _get_formats(ctx)]
@@ -353,6 +423,8 @@ _KNOWN_FILTER_FIELDS = frozenset(
         "wcag",
         "disclosure_positions",
         "disclosure",
+        "disclosure_persistence",
+        "persistence",
         "output_format_ids",
         "input_format_ids",
         "creative agent type",
@@ -514,6 +586,15 @@ def _get_disclosure_positions(f: Any) -> set[str]:
     return {p.value if isinstance(p, Enum) else str(p) for p in positions}
 
 
+def _get_disclosure_persistence(f: Any) -> set[str]:
+    """Every persistence mode any position in a Format's ``disclosure_capabilities`` declares."""
+    return {
+        m.value if isinstance(m, Enum) else str(m)
+        for c in (getattr(f, "disclosure_capabilities", None) or [])
+        for m in c.persistence
+    }
+
+
 def _get_linked_format_ids(f: Any, attr: str) -> set[str]:
     """Extract linked format ID strings from output_format_ids or input_format_ids."""
     linked = getattr(f, attr, None) or []
@@ -614,6 +695,23 @@ def _assert_filter_content(ctx: dict, field: str, label: str) -> None:
                     f"{label} '{field}': format '{_fmt_name(f)}' survived "
                     f"disclosure filtering but has no supported_disclosure_positions"
                 )
+
+    elif field in ("disclosure_persistence", "persistence"):
+        # EXACT SET, not "every survivor declares some persistence": the request schema
+        # keeps a format iff "each requested persistence mode is supported by at least one
+        # position in disclosure_capabilities" (list-creative-formats-request.json,
+        # /properties/disclosure_persistence), so the seeded catalog determines the answer.
+        # The When records the members it sent; None is the omitted filter, which keeps all.
+        requested = ctx["requested_disclosure_persistence"]
+        expected_names = (
+            registry_names
+            if requested is None
+            else {_fmt_name(r) for r in registry if set(requested) <= _get_disclosure_persistence(r)}
+        )
+        assert returned_names == expected_names, (
+            f"{label} '{field}' {requested}: returned {sorted(n for n in returned_names if n)}, "
+            f"the formats declaring every requested mode are {sorted(n for n in expected_names if n)}"
+        )
 
     elif field == "output_format_ids":
         known_out = ctx.get("known_output_format_ids", [])
