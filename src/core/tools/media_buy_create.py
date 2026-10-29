@@ -2768,9 +2768,7 @@ async def _create_media_buy_impl(
             # reason: the gate's coverage rule reads them after this unit closes. They are the
             # stored documents ``get_products`` serves unchanged, and each states its ``mode``
             # (``ck_products_placements_explicit``), so the gate grades the mode the buyer was shown.
-            declared_placements = {
-                product_id: list(row.placements or []) for product_id, row in product_map.items()
-            }
+            declared_placements = {product_id: list(row.placements or []) for product_id, row in product_map.items()}
 
             # AdCP spec (core/targeting.json): "Sellers SHOULD return a validation
             # error if the product has property_targeting_allowed: false."

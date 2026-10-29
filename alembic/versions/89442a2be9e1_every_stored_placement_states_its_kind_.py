@@ -28,7 +28,7 @@ revert the structure and nothing else, and the previous revision's read path acc
 that states them.
 
 Revision ID: 89442a2be9e1
-Revises: a34a2ff137da
+Revises: 69a5a533f157
 Create Date: 2026-10-29 00:40:36.517074
 
 """
@@ -41,7 +41,7 @@ from src.core.json_validators import PLACEMENTS_ARE_EXPLICIT_CHECK, PLACEMENTS_A
 
 # revision identifiers, used by Alembic.
 revision: str = "89442a2be9e1"
-down_revision: str | Sequence[str] | None = "a34a2ff137da"
+down_revision: str | Sequence[str] | None = "69a5a533f157"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
