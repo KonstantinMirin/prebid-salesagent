@@ -692,6 +692,41 @@ class TestCanonicalKindForSizeEncodedIds:
 
         assert canonical_kind_for(format_id) == kind, why
 
+    @pytest.mark.parametrize(
+        ("agent_url", "kind"),
+        [
+            ("https://creative.adcontextprotocol.org", "image"),
+            ("https://peer-agent.example.com", "display_tag"),
+        ],
+        ids=["standard-agent-glob-before-structural", "peer-agent-structural"],
+    )
+    def test_an_unannotated_declaration_reaches_the_glob_before_the_structural_entry(self, agent_url, kind):
+        """Supplying the declaration cannot let step 4 answer ahead of step 3.
+
+        A v1 image format with no ``canonical`` has the standard ``image`` + ``url`` shape,
+        which the registry's structural ``{asset_types: [url]}`` entry also matches
+        (registries/v1-canonical-mapping.json at the pin, "Resolution order" steps 3 and 4).
+        At the standard agent the size-encoded id is a member of the ``display_image`` glob
+        through ``upgrade_legacy_format_id``, so the declared answer must equal the id-only
+        one. Projecting the raw id first answered ``display_tag`` with the declaration and
+        ``image`` without it.
+
+        The peer row is the control, and it differs only in the agent: the SDK's upgrade is
+        the standard agent's namespace alone, the raw slug matches no literal glob, and the
+        structural entry is the step that answers there.
+        """
+        from src.core.format_resolver import canonical_kind_for
+        from tests.factories.format import FormatFactory, FormatIdFactory, make_asset
+
+        format_id = FormatIdFactory(agent_url=agent_url, id="display_300x250_image")
+        declaration = FormatFactory(
+            format_id=format_id,
+            assets=[make_asset("image", asset_id="image_0"), make_asset("url", asset_id="url_1")],
+            canonical=None,
+        )
+
+        assert canonical_kind_for(format_id, spec=declaration) == kind
+
     def test_an_id_the_registry_cannot_reach_at_all_still_fails_closed(self):
         """The fallback must not become a guess: an unknown slug has no kind to project to."""
         from src.core.format_resolver import canonical_kind_for

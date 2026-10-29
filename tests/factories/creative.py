@@ -89,9 +89,17 @@ def served_format_spec(agent_url: str, format_id: str) -> Format | None:
     resolve by BOTH routes and all 22 agree (``canonical_kind_for(id)`` ==
     ``canonical_kind_for(id, spec=fmt)``), 42 resolve only with the spec through its
     ``canonical``, and the 7 card formats that declare none resolve only with the spec,
-    through the registry's structural ``url`` entry (``display_tag``). So supplying the spec
-    cannot change a kind a seeded row already had -- it can only turn a refusal into the
-    kind the normative order gives.
+    through the registry's structural ``url`` entry (``display_tag``).
+
+    That agreement is a property of the ORDER, not of the capture happening to annotate
+    every image format. ``canonical_kind_for`` upgrades the reference before the SDK walks
+    steps 2 to 4, so a size-encoded image id reaches the registry's ``display_image`` glob
+    (step 3) ahead of the structural ``url`` entry (step 4) its ``image`` + ``url`` shape also
+    matches; stripping ``canonical`` off the 7 ``display_*_image`` formats still yields
+    ``image``. Projecting first and upgrading only after a failure answered ``display_tag``
+    for them with the spec and ``image`` without it. So supplying the spec adds only what a
+    higher step reads off the declaration -- it can turn a refusal into the kind the
+    normative order gives, and cannot overturn a glob hit with a structural guess.
 
     None for an id no catalog carries, which keeps the gate real: ``gen_banner`` and
     ``broadstreet_display`` are still refused unless a caller passes the declaration whose

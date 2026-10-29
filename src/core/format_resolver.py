@@ -181,12 +181,18 @@ def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
     format with no annotation and no glob hit but a registry-matchable shape was refused
     where the normative order projects it (salesagent-ol033.20.24).
 
-    The declaration is the fetched *spec* when the caller has one. Without it the SDK is
-    handed the reference alone, so steps 2 and 4 have nothing to read and only the glob can
-    answer. One normalization precedes a second attempt then: ``display_300x250_image`` is
-    not spelled like any glob, but the SDK's ``upgrade_legacy_format_id`` rewrites it to the
-    ``display_image`` template the registry maps (salesagent-iz7dm), and the kind still
-    comes off the SDK's projection of the rewritten reference.
+    The declaration is the fetched *spec* when the caller has one, else the reference alone,
+    so steps 2 and 4 have nothing to read and only the glob can answer. EITHER WAY THE SDK
+    IS HANDED THE UPGRADED ID, once, before the order runs. ``display_300x250_image`` is not
+    spelled like any glob, but it is a member of the ``display_image`` mapping: the SDK's
+    ``upgrade_legacy_format_id`` rewrites it to that template (salesagent-iz7dm). Upgrading
+    only after a failed projection let step 4 answer first whenever a declaration was
+    supplied -- a served v1 image format with no ``canonical`` has the standard ``image`` +
+    ``url`` shape, so the structural ``{asset_types: [url]}`` entry projected it to
+    ``display_tag`` before the glob that names it ``image`` was consulted, and the kind
+    differed with and without the declaration. Normalizing first is what keeps step 3 ahead
+    of step 4, and keeps the id-only answer and the declared answer the same wherever the
+    declaration adds nothing a higher step reads.
 
     Args:
         ref: the deprecated reference, in any shape :func:`format_identity` accepts.
@@ -201,18 +207,15 @@ def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
             module does not mint an error code for a projection it could not make.
     """
     reference = format_reference(ref)
-    kind = _sdk_projected_kind(spec if spec is not None else {"format_id": reference})
-    if kind is not None:
-        return kind
     upgraded = upgrade_legacy_format_id(reference)
-    if upgraded.id != reference.id:
-        kind = _sdk_projected_kind({"format_id": upgraded})
-        if kind is not None:
-            return kind
-    raise ValueError(
-        f"no canonical projection for legacy format_id {reference.id!r}: the registry's resolution order "
-        "fails closed for it"
-    )
+    declaration = spec.model_copy(update={"format_id": upgraded}) if spec is not None else {"format_id": upgraded}
+    kind = _sdk_projected_kind(declaration)
+    if kind is None:
+        raise ValueError(
+            f"no canonical projection for legacy format_id {reference.id!r}: the registry's resolution order "
+            "fails closed for it"
+        )
+    return kind
 
 
 def creative_identity_of(creative: LibraryCreativeAsset, *, spec: Format | None) -> CreativeFormatIdentity:

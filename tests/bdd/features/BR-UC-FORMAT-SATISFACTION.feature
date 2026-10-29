@@ -912,6 +912,15 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     When the Buyer Agent syncs it into the library
     Then the creative is stored carrying canonical kind "html5"
 
+  # THE ORDER BETWEEN STEPS 3 AND 4 has no row here. It differs only for a size-encoded id
+  # at the STANDARD agent's URL whose served declaration carries no canonical: the SDK's
+  # upgrade_legacy_format_id puts it under the display_image glob, and only that agent's
+  # namespace is upgraded. set_served_catalogue re-homes every format at the tenant's peer,
+  # where the raw slug matches no literal glob and the structural `url` entry answers
+  # display_tag under either order; the capture annotates every image format, so step 2
+  # answers first. Naming the standard agent on e2e_rest dials the pinned reference agent
+  # (see host_reference_format). tests/unit/test_format_resolver.py grades it instead.
+
   @T-UC-FORMAT-SATISFACTION-upsert-projectable @creative_library_upsert @requires_db
   Scenario: a creative whose format does resolve is stored with its canonical kind
     Given a packaged product declaring only the deprecated format_ids
