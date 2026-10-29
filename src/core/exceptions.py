@@ -1452,6 +1452,18 @@ class AdCPConflictingSelectorsError(AdCPSalesAgentError[SelectorConflictDetails]
     _code: ClassVar[ErrorCodeT] = ErrorCode.CONFLICTING_SELECTORS
 
 
+class AdCPAmbiguousBiddingPolicyError(AdCPSalesAgentError[EntityRefDetails]):
+    """One package carries the canonical bidding block AND legacy bid_price (422).
+
+    ``enums/error-code.json``: "The same effective package combines the canonical bidding
+    block with legacy bid_price or monetary optimization-goal target fields, so two bidding
+    interpretations are present. Sellers MUST reject rather than choosing a winner."
+    ``field`` names the package, because neither member alone is at fault.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.AMBIGUOUS_BIDDING_POLICY
+
+
 class AdCPIdempotencyConflictError(AdCPConflictError):
     """idempotency_key reused with a different request payload (409, IDEMPOTENCY_CONFLICT).
 

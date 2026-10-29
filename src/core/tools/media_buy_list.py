@@ -55,7 +55,7 @@ from sqlalchemy.orm import Session
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import ConfigurationDetails, ValidationDetails
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.tools._media_buy_status import resolve_canonical_status
+from src.core.tools._media_buy_status import resolve_canonical_status, seller_valid_actions
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +118,6 @@ class _PackageData:
     bid_price: Decimal | None
 
 
-from adcp.server.helpers import valid_actions_for_status
 from adcp.types import MediaBuyStatus
 
 from src.core.database.models import CreativeAssignment, MediaBuy
@@ -372,7 +371,7 @@ def _get_media_buys_impl(
                 media_buy_id=buy.media_buy_id,
                 buyer_campaign_ref=buyer_campaign_ref,
                 status=status,
-                valid_actions=valid_actions_for_status(status.value),
+                valid_actions=seller_valid_actions(status.value),
                 currency=buy.currency or "USD",
                 total_budget=total_budget,
                 packages=response_packages,

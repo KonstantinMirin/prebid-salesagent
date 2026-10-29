@@ -2549,6 +2549,33 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F3: create the additional packages via a separate create_media_buy
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
+  @T-UC-003-ext-u-valid-actions @extension @ext-u @BR-RULE-217 @schema-v3.1 @post-s1
+  Scenario: A seller without mid-flight package additions does not advertise add_packages (ext-u)
+    Given the tenant is configured for auto-approval
+    And the existing media buy has start_time "2020-01-01T00:00:00Z" and end_time "2099-02-01T00:00:00Z"
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    | budget     | 5000    |
+    And the package "pkg_001" exists in the media buy
+    And the updated daily spend does not exceed max_daily_package_spend
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy success spec
+    And the response should succeed
+    And the wire valid_actions should include "update_packages"
+    And the wire valid_actions should not include "add_packages"
+    # LOCAL ADDITION, the advertisement half of BR-RULE-217 INV-1 graded on the wire.
+    # update-media-buy-request.json /properties/new_packages: "Sellers that support mid-flight
+    # package additions advertise add_packages in both valid_actions[] (deprecated) and as an
+    # entry in available_actions[] (authoritative)." This seller does not, so a live buy's
+    # valid_actions carries update_packages (its active status allows it) and not add_packages.
+    # The flight window spans today so the buy date-refines to active, not completed (whose
+    # valid_actions is empty and would satisfy "not include" vacuously).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/new_packages
+
   @T-UC-003-new-packages-add @invariant @BR-RULE-217 @schema-v3.1 @post-s1 @post-s2
   Scenario: Supporting seller adds new packages atomically (INV-2/INV-4)
     Given the tenant is configured for auto-approval
@@ -2716,6 +2743,35 @@ Feature: BR-UC-003 Update Media Buy
       | format_kind        |
       | params             |
       | pricing_option_id  |
+
+    # The same root `not` names two more single members, which are not fully-immutable fields
+    # but are refused through the same branch shape (`required: [name]`): the pre-GA
+    # capability_ids ("Pre-GA capability_ids is also rejected rather than accepted as an
+    # extension", package-update.json's description) and budget_cap_timezone. Both were
+    # accepted: neither is a declared property, so the accepted-shape strip dropped them.
+    Examples: the other single members the package-update root `not` forbids
+      | immutable_field     |
+      | capability_ids      |
+      | budget_cap_timezone |
+
+  @T-UC-003-package-update-bidding-with-bid-price @immutable_field_guard @error @schema-v3.1 @post-f2
+  Scenario: a package update carrying a bidding object beside bid_price is refused AMBIGUOUS_BIDDING_POLICY
+    Given a valid update_media_buy request for "mb_existing"
+    And the request includes a package update where the payload carries bidding with bid_price
+    When the Buyer Agent sends the update_media_buy request
+    Then the update is refused AMBIGUOUS_BIDDING_POLICY naming the package update itself
+    # LOCAL ADDITION. package-update.json's root `not` has one branch of two members:
+    # required [bidding, bid_price] with bidding typed object. bid_price's own description:
+    # "A package update MUST NOT supply both a non-null bidding object and bid_price. During
+    # migration, bidding:null MAY accompany bid_price". The pinned enum has a code for exactly
+    # this condition, AMBIGUOUS_BIDDING_POLICY: "The same effective package combines the
+    # canonical bidding block with legacy bid_price ... Sellers MUST reject rather than
+    # choosing a winner. Recovery: correctable". Both members are declared, so nothing strips
+    # them; the refusal must come ahead of the UNSUPPORTED_FEATURE either member earns alone.
+    # No single member is at fault, so the field is the package object.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/not
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/bid_price
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/AMBIGUOUS_BIDDING_POLICY
 
   @T-UC-003-partition-immutable-package-field @partition @immutable_field_guard @schema-v3.1
   Scenario Outline: Immutable package-field guard partition validation - <partition>

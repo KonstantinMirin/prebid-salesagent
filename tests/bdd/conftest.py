@@ -470,9 +470,18 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: UC-003 ext-t — invoice_recipient authorization (BR-RULE-214) not implemented;
     # production accepts the override without an authorization check, so no VALIDATION_ERROR is raised.
     "T-UC-003-ext-t": "invoice_recipient authorization not implemented (BR-RULE-214) — production gap",
-    # FIXME: UC-003 ext-u — new_packages midflight-additions capability check
-    # (BR-RULE-217 -> UNSUPPORTED_FEATURE) not implemented; production accepts new_packages unhandled.
-    "T-UC-003-ext-u": "new_packages midflight capability check not implemented (BR-RULE-217) — production gap",
+    # FIXME: UC-003 ext-u — graduation candidate, held only for the box run that graduation
+    # requires (.claude/rules/workflows/xpass-graduation.md step 9). The production gap is
+    # closed: update_media_buy refuses new_packages UNSUPPORTED_FEATURE above the UoW
+    # (media_buy_update._refuse_unsupported_actions), and add_packages is out of every
+    # valid_actions[] (_media_buy_status.seller_valid_actions). Inspected without a run: the
+    # scenario states the full obligation (BR-RULE-217 INV-1, code, suggestion); the Givens
+    # build a complete package-request through the shared builder and read the seller's
+    # advertisement from _adcp_status_and_actions on the uc003-ext seed (pending_approval,
+    # flight starting now: non-empty, no add_packages); the Thens grade the wire envelope.
+    # Not in e2e_rest_known_failures.txt. Predicted XPASS(strict), reported FAILED, on a2a,
+    # mcp, rest and e2e_rest: delete this entry with a "# Graduated:" note citing that run.
+    "T-UC-003-ext-u": "new_packages refusal implemented (BR-RULE-217) — awaiting box-run graduation",
     # FIXME: UC-002 ASAP — response doesn't expose resolved start_time
     "T-UC-002-alt-asap": "response lacks resolved start_time field — spec-production gap",
     # FIXME: UC-002 error code mismatch — Pydantic VALIDATION_ERROR vs spec INVALID_REQUEST
@@ -4353,7 +4362,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Graduated: T-UC-026-ext-g-product, T-UC-026-ext-g-format,
             # T-UC-026-ext-g-pricing (innet_091026_1343, all four transports xpass).
             # Production refuses each immutable field on update from
-            # UpdateMediaBuyRequest._refuse_immutable_package_fields, which raises one
+            # UpdateMediaBuyRequest._refuse_forbidden_package_shapes, which raises one
             # pydantic `not` error per offending field; adcp_error_for maps a pydantic
             # ValidationError to AdCPInvalidRequestError, so the buyer gets
             # INVALID_REQUEST + recovery=correctable + the CODE_TABLE suggestion with
@@ -6442,6 +6451,14 @@ _UC003_TARGETING_OVERLAY_TAGS = frozenset(
 _UC003_MANUAL_APPROVAL_TAGS = frozenset(
     {"T-UC-003-alt-manual", "T-UC-003-approval-tenant", "T-UC-003-approval-adapter"}
 )
+# The package-update root `not` scenarios (media-buy/package-update.json). Their Givens need
+# exactly the uc003-ext seed -- an existing buy with pkg_001 -- and the refusal they grade is
+# raised before any of it is read: by the request model, or for bidding beside bid_price by
+# update_media_buy above the UoW (AMBIGUOUS_BIDDING_POLICY). They sat on the uc003-not-wired
+# catch-all, which xfails at setup, so the outline added with the refusal had never run.
+_UC003_PACKAGE_UPDATE_NOT_TAGS = frozenset(
+    {"T-UC-003-package-update-immutable-keyword", "T-UC-003-package-update-bidding-with-bid-price"}
+)
 # The BR-RULE-215 revision scenarios. They were dormant for a reason that was not
 # "the harness cannot reach them": they had NO step definitions at all, so the
 # not-wired row was standing in for missing work rather than for a production gap.
@@ -7146,6 +7163,7 @@ ENV_ROUTES: list[EnvRoute] = [
             lambda m: (
                 any(t.startswith("T-UC-003-ext-") for t in m)
                 or bool(m & _UC003_TARGETING_OVERLAY_TAGS)
+                or bool(m & _UC003_PACKAGE_UPDATE_NOT_TAGS)
                 or "T-UC-003-partition-creative-state" in m
                 or "T-UC-003-boundary-creative-state" in m
             ),

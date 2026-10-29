@@ -17,6 +17,7 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import (
     WIRE_MISSING,
+    assert_wire_rejection,
     payload_or_none,
     require_payload,
     wire_absent,
@@ -243,6 +244,20 @@ def then_wire_valid_actions_include(ctx: dict, action: str) -> None:
     wire = wire_dict(ctx)
     actions = wire.get("valid_actions") or []
     assert action in actions, f"Expected '{action}' in wire valid_actions, got {actions!r}"
+
+
+@then(parsers.parse('the wire valid_actions should not include "{action}"'))
+def then_wire_valid_actions_exclude(ctx: dict, action: str) -> None:
+    """Assert the REAL wire ``valid_actions`` list is present and does not contain *action*.
+
+    Present and non-empty, because an absent or empty list omits every action and so would
+    pass for a seller that advertised nothing; the scenarios using this step pair it with an
+    "include" line that names an action the buy's status does allow.
+    """
+    wire = wire_dict(ctx)
+    actions = wire.get("valid_actions")
+    assert actions, f"Expected a non-empty wire valid_actions, got {actions!r}"
+    assert action not in actions, f"Expected '{action}' absent from wire valid_actions, got {actions!r}"
 
 
 @given(parsers.parse('the media buy is in "{status}" status'))
@@ -2637,10 +2652,13 @@ def given_package_update_start_time(ctx: dict, value: str) -> None:
     _ensure_update_defaults(ctx)["packages"] = [{"package_id": "pkg_001", "start_time": value}]
 
 
-#: A protocol-valid value for each field package-update.json's root ``not`` forbids. Valid
-#: shapes on purpose: the only defect in the request is that the field is present. The
-#: last three are package-request.json's canonical selector arms, which the same ``not``
-#: names beside ``format_ids``.
+#: A protocol-valid value for each member package-update.json's root ``not`` forbids. Valid
+#: shapes on purpose: the only defect in the request is that the member is present. The
+#: canonical selector arms (format_option_refs, format_kind, params) are named beside
+#: ``format_ids``; ``capability_ids`` is the pre-GA field the schema's description says "is
+#: also rejected rather than accepted as an extension"; ``bidding`` and ``bid_price`` are
+#: forbidden only TOGETHER, ``bidding`` being a non-null object (core/bidding-policy.json's
+#: ``{automatic: true}``).
 _IMMUTABLE_PACKAGE_VALUES: dict[str, Any] = {
     "product_id": "prod_other",
     "format_ids": [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}],
@@ -2648,6 +2666,10 @@ _IMMUTABLE_PACKAGE_VALUES: dict[str, Any] = {
     "format_option_refs": [{"scope": "product", "format_option_id": "opt_other"}],
     "format_kind": "image",
     "params": {"width": 300, "height": 250},
+    "capability_ids": ["cap_other"],
+    "budget_cap_timezone": "America/New_York",
+    "bidding": {"automatic": True},
+    "bid_price": 5.0,
 }
 
 #: What the generated rows mean by "all three immutable fields": the three they were
@@ -2699,6 +2721,16 @@ def then_package_update_field_refused_by_keyword(ctx: dict, name: str, keyword: 
         field=f"packages[0].{name}",
         issues=[{"pointer": f"/packages/0/{name}", "keyword": keyword}],
     )
+
+
+@then("the update is refused AMBIGUOUS_BIDDING_POLICY naming the package update itself")
+def then_package_update_refused_ambiguous_bidding(ctx: dict) -> None:
+    """AMBIGUOUS_BIDDING_POLICY, correctable, naming the PACKAGE.
+
+    enums/error-code.json classifies the code correctable. Neither ``bidding`` nor
+    ``bid_price`` alone is at fault, so ``field`` is the package-update object itself.
+    """
+    assert_wire_rejection(ctx, "AMBIGUOUS_BIDDING_POLICY", recovery="correctable", field="packages[0]")
 
 
 #: idempotency_key boundary rows -> the value sent. update-media-buy-request.json requires
@@ -2804,9 +2836,11 @@ def given_idempotency_key_spent(ctx: dict, key: str) -> None:
 # BR-RULE-217 / BR-RULE-010: new_packages
 # ═══════════════════════════════════════════════════════════════════════
 #
-# Production does not read new_packages today (salesagent-ol033.20.11): the DTO accepts the
-# member and nothing applies it. These steps build the request the pin describes and grade
-# the result on the wire, so they fail until the seller implements the addition.
+# This seller does not add packages to a live buy: it advertises no add_packages and refuses
+# new_packages UNSUPPORTED_FEATURE (update-media-buy-request.json /properties/new_packages).
+# These steps build the request the pin describes and grade the result on the wire; the
+# scenarios written for a SUPPORTING seller fail at their own precondition, which reads the
+# seller's advertisement rather than asserting it (salesagent-ol033.25 owns the feature).
 
 
 def _product_pair(ctx: dict, product_id: str) -> tuple[str, str]:
@@ -2837,6 +2871,12 @@ def _set_new_packages(ctx: dict, product_ids: list[str]) -> list[dict[str, Any]]
     _ensure_update_defaults(ctx)["new_packages"] = entries
     ctx["new_package_product_ids"] = [product_id for product_id, _option in pairs]
     return entries
+
+
+@given("the request includes new_packages with one complete package-request")
+def given_new_packages_one(ctx: dict) -> None:
+    """One complete package-request for a product the buy does not hold yet."""
+    _set_new_packages(ctx, ["prod_new_a"])
 
 
 @given("the request includes new_packages with two complete package-requests")
@@ -2895,19 +2935,37 @@ def given_update_with_package_set(ctx: dict, label: str, boundary: str) -> None:
     )
 
 
-@given(parsers.parse('the media buy\'s valid_actions advertises "{action}"'))
-def given_valid_actions_advertise(ctx: dict, action: str) -> None:
-    """Assert the seller's own derivation advertises *action* for the buy in its seeded state.
+def _advertised_actions(ctx: dict) -> list[str]:
+    """The ``valid_actions`` the seller derives for the Background's buy in its seeded state.
 
     ``_adcp_status_and_actions`` is the one function every update response takes
     ``valid_actions`` from, so this is the list the buyer would read before the update.
     A precondition, read from production rather than set: a seller advertises what its
-    state machine says, and no test input can make it advertise more.
+    state machine says, and no test input can make it advertise more or less.
     """
     from src.core.tools.media_buy_update import _adcp_status_and_actions
 
     _status, actions = _adcp_status_and_actions(_existing_media_buy(ctx))
+    return actions
+
+
+@given(parsers.parse('the media buy\'s valid_actions advertises "{action}"'))
+def given_valid_actions_advertise(ctx: dict, action: str) -> None:
+    """Assert the seller advertises *action* for the buy in its seeded state."""
+    actions = _advertised_actions(ctx)
     assert action in actions, f"the seller does not advertise {action!r} for this buy; valid_actions={actions!r}"
+
+
+@given(parsers.parse('the media buy\'s valid_actions does NOT advertise "{action}"'))
+def given_valid_actions_excludes(ctx: dict, action: str) -> None:
+    """Assert the seller does not advertise *action* for the buy in its seeded state.
+
+    A non-empty list is required too: a terminal buy advertises nothing, and "add_packages
+    is absent" would then hold of a buy no update could reach at all.
+    """
+    actions = _advertised_actions(ctx)
+    assert actions, "the seeded buy advertises no action at all, so the absence of one grades nothing"
+    assert action not in actions, f"the seller advertises {action!r} for this buy; valid_actions={actions!r}"
 
 
 @then("both new packages should appear in the affected_packages")

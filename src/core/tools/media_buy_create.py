@@ -28,7 +28,6 @@ if TYPE_CHECKING:
     from src.core.database.repositories.uow import MediaBuyUoW as _MediaBuyUoWType
     from src.core.format_satisfaction import SelectorResolution
 
-from adcp.server.helpers import valid_actions_for_status
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from adcp.types.domains.core.package_format_snapshot import PackageFormatSnapshot as LibraryPackageFormatSnapshot
@@ -119,6 +118,7 @@ from src.core.schemas import (
     canonical_agent_url,
 )
 from src.core.security.outbound_http import CounterpartyUrl, UrlProvenance
+from src.core.tools._media_buy_status import seller_valid_actions
 from src.core.tools._media_buy_transitions import resolve_flight_window_status
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
@@ -4541,7 +4541,7 @@ async def _create_media_buy_impl(
             # grades media_buy_status == "pending_creatives" alongside
             # envelope status == "completed"). Partial GH #1326.
             media_buy_status=media_buy_status,
-            valid_actions=valid_actions_for_status(media_buy_status),
+            valid_actions=seller_valid_actions(media_buy_status),
             creative_deadline=response.creative_deadline,
             errors=property_list_unsupported_advisories(req.packages, adapter),
             # sandbox.mdx: sellers "SHOULD include `sandbox: true` in success responses
