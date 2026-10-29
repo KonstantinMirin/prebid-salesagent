@@ -587,13 +587,18 @@ def _first_package(ctx: dict) -> dict:
 
 @given(parsers.parse('a package has optimization_goal with kind "metric" and metric "{metric}" not in supported set'))
 def given_package_optimization_unsupported_metric(ctx: dict, metric: str) -> None:
-    """Attach an optimization_goal whose metric is outside the seller's supported set.
+    """Attach the metric-kind optimization goal the sentence names, on a product declaring none.
 
-    Production gap: create_media_buy never reads optimization_goals; the metric
-    is silently accepted (BR-UC-002 ext-u wants UNSUPPORTED_FEATURE).
+    The goal is the one the partition outline's ``unsupported_metric`` row sends, built by
+    the same helpers. It used to be ``{"metric": metric, "weight": 1.0}``: no ``kind``, which
+    core/optimization-goal.json requires as the discriminator, and a ``weight`` it does not
+    declare. The INVALID_REQUEST that malformed goal earned was a schema refusal of the
+    fixture, not an answer about the metric. No seeded product declares
+    ``metric_optimization``, so the metric is outside every supported set.
     """
-    pkg = _first_package(ctx)
-    pkg["optimization_goals"] = [{"metric": metric, "weight": 1.0}]
+    from tests.bdd.steps.generic.given_media_buy import _metric_goal, _set_optimization_goals
+
+    _set_optimization_goals(ctx, [_metric_goal(metric)])
 
 
 @given(parsers.parse('a package has optimization_goal with kind "event" and unregistered event_source_id'))
