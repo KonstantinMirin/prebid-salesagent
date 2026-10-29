@@ -470,9 +470,18 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: UC-003 ext-t — invoice_recipient authorization (BR-RULE-214) not implemented;
     # production accepts the override without an authorization check, so no VALIDATION_ERROR is raised.
     "T-UC-003-ext-t": "invoice_recipient authorization not implemented (BR-RULE-214) — production gap",
-    # FIXME: UC-003 ext-u — new_packages midflight-additions capability check
-    # (BR-RULE-217 -> UNSUPPORTED_FEATURE) not implemented; production accepts new_packages unhandled.
-    "T-UC-003-ext-u": "new_packages midflight capability check not implemented (BR-RULE-217) — production gap",
+    # FIXME: UC-003 ext-u — graduation candidate, held only for the box run that graduation
+    # requires (.claude/rules/workflows/xpass-graduation.md step 9). The production gap is
+    # closed: update_media_buy refuses new_packages UNSUPPORTED_FEATURE above the UoW
+    # (media_buy_update._refuse_unsupported_actions), and add_packages is out of every
+    # valid_actions[] (_media_buy_status.seller_valid_actions). Inspected without a run: the
+    # scenario states the full obligation (BR-RULE-217 INV-1, code, suggestion); the Givens
+    # build a complete package-request through the shared builder and read the seller's
+    # advertisement from _adcp_status_and_actions on the uc003-ext seed (pending_approval,
+    # flight starting now: non-empty, no add_packages); the Thens grade the wire envelope.
+    # Not in e2e_rest_known_failures.txt. Predicted XPASS(strict), reported FAILED, on a2a,
+    # mcp, rest and e2e_rest: delete this entry with a "# Graduated:" note citing that run.
+    "T-UC-003-ext-u": "new_packages refusal implemented (BR-RULE-217) — awaiting box-run graduation",
     # FIXME: UC-002 ASAP — response doesn't expose resolved start_time
     "T-UC-002-alt-asap": "response lacks resolved start_time field — spec-production gap",
     # FIXME: UC-002 error code mismatch — Pydantic VALIDATION_ERROR vs spec INVALID_REQUEST
