@@ -471,7 +471,13 @@ def _route_agent_failures(
     Only an UNREACHABLE agent is rerouted. An AGENT_FORMATS_DISCARDED advisory names an
     agent that answered: the format the buyer referenced may well be among the ones it
     returned, so "the referenced creative agent is unavailable" would be false.
+
+    The operator agent's failed url is its identity, an origin, while a reference to it
+    carries the path its catalog publishes (``<origin>/api/creative-agent``), so the match
+    is ``names_listed_agent``'s: by origin for the operator agent, as spelled for any other.
     """
+    from src.core.creative_agent_registry import names_listed_agent
+
     requested_agent_urls = {str(fid.agent_url) for fid in (req.format_ids or [])}
     if not requested_agent_urls or not fetch_result.failed_agent_urls:
         return fetch_result.errors
@@ -480,7 +486,7 @@ def _route_agent_failures(
     for index, advisory in enumerate(fetch_result.errors):
         failed_url = fetch_result.failed_agent_urls[index] if index < len(fetch_result.failed_agent_urls) else None
         unreachable = advisory.code == AppErrorCode.AGENT_UNREACHABLE
-        if unreachable and failed_url is not None and str(failed_url) in requested_agent_urls:
+        if unreachable and failed_url is not None and names_listed_agent(str(failed_url), requested_agent_urls):
             routed.append(AdCPResponseError.of(ErrorCode.REFERENCE_NOT_FOUND, field="format_ids"))
         else:
             routed.append(advisory)

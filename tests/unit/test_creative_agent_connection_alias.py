@@ -114,6 +114,56 @@ class TestOperatorOriginSetting:
         assert IntegrationSettings(creative_agent_origin=value).creative_agent_origin == value
 
 
+class TestUnreachableReferencedAgent:
+    """An unreachable agent the request's format_ids name is REFERENCE_NOT_FOUND on format_ids.
+
+    The operator agent fails under its identity, an origin, while a reference to it carries
+    the path its catalog publishes, so the two are matched by origin. Any other agent is
+    matched as spelled. ``failed_url`` is the registry's own default agent, never a string
+    written here.
+    """
+
+    _OPERATOR = "https://creative.seller.example"
+
+    @staticmethod
+    def _route(failed_url: str, requested_agent_url: str) -> list:
+        from src.core.creative_agent_registry import FormatFetchResult
+        from src.core.errors.codes import AppErrorCode
+        from src.core.schemas import Error, ListCreativeFormatsRequest
+        from src.core.tools.creative_formats import _route_agent_failures
+
+        fetch_result = FormatFetchResult(
+            formats=[],
+            errors=[Error.of(AppErrorCode.AGENT_UNREACHABLE, field="formats")],
+            failed_agent_urls=[failed_url],
+        )
+        req = ListCreativeFormatsRequest(format_ids=[{"agent_url": requested_agent_url, "id": "display_300x250_image"}])
+        return [(error.code, error.field) for error in _route_agent_failures(fetch_result, req)]
+
+    def test_a_mount_path_reference_to_the_operator_agent_is_reference_not_found(self, monkeypatch):
+        monkeypatch.setenv("CREATIVE_AGENT_ORIGIN", self._OPERATOR)
+        operator = CreativeAgentRegistry().DEFAULT_AGENT.agent_url
+
+        routed = self._route(operator, f"{self._OPERATOR}/api/creative-agent")
+
+        assert routed == [("REFERENCE_NOT_FOUND", "format_ids")]
+
+    def test_a_reference_to_another_agent_keeps_the_advisory(self, monkeypatch):
+        monkeypatch.setenv("CREATIVE_AGENT_ORIGIN", self._OPERATOR)
+        operator = CreativeAgentRegistry().DEFAULT_AGENT.agent_url
+
+        routed = self._route(operator, "https://creative.other.example/api/creative-agent")
+
+        assert routed == [("AGENT_UNREACHABLE", "formats")]
+
+    def test_another_agent_is_matched_with_its_path(self, monkeypatch):
+        monkeypatch.setenv("CREATIVE_AGENT_ORIGIN", self._OPERATOR)
+        partner = "https://partner.example/api/creative-agent"
+
+        assert self._route(partner, partner) == [("REFERENCE_NOT_FOUND", "format_ids")]
+        assert self._route(partner, "https://partner.example/other-agent") == [("AGENT_UNREACHABLE", "formats")]
+
+
 def _mock_call_mcp_tool(formats_payload: dict) -> AsyncMock:
     """A ``call_mcp_tool(...)`` awaitable mock returning *formats_payload* as ``structured_content``."""
     return AsyncMock(return_value=MagicMock(structured_content=formats_payload, content=[]))

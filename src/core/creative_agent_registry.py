@@ -19,6 +19,7 @@ Testing:
 """
 
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -194,6 +195,18 @@ def is_operator_agent(agent_url: str) -> bool:
     an identity a reference can name.
     """
     return _agent_origin(agent_url) == _operator_agent_origin()
+
+
+def names_listed_agent(agent_url: str, agent_urls: Collection[str]) -> bool:
+    """Whether *agent_url* names one of the agents *agent_urls* lists.
+
+    A listed URL matches as spelled; the caller puts both sides in one form. The operator
+    agent matches by ORIGIN instead: when *agent_url* and a listed URL both name it, they are
+    one agent whatever paths they carry, because its identity is an origin while the
+    references its catalog publishes carry the path it is mounted at (the reference agent's
+    are ``<origin>/api/creative-agent``). Every other agent keeps the exact comparison.
+    """
+    return agent_url in agent_urls or (is_operator_agent(agent_url) and any(map(is_operator_agent, agent_urls)))
 
 
 def _connection_agent_url(agent_url: str) -> str:
