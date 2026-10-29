@@ -1669,9 +1669,23 @@ def then_refused_conflicting_selectors(ctx: dict) -> None:
 
     The DETAILS are asserted too, and they are what stops this passing on a seller that
     answers the code without having compared anything: the pin asks for "the supplied
-    selector routes and their normalized canonical summaries", so every route the buyer
-    sent must appear, and exactly one of them must name the declaration it selected. A
-    seller that refused before resolving could not fill that in.
+    selector routes and their normalized canonical summaries", and a route's summary is the
+    option SET it selected, because sets are what step (2) compares ("require the selected
+    option sets to match"). So, per arm -- the unit the comparison runs on:
+
+    - every arm the buyer sent is summarized, and no other;
+    - every option named is one the product publishes;
+    - the ``format_option_refs`` arm selected exactly the options its refs name, which is
+      the request's own statement and not this seller's derivation: "Each reference
+      matches one target product ``format_options[]`` entry";
+    - the arms' sets differ, because that disagreement IS the refusal. A summary that
+      names one entry of a set two options narrow shows two routes agreeing beside a
+      refusal that says they differ.
+
+    Against a product publishing one option, those four leave the other arm exactly one
+    answer -- it selected nothing -- so the single-option rows are graded as tightly as a
+    literal would grade them, without one Then hardcoding a declaration the other outline
+    does not store.
     """
     result = ctx["result"]
     result.assert_wire_error("CONFLICTING_SELECTORS", field="packages[0]")
@@ -1680,14 +1694,31 @@ def then_refused_conflicting_selectors(ctx: dict) -> None:
     # the one locator the assertion also uses.
     error_object = result.wire_error_object() or {}
     routes = ((error_object.get("details") or {}).get("selector_routes")) or []
-    sent = {arm for arm in ("format_option_refs", "format_kind", "format_ids") if arm in _SELECTORS[ctx["selector"]]}
+    request = _SELECTORS[ctx["selector"]]
+    sent = {arm for arm in ("format_option_refs", "format_kind", "format_ids") if arm in request}
     assert {route.get("field") for route in routes} == sent, (
         f"the refusal summarizes routes {[r.get('field') for r in routes]}, but the buyer sent {sorted(sent)}"
     )
-    selected = [route.get("selected_option") for route in routes]
-    assert selected.count(_PRODUCT_OPTION_ID) == 1 and None in selected, (
-        f"expected exactly one route to have selected {_PRODUCT_OPTION_ID!r} and another to have selected "
-        f"nothing -- that disagreement IS the refusal -- got {selected!r}"
+    assert all(isinstance(route.get("selected_options"), list) for route in routes), (
+        f"every route summary must state the option set it selected (empty when none); got {routes!r}"
+    )
+    arms: dict[str, set[str]] = {arm: set() for arm in sent}
+    for route in routes:
+        arms[route["field"]].update(route["selected_options"])
+    published = {option["format_option_id"] for option in ctx["default_product"].format_options}
+    named = set().union(*arms.values())
+    assert named <= published, (
+        f"the refusal names options {sorted(named - published)} the product does not publish ({sorted(published)})"
+    )
+    if "format_option_refs" in request:
+        referenced = {ref["format_option_id"] for ref in request["format_option_refs"]}
+        assert arms["format_option_refs"] == referenced, (
+            f"the format_option_refs route names {sorted(referenced)} but its summary selected "
+            f"{sorted(arms['format_option_refs'])}"
+        )
+    summarized = {arm: sorted(selected) for arm, selected in arms.items()}
+    assert len({frozenset(selected) for selected in arms.values()}) > 1, (
+        f"every arm's summary selected the same set, yet the routes were refused as differing -- got {summarized!r}"
     )
 
 

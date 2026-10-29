@@ -283,11 +283,14 @@ class SelectorRouteSummary(BaseModel):
     ``field`` is the request arm the route was read from (``format_option_refs``,
     ``format_kind``, ``format_ids``) and ``selector`` the value the buyer put there,
     rendered — the two together name the route, because one arm may carry several
-    routes. ``format_kind`` and ``selected_option`` are the normalized summary:
-    which canonical shape the route resolved to, and which of the product's
-    ``format_options[]`` entries it then selected. ``selected_option`` is ``None``
-    where the route resolved and selected NOTHING, which is itself a differing
-    selected set and so is a conflict the buyer has to see.
+    routes. ``format_kind`` and ``selected_options`` are the normalized summary:
+    which canonical shape the route resolved to, and EVERY one of the product's
+    ``format_options[]`` entries it then selected. A list, because the pin compares
+    sets -- "require the selected option sets to match" -- and a broad legacy id
+    selects each entry that narrows it; naming one entry of two would show the buyer
+    two routes agreeing beside a refusal that says they differ. Empty where the
+    route resolved and selected NOTHING, which is itself a differing selected set
+    and so is a conflict the buyer has to see.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -295,7 +298,7 @@ class SelectorRouteSummary(BaseModel):
     field: str
     selector: str
     format_kind: str | None = None
-    selected_option: str | None = None
+    selected_options: list[str]
 
 
 class SelectorConflictDetails(EntityRefDetails):

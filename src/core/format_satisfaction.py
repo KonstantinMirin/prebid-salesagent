@@ -1660,9 +1660,9 @@ def conflicting_selectors(
                     format_kind=(
                         str(verdict.declaration.format_kind) if verdict.declaration is not None else route.claim.kind
                     ),
-                    selected_option=(
-                        _declaration_label(verdict.declaration) if verdict.declaration is not None else None
-                    ),
+                    # The route's whole SET, which is what the comparison read
+                    # (:attr:`SelectorResolution._arm_selections`), not its first entry.
+                    selected_options=[_declaration_label(d) for d in verdict.selection],
                 )
                 for route, verdict in resolution.routes
             ],
