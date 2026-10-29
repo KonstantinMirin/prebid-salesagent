@@ -11,8 +11,10 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from adcp.types import Duration
 from pydantic import ValidationError
 
+from src.core.enum_helpers import enum_value
 from src.core.exceptions import (
     adcp_error_for,
 )
@@ -198,6 +200,18 @@ def package_field_path(attr: str, index: int) -> str:
     ``PACKAGES_FIELD`` where the collection as a whole failed (salesagent-rfxfu).
     """
     return f"packages[{index}].{attr}"
+
+
+def campaign_interval_violated(duration: Duration | None) -> bool:
+    """Whether *duration* breaks core/duration.json's "Must be 1 when unit is 'campaign'".
+
+    The pin states the rule in the ``interval`` description only, a relationship between two
+    individually valid fields that its JSON Schema cannot express, so the SDK model accepts
+    ``{"interval": 2, "unit": "campaign"}``. Every tool that takes a Duration asks this one
+    predicate, and refuses with VALIDATION_ERROR ("violates business rules beyond schema
+    validation", enums/error-code.json).
+    """
+    return duration is not None and enum_value(duration.unit) == "campaign" and duration.interval != 1
 
 
 def format_validation_error(validation_error: ValidationError, label: str = "request") -> str:

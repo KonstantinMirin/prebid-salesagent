@@ -143,6 +143,7 @@ from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.targeting_capabilities import (
     collect_targeting_violations,
     property_list_unsupported_advisories,
+    raise_if_campaign_frequency_cap_invalid,
     raise_if_property_targeting_violations,
     validate_property_targeting_allowed,
 )
@@ -3170,6 +3171,7 @@ async def _create_media_buy_impl(
                             details=ValidationDetails(**violations),
                             field="targeting_overlay",
                         )
+            raise_if_campaign_frequency_cap_invalid([pkg.targeting_overlay for pkg in req.packages])
 
     except (AdCPSalesAgentError, ValueError, PermissionError) as e:
         # Audit-update then re-raise via the shared helper so this early-validation

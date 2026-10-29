@@ -25,6 +25,7 @@ it answers the question the next reader would otherwise measure. salesagent-lh23
 the per-dimension table and the apply-exactly-or-reject decision it needs.
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from src.core.enum_helpers import enum_value
@@ -32,7 +33,7 @@ from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import AnyTargeting, Error
-from src.core.validation_helpers import PACKAGES_FIELD
+from src.core.validation_helpers import PACKAGES_FIELD, campaign_interval_violated, package_field_path
 
 if TYPE_CHECKING:
     from src.core.database.models import Product
@@ -180,6 +181,25 @@ def raise_if_property_targeting_violations(violations: list[str]) -> None:
             # overlay sites pass is a different shape under the same old name.
             details=ValidationDetails(reasons=violations),
         )
+
+
+def raise_if_campaign_frequency_cap_invalid(overlays: Sequence[AnyTargeting | None]) -> None:
+    """Refuse a package frequency cap whose ``suppress`` or ``window`` is a campaign Duration
+    with ``interval != 1`` (core/duration.json, see ``campaign_interval_violated``).
+
+    *overlays* are the packages' ``targeting_overlay`` values in request order, so the pointer
+    names the package and the Duration at fault. create_media_buy and update_media_buy both
+    call it, before anything is written.
+    """
+    for index, overlay in enumerate(overlays):
+        cap = overlay.frequency_cap if overlay is not None else None
+        if cap is None:
+            continue
+        for slot in ("suppress", "window"):
+            if campaign_interval_violated(getattr(cap, slot)):
+                raise AdCPValidationError(
+                    field=package_field_path(f"targeting_overlay.frequency_cap.{slot}.interval", index)
+                )
 
 
 # Geo inclusion/exclusion field pairs for same-value overlap detection.

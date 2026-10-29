@@ -94,6 +94,7 @@ from src.core.validation_helpers import package_field_path
 from src.services.targeting_capabilities import (
     collect_targeting_violations,
     property_list_unsupported_advisories,
+    raise_if_campaign_frequency_cap_invalid,
     raise_if_property_targeting_violations,
     validate_property_targeting_allowed,
 )
@@ -844,6 +845,7 @@ def _update_media_buy_impl(
                         details=ValidationDetails(**overlay_violations),
                         field="targeting_overlay",
                     )
+                raise_if_campaign_frequency_cap_invalid([pkg_update.targeting_overlay for pkg_update in req.packages])
 
                 property_targeting_violations: list[str] = []
                 for pkg_update in req.packages:

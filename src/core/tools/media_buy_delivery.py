@@ -24,6 +24,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
+from src.core.validation_helpers import campaign_interval_violated
 from src.core.webhooks.registration import REPORTING_STREAM_ID_FIELD, suppressed_reporting_stream
 
 
@@ -43,14 +44,10 @@ def _validate_attribution_window(attribution_window: "AttributionWindow | None")
     """
     if attribution_window is None:
         return
-    for window in (attribution_window.post_click, attribution_window.post_view):
-        if window is None:
-            continue
-        unit = enum_value(window.unit)
-        if unit == "campaign" and window.interval != 1:
-            raise AdCPValidationError(
-                field="attribution_window",
-            )
+    if any(campaign_interval_violated(w) for w in (attribution_window.post_click, attribution_window.post_view)):
+        raise AdCPValidationError(
+            field="attribution_window",
+        )
 
 
 logger = logging.getLogger(__name__)
