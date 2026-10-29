@@ -2784,17 +2784,29 @@ Feature: BR-UC-002 Create Media Buy
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-plan-id-resolves @v31 @governance @plan-id @ext-x @happy-path
-  Scenario: v3.1 plan_id present and resolvable forwards governance plan and proceeds
+  Scenario: v3.1 deprecated plan_id beside an approved governance_context -- the seller relies on the governance_context and proceeds
     Given a valid create_media_buy request with plan_id "plan-001"
     And the account "acc-001" exists and is active
     And the account has governance_agents configured
-    And the plan "plan-001" resolves and is accessible to the account
+    And the buyer's governance agent has returned verdict "approved" for the exact proposed buy
+    And the buyer attaches the governance_context from that verdict to the create_media_buy request
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy spec
     And the request should proceed past the governance gate
-    And the plan_id should be forwarded to check_governance
-    # BR-RULE-212 INV-2: governance configured + plan_id resolves -> proceeds
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    And the seller's execution check should carry the request's governance_context verbatim
+    # Corrected to the pin at 3.2.7. The scenario used to have the seller resolve plan_id
+    # itself and forward it to check_governance. At the pin plan_id is DEPRECATED on
+    # seller-facing requests: the seller "forwards that opaque context and does not need
+    # the plan identifier" (create-media-buy-request.json /properties/plan_id), services
+    # "MUST treat governance_context as authoritative and MUST NOT require a buyer to
+    # disclose plan_id", and they pass governance_context "verbatim on execution and
+    # lifecycle checks" (check-governance-request.json /properties/plan_id,
+    # /properties/governance_context). The seller holds no plans to resolve; the issuing
+    # governance agent recovers the plan from the token (campaign/specification.mdx).
+    # Forwarding plan_id is permitted, not required, so it is no longer asserted.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/plan_id
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/governance/check-governance-request.json pointer=/properties/governance_context
+    # @source repo=adcp ref=v3.2.7 path=docs/governance/campaign/specification.mdx (L180, L967-977)
 
   @T-UC-002-v31-plan-id-not-found @v31 @governance @plan-id @error-details @post-f2 @post-f3 @ext-x
   Scenario: v3.1 plan_id that does not resolve rejects with PLAN_NOT_FOUND
@@ -3001,6 +3013,8 @@ Feature: BR-UC-002 Create Media Buy
     Given the tenant is configured for auto-approval
     And a valid create_media_buy request with plan_id "plan-2026-q1"
     And the account "acc-001" has governance_agents configured
+    And the buyer's governance agent has returned verdict "approved" for the exact proposed buy
+    And the buyer attaches the governance_context from that verdict to the create_media_buy request
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy success spec
     And the response should succeed
@@ -3008,8 +3022,16 @@ Feature: BR-UC-002 Create Media Buy
     And the response should include a "planned_delivery" block
     # v3.1: planned_delivery describes what the seller will actually run (geo, channels, flight, freq caps, budget)
     # v3.1: present when account has governance_agents OR seller chooses to provide delivery transparency
+    # Corrected to the pin at 3.2.7: the request now carries the buyer's approved
+    # governance_context. On an account with a registered governance agent the field is
+    # "Required when governance applies to the resolved account", and "A request without a
+    # token ... MUST be rejected with PERMISSION_DENIED" -- so the success this scenario
+    # asserts is reachable only with the token. plan_id stays as the deprecated legacy
+    # field; it is not what authorizes the buy.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-response.json pointer=/oneOf/0/properties/planned_delivery
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/governance_context
+    # @source repo=adcp ref=v3.2.7 path=docs/governance/campaign/specification.mdx (L180, L770-792)
     # --- v3.1: artifact_webhook for governance content delivery ---
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-artifact-webhook-config @v31 @artifact-webhook @governance
   Scenario: v3.1 artifact_webhook configured for content delivery to governance agent
@@ -3399,51 +3421,78 @@ Feature: BR-UC-002 Create Media Buy
     # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/create_media_buy_async.yaml phase=submitted_arm_response step=create_media_buy_submitted
 
   @T-UC-002-storyboard-governance-approved @schema-v3.1 @v3-1 @governance @governance-decision
-  Scenario: Governance approved -- seller creates the buy and propagates the governance decision payload
-    Given the buyer's governance agent has returned decision "APPROVED" for the proposed buy
-    And the buyer attaches the governance_decision payload to the create_media_buy request
-    When the Buyer Agent sends create_media_buy with the governance_decision payload
+  Scenario: Governance approved -- seller verifies the approved governance_context and commits the buy
+    Given the account has governance_agents configured
+    And the buyer's governance agent has returned verdict "approved" for the exact proposed buy
+    And the buyer attaches the governance_context from that verdict to the create_media_buy request
+    When the Buyer Agent sends create_media_buy with the governance_context
     Then the response is compliant with the create_media_buy success spec
     And the response should carry status "active" or "pending_start"
     And the response should carry the media_buy_id
-    And the response should echo the governance_decision with decision "APPROVED"
-    # governance_approved storyboard: the buyer's governance agent (orchestrator side)
-    # returns an APPROVED decision before create_media_buy. The seller persists the
-    # buy with the governance_decision payload echoed in the response.
-    # governance_approved: APPROVED decision flows through to the persisted buy
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/governance_conditions.yaml
+    And a get_media_buys readback of the buy should return the authorized total_budget and currency
+    # governance_approved storyboard: the buyer's intent check returns verdict
+    # "approved" with a signed governance_context; the buyer sends that token on
+    # create_media_buy; the seller verifies it before committing, and the commit is
+    # proven by reading the buy back (media_buy_id, total_budget, currency).
+    # Corrected to the pin at 3.2.7. The scenario used to send a "governance_decision
+    # payload" with decision "APPROVED" and require the seller to echo it. Neither is
+    # the pin's: the request field is governance_context (an opaque signed token), the
+    # verdict values are lowercase ("approved" / "denied" / "conditions"), and the
+    # storyboard says the response "need not echo the authorization context" and that
+    # it "never treats a seller-to-buyer governance_context echo as evidence of
+    # authorization" -- the readback is the evidence it grades instead.
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/governance_approved.yaml phase=buy_approved step=create_media_buy
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/governance_approved.yaml phase=committed_state_and_evidence step=get_media_buys_readback
 
   @T-UC-002-storyboard-governance-with-conditions @schema-v3.1 @v3-1 @governance @governance-decision @conditions
-  Scenario: Governance approved with conditions -- seller attaches conditions to the buy
-    Given the buyer's governance agent has returned decision "APPROVED_WITH_CONDITIONS" with a non-empty conditions array
-    And the buyer attaches the governance_decision payload to the create_media_buy request
-    When the Buyer Agent sends create_media_buy with the governance_decision payload
+  Scenario: Governance conditions -- the buyer resolves them before the seller commits, and the seller commits only on an approved execution check
+    Given the account has governance_agents configured
+    And the buyer's governance agent returned verdict "conditions" and then verdict "approved" for the adjusted proposed buy
+    And the buyer attaches the governance_context from that verdict to the create_media_buy request
+    When the Buyer Agent sends create_media_buy with the governance_context
     Then the response is compliant with the create_media_buy success spec
     And the response should carry the media_buy_id
-    And the response should echo the governance_decision with decision "APPROVED_WITH_CONDITIONS"
-    And the response should carry the conditions array attached to the persisted buy
-    # governance_conditions storyboard: governance returns APPROVED_WITH_CONDITIONS
-    # carrying a conditions array. The seller persists the buy AND surfaces the
-    # conditions on the response so downstream systems (delivery monitoring,
-    # billing) can enforce them.
-    # governance_conditions: conditions persist on the buy for downstream enforcement
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/governance_denied.yaml
+    And the seller's execution check should have returned verdict "approved" before the buy was committed
+    And a get_media_buys readback of the buy should return the authorized total_budget and currency
+    # governance_conditions storyboard: "conditions" is a non-authorizing INTENT
+    # counterproposal. The buyer applies the condition and repeats the intent check;
+    # only the later "approved" verdict returns the governance_context it sends to the
+    # seller. The seller's own execution check is binary ("approved" or "denied"; a
+    # "conditions" execution verdict is invalid and never authorizes a commit), and the
+    # storyboard observes it in the governance audit log, then reads the buy back.
+    # Corrected to the pin at 3.2.7. The scenario used to have the seller receive an
+    # "APPROVED_WITH_CONDITIONS" governance_decision and echo the decision and its
+    # conditions array on the response. The pin has no such verdict or request field,
+    # the seller never receives a conditions verdict, and "The create response need not
+    # echo governance conditions or governance_context".
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/governance_conditions.yaml phase=governed_execution step=create_media_buy_after_approval
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/governance_conditions.yaml phase=committed_state_and_outcome step=get_plan_audit_logs_execution
 
   @T-UC-002-storyboard-governance-denied @schema-v3.1 @v3-1 @governance @governance-decision @rejection
-  Scenario: Governance denied -- seller rejects the buy with GOVERNANCE_DENIED and propagates denial rationale
-    Given the buyer's governance agent has returned decision "DENIED" with a denial reason
-    And the buyer attaches the governance_decision payload to the create_media_buy request
-    When the Buyer Agent sends create_media_buy with the governance_decision payload
+  Scenario: Governance denied -- the seller's execution check is denied, so it rejects the buy with GOVERNANCE_DENIED and propagates the findings
+    Given the account has governance_agents configured
+    And the buyer's governance agent has returned verdict "approved" for the exact proposed buy
+    And the buyer attaches the governance_context from that verdict to the create_media_buy request
+    And the plan owner then reduces the plan budget below the proposed buy
+    When the Buyer Agent sends create_media_buy with the governance_context
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "GOVERNANCE_DENIED"
-    And the error details should include the denial reason from the governance decision
-    # governance_denied storyboard: governance returns DENIED. The seller MUST
-    # reject create_media_buy with error code GOVERNANCE_DENIED and propagate
-    # the denial reason on the error details so the buyer's orchestrator can
-    # log and either escalate to human or retry with reduced scope.
-    # governance_denied: seller surfaces governance denial as a structured error
-    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/governance_denied_recovery.yaml
+    And the error should carry the findings of the seller's denied execution check
+    And no media buy record should be persisted
+    # governance_denied storyboard: the buyer's intent check approves a $25K buy, then the
+    # plan owner amends the plan to $10K. The seller receives a valid in-date token and
+    # must still run its own execution check, which the governance agent denies against
+    # the amended plan. The seller does not commit the buy and returns GOVERNANCE_DENIED
+    # in errors[] and adcp_error (create_media_buy has no rejection arm), propagating the
+    # governance findings ("sellers SHOULD propagate governance findings verbatim").
+    # Corrected to the pin at 3.2.7. The scenario used to have the buyer attach a DENIED
+    # "governance_decision payload". At the pin a denied intent yields no
+    # governance_context to attach, and a request without one is PERMISSION_DENIED
+    # "without consulting governance" -- so GOVERNANCE_DENIED is reachable only through
+    # the seller's own execution check, which is what this scenario now drives.
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/governance_denied.yaml phase=buy_denied step=create_media_buy_denied
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json (enumDescriptions.GOVERNANCE_DENIED)
 
   @T-UC-002-storyboard-governance-denied-recovery @schema-v3.1 @v3-1 @governance @recovery
   Scenario: Governance denied recovery -- buyer shrinks the buy to within plan limits and retries successfully
