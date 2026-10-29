@@ -1577,13 +1577,14 @@ def _approved_display_creative(ctx: dict, creative_id: str) -> Any:
 def _send_earlier_update(ctx: dict, package_label: str, **package_fields: Any) -> None:
     """Put the package's prior state (creatives, catalogs) on the record the way a buyer does: an update.
 
-    Sent over the scenario's own transport, through ``env.call_via`` rather than
-    ``dispatch_request``: that is the one writer of ``ctx["result"]``, and this update is
-    the scenario's precondition, not the request it grades. Its own bag, so it carries its
-    own idempotency key rather than the graded request's.
+    Sent over the scenario's own transport through ``dispatch_request``, which gates and
+    records the payload like every other dispatch. That entry writes the dispatch-result
+    contract into the ctx it is handed, so this update gets a ctx of its own: the scenario's
+    ``ctx["result"]`` is the request it grades, and this update is only its precondition.
+    The own ctx carries no ``credential`` override, so the env presents its own, as the
+    graded request's principal. Its own bag, so it carries its own idempotency key rather
+    than the graded request's.
     """
-    from tests.bdd.steps.generic._dispatch import _as_transport, gate_and_record
-
     bag = apply_required_update_fields(
         ctx,
         {
@@ -1591,8 +1592,9 @@ def _send_earlier_update(ctx: dict, package_label: str, **package_fields: Any) -
             "packages": [{"package_id": _resolve_package_id(ctx, package_label), **package_fields}],
         },
     )
-    gate_and_record(bag)
-    result = ctx["env"].call_via(_as_transport(ctx, "_send_earlier_update"), **bag)
+    earlier: dict = {"env": ctx["env"], "transport": ctx["transport"]}
+    dispatch_request(earlier, **bag)
+    result = earlier["result"]
     assert result.is_success, (
         f"the earlier update_media_buy that sets up {package_label!r} was refused: {result.error!r}"
     )
