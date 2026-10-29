@@ -1818,10 +1818,14 @@ def parse_xfail_reason(reason: str) -> XfailReason | None:
 # passing reports XPASS(strict) and has to be looked at. _UC002_UC003_VACUOUS_PARKS holds what
 # PASSES but grades nothing (or grades a claim the pin contradicts): xfail(run=False), the
 # UC-010 park's shape, because a vacuous pass counted as coverage is the defect and a running
-# xfail would report it as an XPASS. A scenario matched by the ledger is never parked.
+# xfail would report it as an XPASS. No nodeid is matched by both lists, and a park on a
+# Scenario Outline names the measured rows it parks, so a ledgered row that starts passing,
+# or a row added to the outline later, runs instead of falling into a park nobody reads.
 #
 # Both lists may only SHRINK. A scenario that newly fails is not added here; it is fixed, or
-# its cause is measured and given its own entry with that cause.
+# its cause is measured and given its own entry with that cause. The entry counts, the
+# nodeids each list matches, the no-overlap rule and the outline-rows rule are pinned by
+# tests/unit/test_architecture_route_xfail_census.py.
 #
 # Reasons avoid the words the dormancy tripwire (_classify_strict_xfail_dormancy) reads as a
 # claim about production, because several entries ARE test-wiring and say so.
@@ -2029,9 +2033,11 @@ def _example_row(nodeid: str) -> str:
 class _CatchallXfail:
     """One entry of the UC-002 / UC-003 explicit ledger or of its vacuous parks.
 
-    ``rows`` are prefixes of the Examples row (``_example_row``) -- in practice each one is a
-    row's first column, so an entry reads as the Examples line it names. Empty means every
-    row. ``transports`` empty means every transport.
+    ``rows`` are leading Examples columns of the row (``_example_row``), matched whole: each
+    one is a row's first column, so an entry reads as the Examples line it names, and
+    ``view_duration_seconds = 0`` does not also claim ``view_duration_seconds = 0.001``. A
+    non-ASCII character is written the way the nodeid escapes it (``\\u2014``). Empty means
+    every row. ``transports`` empty means every transport.
     """
 
     tag: str
@@ -2044,7 +2050,8 @@ class _CatchallXfail:
             return False
         if self.transports and _transport_of(nodeid) not in self.transports:
             return False
-        return not self.rows or _example_row(nodeid).startswith(self.rows)
+        row = _example_row(nodeid)
+        return not self.rows or any(row == r or row.startswith(f"{r}-") for r in self.rows)
 
 
 _X = _CatchallXfail
@@ -2062,7 +2069,7 @@ _UC002_UC003_LEDGER: tuple[_CatchallXfail, ...] = (
         "T-UC-002-boundary-catalog-distinct-type",
         _LEDGER_CATALOG_DUP,
         rows=(
-            "2 catalogs, same type (product + product)",
+            "2 catalogs, same type (product + product) \\u2014 first duplicate violation",
             "3 catalogs, two share same type (product + product + store)",
         ),
     ),
@@ -2074,7 +2081,7 @@ _UC002_UC003_LEDGER: tuple[_CatchallXfail, ...] = (
     _X(
         "T-UC-002-boundary-currency-consistency",
         _LEDGER_MIXED_CURRENCY,
-        rows=("two packages, different currencies (via pricing options)", "two packages, different currencies-"),
+        rows=("two packages, different currencies (via pricing options)", "two packages, different currencies"),
     ),
     _X(
         "T-UC-002-boundary-io-acceptance",
@@ -2349,7 +2356,7 @@ _UC002_UC003_LEDGER: tuple[_CatchallXfail, ...] = (
         _LEDGER_KEYWORD_OPS,
         rows=(
             "array length 1 (minimum valid)",
-            "bid_price = 0-",
+            "bid_price = 0",
             "bid_price = 0.01",
             "keyword length 1 (single char)",
             "keyword_targets_add WITH targeting_overlay.negative_keywords (cross-dimension)",
@@ -2416,10 +2423,10 @@ _UC002_UC003_LEDGER: tuple[_CatchallXfail, ...] = (
             "kind = 'event'",
             "kind = 'metric'",
             "many goals (no maxItems)",
-            "optimization_goals present",
+            "optimization_goals present \\u2014 replaces all",
             "priority = 1 (boundary min)",
             "priority omitted",
-            "single goal (1 item",
+            "single goal (1 item \\u2014 boundary min)",
             "target omitted",
             "target.value = 0.001 (just above zero)",
             "view_duration_seconds = 0.001 (just above zero)",
@@ -2611,8 +2618,28 @@ _VACUOUS_FREQ_CAP = (
 #: What PASSES but grades nothing, or grades a claim the pin contradicts. xfail(run=False).
 _UC002_UC003_VACUOUS_PARKS: tuple[_CatchallXfail, ...] = (
     # ── UC-002 ──
-    _X("T-UC-002-boundary-catalog-distinct-type", _VACUOUS_CATALOGS),
-    _X("T-UC-002-partition-catalog-distinct-type", _VACUOUS_CATALOGS),
+    _X(
+        "T-UC-002-boundary-catalog-distinct-type",
+        _VACUOUS_CATALOGS,
+        rows=(
+            "0 catalogs (empty array)",
+            "0 catalogs (field absent)",
+            "1 catalog (uniqueness trivially satisfied)",
+            "13 catalogs, all 13 distinct enum values",
+            "2 catalogs, different types (product + store)",
+            "catalog_id references a synced catalog",
+        ),
+    ),
+    _X(
+        "T-UC-002-partition-catalog-distinct-type",
+        _VACUOUS_CATALOGS,
+        rows=(
+            "distinct_types",
+            "max_distinct_types",
+            "no_catalogs",
+            "single_catalog",
+        ),
+    ),
     _X(
         "T-UC-002-inv-080-1",
         "vacuous pass: the request also lacks brand, dates and packages (the harness injects a default "
@@ -2660,12 +2687,34 @@ _UC002_UC003_VACUOUS_PARKS: tuple[_CatchallXfail, ...] = (
         "vacuous pass: the Thens check only for success, so a seller that drops the package "
         "frequency_cap, or stores it at the root, passes",
     ),
-    _X("T-UC-002-boundary-targeting-collection-list", _VACUOUS_COLLECTION_LIST),
+    _X(
+        "T-UC-002-boundary-targeting-collection-list",
+        _VACUOUS_COLLECTION_LIST,
+        rows=(
+            "both collection_list and collection_list_exclude set",
+            "collection_list with valid agent_url and list_id",
+            "collection_list_exclude with valid agent_url and list_id",
+        ),
+    ),
     _X("T-UC-002-boundary-approval-workflow", _VACUOUS_TENANT_FLAG, rows=("tenant flag true (pending)",)),
     _X("T-UC-002-partition-approval-workflow", _VACUOUS_TENANT_FLAG, rows=("pending_human_review",)),
     _X("T-UC-002-inv-017-2", _VACUOUS_TENANT_FLAG),
-    _X("T-UC-002-boundary-persistence-timing", _VACUOUS_PERSISTENCE),
-    _X("T-UC-002-partition-persistence-timing", _VACUOUS_PERSISTENCE),
+    _X(
+        "T-UC-002-boundary-persistence-timing",
+        _VACUOUS_PERSISTENCE,
+        rows=(
+            "adapter returns error (auto-approval)",
+            "manual approval detected (pending state)",
+        ),
+    ),
+    _X(
+        "T-UC-002-partition-persistence-timing",
+        _VACUOUS_PERSISTENCE,
+        rows=(
+            "auto_approve_adapter_failure",
+            "manual_approval_pending",
+        ),
+    ),
     _X(
         "T-UC-002-sandbox-production",
         "contradicts the pin: the Then requires sandbox to be absent, but a production response with "
@@ -2690,11 +2739,26 @@ _UC002_UC003_VACUOUS_PARKS: tuple[_CatchallXfail, ...] = (
             "proximity_geometry",
             "proximity_radius",
             "proximity_travel_time",
-            "multiple_dimensions",
         ),
     ),
+    # On e2e_rest this row fails (ledgered above), so only the in-process passes are parked.
+    _X(
+        "T-UC-002-partition-targeting-overlay",
+        _CONTRADICTS_UNDECLARED_OVERLAY,
+        rows=("multiple_dimensions",),
+        transports=("a2a", "mcp", "rest"),
+    ),
     # ── UC-003 ──
-    _X("T-UC-003-boundary-start-time", _VACUOUS_UPDATE_START),
+    _X(
+        "T-UC-003-boundary-start-time",
+        _VACUOUS_UPDATE_START,
+        rows=(
+            "'ASAP' wrong case",
+            "absent (null)",
+            "future ISO datetime",
+            "literal 'asap'",
+        ),
+    ),
     _X(
         "T-UC-003-partition-start-time",
         _VACUOUS_UPDATE_START,
@@ -2725,16 +2789,34 @@ _UC002_UC003_VACUOUS_PARKS: tuple[_CatchallXfail, ...] = (
     _X(
         "T-UC-003-boundary-creative-replacement",
         "vacuous pass: every row's outcome is bare 'success', so nothing checks the stored creative assignments",
+        rows=(
+            "creative_assignments replaces all",
+            "creative_ids replaces all existing",
+            "existing creative removed (not in new)",
+            "new creative added (not in existing)",
+        ),
     ),
     _X(
         "T-UC-003-partition-creative-replacement",
         "contradicts the pin: packages[].creative_ids is not in the pinned package-update.json "
         "(replacement goes through creative_assignments), and every row ends in bare 'success'",
+        rows=(
+            "add_new_creative",
+            "creative_assignments_replace",
+            "creative_ids_replace",
+            "remove_existing_creative",
+        ),
     ),
     _X(
         "T-UC-003-boundary-end-time",
         "vacuous pass: the error rows accept any refusal, the dates are in the past, and the "
         "'absent (null)' row sends an empty string",
+        rows=(
+            "absent (null)",
+            "end_time = start_time (rejected)",
+            "end_time after start_time",
+            "end_time before start_time",
+        ),
     ),
     _X(
         "T-UC-003-partition-end-time",
@@ -2742,16 +2824,129 @@ _UC002_UC003_VACUOUS_PARKS: tuple[_CatchallXfail, ...] = (
         "end <= start rule are not observed",
         rows=("equal_to_start", "before_start"),
     ),
-    _X("T-UC-003-boundary-keyword-targets-add", _VACUOUS_ANY_REFUSAL),
-    _X("T-UC-003-partition-keyword-targets-add", _VACUOUS_ANY_REFUSAL),
-    _X("T-UC-003-boundary-keyword-targets-remove", _VACUOUS_ANY_REFUSAL),
-    _X("T-UC-003-partition-keyword-targets-remove", _VACUOUS_ANY_REFUSAL),
-    _X("T-UC-003-boundary-negative-keywords-add", _VACUOUS_ANY_REFUSAL),
-    _X("T-UC-003-partition-negative-keywords-add", _VACUOUS_ANY_REFUSAL),
-    _X("T-UC-003-boundary-negative-keywords-remove", _VACUOUS_ANY_REFUSAL),
-    _X("T-UC-003-partition-negative-keywords-remove", _VACUOUS_ANY_REFUSAL),
-    _X("T-UC-003-boundary-optimization-goals", _VACUOUS_ANY_REFUSAL),
-    _X("T-UC-003-partition-optimization-goals", _VACUOUS_ANY_REFUSAL),
+    _X(
+        "T-UC-003-boundary-keyword-targets-add",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "array length 0 (empty)",
+            "bid_price = -0.01",
+            "keyword length 0 (empty string)",
+            "keyword_targets_add WITH targeting_overlay.keyword_targets",
+            "match_type = 'unknown'",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-keyword-targets-add",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "conflict_with_overlay",
+            "empty_array",
+            "empty_keyword",
+            "invalid_match_type",
+            "missing_keyword",
+            "missing_match_type",
+            "negative_bid_price",
+        ),
+    ),
+    _X(
+        "T-UC-003-boundary-keyword-targets-remove",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "array length 0 (empty)",
+            "keyword length 0 (empty string)",
+            "keyword_targets_remove WITH targeting_overlay.keyword_targets",
+            "match_type = 'unknown'",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-keyword-targets-remove",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "conflict_with_overlay",
+            "empty_array",
+            "empty_keyword",
+            "invalid_match_type",
+            "missing_keyword",
+            "missing_match_type",
+        ),
+    ),
+    _X(
+        "T-UC-003-boundary-negative-keywords-add",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "array length 0 (empty)",
+            "keyword length 0 (empty string)",
+            "match_type = 'unknown'",
+            "negative_keywords_add WITH targeting_overlay.negative_keywords",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-negative-keywords-add",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "conflict_with_overlay",
+            "empty_array",
+            "empty_keyword",
+            "invalid_match_type",
+            "missing_keyword",
+            "missing_match_type",
+        ),
+    ),
+    _X(
+        "T-UC-003-boundary-negative-keywords-remove",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "array length 0 (empty)",
+            "keyword length 0 (empty string)",
+            "match_type = 'unknown'",
+            "negative_keywords_remove WITH targeting_overlay.negative_keywords",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-negative-keywords-remove",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "conflict_with_overlay",
+            "empty_array",
+            "empty_keyword",
+            "invalid_match_type",
+            "missing_keyword",
+            "missing_match_type",
+        ),
+    ),
+    _X(
+        "T-UC-003-boundary-optimization-goals",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "empty array (0 items)",
+            "event_sources empty array",
+            "kind = unknown string",
+            "kind omitted",
+            "optimization_goals omitted \\u2014 preserves existing",
+            "priority = 0",
+            "target.value = 0 (exclusive minimum)",
+            "view_duration_seconds = 0",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-optimization-goals",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "empty_array",
+            "event_missing_sources",
+            "event_source_id_empty",
+            "event_sources_empty",
+            "invalid_kind",
+            "invalid_metric_enum",
+            "metric_missing_metric",
+            "missing_kind",
+            "priority_negative",
+            "priority_zero",
+            "target_value_negative",
+            "target_value_zero",
+            "view_duration_zero",
+        ),
+    ),
     _X(
         "T-UC-003-boundary-targeting-overlay",
         _VACUOUS_OVERLAY_UPDATE,
@@ -2795,37 +2990,92 @@ _UC002_UC003_VACUOUS_PARKS: tuple[_CatchallXfail, ...] = (
         rows=("single_field_update", "multi_field_update"),
     ),
     _X("T-UC-003-partition-budget-amount", _VACUOUS_UPDATE_SUCCESS, rows=("positive_amount",)),
-    _X("T-UC-003-boundary-frequency-cap-suppress", _VACUOUS_FREQ_CAP),
-    _X("T-UC-003-partition-frequency-cap-suppress", _VACUOUS_FREQ_CAP),
+    _X(
+        "T-UC-003-boundary-frequency-cap-suppress",
+        _VACUOUS_FREQ_CAP,
+        rows=(
+            "all three absent (empty frequency_cap)",
+            "interval = -1 (negative)",
+            "interval = 0 (below minimum)",
+            "suppress + max_impressions both present (AND semantics)",
+            "suppress = {} (missing both fields)",
+            "suppress absent, suppress_minutes=60",
+            "suppress is string '60' (wrong type)",
+            "suppress present, suppress_minutes absent, max_impressions absent",
+            "suppress_minutes = -1 (below minimum 0)",
+            "suppress_minutes = 0 (boundary minimum)",
+            "unit = 'weeks' (unknown)",
+            "unit=campaign, interval=2",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-frequency-cap-suppress",
+        _VACUOUS_FREQ_CAP,
+        rows=(
+            "campaign_interval_not_one",
+            "deprecated_suppress_minutes",
+            "interval_negative",
+            "interval_zero",
+            "missing_interval",
+            "missing_unit",
+            "no_frequency_control",
+            "suppress_minutes_negative",
+            "suppress_minutes_zero",
+            "suppress_only",
+            "suppress_with_max_impressions",
+            "unknown_unit",
+            "wrong_type_suppress",
+        ),
+    ),
     _X(
         "T-UC-003-partition-revision",
         "vacuous pass: production ignores revision, so 'success' passes with no concurrency check; the pin "
         "requires the success to return the incremented revision",
         rows=("absent", "matches_current"),
     ),
-    _X("T-UC-003-bva-targeting-overlay-collection-list", _VACUOUS_COLLECTION_LIST),
+    _X(
+        "T-UC-003-bva-targeting-overlay-collection-list",
+        _VACUOUS_COLLECTION_LIST,
+        rows=(
+            "both collection_list and collection_list_exclude set",
+            "collection_list with valid agent_url and list_id",
+            "collection_list_exclude with valid agent_url and list_id",
+        ),
+    ),
     _X(
         "T-UC-003-sandbox-update-nonsuccess",
         "vacuous pass: the trigger is refused at request validation, before the sandbox account is "
         "resolved, so a failure builder that stamped sandbox would not be seen",
+        rows=("terminal failure",),
     ),
     _X(
         "T-UC-003-partition-immutable-package-field",
         "vacuous pass: in dev an undeclared package field is refused by extra='forbid' with the same "
         "INVALID_REQUEST, so the readOnly guard is not observed",
+        rows=(
+            "format_ids_present",
+            "multiple_immutable_keys_present",
+            "no_immutable_keys",
+            "pricing_option_id_present",
+            "product_id_present",
+        ),
     ),
     _X(
         "T-UC-003-partition-placement-id",
         "vacuous pass: the product has no placements, so the 'unsupported' row passes whether or not its "
         "fixture runs, and the success row reads nothing back",
+        rows=(
+            "no_placement_ids",
+            "product_no_placement_support",
+        ),
     ),
     _X(
         "T-UC-003-bva-sandbox-response",
         "vacuous pass: the row accepts any schema-conformant refusal, an account-resolution failure "
         "included, and this seller never emits sandbox on update at all",
         rows=(
-            "sandbox account with invalid budget",
-            "sandbox present on update_media_buy terminal-failure",
+            "sandbox account with invalid budget (real validation error)",
+            "sandbox present on update_media_buy terminal-failure (errors) shape",
         ),
     ),
     _X(
