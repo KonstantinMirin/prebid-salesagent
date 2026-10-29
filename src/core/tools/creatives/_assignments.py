@@ -18,6 +18,7 @@ from src.core.format_satisfaction import FormatRefusal, creative_refusal, creati
 from src.core.logging_config import log_safe
 from src.core.schemas import SyncCreativeResult
 from src.core.tenant_context import TenantContext
+from src.core.tools._media_buy_transitions import advance_past_pending_creatives
 from src.core.tools.creatives._processing import _failed_sync_result
 
 logger = logging.getLogger(__name__)
@@ -417,6 +418,7 @@ def _process_assignments(
                 if mb_obj.status == "draft" and mb_obj.approved_at is not None:
                     uow.media_buys.update_status(mb_id, PersistedMediaBuyStatus.PENDING_CREATIVES)
                     logger.info(f"[SYNC_CREATIVES] Media buy {mb_id} transitioned from draft to pending_creatives")
+                advance_past_pending_creatives(uow.media_buys, assignment_repo, mb_id)
 
             # An owned UoW commits on clean exit; a caller-supplied one is the
             # caller's to dispose of (rolled back under dry_run).

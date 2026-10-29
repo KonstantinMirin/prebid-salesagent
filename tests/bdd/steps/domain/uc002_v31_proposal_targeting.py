@@ -12,15 +12,17 @@ from typing import Any
 
 from adcp.types import ErrorCode
 from adcp.types.domains.enums.available_metric import AvailableMetric
-from pytest_bdd import given, parsers, then
+from pytest_bdd import given, parsers, then, when
 
 from src.core.product_conversion import default_reporting_capabilities
-from tests.bdd.steps._outcome_helpers import wire_entry
+from tests.bdd.steps._outcome_helpers import wire_entry, wire_field
+from tests.bdd.steps.generic._dispatch import dispatch_package_update
 from tests.bdd.steps.generic.given_media_buy import (
     _add_inline_creatives,
     _ensure_request_defaults,
     _set_catalogs,
     _set_targeting_overlay,
+    inline_creative_payload,
 )
 from tests.factories.creative_asset import AssetSpec, image_spec, text_spec
 from tests.factories.malformed import malformed
@@ -336,3 +338,48 @@ def given_create_without_creatives(ctx: dict) -> None:
         assert not ({"creatives", "creative_ids", "creative_assignments"} & package.keys()), (
             f"the default package already carries creatives: {sorted(package)}"
         )
+
+
+@when("the buyer syncs a creative and assigns it to the package through update_media_buy")
+def when_sync_and_assign_creative(ctx: dict) -> None:
+    """update_media_buy on the buy the create answered, carrying one inline creative for its package.
+
+    package-update.json ``creatives``: new inline creatives "enter the seller's creative
+    library" and are assigned to the package -- the sync and the assignment of the
+    storyboard's supply_creatives phase in one buyer request, which production runs through
+    its sync_creatives service. The ids are the ones the create put on the wire.
+    """
+    creative = inline_creative_payload(1)
+    ctx["assigned_creative_id"] = creative["creative_id"]
+    dispatch_package_update(
+        ctx,
+        media_buy_id=wire_field(ctx, "media_buy_id"),
+        package_id=wire_field(ctx, "packages")[0]["package_id"],
+        creatives=[creative],
+    )
+
+
+@then(parsers.parse('the buy\'s media_buy_status should transition to "{status}"'))
+def then_buy_status_transitions(ctx: dict, status: str) -> None:
+    """The update moved the buy out of pending_creatives, on the wire and in the seller's record.
+
+    pending_creatives_to_start.yaml step assign_creative_to_package: the envelope is
+    ``completed``, the affected package carries the assigned creative, and
+    ``media_buy_status`` has advanced. The stored row is read too, because the storyboard's
+    verify_transition phase exists for "sellers that return the updated status in response
+    but do not persist it".
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    assert wire_field(ctx, "status") == "completed", "a synchronous update answers the completed envelope"
+    assert wire_field(ctx, "media_buy_status") == status, (
+        f"media_buy_status {wire_field(ctx, 'media_buy_status')!r}, expected {status!r}"
+    )
+    affected = wire_field(ctx, "affected_packages")
+    assigned = [a["creative_id"] for p in affected for a in p.get("creative_assignments") or []]
+    assert ctx["assigned_creative_id"] in assigned, f"the affected packages carry no assignment of it: {affected!r}"
+    with MediaBuyUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.media_buys is not None
+        stored = uow.media_buys.get_by_id(wire_field(ctx, "media_buy_id"))
+        assert stored is not None, "the seller holds no record of the updated buy"
+        assert stored.status != "pending_creatives", "the seller answered the transition but stored pending_creatives"

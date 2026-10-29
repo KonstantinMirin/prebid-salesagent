@@ -1362,12 +1362,28 @@ def given_product_configuration(ctx: dict, config: str) -> None:
 def _set_min_spend(ctx: dict, *, product_min: float | None, tenant_min: float | None, budget: float) -> None:
     """Configure minimum spend thresholds and package budget.
 
-    Sets PricingOption.min_spend_per_package (product-level) and
-    CurrencyLimit.min_package_budget (tenant-level), then adjusts
-    the request package budget.
+    Sets the two minimums (``_set_minimums``), then adjusts the request package budget.
     """
-    env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
+    _set_minimums(ctx, product_min=product_min, tenant_min=tenant_min)
+    if kwargs.get("packages"):
+        kwargs["packages"][0]["budget"] = budget
+
+
+@given("the seller sets no minimum package budget")
+def given_no_minimum_package_budget(ctx: dict) -> None:
+    """Clear the seller's minimum at both levels, so a budget is judged by no seller minimum.
+
+    For a budget-amount boundary: the factory tenant's USD CurrencyLimit carries
+    ``min_package_budget=100``, which refuses every small positive budget with the same
+    BUDGET_TOO_LOW a positivity rule answers, so the row could not tell the two apart.
+    """
+    _set_minimums(ctx, product_min=None, tenant_min=None)
+
+
+def _set_minimums(ctx: dict, *, product_min: float | None, tenant_min: float | None) -> None:
+    """Set PricingOption.min_spend_per_package (product) and CurrencyLimit.min_package_budget (tenant)."""
+    env = ctx["env"]
 
     # Product-level minimum: update the default pricing option IN PLACE -- the one row
     # the package already selects. A sibling cpm/USD/fixed row cannot be added instead:
@@ -1381,10 +1397,6 @@ def _set_min_spend(ctx: dict, *, product_min: float | None, tenant_min: float | 
     cl = env.get_currency_limit("USD")
     cl.min_package_budget = Decimal(str(tenant_min)) if tenant_min is not None else None
     env._commit_factory_data()
-
-    # Set package budget
-    if kwargs.get("packages"):
-        kwargs["packages"][0]["budget"] = budget
 
 
 @given(parsers.parse("the minimum spend scenario is {partition}"))
@@ -1990,21 +2002,23 @@ def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x
     if kwargs.get("packages"):
         pkg = kwargs["packages"][0]
         creatives = pkg.get("creatives") or []
-        for i in range(count):
-            creatives.append(
-                CreativeAssetRequestFactory.payload(
-                    creative_id=f"inline-cr-{i + 1:03d}",
-                    name=f"Inline Creative {i + 1}",
-                    format_id={
-                        "agent_url": "https://creative.adcontextprotocol.org",
-                        "id": fmt_id,
-                    },
-                    # Keyed by the asset_id the CAPTURE declares for this format, not by the
-                    # deleted stub's ``primary``. See _create_approved_creative.
-                    assets=build_assets(image_spec("banner_image", url=f"https://example.com/banner-{i + 1}.png")),
-                )
-            )
+        creatives.extend(inline_creative_payload(i + 1, fmt_id) for i in range(count))
         pkg["creatives"] = creatives
+
+
+def inline_creative_payload(number: int, fmt_id: str = "display_300x250_image") -> dict[str, Any]:
+    """The *number*-th inline creative ``_add_inline_creatives`` builds: one image for *fmt_id*."""
+    return CreativeAssetRequestFactory.payload(
+        creative_id=f"inline-cr-{number:03d}",
+        name=f"Inline Creative {number}",
+        format_id={
+            "agent_url": "https://creative.adcontextprotocol.org",
+            "id": fmt_id,
+        },
+        # Keyed by the asset_id the CAPTURE declares for this format, not by the
+        # deleted stub's ``primary``. See _create_approved_creative.
+        assets=build_assets(image_spec("banner_image", url=f"https://example.com/banner-{number}.png")),
+    )
 
 
 @given(parsers.parse("the creative scenario is {partition}"))

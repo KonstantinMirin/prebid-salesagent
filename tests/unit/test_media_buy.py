@@ -24,6 +24,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.adapters.base import AdapterCreateRequest, AdapterUpdateResult
+from src.core.database.models import CreativeAssignment
 from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
@@ -73,6 +74,16 @@ from tests.helpers.unit_identity import fabricated_account_identity
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+
+def _stored_assignment(creative_id: str) -> CreativeAssignment:
+    """A stored ``creative_assignments`` row, unsaved: ``weight`` is NOT NULL on the table.
+
+    update_media_buy's ``affected_packages`` reports each package's stored assignments
+    (creative_id, weight, placement_ids), so the stub is the row's real shape rather than a
+    mock whose unset columns answer with another mock.
+    """
+    return CreativeAssignment(creative_id=creative_id, weight=100)
 
 
 def _stub_media_buy_reads(repo, row, media_buy_id: str | None = None):
@@ -1963,8 +1974,7 @@ class TestUpdateMediaBuyCreativeIds:
         stamp_format_identity(mock_c2, format_id="display_300x250", agent_url="http://agent.test")
 
         # Existing assignment for c_old (should be removed)
-        mock_existing_assignment = MagicMock()
-        mock_existing_assignment.creative_id = "c_old"
+        mock_existing_assignment = _stored_assignment("c_old")
 
         mock_buy = MagicMock()
         mock_buy.media_buy_id = "mb_1"
@@ -2221,12 +2231,9 @@ class TestUpdateMediaBuyCreativeIds:
         stamp_format_identity(mock_c4, format_id="display_300x250", agent_url="http://agent.test")
 
         # Existing assignments: c1, c2, c3
-        mock_assign_c1 = MagicMock()
-        mock_assign_c1.creative_id = "c1"
-        mock_assign_c2 = MagicMock()
-        mock_assign_c2.creative_id = "c2"
-        mock_assign_c3 = MagicMock()
-        mock_assign_c3.creative_id = "c3"
+        mock_assign_c1 = _stored_assignment("c1")
+        mock_assign_c2 = _stored_assignment("c2")
+        mock_assign_c3 = _stored_assignment("c3")
 
         mock_buy = MagicMock()
         mock_buy.media_buy_id = "mb_1"

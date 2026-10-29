@@ -1090,26 +1090,35 @@ def _assert_workflow_outcome(ctx: dict, outcome: str) -> None:
 
 
 def _assert_persistence_outcome(ctx: dict, outcome: str) -> None:
-    """Assert persistence matches the expected behavior.
+    """Assert BR-RULE-020's persistence timing on the wire AND in the seller's records.
 
-    - 'all records persisted after adapter success': the success arm's media_buy_id names a
-      media buy the seller holds (read back through the harness)
-    - 'records persisted in pending state': the submitted arm (no media_buy_id by pin)
-    - 'no records persisted after adapter failure': the refusal crossed the wire
+    - 'all records persisted after adapter success': the ad server took exactly this buy
+      and the seller stored it with the packages the wire names
+    - 'records persisted in pending state': the submitted arm (no media_buy_id by pin),
+      with the buy stored awaiting approval, one package per requested package, and the
+      ad server not yet handed anything
+    - 'no records persisted after adapter failure': the ad server's SERVICE_UNAVAILABLE
+      (``AdCPAdapterError``, the fault the Given injects) on the wire, and no buy stored
     """
+    from tests.bdd.steps.domain.uc002_invariants import (
+        then_adapter_executed,
+        then_package_records_persisted,
+        then_parked,
+    )
+    from tests.bdd.steps.generic.then_media_buy import then_no_media_buy_persisted
+
     if outcome == "no records persisted after adapter failure":
-        assert "error" in ctx, f"Expected error for '{outcome}' but no error in ctx"
-        ctx["result"].error_envelope()
+        ctx["result"].assert_wire_error("SERVICE_UNAVAILABLE")
+        then_no_media_buy_persisted(ctx)
         return
 
     assert "error" not in ctx, f"Expected '{outcome}' but got error: {ctx.get('error')}"
     if outcome == "records persisted in pending state":
         _assert_submitted_arm(ctx, outcome)
+        then_parked(ctx)
+        then_package_records_persisted(ctx)
         return
-    from tests.bdd.steps._outcome_helpers import assert_media_buy_created
-
-    media_buy_id = wire_field(ctx, "media_buy_id")
-    assert assert_media_buy_created(ctx, media_buy_id) is not None, f"Media buy {media_buy_id!r} not persisted"
+    then_adapter_executed(ctx)
 
 
 @lru_cache(maxsize=1)
