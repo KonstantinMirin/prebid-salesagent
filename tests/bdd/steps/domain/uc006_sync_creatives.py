@@ -187,6 +187,23 @@ def _scenario_format_entry(ctx: dict, env: object) -> dict[str, str]:
     return {"id": _scenario_format_id(ctx, env), "agent_url": agent_url}
 
 
+def seeded_format_columns(env: Any, entry: dict[str, str]) -> dict[str, Any]:
+    """``CreativeFactory``'s format kwargs for a library row naming *entry* (``{id, agent_url}``).
+
+    The row carries the reference the scenario's sync names AND the declaration that sync
+    resolves it against (``env.published_format_spec``), so the factory projects the row's
+    canonical kind the way production projects the synced creative's. Without the
+    declaration a row in the catalog format at the e2e hosted agent was refused in the test
+    process -- the SDK maps ``display_300x250_image`` only at the reference agent's origin --
+    while the server resolved the same reference from the agent's own ``canonical.kind``.
+    """
+    return {
+        "agent_url": entry["agent_url"],
+        "format": entry["id"],
+        "format_spec": env.published_format_spec(entry["agent_url"], entry["id"]),
+    }
+
+
 def _creative_format_id_entry(ctx: dict, env: object) -> dict[str, str]:
     """The ``format_id`` object a creative payload carries, for the current transport.
 
@@ -1165,8 +1182,7 @@ def _seed_library_creative(ctx: dict, creative_id: str) -> None:
         principal=ctx["principal"],
         creative_id=creative_id,
         name="Library Creative",
-        agent_url=fmt["agent_url"],
-        format=fmt["id"],
+        **seeded_format_columns(env, fmt),
     )
     env._commit_factory_data()
 
@@ -1268,8 +1284,7 @@ def _seed_absent_library_creative(ctx: dict) -> str:
         principal=ctx["principal"],
         creative_id=absent_id,
         name="Absent From Request",
-        agent_url=fmt["agent_url"],
-        format=fmt["id"],
+        **seeded_format_columns(env, fmt),
     )
     env._commit_factory_data()
     ctx["absent_creative_id"] = absent_id
@@ -1416,8 +1431,7 @@ def given_assignment_already_exists(ctx: dict) -> None:
         principal=principal,
         creative_id=creative_id,
         name=creative_payload["name"],
-        agent_url=fmt_entry["agent_url"],
-        format=fmt_entry["id"],
+        **seeded_format_columns(env, fmt_entry),
     )
     existing_assignment = CreativeAssignmentFactory(
         creative=creative,
@@ -1489,8 +1503,7 @@ def given_creative_already_assigned_to_package(ctx: dict) -> None:
         principal=principal,
         creative_id=creative_id,
         name=creative_payload["name"],
-        agent_url=_scenario_format_entry(ctx, env)["agent_url"],
-        format=_scenario_format_entry(ctx, env)["id"],
+        **seeded_format_columns(env, _scenario_format_entry(ctx, env)),
     )
     existing_assignment = CreativeAssignmentFactory(
         creative=creative,
@@ -2542,14 +2555,9 @@ def given_creative_already_exists(ctx: dict, stored_name: str | None = None) -> 
         principal=principal,
         creative_id=creative_id,
         name=stored_name if stored_name is not None else creative_payload["name"],
-        agent_url=fmt_id["agent_url"],
-        format=fmt_id["id"],
-        # When the payload names a format THIS ENV serves, the row is seeded with that
-        # declaration. Since salesagent-6xtxb the env serves the shared reference capture
-        # itself, so the two agree by construction rather than by this branch -- it stays
-        # because a scenario may still narrow the catalogue (``set_served_catalogue``) and
-        # the factory's own lookup would then find more than the env serves.
-        format_spec=(env.served_format_spec(fmt_id["id"]) if env.serves_format(fmt_id["id"]) else None),
+        # The declaration a sync of this payload resolves against, which is a format THIS
+        # ENV was told to serve when a Given configured one (``published_format_spec``).
+        **seeded_format_columns(env, fmt_id),
     )
     env._commit_factory_data()
 
@@ -3121,8 +3129,7 @@ def given_existing_assignment_in_media_buy(ctx: dict) -> None:
         principal=principal,
         creative_id=creative_id,
         name=creative_payload["name"],
-        agent_url=_scenario_format_entry(ctx, env)["agent_url"],
-        format=_scenario_format_entry(ctx, env)["id"],
+        **seeded_format_columns(env, _scenario_format_entry(ctx, env)),
     )
     CreativeAssignmentFactory(
         creative=creative,
@@ -4187,8 +4194,7 @@ def given_creative_exists_for_principal(ctx: dict, creative_id: str, principal_i
         principal=principal,
         creative_id=creative_id,
         name=f"Pre-existing creative {creative_id}",
-        agent_url=_scenario_format_entry(ctx, env)["agent_url"],
-        format=_scenario_format_entry(ctx, env)["id"],
+        **seeded_format_columns(env, _scenario_format_entry(ctx, env)),
     )
     env._commit_factory_data()
     ctx["pre_existing_creative_id"] = creative_id
@@ -6182,9 +6188,6 @@ def given_creative_already_assigned_to_package_partition(ctx: dict) -> None:
     ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    # The row names the agent the synced creative names, or the sync re-points it.
-    agent_url = _scenario_format_entry(ctx, env)["agent_url"]
-    creative_format = _scenario_format_id(ctx, env)
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
     product = ProductFactory(
@@ -6203,8 +6206,8 @@ def given_creative_already_assigned_to_package_partition(ctx: dict) -> None:
         principal=principal,
         creative_id=creative_id,
         name=creative_payload["name"],
-        agent_url=agent_url,
-        format=creative_format,
+        # The row names the agent the synced creative names, or the sync re-points it.
+        **seeded_format_columns(env, _scenario_format_entry(ctx, env)),
     )
     existing_assignment = CreativeAssignmentFactory(
         creative=creative,
@@ -6718,8 +6721,7 @@ def _preseed_creative_for_principal(ctx: dict, creative_id: str, principal_id: s
         principal=owner_principal,
         creative_id=creative_id,
         name=f"Pre-existing creative {creative_id}",
-        agent_url=_scenario_format_entry(ctx, env)["agent_url"],
-        format=_scenario_format_entry(ctx, env)["id"],
+        **seeded_format_columns(env, _scenario_format_entry(ctx, env)),
     )
     env._commit_factory_data()
     ctx["pre_existing_creative_id"] = creative_id

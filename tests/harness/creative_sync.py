@@ -1184,6 +1184,37 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
             )
         return self._served_formats[format_id]
 
+    def published_format_spec(self, agent_url: str, format_id: str) -> Format | None:
+        """The declaration a sync naming ``(agent_url, format_id)`` resolves against, or None.
+
+        For a step that SEEDS a library row through ``CreativeFactory``, which projects the
+        row's legacy reference to its canonical kind exactly as the sync path does
+        (``creative_identity_of``) and needs the same declaration to do it. In order:
+
+        1. a format a Given configured this env to serve (:meth:`served_format`);
+        2. an entry the tenant's hosted agent publishes (:meth:`host_reference_format`) --
+           on e2e the agent :meth:`catalog_agent_url` names;
+        3. the reference capture the standard agent answers from, which is the factory's
+           own lookup (``served_format_spec``).
+
+        Step 2 is why this exists. The factory reads only the capture, whose entries all name
+        ``https://creative.adcontextprotocol.org``, so on e2e it found nothing at the hosted
+        agent's URL and fell back to the bare id. The SDK maps ``display_300x250_image`` to a
+        kind only at the reference agent's origin, so every seeded row in the catalog format
+        was refused in the TEST process while the server, which reads the hosted agent's
+        declaration and its ``canonical.kind``, resolved the identical sync. None leaves the
+        factory to its own lookup, whose refusal is production's.
+        """
+        from src.core.format_resolver import find_format
+        from tests.factories.creative import served_format_spec
+
+        if format_id in self._served_formats:
+            return self._served_formats[format_id]
+        hosted = [Format.model_validate(entry) for entry in (self._hosted_formats or {}).values()]
+        return find_format(hosted, FormatId(agent_url=agent_url, id=format_id)) or served_format_spec(
+            agent_url, format_id
+        )
+
     #: The capture's generative format a scenario gets when it does not name one. A
     #: CAPTURED id, not an invented one: the seven generative formats the reference agent
     #: serves all end in ``_generative`` and carry a real ``output_format_ids``, which is

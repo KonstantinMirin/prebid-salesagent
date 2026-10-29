@@ -28,6 +28,7 @@ from tests.bdd.steps.domain.uc006_sync_creatives import (
     _assignments_for_the_wire,
     _format_payload,
     _persisted_creative_fingerprints,
+    seeded_format_columns,
 )
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 from tests.bdd.steps.generic._dispatch import dispatch_request
@@ -71,8 +72,7 @@ def _seed_row(ctx: dict, creative_id: str, name: str, *, format_id: str | None =
         principal=ctx["principal"],
         creative_id=creative_id,
         name=name,
-        agent_url=agent_url,
-        format=format_id or fmt,
+        **seeded_format_columns(ctx["env"], {"agent_url": agent_url, "id": format_id or fmt}),
     )
 
 
