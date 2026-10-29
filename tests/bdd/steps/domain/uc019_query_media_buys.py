@@ -131,6 +131,27 @@ def _patch_adapter_with_snapshot(ctx: dict, snapshot_data: dict) -> None:
     ctx["adapter_snapshot_data"] = snapshot_data
 
 
+def _seed_package(ctx: dict, media_buy: Any, pkg_id: str, *, budget: float, **config: Any) -> None:
+    """Seed one named package on *media_buy* and record which buy owns it.
+
+    The one package seeder for this module's Givens. ``**config`` adds keys to the
+    persisted ``package_config`` blob (``creative_deadline``, for example), which is
+    where get_media_buys reads the optional package fields from. The caller commits.
+    """
+    MediaPackageFactory(
+        media_buy=media_buy,
+        package_id=pkg_id,
+        package_config={
+            "package_id": pkg_id,
+            "product_id": "guaranteed_display",
+            "budget": budget,
+            "status": "active",
+            **config,
+        },
+    )
+    ctx.setdefault("seeded_packages", {})[pkg_id] = media_buy
+
+
 def _find_media_buy_for_package(ctx: dict, pkg_id: str) -> Any:
     """Find the seeded media buy ORM object that owns the given package_id."""
     pkgs = ctx.get("seeded_packages", {})
@@ -543,19 +564,9 @@ def given_principal_owns_mb_with_named_package(ctx: dict, principal_id: str, mb_
         media_buy_id=real_id,
         status="active",
     )
-    MediaPackageFactory(
-        media_buy=mb,
-        package_id=pkg_id,
-        package_config={
-            "package_id": pkg_id,
-            "product_id": "guaranteed_display",
-            "budget": 5000.0,
-            "status": "active",
-        },
-    )
+    _seed_package(ctx, mb, pkg_id, budget=5000.0)
     env._commit_factory_data()
     _register_media_buy(ctx, mb_id, mb)
-    ctx.setdefault("seeded_packages", {})[pkg_id] = mb
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with packages "{pkg1}" and "{pkg2}"'))
@@ -571,17 +582,7 @@ def given_principal_owns_mb_with_two_packages(ctx: dict, principal_id: str, mb_i
         status="active",
     )
     for pkg_id in [pkg1, pkg2]:
-        MediaPackageFactory(
-            media_buy=mb,
-            package_id=pkg_id,
-            package_config={
-                "package_id": pkg_id,
-                "product_id": "guaranteed_display",
-                "budget": 3000.0,
-                "status": "active",
-            },
-        )
-        ctx.setdefault("seeded_packages", {})[pkg_id] = mb
+        _seed_package(ctx, mb, pkg_id, budget=3000.0)
     env._commit_factory_data()
     _register_media_buy(ctx, mb_id, mb)
 
@@ -768,31 +769,6 @@ def given_creative_status_simple(ctx: dict, creative_id: str, status: str) -> No
     creative = _seeded_creative(ctx, creative_id)
     creative.status = status
     ctx["env"]._commit_factory_data()
-
-
-@given(parsers.parse('no creative with id "{creative_id}" exists in the tenant'))
-def given_no_creative_exists(ctx: dict, creative_id: str) -> None:
-    """Assert the state BR-RULE-152 INV-4 asks for, and record that it is unreachable.
-
-    The scenario wants an assignment pointing at a creative row that does not exist.
-    ``creative_assignments`` carries a composite ForeignKeyConstraint
-    (creative_id, tenant_id, principal_id) -> creatives with no ondelete
-    (src/core/database/models.py), so that row cannot be inserted and the creative cannot
-    be deleted out from under it. The condition is unreachable in this schema, which means
-    production's silent-skip is defensive code nothing can exercise.
-
-    This step therefore establishes nothing and says so: it asserts the one thing that IS
-    true -- the creative the preceding Given seeded exists, and by the FK must -- and leaves
-    the scenario's own routing to report the gap, rather than carrying a per-step escape
-    hatch. The old inline ``pytest.xfail`` here was never reached anyway:
-    ``given_package_creative_assignment`` aborted first. Nothing is recorded on ctx for a
-    later step to read, because there is no established state to describe.
-    """
-    creative = _seeded_creative(ctx, creative_id)
-    assert creative.creative_id == creative_id, (
-        f"seeded creative is {creative.creative_id!r}, not {creative_id!r} — the assignment "
-        "Given and this one disagree about which creative the scenario is about"
-    )
 
 
 @given(parsers.parse('no snapshot data is available for package "{pkg_id}"'))
@@ -1978,32 +1954,6 @@ def then_rejection_reason_absent(ctx: dict) -> None:
         actual_reason = getattr(approval, "rejection_reason", None)
         assert actual_reason is None, f"Expected rejection_reason to be absent, got '{actual_reason}'"
     assert approvals, "No approval entries found in response — cannot verify rejection_reason absence"
-
-
-@then(parsers.parse('the creative approvals for package "{pkg_id}" should not include an entry for "{creative_id}"'))
-def then_no_approval_for_creative(ctx: dict, pkg_id: str, creative_id: str) -> None:
-    """Assert missing creative is not in approvals (INV-152-4).
-
-    The package MUST be found in the response — if it's missing, that's a hard
-    failure, not an xfail.
-    """
-    buys = _get_media_buys(ctx)
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            if getattr(pkg, "package_id", None) == pkg_id:
-                approvals = getattr(pkg, "creative_approvals", None) or []
-                approval_ids = [getattr(a, "creative_id", None) for a in approvals]
-                assert creative_id not in approval_ids, (
-                    f"Expected creative '{creative_id}' to NOT appear in approvals for package '{pkg_id}', but found it"
-                )
-                return
-    raise AssertionError(f"Package '{pkg_id}' not found in response — cannot verify creative '{creative_id}' omission")
-
-
-@then(parsers.parse("no error should be raised for the missing creative"))
-def then_no_error_for_missing_creative(ctx: dict) -> None:
-    """Assert no error raised for missing creative."""
-    assert "error" not in ctx or ctx.get("error") is None, f"Unexpected error for missing creative: {ctx.get('error')}"
 
 
 @then(parsers.parse('package "{pkg_id}" should not have a snapshot field'))
@@ -3210,6 +3160,7 @@ _VALID_BLOB_SIBLINGS = {
     "end_time": "2026-03-31T00:00:00Z",
     "paused": False,
     "targeting_overlay": {"geo_countries": ["US"]},
+    "creative_deadline": "2026-02-20T00:00:00Z",
 }
 
 
@@ -3537,3 +3488,170 @@ def then_no_advisory_with_code(ctx: dict, code: str) -> None:
         f"expected no errors[] advisory with code {code!r} — its pinned recovery advises a retry "
         f"that can never repair a seller-side defect; got {offending!r}"
     )
+
+
+# ── creative_deadline: buy level and package level ────────────────────
+#
+# get-media-buys-response.json (pinned) declares an optional ``creative_deadline`` on
+# ``media_buys[]`` and on ``packages[]``, and get_media_buys.mdx says the package value
+# applies when present and "When absent, the media buy's creative_deadline applies."
+# The buy-level value is the ``media_buys.creative_deadline`` column; the package-level
+# value is a key of the package's ``package_config`` blob, which is where get_media_buys
+# reads the optional package fields from. Every Given writes the persisted row, so it
+# is the same state on every transport, including the live server on e2e_rest.
+
+
+def _set_buy_creative_deadline(ctx: dict, mb_id: str, timestamp: str | None) -> None:
+    """Write the buy's persisted ``creative_deadline`` column (None clears it) and commit."""
+    row = _resolve_media_buy_row(ctx, mb_id)
+    row.creative_deadline = None if timestamp is None else _parse_iso8601(timestamp)
+    ctx["env"]._session.commit()
+
+
+def _assert_wire_creative_deadline(entry: dict, expected: str | None, subject: str) -> None:
+    """Grade one wire entry's ``creative_deadline``: the instant *expected*, or the key absent.
+
+    Absent means the KEY is absent. The pinned field is a non-nullable string, so the only
+    legal rendering of "no deadline" is omission. Instants are compared parsed, because
+    "...Z" and "...+00:00" are the same deadline.
+    """
+    if expected is None:
+        assert "creative_deadline" not in entry, (
+            f"expected {subject} to omit creative_deadline; got {entry.get('creative_deadline')!r}"
+        )
+        return
+    actual = entry.get("creative_deadline")
+    assert actual is not None, f"expected {subject} creative_deadline {expected!r}; the key is absent"
+    assert _parse_iso8601(actual) == _parse_iso8601(expected), (
+        f"expected {subject} creative_deadline {expected!r}; got {actual!r}"
+    )
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with creative_deadline "{timestamp}"'))
+def given_owns_media_buy_with_creative_deadline(ctx: dict, principal_id: str, mb_id: str, timestamp: str) -> None:
+    """Seed a buy whose persisted creative_deadline column carries *timestamp*.
+
+    Like the confirmed_at Givens above, this sentence ends in a quoted literal, so it
+    exists to keep the generic ``owns media buy "{mb_id}"`` Given from binding it.
+    """
+    _seed_simple_media_buy(ctx, principal_id, mb_id, creative_deadline=_parse_iso8601(timestamp))
+
+
+@given(parsers.parse('media buy "{mb_id}" has package "{pkg_id}" with creative_deadline "{timestamp}"'))
+def given_media_buy_package_with_creative_deadline(ctx: dict, mb_id: str, pkg_id: str, timestamp: str) -> None:
+    """Seed a package on the buy whose package_config carries *timestamp* as its deadline."""
+    _seed_package(ctx, _resolve_media_buy_row(ctx, mb_id), pkg_id, budget=3000.0, creative_deadline=timestamp)
+    ctx["env"]._commit_factory_data()
+
+
+@given(parsers.parse('media buy "{mb_id}" has package "{pkg_id}" with no creative_deadline'))
+def given_media_buy_package_without_creative_deadline(ctx: dict, mb_id: str, pkg_id: str) -> None:
+    """Seed a package on the buy whose package_config carries no creative_deadline key."""
+    _seed_package(ctx, _resolve_media_buy_row(ctx, mb_id), pkg_id, budget=3000.0)
+    ctx["env"]._commit_factory_data()
+
+
+@given(parsers.parse('media buy "{mb_id}" carries buy creative_deadline "{timestamp}"'))
+def given_buy_carries_creative_deadline(ctx: dict, mb_id: str, timestamp: str) -> None:
+    """Set the seeded buy's persisted creative_deadline."""
+    _set_buy_creative_deadline(ctx, mb_id, timestamp)
+
+
+@given(parsers.parse('media buy "{mb_id}" carries no buy creative_deadline'))
+def given_buy_carries_no_creative_deadline(ctx: dict, mb_id: str) -> None:
+    """Clear the seeded buy's persisted creative_deadline."""
+    _set_buy_creative_deadline(ctx, mb_id, None)
+
+
+@given(parsers.parse('package "{pkg_id}" carries package creative_deadline "{timestamp}"'))
+def given_package_carries_creative_deadline(ctx: dict, pkg_id: str, timestamp: str) -> None:
+    """Write *timestamp* into the package's package_config as its creative_deadline."""
+    _set_package_config(ctx, pkg_id, {"creative_deadline": timestamp})
+
+
+@given(parsers.parse('package "{pkg_id}" carries no package creative_deadline'))
+def given_package_carries_no_creative_deadline(ctx: dict, pkg_id: str) -> None:
+    """Remove any creative_deadline key from the package's package_config."""
+    _set_package_config(ctx, pkg_id, {}, drop=("creative_deadline",))
+
+
+@then(parsers.parse('the package "{pkg_id}" creative_deadline should equal "{timestamp}"'))
+def then_package_creative_deadline_equals(ctx: dict, pkg_id: str, timestamp: str) -> None:
+    """The package carries its own deadline on the wire."""
+    _assert_wire_creative_deadline(_wire_package(ctx, pkg_id), timestamp, f"package {pkg_id!r}")
+
+
+@then(parsers.parse('the package "{pkg_id}" creative_deadline should be omitted'))
+def then_package_creative_deadline_omitted(ctx: dict, pkg_id: str) -> None:
+    """The package carries no deadline of its own on the wire."""
+    _assert_wire_creative_deadline(_wire_package(ctx, pkg_id), None, f"package {pkg_id!r}")
+
+
+@then(parsers.parse('the effective deadline for "{pkg_id}" should be the buy-level "{timestamp}"'))
+@then(
+    parsers.parse(
+        'the package "{pkg_id}" creative_deadline should be omitted and the effective deadline '
+        'should be the buy-level "{timestamp}"'
+    )
+)
+def then_effective_deadline_is_buy_level(ctx: dict, pkg_id: str, timestamp: str) -> None:
+    """The package inherits the buy's deadline: it omits its own, and the buy carries *timestamp*.
+
+    That is the pinned rule read off the wire. A buyer resolves the package's deadline as
+    "the package value when present, otherwise the media buy's", so the effective value is
+    the buy-level one exactly when both halves below hold.
+    """
+    label = _sole_seeded_label(ctx)
+    _assert_wire_creative_deadline(_wire_package(ctx, pkg_id, mb_id=label), None, f"package {pkg_id!r}")
+    _assert_wire_creative_deadline(_wire_media_buy(ctx, label), timestamp, f"media buy {label!r}")
+
+
+@then(
+    parsers.parse(
+        'the package "{pkg_id}" creative_deadline should equal "{timestamp}" and override the buy-level value'
+    )
+)
+def then_package_creative_deadline_overrides_buy(ctx: dict, pkg_id: str, timestamp: str) -> None:
+    """The package's own deadline is on the wire, and the buy carries a different one.
+
+    The buy-level value has to be present and different, or "override" is not observable:
+    a package that echoed the buy's value would pass a check of the package alone.
+    """
+    label = _sole_seeded_label(ctx)
+    _assert_wire_creative_deadline(_wire_package(ctx, pkg_id, mb_id=label), timestamp, f"package {pkg_id!r}")
+    buy_deadline = _wire_media_buy(ctx, label).get("creative_deadline")
+    assert buy_deadline is not None, f"expected media buy {label!r} to carry the buy-level deadline being overridden"
+    assert _parse_iso8601(buy_deadline) != _parse_iso8601(timestamp), (
+        f"the buy-level creative_deadline {buy_deadline!r} equals the package's {timestamp!r}, so no "
+        "override is observable"
+    )
+
+
+@then(
+    parsers.parse(
+        'the package "{pkg_id}" creative_deadline should equal "{timestamp}" and the buy-level field should be omitted'
+    )
+)
+def then_package_creative_deadline_without_buy_level(ctx: dict, pkg_id: str, timestamp: str) -> None:
+    """The package carries its own deadline and the buy carries none."""
+    label = _sole_seeded_label(ctx)
+    _assert_wire_creative_deadline(_wire_package(ctx, pkg_id, mb_id=label), timestamp, f"package {pkg_id!r}")
+    _assert_wire_creative_deadline(_wire_media_buy(ctx, label), None, f"media buy {label!r}")
+
+
+@then(
+    parsers.parse(
+        'the media buy "{mb_id}" should omit creative_deadline and the package "{pkg_id}" '
+        "should omit creative_deadline (no error)"
+    )
+)
+def then_no_creative_deadline_at_either_level(ctx: dict, mb_id: str, pkg_id: str) -> None:
+    """Neither level carries a deadline, and the response carries no advisory about it.
+
+    Both fields are optional, so a buy with no deadline anywhere is a clean document:
+    ``errors[]`` must be empty, not merely free of a refusal.
+    """
+    _assert_wire_creative_deadline(_wire_package(ctx, pkg_id, mb_id=mb_id), None, f"package {pkg_id!r}")
+    _assert_wire_creative_deadline(_wire_media_buy(ctx, mb_id), None, f"media buy {mb_id!r}")
+    advisories = _wire_advisories(ctx)
+    assert advisories == [], f"expected no errors[] advisories for a buy with no deadline; got {advisories!r}"

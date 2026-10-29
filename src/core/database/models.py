@@ -1567,6 +1567,10 @@ class MediaBuy(Base):
     # synchronous auto-approve path a successful create_media_buy response is
     # itself the confirmation. NULL until commitment.
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The buy-level creative upload deadline the adapter reported on create
+    # (create-media-buy-response.json `creative_deadline`), kept so get_media_buys
+    # reports the same value. NULL when the adapter set none.
+    creative_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
