@@ -509,6 +509,18 @@ Feature: BR-UC-005 Discover Creative Formats
     Then no formats from the creative agent should be returned
     And the discarded entries should be reported as "AGENT_FORMATS_DISCARDED" on "formats" with recovery "terminal"
 
+  # Which creative agents a seller federates is the seller's choice: the pinned response
+  # requires only formats, and creative_agents is an optional referral list. A seller that
+  # runs its own creative agent and turns the standard one off lists that agent's formats
+  # and nothing else, and refers buyers to that agent alone. Storyboard: ungraded.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-response.json pointer=/properties/creative_agents
+  @T-UC-005-own-agents-only @UC-005-MAIN-MCP-13 @edge-case @post-s4
+  Scenario: A seller that does not federate the standard creative agent lists only its own agents
+    Given the seller does not federate the standard creative agent and its own creative agent serves format "acme-own-banner"
+    When the Buyer Agent requests the format catalog
+    Then only "acme-own-banner" should be returned
+    And the creative_agents referrals should name only the seller's own creative agent
+
   @T-UC-005-dim-boundary @UC-005-MAIN-MCP-08 @boundary @BR-RULE-049
   Scenario: Dimension boundary - inclusive range at threshold
     Given the registry has format "exact-fit" with render width 728 and height 90

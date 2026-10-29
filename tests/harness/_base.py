@@ -3191,6 +3191,30 @@ class IntegrationEnv(BaseTestEnv):
     #: opt-out is scoped to exactly the scenario that calls it.
     REST_RAISE_SERVER_EXCEPTIONS: bool = True
 
+    def ensure_tenant(self, **tenant_kwargs: Any) -> Any:
+        """Get-or-create this env's tenant row alone, with *tenant_kwargs* applied either way.
+
+        The tenant half of :meth:`setup_default_data`, for a setup that configures the
+        SELLER and must not seed a principal: the factory derives a principal's token from
+        its ``principal_id`` alone and ``principals.token_hash`` is globally unique, so a
+        principal seeded as a side effect collides with one a test creates itself.
+        Forwarded to ``TenantFactory`` on the create path; APPLIED to the existing row on
+        the get path, where the e2e ``__enter__`` auto-seed created it with model defaults.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import Tenant
+        from tests.factories import TenantFactory
+
+        tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()
+        if tenant is None:
+            return TenantFactory(tenant_id=self._tenant_id, **tenant_kwargs)
+        if tenant_kwargs:
+            for column, value in tenant_kwargs.items():
+                setattr(tenant, column, value)
+            self._commit_factory_data()
+        return tenant
+
     def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]:
         """Get-or-create default tenant + principal via factories.
 
@@ -3212,16 +3236,10 @@ class IntegrationEnv(BaseTestEnv):
         from sqlalchemy import select
 
         from src.core.database.models import AdapterConfig as DBAdapterConfig
-        from src.core.database.models import Principal, Tenant
-        from tests.factories import AdapterConfigFactory, PrincipalFactory, TenantFactory
+        from src.core.database.models import Principal
+        from tests.factories import AdapterConfigFactory, PrincipalFactory
 
-        tenant = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first()
-        if tenant is None:
-            tenant = TenantFactory(tenant_id=self._tenant_id, **tenant_kwargs)
-        elif tenant_kwargs:
-            for column, value in tenant_kwargs.items():
-                setattr(tenant, column, value)
-            self._commit_factory_data()
+        tenant = self.ensure_tenant(**tenant_kwargs)
 
         principal = self._session.scalars(
             select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=self._principal_id)

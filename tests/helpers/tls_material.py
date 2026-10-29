@@ -69,22 +69,15 @@ def trust_test_ca(guard: Guard) -> None:
     guard("ssl_cert_file", patcher.stop)
 
 
-def start_tls_capture_service(guard: Guard, label: str) -> ThreadingHTTPServer:
-    """Serve the e2e webhook-capture service in THIS process over TLS, released through *guard*.
+def start_tls_capture_service() -> ThreadingHTTPServer:
+    """Serve the e2e webhook-capture service in THIS process over TLS, on loopback; the caller owns its shutdown.
 
     The same service the compose stack runs, so what an in-process scenario's peer
     answers and what the e2e server's peer answers come from one implementation.
     """
     from tests.e2e.webhook_capture_service import start_capture_service
 
-    server = start_capture_service(host="127.0.0.1", port=0, ssl_context=_ready_server_context())
-
-    def close() -> None:
-        server.shutdown()
-        server.server_close()
-
-    guard(label, close)
-    return server
+    return start_capture_service(host="127.0.0.1", port=0, ssl_context=_ready_server_context())
 
 
 def start_tls_origin(guard: Guard, label: str, *, listen_host: str = "127.0.0.1") -> LocalOrigin:

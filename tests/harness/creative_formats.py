@@ -1,9 +1,17 @@
 """CreativeFormatsEnv — integration test environment for _list_creative_formats_impl.
 
-Patches: creative agent registry, audit logger.
-Real: format processing logic (no direct DB access in this _impl). A scenario that
-calls ``set_peer_format_payload`` swaps the registry stand-in for production's own
-registry, which dials a real peer endpoint.
+Patches: the creative agent registry singleton (replaced by a fresh instance of
+production's own testing-mode ``ReferenceFormatsRegistry`` per env, so each scenario has
+its own format cache), and the audit logger.
+Real: the registry, the tenant's ``creative_agents`` rows, the dial to a peer creative
+agent over the egress seam, and the format processing logic.
+
+A scenario that names the formats a seller serves calls ``set_registry_formats``. The
+formats are served by a real peer creative agent -- the webhook-capture service, started
+once per worker in process and running in the compose stack on e2e -- the tenant's one
+``creative_agents`` row points at it, and the tenant does not federate the standard
+creative agent. The seller then lists exactly those formats, on every transport, through
+production's own path.
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
 
@@ -12,7 +20,7 @@ Usage::
     @pytest.mark.requires_db
     def test_something(self, integration_db):
         with CreativeFormatsEnv() as env:
-            env.set_registry_formats([mock_format_1, mock_format_2])
+            env.set_registry_formats([format_1, format_2])
             response = env.call_impl()
             assert len(response.formats) == 2
 
@@ -24,106 +32,37 @@ Available mocks via env.mock:
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
+from unittest.mock import MagicMock
 
-from src.core.schemas import FormatKey, ListCreativeFormatsResponse
+from src.core.schemas import ListCreativeFormatsResponse
 from tests.harness._base import IntegrationEnv
-from tests.harness._realize import E2EUnsupportedSetup, realize_e2e
+from tests.harness._realize import realize_e2e
 from tests.harness.egress import EgressHatchMixin
 from tests.harness.transport import DeliverResult
-from tests.helpers.tls_material import start_tls_capture_service, trust_test_ca
+from tests.helpers.peer_creative_agent import new_peer_key, serve_peer_catalog
+from tests.helpers.tls_material import trust_test_ca
 
 
-def _format_identity_key(fmt: Any) -> FormatKey:
-    """Federation identity ``(canonical agent_url, id)`` of a Format / FormatId / bare id.
-
-    Delegates to ``src.core.format_resolver.format_identity``, which is the ONE
-    place that answers "same format?" — it normalizes the three shapes a
-    reference actually arrives in (model, wire dict, legacy bare string) and then
-    hands the rule itself to ``src.core.schemas.format_id_identity``. The pinned
-    ``core/format-id.json`` makes canonicalizing ``agent_url`` before treating two
-    references as one a MUST, so a harness that compared ``.format_id.id`` alone
-    (what this helper used to do) would call a third-party format that merely
-    shares an id "already in the reference catalog" and silently skip the
-    unrealizable-setup error the scenario needs.
-
-    Accepts a ``Format`` (unwrapped via ``.format_id``), a bare ``FormatId``, a
-    wire dict, or a plain string id — a bare id is namespaced to the canonical
-    creative agent, which is the agent every entry in the reference fixture
-    carries.
-    """
-    from src.core.format_resolver import format_identity
-
-    return format_identity(getattr(fmt, "format_id", fmt))
-
-
-def _validate_registry_formats(env: Any, formats: list[Any]) -> None:
-    """E2E realization of set_registry_formats: validate against the live catalog.
-
-    The live stack serves the full reference-format catalog by construction
-    (``ADCP_TESTING`` reads the same fixture this validates against), so there
-    is no per-scenario server registry to write. Instead we validate the
-    scenario's intent is realizable:
-
-    - empty list (empty-catalog scenarios) -> unrealizable: the live stack
-      always serves the agent catalog.
-    - requested ids ⊆ reference set -> no-op: the server already serves them.
-    - requested ⊄ reference set -> unrealizable: name the missing ids and point
-      at the fixture-refresh path.
-
-    Membership is decided on the ``(canonical agent_url, id)`` federation pair
-    (:func:`_format_identity_key`), never on the bare id: two agents may publish
-    the same ``id``, and only the pair says whether the LIVE catalog actually
-    serves the format this scenario asked for.
-
-    The missing ones are spelled by ``format_display``, the one renderer of a
-    :data:`FormatKey`'s halves. A key is a ``str`` now, not the frozen dataclass it was
-    before the creative-identity collapse, so reading ``.id`` / ``.agent_url`` off one here
-    raised ``AttributeError`` instead of naming them -- turning every unrealizable e2e setup
-    into a failure rather than the skip the scenario asked for.
-    """
-    from src.core.format_cache import load_reference_formats
-    from src.core.format_resolver import format_display
-
-    if not formats:
-        raise E2EUnsupportedSetup(
-            "live stack always serves the agent catalog; an empty catalog cannot be realized over e2e"
-        )
-
-    reference_ids = {_format_identity_key(f) for f in load_reference_formats()}
-    requested_ids = {_format_identity_key(f) for f in formats}
-    missing = requested_ids - reference_ids
-    if missing:
-        named = sorted(format_display(identity) for identity in missing)
-        raise E2EUnsupportedSetup(
-            f"requested formats not in the reference catalog: {named}. "
-            "Register them in the creative agent registry and refresh the fixture "
-            "(`make creative-formats-refresh`)."
-        )
-
-
-def _serve_peer_catalog_on_the_live_stack(env: CreativeFormatsEnv, payload: list[dict[str, Any]]) -> None:
-    """E2E realization of set_peer_format_payload: the compose stack's capture service is the peer.
+def _serve_peer_catalog_on_the_live_stack(env: CreativeFormatsEnv, key: str, document: dict[str, Any]) -> str:
+    """E2E realization of the peer agent: the compose stack's capture service serves *document*.
 
     The live server cannot reach a socket in the runner, so the peer it dials is the
     webhook-capture service, which already sits behind the shared TLS front and answers
-    ``list_creative_formats`` over MCP for a key a test programs. The tenant's
-    ``creative_agents`` row names that endpoint; the factory writes it to the live
-    server's own database, as every e2e factory row is written.
+    ``list_creative_formats`` over MCP for a key a test programs. Returns the URL the
+    server dials, which the tenant's ``creative_agents`` row then names; the factory writes
+    that row to the live server's own database, as every e2e factory row is written.
     """
-    from tests.e2e._webhook_capture import peer_agent_url, serve_peer_catalog
+    from tests.e2e import _webhook_capture
 
-    key = f"peer-{uuid4().hex}"
-    serve_peer_catalog(key, {"formats": payload})
-    env.configure_peer_agent(peer_agent_url(key))
+    _webhook_capture.serve_peer_catalog(key, document)
+    return _webhook_capture.peer_agent_url(key)
 
 
 class CreativeFormatsEnv(EgressHatchMixin, IntegrationEnv):
     """Integration test environment for _list_creative_formats_impl.
 
-    Mocks creative agent registry (external service) and audit logger.
-    The format processing logic runs for real.
+    Runs production's testing-mode registry against real ``creative_agents`` rows and a
+    real peer creative agent; mocks only the audit logger.
     """
 
     # Dispatch declaration: the base owns call_mcp/call_a2a.
@@ -152,108 +91,112 @@ class CreativeFormatsEnv(EgressHatchMixin, IntegrationEnv):
     }
     REST_ENDPOINT = "/api/v1/creative-formats"
 
+    #: The formats :meth:`set_registry_formats` seeded, or None when no Given named any.
+    _seeded_formats: list[Any] | None = None
+    #: The tenant's one peer ``creative_agents`` row, created on first use.
+    _peer_agent_row: Any = None
+    #: The URL that row names: where the seller dials its peer, and what it refers buyers to.
+    _peer_agent_url: str | None = None
+    #: Whether this env trusts the test CA and opened the private-range hatch yet.
+    _peer_reachable: bool = False
+
     def _configure_mocks(self) -> None:
-        """Set up happy-path defaults for external mocks.
+        """Install production's testing-mode registry, fresh per env, and a no-op audit logger.
 
-        Seeds a minimal set of default formats so scenarios that don't
-        explicitly call set_registry_formats() still get non-empty results.
-        Scenarios needing specific formats override via set_registry_formats().
+        ``ReferenceFormatsRegistry`` answers the standard creative agent from the committed
+        capture and dials every agent the tenant configured, exactly as the e2e server's
+        registry does, so a scenario with no format Given lists the capture in both worlds.
+        The patch exists only so each env gets its own instance -- and with it its own
+        format cache -- rather than the process's memoized one.
         """
-        from src.core.creative_agent_registry import CreativeAgentRegistry, FormatFetchResult
-        from src.core.format_cache import load_reference_formats
+        from src.core.creative_agent_registry import ReferenceFormatsRegistry
 
-        default_formats = list(load_reference_formats())
+        self.mock["registry"].return_value = ReferenceFormatsRegistry()
+        self.mock["audit_logger"].return_value = MagicMock()
 
-        # Registry: return a mock with async list_all_formats + list_all_formats_with_errors
-        mock_registry = MagicMock()
-        mock_registry.list_all_formats = AsyncMock(return_value=default_formats)
-        mock_registry.list_all_formats_with_errors = AsyncMock(
-            return_value=FormatFetchResult(formats=default_formats, errors=[])
-        )
-        self.mock["registry"].return_value = mock_registry
-
-        # ``_get_tenant_agents`` is the REAL method, bound to a real registry, so the
-        # referral path (``creative_agents``, POST-S4) reads the tenant's
-        # ``creative_agents`` rows exactly as the live server does. Left as a MagicMock
-        # attribute it returned a MagicMock, which MagicMock makes ITERABLE AND EMPTY --
-        # so production walked zero agents and answered ``creative_agents: []`` on every
-        # in-process transport. That is a mock inventing an answer it does not have, and
-        # it read as a production gap for long enough to be recorded as one.
-        #
-        # ``_get_tenant_agents`` is defined once, on the base, and neither
-        # ``ReferenceFormatsRegistry`` nor anything else overrides it, so which class is
-        # instantiated here cannot change the answer.
-        mock_registry._get_tenant_agents = CreativeAgentRegistry()._get_tenant_agents
-
-        # Audit logger: no-op
-        mock_logger = MagicMock()
-        self.mock["audit_logger"].return_value = mock_logger
-
-    @realize_e2e(_validate_registry_formats)
     def set_registry_formats(self, formats: list[Any]) -> None:
-        """Configure mock registry to return these formats from list_all_formats.
+        """The seller's catalog is exactly *formats*, on every transport.
 
-        In-process: injects ``formats`` on the registry mock. E2E: validates the
-        request is realizable against the live catalog (the live stack serves the
-        full reference set by construction, so there is no per-scenario registry
-        to write) — see :func:`_validate_registry_formats`.
+        Serves *formats* from the peer creative agent under a fresh key, points the
+        tenant's one peer ``creative_agents`` row at it, and turns off the tenant's
+        federation of the standard creative agent (``use_default_creative_agent``), so the
+        seller lists these formats and nothing else. Each call mints a new key, so a
+        cumulative re-sync from successive Givens is never answered from a catalog the
+        registry cached for an earlier URL.
+
+        A format the seller's own parse refuses (``PeerFormat``) is discarded and
+        reported, as it would be from any real peer: the Given has to build a conforming
+        format, which is the point of serving it for real.
         """
-        from src.core.creative_agent_registry import FormatFetchResult
+        document = {"formats": [fmt.model_dump(mode="json", exclude_none=True) for fmt in formats]}
+        self.configure_peer_agent(self._serve_peer_catalog(document), use_default_creative_agent=False)
+        self._seeded_formats = list(formats)
 
-        self.mock["registry"].return_value.list_all_formats = AsyncMock(return_value=formats)
-        self.mock["registry"].return_value.list_all_formats_with_errors = AsyncMock(
-            return_value=FormatFetchResult(formats=list(formats), errors=[])
-        )
-
-    @realize_e2e(_serve_peer_catalog_on_the_live_stack)
     def set_peer_format_payload(self, payload: list[dict[str, Any]]) -> None:
         """A creative agent configured on the tenant answers ``list_creative_formats`` with *payload*.
 
         *payload* is the agent's ``formats`` array as raw JSON, served verbatim, so an
         entry the pinned schema cannot validate reaches the seller's OWN parse. Nothing
-        here is a stand-in for that parse: the agent is a real MCP endpoint over TLS (the
-        same capture service the e2e stack runs, started in this process), the tenant row
-        is a real ``creative_agents`` row, and the registry is production's testing-mode
-        ``ReferenceFormatsRegistry``, which answers the default agent from the reference
-        catalog and dials the tenant's configured agents.
-
-        In process that means trusting the shared test CA and opening the private-range
-        hatch, because the endpoint listens on loopback; the live stack's posture is
-        already open.
+        here is a stand-in for that parse: the agent is a real MCP endpoint over TLS, the
+        tenant row is a real ``creative_agents`` row, and the registry is production's
+        testing-mode ``ReferenceFormatsRegistry``. The standard creative agent stays
+        federated: these scenarios locate the peer's formats by the agent_url it published.
         """
-        from src.core.creative_agent_registry import ReferenceFormatsRegistry
-        from tests.e2e.webhook_capture_service import peer_path
+        self.configure_peer_agent(self._serve_peer_catalog({"formats": payload}))
 
-        trust_test_ca(self._guard)
-        self.set_egress_hatches(private=True)
-        peer = start_tls_capture_service(self._guard, "peer_creative_agent")
-        key = f"peer-{uuid4().hex}"
-        peer.store.serve_peer_catalog(key, {"formats": payload})
-        self.configure_peer_agent(f"https://127.0.0.1:{peer.server_address[1]}{peer_path(key)}")
-        self.mock["registry"].return_value = ReferenceFormatsRegistry()
+    def _serve_peer_catalog(self, document: dict[str, Any]) -> str:
+        """Serve *document* from the peer creative agent under a fresh key; return its URL."""
+        return self._realize_peer_catalog(new_peer_key(), document)
 
-    def configure_peer_agent(self, agent_url: str) -> None:
-        """Configure *agent_url* as one of the tenant's creative agents -- one row, both worlds."""
+    @realize_e2e(_serve_peer_catalog_on_the_live_stack)
+    def _realize_peer_catalog(self, key: str, document: dict[str, Any]) -> str:
+        """In process: this worker's shared peer agent, on loopback over TLS.
+
+        The registry dials it through the egress seam, so the env trusts the shared test
+        CA and opens the private-range hatch -- once, for the env's lifetime. The live
+        stack's posture is already open.
+        """
+        if not self._peer_reachable:
+            trust_test_ca(self._guard)
+            self.set_egress_hatches(private=True)
+            self._peer_reachable = True
+        return serve_peer_catalog(key, document)
+
+    def configure_peer_agent(self, agent_url: str, **tenant_columns: Any) -> None:
+        """The tenant's one peer creative agent is *agent_url* -- one row, both worlds.
+
+        The row is created on the first call and re-pointed after, so a scenario never
+        configures two peers by re-seeding. *tenant_columns* go through ``ensure_tenant``,
+        which applies them to the tenant row the test or the e2e auto-seed already created
+        and seeds nothing else: this configures the seller, not a buyer.
+        """
         from tests.factories import CreativeAgentFactory
 
-        tenant, _principal = self.setup_default_data()
-        CreativeAgentFactory(tenant=tenant, agent_url=agent_url, name="Peer Creative Agent")
+        tenant = self.ensure_tenant(**tenant_columns)
+        if self._peer_agent_row is None:
+            self._peer_agent_row = CreativeAgentFactory(tenant=tenant, agent_url=agent_url, name="Peer Creative Agent")
+        else:
+            self._peer_agent_row.agent_url = agent_url
         self._commit_factory_data()
+        self._peer_agent_url = agent_url
+
+    def peer_agent_url(self) -> str:
+        """The URL of the tenant's peer creative agent, as its ``creative_agents`` row names it."""
+        assert self._peer_agent_url is not None, "no peer creative agent is configured on this tenant"
+        return self._peer_agent_url
 
     def served_registry_formats(self) -> list[Any]:
-        """The formats the creative agent registry serves this scenario, on this transport.
+        """The formats the seller's creative agents serve this scenario, on every transport.
 
-        In process, what the registry mock was configured with -- by
-        :meth:`set_registry_formats`, or the reference catalog ``_configure_mocks`` seeds.
-        Over e2e, the whole reference catalog: the live stack serves it by construction
-        whichever subset a Given named (see :func:`_validate_registry_formats`), so that
-        catalog, not the Given's subset, is what a complete answer must cover there.
+        What :meth:`set_registry_formats` seeded -- the peer serves exactly those and the
+        standard agent is not federated -- or, when no Given named any, the reference
+        catalog the standard creative agent answers from.
         """
-        if self.is_e2e:
-            from src.core.format_cache import load_reference_formats
+        if self._seeded_formats is not None:
+            return list(self._seeded_formats)
+        from src.core.format_cache import load_reference_formats
 
-            return list(load_reference_formats())
-        return list(self.mock["registry"].return_value.list_all_formats_with_errors.return_value.formats)
+        return list(load_reference_formats())
 
     def call_impl(self, **kwargs: Any) -> ListCreativeFormatsResponse:
         """Call _list_creative_formats_impl.
