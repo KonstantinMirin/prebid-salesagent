@@ -290,12 +290,17 @@ def _e2e_ai_reviews_taken_up(self: CreativeSyncEnv, *, awaiting: list[str]) -> l
         time.sleep(_AI_REVIEW_POLL_SECONDS)
 
 
+#: The ``data`` keys the background AI reviewer writes: its verdict, or the error it failed
+#: with -- the two branches of ``_ai_review_creative`` (src/admin/blueprints/creatives.py).
+AI_REVIEWER_DATA_KEYS = ("ai_review", "ai_review_error")
+
+
 def _has_ai_review_outcome(row: Any) -> bool:
     """True when the background reviewer committed either outcome onto *row*."""
     data = getattr(row, "data", None)
     if not isinstance(data, dict):
         return False
-    return data.get("ai_review") is not None or data.get("ai_review_error") is not None
+    return any(data.get(key) is not None for key in AI_REVIEWER_DATA_KEYS)
 
 
 #: Where the in-process stand-in for the operator agent says its canonical render lives.
@@ -604,10 +609,13 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
         e2e_unsupported(
             "each observation is taken INSIDE the submit, by this env's stand-in for the AI-review "
             "executor, at the instant production hands the job over. Under e2e_rest the submit "
-            "happens in the server process, where no stand-in runs, and what the real job read is "
-            "not observable afterwards: on the update branch it commits the same verdict whether it "
-            "read the row as the sync committed it or as it was before. Observing it e2e needs a "
-            "read taken at the submit inside the server, which is its own build"
+            "happens in the server process, where no stand-in runs. The job's write-back does keep "
+            "what it read (it writes the whole data document back with its verdict added), but that "
+            "read comes only after the review itself runs, so a job submitted from inside the open "
+            "transaction almost always reads after the sync has committed anyway: the e2e answer "
+            "would catch an early hand-off only when the job's read wins that race, and would pass "
+            "the regression this scenario names otherwise. Grading it e2e needs a read taken at the "
+            "submit inside the server, which is its own build"
         )
     )
     def ai_review_observations(self) -> dict[str, tuple[str, str] | None]:
@@ -993,19 +1001,6 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
         both legs, so a scenario's agent says the same thing on every transport.
         """
         setattr(self.mock["registry"].return_value, tool, AsyncMock(return_value=document))
-
-    @realize_e2e(
-        e2e_unsupported(
-            "the Then this serves asks WHICH format ids the seller looked up with the agent, read "
-            "off a recorder standing in for registry.get_format. Under e2e_rest the lookup runs in "
-            "the server and reaches the hosted agent as a list_creative_formats call, which names no "
-            "format id and may be answered from the catalogue the same request already listed, so "
-            "'looked up THIS format' has no observable there"
-        )
-    )
-    def record_format_lookups(self, *, answering: Format) -> None:
-        """Record every single-format lookup, answering each with *answering*."""
-        self.mock["registry"].return_value.get_format = AsyncMock(return_value=answering)
 
     @realize_e2e(_the_hosted_agent_received)
     def creative_agent_requests(self, tool: str) -> list[dict[str, Any]]:
