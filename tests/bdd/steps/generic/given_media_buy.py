@@ -1130,7 +1130,11 @@ def given_pricing_option_configuration(ctx: dict, config: str) -> None:
         _setup_auction_pricing(ctx)
 
     elif config == "cpa_model":
-        _select_new_pricing_option(ctx, pricing_model="cpa", currency="USD", is_fixed=True, rate=10.00)
+        # pricing-options/cpa-option.json requires event_type, and the seller cannot
+        # publish a CPA option without one (product_conversion refuses the row).
+        _select_new_pricing_option(
+            ctx, pricing_model="cpa", currency="USD", is_fixed=True, rate=10.00, parameters={"event_type": "purchase"}
+        )
 
     elif config in ("both_set", "fixed+floor"):
         _setup_both_pricing(ctx)
