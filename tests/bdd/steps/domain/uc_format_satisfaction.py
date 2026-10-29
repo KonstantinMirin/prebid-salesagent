@@ -371,6 +371,26 @@ def _publisher_placement(mode: str) -> dict[str, Any]:
     return placement
 
 
+#: The two deprecated references a legacy-only product sells beside each other, sized by
+#: their ids: the SDK projects ``display_300x250`` to an image fixed at 300x250 and
+#: ``display_728x90`` to one fixed at 728x90 (``registries/v1-canonical-mapping.json``).
+_LEGACY_MREC = {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250"}
+_LEGACY_LEADERBOARD = {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_728x90"}
+
+
+def _legacy_placement(placement_id: str, *accepted: dict[str, Any]) -> dict[str, Any]:
+    """One stored INCLUDED placement narrowing through the deprecated ``format_ids`` alone.
+
+    The shape a legacy-only product's placements have. ``core/placement.json`` at the pin:
+    "When present on a product placement, this field narrows the product-level
+    ``format_ids`` contract and MUST NOT introduce formats the product does not accept."
+    """
+    placement: dict[str, Any] = StoredPlacementFactory(
+        placement_id=placement_id, mode="included", format_ids=list(accepted)
+    )
+    return placement
+
+
 #: What the seller STORES in ``placements``, per name, for the coverage scenarios. Every
 #: row but ``narrowed_inline`` is stored beside ``two_image_options``, and the rows differ
 #: only in which option each placement accepts and whether it is included.
@@ -467,6 +487,13 @@ _PLACEMENTS: dict[str, list[dict[str, Any]]] = {
     "publisher_ref_targetable": [
         _placement("satisfaction_mrec_slot", "included", _MREC),
         _publisher_placement("targetable"),
+    ],
+    # Stored beside the legacy-only product of ``_LEGACY_MREC`` and ``_LEGACY_LEADERBOARD``:
+    # ``split`` spelled in the deprecated arm, each included placement narrowing to one of
+    # the two references, so no single size covers both.
+    "legacy_split": [
+        _legacy_placement("satisfaction_mrec_slot", _LEGACY_MREC),
+        _legacy_placement("satisfaction_leaderboard_slot", _LEGACY_LEADERBOARD),
     ],
 }
 
@@ -663,6 +690,9 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     # does not satisfy the product". The SAME id beside a resolving option ref is the
     # conflict row below, and the two differ in nothing else.
     "legacy_display_728x90": {"format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_728x90"}]},
+    # BOTH sizes of the legacy-only product on one arm: a set, which is how a buyer covers
+    # ``legacy_split``'s two included placements through the deprecated selector.
+    "legacy_both_sizes": {"format_ids": [_LEGACY_MREC, _LEGACY_LEADERBOARD]},
     # Two legacy references that normalize to the KIND alone. The registry maps both to
     # ``image`` by glob, while neither carries or projects a size: ``display_image`` is the
     # unparameterized template, and the SDK upgrades ``display_300x250`` to 300x250 only for
@@ -902,6 +932,28 @@ def given_legacy_only_product(ctx: dict) -> None:
     _store_product(ctx, "satisfaction_legacy_only", format_ids=list(_LEGACY_ARM), format_options=None)
 
 
+@given(
+    parsers.parse(
+        'the seller publishes only the deprecated 300x250 and 728x90 formats across placements "{placements}"'
+    )
+)
+def given_legacy_only_product_across_placements(ctx: dict, placements: str) -> None:
+    """Store a LEGACY-ONLY product selling two sizes, with the named stored placements.
+
+    The product publishes no ``format_options``, so the coverage rules read both its arm and
+    its placements' deprecated ``format_ids`` through the SDK's projection. The rows this
+    stores beside it narrow through that arm alone, the shape a legacy-only product's
+    placements have.
+    """
+    _store_product(
+        ctx,
+        f"satisfaction_legacy_two_sizes_{placements}",
+        format_ids=[_LEGACY_MREC, _LEGACY_LEADERBOARD],
+        format_options=None,
+        placements=_PLACEMENTS[placements],
+    )
+
+
 @given(parsers.parse('the seller declares a canonical format option "{declaration}" and no format_ids'))
 def given_canonical_only_declaration(ctx: dict, declaration: str) -> None:
     """Store a CANONICAL-ONLY product -- the declaration, and no deprecated arm at all.
@@ -1004,10 +1056,34 @@ def given_canonical_creative_with_manifest(ctx: dict, kind: str, manifest: str) 
     ctx["request_kwargs"]["packages"][0]["creative_ids"] = [creative.creative_id]
 
 
+@given(parsers.parse('the buyer assigns canonical "{kind}" creatives carrying the "{manifests}" manifests'))
+def given_canonical_creatives_with_manifests(ctx: dict, kind: str, manifests: str) -> None:
+    """Several stored canonical creatives, one per comma-separated manifest, all on the package.
+
+    The package's creative SET is what the placement-coverage rule grades, so the set is the
+    scenario's parameter: one creative per manifest, each eligible for every placement
+    (a create package routes no creative to a placement).
+    """
+    ctx["request_kwargs"]["packages"][0]["creative_ids"] = [
+        creative.creative_id for creative in _seed_canonical_creatives(ctx, kind, manifests)
+    ]
+
+
+def _seed_canonical_creatives(ctx: dict, kind: str, manifests: str) -> list[Any]:
+    """One committed canonical creative per comma-separated :func:`_manifest` name, in order."""
+    return [_seed_canonical_creative(ctx, kind=kind, assets=_manifest(name.strip())) for name in manifests.split(",")]
+
+
 @given(parsers.parse('a canonical "{kind}" creative carrying the "{manifest}" manifest exists'))
 def given_canonical_creative_with_manifest_exists(ctx: dict, kind: str, manifest: str) -> None:
     """The update path's creative: stored with the named manifest, assigned by the When."""
     ctx["creative_to_assign"] = _seed_canonical_creative(ctx, kind=kind, assets=_manifest(manifest))
+
+
+@given(parsers.parse('canonical "{kind}" creatives carrying the "{manifests}" manifests exist'))
+def given_canonical_creatives_with_manifests_exist(ctx: dict, kind: str, manifests: str) -> None:
+    """The update path's creative set: one stored creative per manifest, assigned by the When."""
+    ctx["creatives_to_assign"] = _seed_canonical_creatives(ctx, kind, manifests)
 
 
 # ── UPDATE path ─────────────────────────────────────────────────────
@@ -1071,6 +1147,31 @@ def when_update_uploads_creatives(ctx: dict) -> None:
     _dispatch_package_update(ctx, creatives=ctx["request_kwargs"]["packages"][0]["creatives"])
 
 
+#: The routing token for an assignment that names no ``placement_ids``: "When omitted, the
+#: creative is eligible for all placements" (``sync-creatives-request.json``).
+_EVERY_PLACEMENT = "any"
+
+
+@when(parsers.parse('the Buyer Agent assigns those creatives through update_media_buy routed to "{routing}"'))
+def when_update_assigns_routed_creatives(ctx: dict, routing: str) -> None:
+    """Dispatch update_media_buy with one ``creative_assignments`` entry per seeded creative.
+
+    *routing* is comma-separated and aligned with the creatives: a placement id routes that
+    creative there through ``placement_ids``, and ``any`` omits the member. The package's
+    ``creative_assignments`` replace its creatives, so this is the whole set the seller grades.
+    """
+    targets = [target.strip() for target in routing.split(",")]
+    creatives = ctx["creatives_to_assign"]
+    assert len(targets) == len(creatives), f"{len(targets)} routes for {len(creatives)} creatives"
+    _dispatch_package_update(
+        ctx,
+        creative_assignments=[
+            {"creative_id": creative.creative_id} | ({} if target == _EVERY_PLACEMENT else {"placement_ids": [target]})
+            for creative, target in zip(creatives, targets, strict=True)
+        ],
+    )
+
+
 def _dispatch_package_update(ctx: dict, **package_members: Any) -> None:
     """One update_media_buy against the held buy's package, carrying *package_members*.
 
@@ -1111,6 +1212,23 @@ def given_sync_declaring_product(ctx: dict, declaration: str) -> None:
     publishing SEVERAL declarations of one kind -- the case ``format_option_ref`` exists for.
     """
     _seed_sync_chain(ctx, format_options=_DECLARATIONS[declaration], format_ids=list(_LEGACY_ARM))
+
+
+@given(
+    parsers.parse('a packaged product whose placements "{placements}" narrow canonical format options "{declaration}"')
+)
+def given_sync_product_across_placements(ctx: dict, placements: str, declaration: str) -> None:
+    """The sync chain over a dual-arm product that also stores the named placements.
+
+    Worded to start differently from the bare declaration Given above, whose trailing
+    ``"{declaration}"`` would otherwise match across the rest of a longer sentence.
+    """
+    _seed_sync_chain(
+        ctx,
+        format_options=_DECLARATIONS[declaration],
+        format_ids=list(_LEGACY_ARM),
+        placements=_PLACEMENTS[placements],
+    )
 
 
 @given("a packaged product declaring only the deprecated format_ids")
@@ -1208,7 +1326,11 @@ def given_sync_legacy_density_product(ctx: dict, width: int, height: int, pixel_
 
 
 def _seed_sync_chain(
-    ctx: dict, *, format_options: list[dict[str, Any]] | None, format_ids: list[dict[str, str]]
+    ctx: dict,
+    *,
+    format_options: list[dict[str, Any]] | None,
+    format_ids: list[dict[str, str]],
+    placements: list[dict[str, Any]] | None = None,
 ) -> None:
     """The product, media buy and package a sync_creatives assignment needs.
 
@@ -1225,6 +1347,7 @@ def _seed_sync_chain(
         delivery_type="non_guaranteed",
         format_ids=format_ids,
         format_options=format_options,
+        placements=placements,
         property_tags=["all_inventory"],
     )
     PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
@@ -1918,6 +2041,29 @@ def then_creative_refused(ctx: dict, code: str) -> None:
     assignment gate refuses a STORED creative, and which one is ``details.creative_id``.
     """
     _assert_creative_refused(ctx, code, field=None)
+
+
+@then(
+    parsers.parse(
+        'the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "{field}" '
+        'for leaving placement "{placement_id}" uncovered'
+    )
+)
+def then_creatives_leave_placement_uncovered(ctx: dict, field: str, placement_id: str) -> None:
+    """The creative-set coverage refusal: the code, the request field, and which placement.
+
+    ``details.rejected_value`` is the included placement the set leaves unserved -- with
+    several creatives there is no single offending creative, and the placement is what the
+    buyer has to fill -- and ``details.product_id`` the product whose placement it is. The
+    code is the pinned enum's generic creative code: no more specific one names an uncovered
+    placement. *field* is the request member that carried the creatives, which differs by
+    tool (``packages`` on create, the package's array on update, ``assignments`` on sync).
+    """
+    ctx["result"].assert_wire_error(
+        "CREATIVE_VALIDATION_FAILED_GENERIC",
+        field=field,
+        details={"rejected_value": placement_id, "product_id": ctx["default_product"].product_id},
+    )
 
 
 def _assert_creative_refused(ctx: dict, code: str, *, field: str | None) -> None:
