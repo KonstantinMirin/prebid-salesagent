@@ -319,6 +319,7 @@ def create_variant_from_template(
     # security-relevant behaviour change needing its own grading, and this change's instrument
     # grades an adapter's vendor payload. Do not add another name here without asking whether
     # the enumeration itself is what should go.
+    contract = template.format_contract
     variant_data = {
         "tenant_id": template.tenant_id,
         "product_id": variant_id,
@@ -334,8 +335,15 @@ def create_variant_from_template(
         # shape the same sentence tells new products to author ("Do not author a new product
         # from format_ids alone") -- generated variants satisfying no branch of that anyOf.
         # Legacy templates were unaffected, which is why it went unseen (salesagent-ki6a4).
-        "format_ids": template.format_ids,
-        "format_options": template.format_options,
+        #
+        # Copied from the template's CONTRACT (``Product.format_contract``), not its own
+        # columns: a template linked to an inventory profile is served the profile's
+        # declarations, and the variant does not carry the link, so copying the template's
+        # own arms handed the variant a contract the template never offered. A canonical
+        # contract is copied as its declarations alone; its legacy projection is derived
+        # from them, so storing it beside them would be a second authored catalog.
+        "format_ids": None if contract.format_options else (list(contract.format_ids) or None),
+        "format_options": list(contract.format_options) if contract.format_options else None,
         "targeting_template": template.targeting_template,
         "delivery_type": template.delivery_type,
         "measurement": template.measurement,
