@@ -1554,6 +1554,29 @@ Feature: BR-UC-003 Update Media Buy
       | optimization_goals present — replaces all               | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                            | success                  |
       | optimization_goals omitted — preserves existing         | <not provided>                                                                                                                                                                       | success                  |
 
+  # REGROUNDED: the four keyword partition outlines in this section (keyword_targets_add,
+  # keyword_targets_remove, negative_keywords_add, negative_keywords_remove).
+  # Valid rows: core/targeting.json says of keyword_targets and of negative_keywords
+  # "Seller must declare support in get_adcp_capabilities", and of every fresh request "A
+  # fresh create/update request MUST be applied exactly or rejected". This seller declares
+  # neither dimension (the reason @T-UC-003-alt-keyword-ops records), so a protocol-valid
+  # keyword operation is refused with UNSUPPORTED_FEATURE. These rows used to expect bare
+  # success, which is the obligation of a seller that supports keyword targeting.
+  # Invalid rows: each breaks one package-update.json constraint (minItems 1, keyword
+  # minLength 1, required keyword and match_type, the match-type enum, bid_price minimum 0).
+  # The request DTO refuses them at the boundary, before the capability refusal, so each row
+  # names INVALID_REQUEST and the field the wire carries. Their former "error with
+  # suggestion" accepted any refusal, so the UNSUPPORTED_FEATURE every keyword operation
+  # receives satisfied it whether or not the constraint was enforced.
+  # conflict_with_overlay is REMOVED from each outline. Its sentinel put the overlay
+  # dimension on the package, and the outline's own Given "no targeting_overlay.<dimension>
+  # is present in the same package update" then removed it, so the row never sent the
+  # conflict. targeting.mdx "Managing keywords after launch" states the conflict, and
+  # @T-UC-003-ext-r-keyword, @T-UC-003-ext-r-negative and the boundary outlines' WITH-overlay
+  # rows send it, with no such Given.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json
+  # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/targeting.mdx
   @T-UC-003-partition-keyword-targets-add @partition @keyword_targets_add
   Scenario Outline: Keyword targets add partition validation - <partition>
     Given a valid update_media_buy request with:
@@ -1571,26 +1594,25 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition              | kw_value                                                                                                                                | outcome |
-      | typical_add            | [{"keyword": "running shoes", "match_type": "broad"}, {"keyword": "nike sneakers", "match_type": "exact"}]                              | success |
-      | boundary_min_array     | [{"keyword": "laptop", "match_type": "phrase"}]                                                                                         | success |
-      | boundary_min_keyword   | [{"keyword": "a", "match_type": "broad"}]                                                                                               | success |
-      | add_with_bid_price     | [{"keyword": "shoes", "match_type": "exact", "bid_price": 2.50}]                                                                        | success |
-      | add_without_bid_price  | [{"keyword": "shoes", "match_type": "broad"}]                                                                                           | success |
-      | upsert_existing        | [{"keyword": "shoes", "match_type": "exact", "bid_price": 3.00}]                                                                        | success |
-      | zero_bid_price         | [{"keyword": "shoes", "match_type": "broad", "bid_price": 0}]                                                                           | success |
-      | all_match_types        | [{"keyword": "shoes", "match_type": "broad"}, {"keyword": "shoes", "match_type": "phrase"}, {"keyword": "shoes", "match_type": "exact"}] | success |
-      | cross_dimension_valid  | [{"keyword": "shoes", "match_type": "broad"}]                                                                                           | success |
+      | partition              | kw_value                                                                                                                                | outcome                                     |
+      | typical_add            | [{"keyword": "running shoes", "match_type": "broad"}, {"keyword": "nike sneakers", "match_type": "exact"}]                              | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_array     | [{"keyword": "laptop", "match_type": "phrase"}]                                                                                         | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_keyword   | [{"keyword": "a", "match_type": "broad"}]                                                                                               | error "UNSUPPORTED_FEATURE" with suggestion |
+      | add_with_bid_price     | [{"keyword": "shoes", "match_type": "exact", "bid_price": 2.50}]                                                                        | error "UNSUPPORTED_FEATURE" with suggestion |
+      | add_without_bid_price  | [{"keyword": "shoes", "match_type": "broad"}]                                                                                           | error "UNSUPPORTED_FEATURE" with suggestion |
+      | upsert_existing        | [{"keyword": "shoes", "match_type": "exact", "bid_price": 3.00}]                                                                        | error "UNSUPPORTED_FEATURE" with suggestion |
+      | zero_bid_price         | [{"keyword": "shoes", "match_type": "broad", "bid_price": 0}]                                                                           | error "UNSUPPORTED_FEATURE" with suggestion |
+      | all_match_types        | [{"keyword": "shoes", "match_type": "broad"}, {"keyword": "shoes", "match_type": "phrase"}, {"keyword": "shoes", "match_type": "exact"}] | error "UNSUPPORTED_FEATURE" with suggestion |
+      | cross_dimension_valid  | [{"keyword": "shoes", "match_type": "broad"}]                                                                                           | error "UNSUPPORTED_FEATURE" with suggestion |
 
     Examples: Invalid partitions
-      | partition              | kw_value                                                        | outcome                  |
-      | empty_array            | []                                                               | error with suggestion    |
-      | empty_keyword          | [{"keyword": "", "match_type": "broad"}]                         | error with suggestion    |
-      | missing_keyword        | [{"match_type": "broad"}]                                        | error with suggestion    |
-      | missing_match_type     | [{"keyword": "shoes"}]                                           | error with suggestion    |
-      | invalid_match_type     | [{"keyword": "shoes", "match_type": "fuzzy"}]                    | error with suggestion    |
-      | negative_bid_price     | [{"keyword": "shoes", "match_type": "exact", "bid_price": -1.00}] | error with suggestion   |
-      | conflict_with_overlay  | <with targeting_overlay.keyword_targets present>                  | error with suggestion    |
+      | partition              | kw_value                                                          | outcome                                                                         |
+      | empty_array            | []                                                                | error "INVALID_REQUEST" on packages[0].keyword_targets_add with suggestion              |
+      | empty_keyword          | [{"keyword": "", "match_type": "broad"}]                          | error "INVALID_REQUEST" on packages[0].keyword_targets_add[0].keyword with suggestion   |
+      | missing_keyword        | [{"match_type": "broad"}]                                         | error "INVALID_REQUEST" on packages[0].keyword_targets_add[0].keyword with suggestion   |
+      | missing_match_type     | [{"keyword": "shoes"}]                                            | error "INVALID_REQUEST" on packages[0].keyword_targets_add[0].match_type with suggestion |
+      | invalid_match_type     | [{"keyword": "shoes", "match_type": "fuzzy"}]                     | error "INVALID_REQUEST" on packages[0].keyword_targets_add[0].match_type with suggestion |
+      | negative_bid_price     | [{"keyword": "shoes", "match_type": "exact", "bid_price": -1.00}] | error "INVALID_REQUEST" on packages[0].keyword_targets_add[0].bid_price with suggestion  |
 
   @T-UC-003-boundary-keyword-targets-add @boundary @keyword_targets_add
   Scenario Outline: Keyword targets add boundary validation - <boundary_point>
@@ -1641,22 +1663,21 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition            | kw_value                                                                                                                                | outcome |
-      | typical_remove       | [{"keyword": "running shoes", "match_type": "broad"}, {"keyword": "nike sneakers", "match_type": "exact"}]                              | success |
-      | boundary_min_array   | [{"keyword": "laptop", "match_type": "phrase"}]                                                                                         | success |
-      | boundary_min_keyword | [{"keyword": "a", "match_type": "broad"}]                                                                                               | success |
-      | remove_nonexistent   | [{"keyword": "nonexistent", "match_type": "exact"}]                                                                                     | success |
-      | all_match_types      | [{"keyword": "shoes", "match_type": "broad"}, {"keyword": "shoes", "match_type": "phrase"}, {"keyword": "shoes", "match_type": "exact"}] | success |
-      | cross_dimension_valid | [{"keyword": "shoes", "match_type": "broad"}]                                                                                          | success |
+      | partition            | kw_value                                                                                                                                | outcome                                     |
+      | typical_remove       | [{"keyword": "running shoes", "match_type": "broad"}, {"keyword": "nike sneakers", "match_type": "exact"}]                              | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_array   | [{"keyword": "laptop", "match_type": "phrase"}]                                                                                         | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_keyword | [{"keyword": "a", "match_type": "broad"}]                                                                                               | error "UNSUPPORTED_FEATURE" with suggestion |
+      | remove_nonexistent   | [{"keyword": "nonexistent", "match_type": "exact"}]                                                                                     | error "UNSUPPORTED_FEATURE" with suggestion |
+      | all_match_types      | [{"keyword": "shoes", "match_type": "broad"}, {"keyword": "shoes", "match_type": "phrase"}, {"keyword": "shoes", "match_type": "exact"}] | error "UNSUPPORTED_FEATURE" with suggestion |
+      | cross_dimension_valid | [{"keyword": "shoes", "match_type": "broad"}]                                                                                          | error "UNSUPPORTED_FEATURE" with suggestion |
 
     Examples: Invalid partitions
-      | partition              | kw_value                                                        | outcome                  |
-      | empty_array            | []                                                               | error with suggestion    |
-      | empty_keyword          | [{"keyword": "", "match_type": "broad"}]                         | error with suggestion    |
-      | missing_keyword        | [{"match_type": "broad"}]                                        | error with suggestion    |
-      | missing_match_type     | [{"keyword": "shoes"}]                                           | error with suggestion    |
-      | invalid_match_type     | [{"keyword": "shoes", "match_type": "fuzzy"}]                    | error with suggestion    |
-      | conflict_with_overlay  | <with targeting_overlay.keyword_targets present>                  | error with suggestion    |
+      | partition              | kw_value                                      | outcome                                                                                     |
+      | empty_array            | []                                            | error "INVALID_REQUEST" on packages[0].keyword_targets_remove with suggestion               |
+      | empty_keyword          | [{"keyword": "", "match_type": "broad"}]      | error "INVALID_REQUEST" on packages[0].keyword_targets_remove[0].keyword with suggestion    |
+      | missing_keyword        | [{"match_type": "broad"}]                     | error "INVALID_REQUEST" on packages[0].keyword_targets_remove[0].keyword with suggestion    |
+      | missing_match_type     | [{"keyword": "shoes"}]                        | error "INVALID_REQUEST" on packages[0].keyword_targets_remove[0].match_type with suggestion |
+      | invalid_match_type     | [{"keyword": "shoes", "match_type": "fuzzy"}] | error "INVALID_REQUEST" on packages[0].keyword_targets_remove[0].match_type with suggestion |
 
   @T-UC-003-boundary-keyword-targets-remove @boundary @keyword_targets_remove
   Scenario Outline: Keyword targets remove boundary validation - <boundary_point>
@@ -1705,22 +1726,21 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition              | nk_value                                                                                                                                | outcome |
-      | typical_add            | [{"keyword": "cheap", "match_type": "broad"}, {"keyword": "free shipping", "match_type": "phrase"}]                                     | success |
-      | boundary_min_array     | [{"keyword": "discount", "match_type": "exact"}]                                                                                        | success |
-      | boundary_min_keyword   | [{"keyword": "x", "match_type": "broad"}]                                                                                               | success |
-      | add_duplicate          | [{"keyword": "cheap", "match_type": "broad"}]                                                                                           | success |
-      | all_match_types        | [{"keyword": "free", "match_type": "broad"}, {"keyword": "free", "match_type": "phrase"}, {"keyword": "free", "match_type": "exact"}]   | success |
-      | cross_dimension_valid  | [{"keyword": "cheap", "match_type": "broad"}]                                                                                           | success |
+      | partition              | nk_value                                                                                                                                | outcome                                     |
+      | typical_add            | [{"keyword": "cheap", "match_type": "broad"}, {"keyword": "free shipping", "match_type": "phrase"}]                                     | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_array     | [{"keyword": "discount", "match_type": "exact"}]                                                                                        | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_keyword   | [{"keyword": "x", "match_type": "broad"}]                                                                                               | error "UNSUPPORTED_FEATURE" with suggestion |
+      | add_duplicate          | [{"keyword": "cheap", "match_type": "broad"}]                                                                                           | error "UNSUPPORTED_FEATURE" with suggestion |
+      | all_match_types        | [{"keyword": "free", "match_type": "broad"}, {"keyword": "free", "match_type": "phrase"}, {"keyword": "free", "match_type": "exact"}]   | error "UNSUPPORTED_FEATURE" with suggestion |
+      | cross_dimension_valid  | [{"keyword": "cheap", "match_type": "broad"}]                                                                                           | error "UNSUPPORTED_FEATURE" with suggestion |
 
     Examples: Invalid partitions
-      | partition              | nk_value                                                        | outcome                  |
-      | empty_array            | []                                                               | error with suggestion    |
-      | empty_keyword          | [{"keyword": "", "match_type": "broad"}]                         | error with suggestion    |
-      | missing_keyword        | [{"match_type": "broad"}]                                        | error with suggestion    |
-      | missing_match_type     | [{"keyword": "cheap"}]                                           | error with suggestion    |
-      | invalid_match_type     | [{"keyword": "cheap", "match_type": "fuzzy"}]                    | error with suggestion    |
-      | conflict_with_overlay  | <with targeting_overlay.negative_keywords present>                | error with suggestion    |
+      | partition              | nk_value                                      | outcome                                                                                    |
+      | empty_array            | []                                            | error "INVALID_REQUEST" on packages[0].negative_keywords_add with suggestion               |
+      | empty_keyword          | [{"keyword": "", "match_type": "broad"}]      | error "INVALID_REQUEST" on packages[0].negative_keywords_add[0].keyword with suggestion    |
+      | missing_keyword        | [{"match_type": "broad"}]                     | error "INVALID_REQUEST" on packages[0].negative_keywords_add[0].keyword with suggestion    |
+      | missing_match_type     | [{"keyword": "cheap"}]                        | error "INVALID_REQUEST" on packages[0].negative_keywords_add[0].match_type with suggestion |
+      | invalid_match_type     | [{"keyword": "cheap", "match_type": "fuzzy"}] | error "INVALID_REQUEST" on packages[0].negative_keywords_add[0].match_type with suggestion |
 
   @T-UC-003-boundary-negative-keywords-add @boundary @negative_keywords_add
   Scenario Outline: Negative keywords add boundary validation - <boundary_point>
@@ -1769,22 +1789,21 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition              | nk_value                                                                                                                                | outcome |
-      | typical_remove         | [{"keyword": "cheap", "match_type": "broad"}, {"keyword": "free shipping", "match_type": "phrase"}]                                     | success |
-      | boundary_min_array     | [{"keyword": "discount", "match_type": "exact"}]                                                                                        | success |
-      | boundary_min_keyword   | [{"keyword": "x", "match_type": "broad"}]                                                                                               | success |
-      | remove_nonexistent     | [{"keyword": "nonexistent", "match_type": "exact"}]                                                                                     | success |
-      | all_match_types        | [{"keyword": "free", "match_type": "broad"}, {"keyword": "free", "match_type": "phrase"}, {"keyword": "free", "match_type": "exact"}]   | success |
-      | cross_dimension_valid  | [{"keyword": "cheap", "match_type": "broad"}]                                                                                           | success |
+      | partition              | nk_value                                                                                                                                | outcome                                     |
+      | typical_remove         | [{"keyword": "cheap", "match_type": "broad"}, {"keyword": "free shipping", "match_type": "phrase"}]                                     | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_array     | [{"keyword": "discount", "match_type": "exact"}]                                                                                        | error "UNSUPPORTED_FEATURE" with suggestion |
+      | boundary_min_keyword   | [{"keyword": "x", "match_type": "broad"}]                                                                                               | error "UNSUPPORTED_FEATURE" with suggestion |
+      | remove_nonexistent     | [{"keyword": "nonexistent", "match_type": "exact"}]                                                                                     | error "UNSUPPORTED_FEATURE" with suggestion |
+      | all_match_types        | [{"keyword": "free", "match_type": "broad"}, {"keyword": "free", "match_type": "phrase"}, {"keyword": "free", "match_type": "exact"}]   | error "UNSUPPORTED_FEATURE" with suggestion |
+      | cross_dimension_valid  | [{"keyword": "cheap", "match_type": "broad"}]                                                                                           | error "UNSUPPORTED_FEATURE" with suggestion |
 
     Examples: Invalid partitions
-      | partition              | nk_value                                                          | outcome                  |
-      | empty_array            | []                                                                 | error with suggestion    |
-      | empty_keyword          | [{"keyword": "", "match_type": "broad"}]                           | error with suggestion    |
-      | missing_keyword        | [{"match_type": "broad"}]                                          | error with suggestion    |
-      | missing_match_type     | [{"keyword": "cheap"}]                                             | error with suggestion    |
-      | invalid_match_type     | [{"keyword": "cheap", "match_type": "fuzzy"}]                      | error with suggestion    |
-      | conflict_with_overlay  | <with targeting_overlay.negative_keywords present>                  | error with suggestion    |
+      | partition              | nk_value                                      | outcome                                                                                       |
+      | empty_array            | []                                            | error "INVALID_REQUEST" on packages[0].negative_keywords_remove with suggestion               |
+      | empty_keyword          | [{"keyword": "", "match_type": "broad"}]      | error "INVALID_REQUEST" on packages[0].negative_keywords_remove[0].keyword with suggestion    |
+      | missing_keyword        | [{"match_type": "broad"}]                     | error "INVALID_REQUEST" on packages[0].negative_keywords_remove[0].keyword with suggestion    |
+      | missing_match_type     | [{"keyword": "cheap"}]                        | error "INVALID_REQUEST" on packages[0].negative_keywords_remove[0].match_type with suggestion |
+      | invalid_match_type     | [{"keyword": "cheap", "match_type": "fuzzy"}] | error "INVALID_REQUEST" on packages[0].negative_keywords_remove[0].match_type with suggestion |
 
   @T-UC-003-boundary-negative-keywords-remove @boundary @negative_keywords_remove
   Scenario Outline: Negative keywords remove boundary validation - <boundary_point>
