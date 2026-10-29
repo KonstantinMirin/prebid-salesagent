@@ -59,6 +59,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
+from src.core.helpers.brand_key import brand_key_parts
 from src.core.idempotency_canonical import canonical_request_hash
 from src.core.idempotency_policy import DEFAULT_REPLAY_TTL
 from src.core.idempotency_replay import raise_on_payload_conflict
@@ -212,8 +213,7 @@ def _refuse_committed_metrics_beyond_product(index: int, package: PackageRequest
     """
     standard = sorted(enum_value(m) for m in _served_reporting_capability(product, "available_metrics"))
     vendor = {
-        (m["vendor"]["domain"], m["vendor"].get("brand_id"), m["metric_id"])
-        for m in _served_reporting_capability(product, "vendor_metrics")
+        (*brand_key_parts(m["vendor"]), m["metric_id"]) for m in _served_reporting_capability(product, "vendor_metrics")
     }
     for position, entry in enumerate(package.committed_metrics or ()):
         metric_id = enum_value(entry.metric_id)
@@ -222,7 +222,7 @@ def _refuse_committed_metrics_beyond_product(index: int, package: PackageRequest
                 continue
             accepted: list[str] | None = standard
         else:
-            if (entry.vendor.domain, enum_value(entry.vendor.brand_id), metric_id) in vendor:
+            if (*brand_key_parts(entry.vendor), metric_id) in vendor:
                 continue
             accepted = None
         raise AdCPTermsRejectedError(

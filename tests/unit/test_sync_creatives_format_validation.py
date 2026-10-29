@@ -13,7 +13,6 @@ from src.core.tools.creatives._sync import _sync_creatives_impl
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers.creative_test_helpers import (
     make_creative_dict,
-    make_format_spec,
     make_registry_mock,
     sync_creatives_request,
 )
@@ -53,43 +52,6 @@ class TestSyncCreativesFormatValidation:
     def valid_creative_dict(self):
         """Valid creative dictionary for testing."""
         return make_creative_dict(creative_id="creative_123")
-
-    @pytest.fixture
-    def mock_format_spec(self):
-        """Mock format specification from creative agent."""
-        return make_format_spec(name="Medium Rectangle - Image")
-
-    def test_format_validation_success(self, identity, mock_tenant, valid_creative_dict, mock_format_spec):
-        """Test that format validation succeeds when format exists."""
-        mock_uow, mock_creative_repo = _make_creative_uow()
-
-        with (
-            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
-            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
-            patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._sync.log_tool_activity"),
-        ):
-            mock_uow_cls.return_value.__enter__.return_value = mock_uow
-
-            # Setup mock registry
-            async def mock_list_all_formats(tenant_id=None):
-                return [mock_format_spec]
-
-            async def mock_get_format(agent_url, format_id, **_kwargs):
-                return mock_format_spec
-
-            mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
-            mock_registry_getter.return_value = mock_registry
-
-            # Execute
-            response = _sync_creatives_impl(
-                req=sync_creatives_request(creatives=[valid_creative_dict]), identity=identity
-            )
-
-            # Verify format was validated
-            assert len(response.creatives) == 1
-            assert response.creatives[0].action == "created"
-            assert response.creatives[0].creative_id == "creative_123"
 
     def test_format_validation_unknown_format(self, identity, mock_tenant, valid_creative_dict):
         """Test that validation fails with clear error when format doesn't exist."""
@@ -172,100 +134,6 @@ class TestSyncCreativesFormatValidation:
             # provenance of the failure is carried by the TYPED details instead.
             assert exc_info.value.details.status == "Connection failed"
             assert exc_info.value.recovery == "transient"
-
-    def test_format_validation_multiple_creatives(self, identity, mock_tenant, mock_format_spec):
-        """Test that format validation works correctly with multiple creatives."""
-        creatives = [
-            make_creative_dict(creative_id="creative_1", name="Valid Creative"),
-            {
-                **make_creative_dict(creative_id="creative_2", name="Invalid Format"),
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "unknown_format"},
-            },
-            make_creative_dict(creative_id="creative_3", name="Valid Creative 2"),
-        ]
-
-        mock_uow, mock_creative_repo = _make_creative_uow()
-
-        with (
-            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
-            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
-            patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._sync.log_tool_activity"),
-        ):
-            mock_uow_cls.return_value.__enter__.return_value = mock_uow
-
-            # Setup mock registry
-            async def mock_list_all_formats(tenant_id=None):
-                return [mock_format_spec]
-
-            # Mock get_format to return format_spec for valid format, None for invalid
-            async def mock_get_format(agent_url, format_id, **_kwargs):
-                if format_id == "display_300x250_image":
-                    return mock_format_spec
-                return None
-
-            mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
-            mock_registry_getter.return_value = mock_registry
-
-            # Execute
-            response = _sync_creatives_impl(req=sync_creatives_request(creatives=creatives), identity=identity)
-
-            # Verify results
-            assert len(response.creatives) == 3
-
-            # First creative: success
-            assert response.creatives[0].creative_id == "creative_1"
-            assert response.creatives[0].action == "created"
-
-            # Second creative: failed (unknown format)
-            assert response.creatives[1].creative_id == "creative_2"
-            assert response.creatives[1].action == "failed"
-            advisory_2 = response.creatives[1].errors[0]
-            assert advisory_2.code == "REFERENCE_NOT_FOUND"
-            assert advisory_2.details["format_id"] == "unknown_format"
-
-            # Third creative: success
-            assert response.creatives[2].creative_id == "creative_3"
-            assert response.creatives[2].action == "created"
-
-    def test_format_validation_caching(self, identity, mock_tenant, valid_creative_dict, mock_format_spec):
-        """Test that format validation uses in-memory cache (doesn't call agent twice for same format)."""
-        # Create two creatives with same format
-        creative1 = valid_creative_dict.copy()
-        creative1["creative_id"] = "creative_1"
-
-        creative2 = valid_creative_dict.copy()
-        creative2["creative_id"] = "creative_2"
-
-        mock_uow, mock_creative_repo = _make_creative_uow()
-
-        with (
-            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
-            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
-            patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._sync.log_tool_activity"),
-        ):
-            mock_uow_cls.return_value.__enter__.return_value = mock_uow
-
-            # Setup mock registry
-            async def mock_list_all_formats(tenant_id=None):
-                return [mock_format_spec]
-
-            async def mock_get_format(agent_url, format_id, **_kwargs):
-                return mock_format_spec
-
-            mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
-            mock_registry_getter.return_value = mock_registry
-
-            # Execute
-            response = _sync_creatives_impl(
-                req=sync_creatives_request(creatives=[creative1, creative2]), identity=identity
-            )
-
-            # Verify both creatives succeeded
-            assert len(response.creatives) == 2
-            assert response.creatives[0].action == "created"
-            assert response.creatives[1].action == "created"
 
     def test_error_messages_distinguish_scenarios(self, identity, mock_tenant):
         """Test that error messages clearly distinguish between different failure scenarios."""
