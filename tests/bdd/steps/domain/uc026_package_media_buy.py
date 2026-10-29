@@ -976,10 +976,20 @@ def given_buyer_owns_pkg_max_bid(ctx: dict, pkg_id: str) -> None:
     _own_pkg_with_metadata(ctx, pkg_id, max_bid=True)
 
 
-@given(parsers.parse('the Buyer owns a media buy with a package "{pkg_id}" having catalogs {catalogs}'))
+# The argument is a JSON list, so the pattern requires one: a bare ``{catalogs}`` also matched
+# "having catalogs and optimization_goals" and pytest-bdd picked this step for that line.
+@given(
+    parsers.re(r'the Buyer owns a media buy with a package "(?P<pkg_id>[^"]+)" having catalogs (?P<catalogs>\[.*\])')
+)
 def given_buyer_owns_pkg_with_catalogs(ctx: dict, pkg_id: str, catalogs: str) -> None:
-    """Create a media buy with a package having specific catalogs."""
-    _own_pkg_with_metadata(ctx, pkg_id, catalogs=catalogs)
+    """Create a media buy whose package is CREATED with *catalogs*, not merely said to have them.
+
+    The replacement scenario this opens (T-UC-026-inv-201-1) grades "the old catalog
+    should not be present", which says nothing unless the old catalog was sent. Recording
+    the claim as metadata left the package with no catalogs at all, so a seller that
+    merged instead of replacing passed it.
+    """
+    _create_media_buy_for_update(ctx, catalogs=json.loads(catalogs))
 
 
 @given(parsers.parse('the Buyer owns a media buy with a package "{pkg_id}" having optimization_goals {goals}'))
@@ -1262,9 +1272,12 @@ def given_boundary_pricing_option(ctx: dict, boundary_point: str) -> None:
 # --- Update partition/boundary Given steps ---
 
 
-def _setup_update_partition(ctx: dict) -> tuple[dict, dict]:
-    """Create a media buy for update partition/boundary tests, return (update_kwargs, pkg_update)."""
-    _create_media_buy_for_update(ctx)
+def _setup_update_partition(ctx: dict, **pkg_overrides: Any) -> tuple[dict, dict]:
+    """Create a media buy for update partition/boundary tests, return (update_kwargs, pkg_update).
+
+    *pkg_overrides* go on the CREATED package, so a scenario's starting state is realized.
+    """
+    _create_media_buy_for_update(ctx, **pkg_overrides)
     update_kwargs = _ensure_update_kwargs(ctx)
     pkg_update: dict[str, Any] = {"package_id": ctx.get("existing_package_id", "pkg-001")}
     return update_kwargs, pkg_update
@@ -1563,30 +1576,41 @@ def _apply_keyword_boundary(pkg_update: dict, field_name: str, bp: str) -> None:
 # --- Paused partition/boundary ---
 
 
+def _paused_create_request(ctx: dict, paused: bool | None) -> None:
+    """Build a create request whose one package asks for *paused* (``None`` omits it)."""
+    _build_request_with_overrides(ctx, **({} if paused is None else {"paused": paused}))
+    ctx["paused_request_type"] = "create"
+
+
+def _paused_update_request(ctx: dict, *, start_paused: bool, paused: bool) -> None:
+    """Create a package in the *start_paused* state, then build an update asking for *paused*.
+
+    The starting state is REALIZED, not assumed. A resume row that starts from an
+    active package passes on a seller that ignores the resume, because the package was
+    never paused; the "already-paused" row would not be idempotent at all. Both rows
+    used to start from the default (active) package, so neither graded its own name.
+    The create honours ``paused`` and stores it (T-UC-026-inv-200-2), and
+    T-UC-026-alt-resume starts from exactly this state on every transport.
+    """
+    update_kwargs, pkg_update = _setup_update_partition(ctx, paused=start_paused)
+    pkg_update["paused"] = paused
+    update_kwargs["packages"] = [pkg_update]
+    ctx["update_kwargs"] = update_kwargs
+    ctx["paused_request_type"] = "update"
+
+
 @given(parsers.re(r"a package request with paused per (?!boundary )(?P<partition>.+)"))
 def given_partition_paused(ctx: dict, partition: str) -> None:
     """Build request per partition for paused behavior."""
     partition = partition.strip()
-    if partition in ("active_default", "explicitly_active", "explicitly_paused"):
-        # Create flow
-        kwargs = _ensure_request_defaults(ctx)
-        pkg = _build_default_package(ctx)
-        if partition == "explicitly_paused":
-            pkg["paused"] = True
-        elif partition == "explicitly_active":
-            pkg["paused"] = False
-        # active_default: omit paused field
-        kwargs["packages"] = [pkg]
-        ctx["paused_request_type"] = "create"
-    elif partition in ("pause_on_update", "resume_on_update"):
-        # Update flow
-        _create_media_buy_for_update(ctx)
-        update_kwargs = _ensure_update_kwargs(ctx)
-        pkg_update = {"package_id": ctx.get("existing_package_id", "pkg-001")}
-        pkg_update["paused"] = partition == "pause_on_update"
-        update_kwargs["packages"] = [pkg_update]
-        ctx["update_kwargs"] = update_kwargs
-        ctx["paused_request_type"] = "update"
+    if partition == "active_default":
+        _paused_create_request(ctx, None)
+    elif partition in ("explicitly_active", "explicitly_paused"):
+        _paused_create_request(ctx, partition == "explicitly_paused")
+    elif partition == "pause_on_update":
+        _paused_update_request(ctx, start_paused=False, paused=True)
+    elif partition == "resume_on_update":
+        _paused_update_request(ctx, start_paused=True, paused=False)
     else:
         raise ValueError(f"Unknown paused partition: {partition}")
 
@@ -1595,27 +1619,12 @@ def given_partition_paused(ctx: dict, partition: str) -> None:
 def given_boundary_paused(ctx: dict, boundary_point: str) -> None:
     """Build request per boundary for paused behavior."""
     bp = boundary_point.strip()
+    asked = True if "paused=true" in bp else False if "paused=false" in bp else None
     if "on create" in bp:
-        kwargs = _ensure_request_defaults(ctx)
-        pkg = _build_default_package(ctx)
-        if "paused=true" in bp:
-            pkg["paused"] = True
-        elif "paused=false" in bp:
-            pkg["paused"] = False
-        # "omitted" case: don't set paused
-        kwargs["packages"] = [pkg]
-        ctx["paused_request_type"] = "create"
-    elif "on update" in bp or "already-paused" in bp:
-        _create_media_buy_for_update(ctx)
-        update_kwargs = _ensure_update_kwargs(ctx)
-        pkg_update = {"package_id": ctx.get("existing_package_id", "pkg-001")}
-        if "paused=true" in bp:
-            pkg_update["paused"] = True
-        elif "paused=false" in bp:
-            pkg_update["paused"] = False
-        update_kwargs["packages"] = [pkg_update]
-        ctx["update_kwargs"] = update_kwargs
-        ctx["paused_request_type"] = "update"
+        _paused_create_request(ctx, asked)
+    elif asked is not None and ("on update" in bp or "already-paused" in bp):
+        # "resume paused package" and "already-paused package" both start paused.
+        _paused_update_request(ctx, start_paused="already-paused" in bp or asked is False, paused=asked)
     else:
         raise ValueError(f"Unknown paused boundary: {bp}")
 
@@ -1788,6 +1797,30 @@ def then_package_omits_unrequested_format_ids(ctx: dict) -> None:
     assert "format_ids" not in package, (
         f"the request carried no format_ids, yet the package echoes {package['format_ids']!r}; "
         "core/package.json: 'Omitted means the request did not carry legacy format_ids'"
+    )
+
+
+@then(parsers.parse("the package's format_ids_to_provide lists the product's formats {format_ids}"))
+def then_package_formats_to_provide_are_product_formats(ctx: dict, format_ids: str) -> None:
+    """Assert the omitted-format_ids default is applied: the package must provide every product format.
+
+    ``media-buy/package-request.json`` @ 3.2.7: "If omitted and no canonical selector is
+    present, all formats supported by the product are active." ``format_ids`` is not where
+    the seller reports that (it echoes only what the request carried), so the default is
+    read off ``format_ids_to_provide``, the legacy projection of the package's to-provide
+    checklist. Compared for set equality on the wire entry dict, so a seller that applied
+    no default (field absent), or narrowed or widened it, fails.
+    """
+    package = wire_entry(ctx, "packages", index=0)
+    provided = package.get("format_ids_to_provide")
+    assert provided, (
+        "the request omitted format_ids, so every product format is active and must be listed "
+        f"in format_ids_to_provide; the package carries {provided!r}"
+    )
+    expected = set(json.loads(format_ids))
+    actual = {_extract_format_id(f) for f in provided}
+    assert actual == expected, (
+        f"format_ids_to_provide lists {sorted(actual)}, expected the product's {sorted(expected)}"
     )
 
 
