@@ -1901,7 +1901,8 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-start-time @partition @start_time
   Scenario Outline: Start time partition validation - <partition>
-    Given a valid update_media_buy request with:
+    Given the existing media buy has start_time "2026-01-01T00:00:00Z"
+    And a valid update_media_buy request with:
     | field        | value        |
     | media_buy_id | mb_existing  |
     | start_time   | <start_value> |
@@ -1911,24 +1912,41 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition              | start_value              | outcome |
-      | asap_literal           | asap                     | success |
-      | future_iso_datetime    | 2026-05-01T00:00:00Z     | success |
+      | partition              | start_value              | outcome                   |
+      | asap_literal           | asap                     | start_time stored as now  |
+      | future_iso_datetime    | {7 days from now}        | start_time stored as sent |
+      | past_datetime          | 2020-01-01T00:00:00Z     | start_time stored as sent |
 
     Examples: Invalid partitions
-      | partition             | start_value          | outcome                                 |
-      | past_datetime         | 2020-01-01T00:00:00Z | error with suggestion                   |
-      | wrong_case_asap       | ASAP                 | error with suggestion                   |
-      | future_naive_datetime | 2026-05-01T00:00:00  | error "INVALID_REQUEST" with suggestion |
+      | partition             | start_value          | outcome                                               |
+      | wrong_case_asap       | ASAP                 | error "INVALID_REQUEST" on start_time with suggestion |
+      | future_naive_datetime | 2026-05-01T00:00:00  | error "INVALID_REQUEST" with suggestion               |
     # LOCAL CORRECTION: future_naive_datetime sat with the valid partitions and expected
     # success. The pinned core/start-timing.json admits the const "asap" or a string of
     # format date-time, which is RFC 3339 and requires a UTC offset, so a naive timestamp
     # is a schema violation: INVALID_REQUEST.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/start-timing.json
+    # LOCAL CORRECTION (start time on UPDATE), shared with @T-UC-003-boundary-start-time:
+    # - past_datetime expected a refusal. The pin's past-start refusal is scoped to new buys
+    #   (create_media_buy.mdx "Flight date validation": "For new media buys, the top-level
+    #   start_time MUST be either "asap" or a date-time that is not in the past"), and
+    #   update_media_buy.mdx lists no such refusal: start_time is "Updated campaign start
+    #   time" and a start shift is the update_flight_dates action. A schema-valid start_time
+    #   the pin does not refuse is applied, so the row grades that it was.
+    # - the valid rows said only "success", which a seller that dropped start_time passes.
+    #   They now read the stored buy: "asap" is resolved to the instant the update was
+    #   applied, and a concrete date-time is stored as sent. The Given seeds a start far
+    #   from either, so an ignored start_time cannot match. The future value is relative,
+    #   because a fixed date expires (2026-05-01 had).
+    # - wrong_case_asap names its code and field: "ASAP" is neither the const "asap" nor a
+    #   date-time, which is a schema violation on start_time.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx
 
   @T-UC-003-boundary-start-time @boundary @start_time
   Scenario Outline: Start time boundary validation - <boundary_point>
-    Given a valid update_media_buy request with:
+    Given the existing media buy has start_time "2026-01-01T00:00:00Z"
+    And a valid update_media_buy request with:
     | field        | value        |
     | media_buy_id | mb_existing  |
     | start_time   | <start_value> |
@@ -1936,14 +1954,18 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: see @T-UC-003-partition-start-time for the success rows and the past
+    # row. The row that read "absent (null)" sent an empty string (the table cell is empty),
+    # so it is named for what it sends; "" is neither "asap" nor a date-time.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/start-timing.json
 
     Examples: Boundary values
-      | boundary_point          | start_value              | outcome                  |
-      | literal 'asap'          | asap                     | success                  |
-      | future ISO datetime     | 2026-05-01T00:00:00Z     | success                  |
-      | past datetime           | 2020-01-01T00:00:00Z     | error with suggestion    |
-      | 'ASAP' wrong case       | ASAP                     | error with suggestion    |
-      | absent (null)           |                          | error with suggestion    |
+      | boundary_point          | start_value              | outcome                                               |
+      | literal 'asap'          | asap                     | start_time stored as now                              |
+      | future ISO datetime     | {7 days from now}        | start_time stored as sent                             |
+      | past datetime           | 2020-01-01T00:00:00Z     | start_time stored as sent                             |
+      | 'ASAP' wrong case       | ASAP                     | error "INVALID_REQUEST" on start_time with suggestion |
+      | empty string            |                          | error "INVALID_REQUEST" on start_time with suggestion |
 
   @T-UC-003-partition-end-time @partition @end_time
   Scenario Outline: End time partition validation - <partition>

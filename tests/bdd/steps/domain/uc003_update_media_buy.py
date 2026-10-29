@@ -9,7 +9,7 @@ conftest's _harness_env.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
@@ -3257,11 +3257,53 @@ def _assert_submitted(ctx: dict) -> None:
     then_response_contains_task_id(ctx)
 
 
+def _stored_start_time(ctx: dict) -> tuple[datetime, datetime]:
+    """Synchronous success, then ``(start_time, updated_at)`` of the stored buy, in UTC.
+
+    Read through ``MediaBuyUoW`` (the live server's database on e2e_rest), because the
+    claim is what the seller RECORDED. ``updated_at`` is the instant the update wrote the
+    row, on the seller's own clock, which is what an applied ``asap`` is measured against.
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+    from tests.bdd.steps.domain.uc002_invariants import _as_utc
+
+    _assert_synchronous_success(ctx)
+    media_buy_id = _existing_media_buy(ctx).media_buy_id
+    with MediaBuyUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.media_buys is not None
+        row = uow.media_buys.get_by_id(media_buy_id)
+        assert row is not None, f"no persisted media buy {media_buy_id!r}"
+        assert row.start_time is not None, f"the seller stored no start_time on {media_buy_id!r}"
+        return _as_utc(row.start_time), _as_utc(row.updated_at)
+
+
+def _assert_start_time_stored_as_now(ctx: dict) -> None:
+    """``asap`` was resolved to the instant the seller applied the update, not ignored."""
+    from tests.bdd.steps.domain.uc002_invariants import _ASAP_TOLERANCE_SECONDS
+
+    stored, applied = _stored_start_time(ctx)
+    drift = abs((stored - applied).total_seconds())
+    assert drift <= _ASAP_TOLERANCE_SECONDS, (
+        f"start_time 'asap' should resolve to the update's instant {applied}, but the stored "
+        f"start_time is {stored} ({drift:.0f}s away)"
+    )
+
+
+def _assert_start_time_stored_as_sent(ctx: dict) -> None:
+    """The concrete date-time the update sent is the start_time the seller stored."""
+    sent = ctx["update_kwargs"]["start_time"]
+    expected = datetime.fromisoformat(sent.replace("Z", "+00:00")).astimezone(UTC)
+    stored, _applied = _stored_start_time(ctx)
+    assert stored == expected, f"the update sent start_time {sent!r}, but the seller stored {stored}"
+
+
 _UPDATE_OUTCOMES = {
     "accepted": _assert_synchronous_success,
     "success with persisted records": _assert_persisted_success,
     "success with pending status": _assert_submitted,
     "submitted task envelope (awaiting approval)": _assert_submitted,
+    "start_time stored as now": _assert_start_time_stored_as_now,
+    "start_time stored as sent": _assert_start_time_stored_as_sent,
 }
 
 
