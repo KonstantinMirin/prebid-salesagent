@@ -1366,6 +1366,47 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     When the Buyer Agent assigns it to that package
     Then the buyer is refused UNSUPPORTED_FEATURE
 
+  @T-UC-FORMAT-SATISFACTION-manifest-legacy-option-ref-size-conflict @format_satisfaction_sync @requires_db
+  Scenario: a creative synced by format_id naming an option its format_id does not fit is refused
+    Given a packaged product declaring a canonical image option fixed at 300x250
+    And the buyer syncs a creative whose format_option_ref names product option "satisfaction_image_mrec" beside format_id "display_728x90_image"
+    When the Buyer Agent assigns it to that package
+    Then the buyer is refused UNSUPPORTED_FEATURE
+
+    # THE REF DOES NOT REPLACE THE format_id. Against the stored row above this differs only
+    # in the named format: display_728x90_image normalizes to image at 728x90, which the
+    # 300x250 declaration the ref names does not accept. Routed by the ref alone it was
+    # ACCEPTED, because the option route never graded the reference and a legacy creative
+    # carries no manifest to grade -- a 728x90 creative trafficked on a fixed 300x250
+    # product. formats.mdx: "Equal format_kind values alone do not prove compatibility";
+    # creative-manifests.mdx § Validation step 5: "do not silently relax the target
+    # contract". The reference resolves and selects nothing on this product, "a single
+    # resolved route that does not satisfy" (media-buy/package-request.json), so the code is
+    # UNSUPPORTED_FEATURE. CONFLICTING_SELECTORS is defined for "A 3.x package request", not
+    # a creative.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/formats.mdx section="Matching and satisfaction"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json
+
+  @T-UC-FORMAT-SATISFACTION-manifest-legacy-option-ref-agrees @format_satisfaction_sync @requires_db
+  Scenario: a creative synced by format_id whose option ref names the declaration its format_id selects is assigned
+    Given a packaged product declaring canonical format options "two_image_options"
+    And the buyer syncs a creative whose format_option_ref names product option "satisfaction_image_leaderboard" beside format_id "display_728x90_image"
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+  @T-UC-FORMAT-SATISFACTION-manifest-legacy-option-ref-disagrees @format_satisfaction_sync @requires_db
+  Scenario: a creative synced by format_id whose option ref names another declaration is refused
+    Given a packaged product declaring canonical format options "two_image_options"
+    And the buyer syncs a creative whose format_option_ref names product option "satisfaction_image_mrec" beside format_id "display_728x90_image"
+    When the Buyer Agent assigns it to that package
+    Then the buyer is refused UNSUPPORTED_FEATURE
+
+    # BOTH HALVES RESOLVE HERE, and still only the first row is assigned. two_image_options
+    # publishes the 300x250 and the 728x90; display_728x90_image selects the 728x90 and each
+    # ref selects one of the two. The two scenarios differ only in which option the ref
+    # names, so a seller that let the ref decide alone accepts both, and one that ignored the
+    # ref accepts both too -- only a seller holding each half to the other refuses the second.
+
   # ── The MANIFEST against the declaration it selects ───────────────────────────────────
   #
   # docs/creative/creative-manifests.mdx § Validation, at the pin:
@@ -1567,4 +1608,29 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # names, and image_main_as_text fills the slot with a text asset. The accept row above
     # differs from both in that one asset. The refusal is per creative -- the batch completes
     # and the entry fails -- and nothing is written.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image.json pointer=/properties/slots/default
+
+  @T-UC-FORMAT-SATISFACTION-manifest-legacy-only-product-accepted @format_satisfaction_sync @requires_db
+  Scenario: a canonical creative filling its kind's slots is assigned to a product publishing no declaration
+    Given a packaged product declaring only the deprecated format_ids
+    And the buyer syncs a canonical "image" creative carrying the "image_300x250" manifest
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+  @T-UC-FORMAT-SATISFACTION-manifest-legacy-only-product-refused @format_satisfaction_sync @requires_db
+  Scenario: a canonical creative missing its kind's slot is refused by a product publishing no declaration
+    Given a packaged product declaring only the deprecated format_ids
+    And the buyer syncs a canonical "image" creative carrying the "image_unnamed" manifest
+    When the Buyer Agent assigns it to that package
+    Then the creative is refused CREATIVE_VALIDATION_FAILED_GENERIC
+    And the refusal names "assets.image_main" missing where "image" is accepted
+
+    # AN ASSIGNMENT THAT SELECTS NO DECLARATION STILL GRADES THE MANIFEST. A product
+    # publishing only the deprecated format_ids has no format_options[] entry for the
+    # canonical creative to select, so there is no declaration to hold it to -- and before
+    # this pair the manifest was graded nowhere: the same `banner`-keyed image the library
+    # sync refuses was assigned. It is held to its kind, as a sync that assigns nothing is:
+    # formats/canonical/image.json's slots default requires image_main. The two scenarios
+    # differ only in that one asset.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-manifests.mdx section="Validation"
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image.json pointer=/properties/slots/default

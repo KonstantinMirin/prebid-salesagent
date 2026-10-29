@@ -158,6 +158,9 @@ class FormatRefusal(StrEnum):
     PLACEMENT_UNCOVERED = "placement_uncovered"
     MANIFEST_NOT_SATISFIED = "manifest_not_satisfied"
     MANIFEST_AMBIGUOUS = "manifest_ambiguous"
+    #: A creative naming BOTH a legacy ``format_id`` and a ``format_option_ref`` whose
+    #: reference does not select the declaration the ref names (:func:`creative_satisfies`).
+    LEGACY_NOT_OPTION = "legacy_not_option"
 
 
 #: The two members that are a RESOLUTION failure in ``media-buy/package-request.json``'s
@@ -2031,16 +2034,70 @@ def creative_satisfies(creative: Any, contract: Any) -> FormatSatisfaction:
     *contract* is the product's ``format_contract``. The manifest travels only for a
     canonical creative -- one asserting no legacy reference -- for the reason the module
     docstring gives.
+
+    A CANONICAL MANIFEST IS ALWAYS GRADED. When the product selects no declaration for it --
+    it publishes only the deprecated ``format_ids``, or neither arm -- the verdict is
+    satisfied with an empty selection, and the manifest is then held to its kind
+    (:func:`kind_manifest_verdict`), the same rule a library sync applies when nothing is
+    assigned. Otherwise a manifest missing its kind's required slot was graded nowhere.
+
+    A LEGACY CREATIVE CARRYING AN OPTION REF is asked twice, by :func:`_legacy_with_option`.
     """
     from src.core.schemas import CreativeFormatIdentity
 
     identity = CreativeFormatIdentity.from_row(creative)
-    manifest = manifest_document((creative.data or {}).get("assets")) if identity.assertion is None else None
-    return satisfies(
-        identity.as_selector(),
-        contract.format_options,
-        legacy_catalog=contract.format_ids,
-        manifest=manifest,
+    selector = identity.as_selector()
+    if identity.assertion is not None:
+        return _legacy_with_option(selector, contract) if identity.option is not None else _asked(selector, contract)
+    assets = (creative.data or {}).get("assets")
+    verdict = _asked(selector, contract, manifest_document(assets))
+    if verdict and not verdict.selection:
+        return kind_manifest_verdict(identity.kind, assets)
+    return verdict
+
+
+def _asked(selector: FormatSelector, contract: Any, manifest: Mapping[str, Any] | None = None) -> FormatSatisfaction:
+    """:func:`satisfies` over a product's ``format_contract``, both arms."""
+    return satisfies(selector, contract.format_options, legacy_catalog=contract.format_ids, manifest=manifest)
+
+
+def _legacy_with_option(selector: FormatSelector, contract: Any) -> FormatSatisfaction:
+    """A creative naming a legacy ``format_id`` AND a ``format_option_ref``: both must hold.
+
+    ``core/creative-asset.json`` puts ``format_option_ref`` beside the identifier, so a v1
+    item may carry one, and the ref then names the declaration -- but it does not replace
+    what the ``format_id`` says. ``formats.mdx``: "Equal ``format_kind`` values alone do not
+    prove compatibility", and creative-manifests.mdx § Validation step 5: "do not silently
+    relax the target contract". Routed by the ref alone, a ``display_728x90_image`` creative
+    naming a 300x250 option was accepted onto a product fixing 300x250, because the option
+    route never graded the reference and a legacy creative carries no manifest to grade.
+
+    So each half is resolved ON ITS OWN -- the ref without the reference, and the reference
+    without the ref, through the same routes as any claim -- and the creative is accepted
+    only when the declaration the ref selects is one the reference selects too. A half that
+    refuses is that refusal; two halves that each resolve but disagree are
+    :attr:`FormatRefusal.LEGACY_NOT_OPTION`. Both are ``UNSUPPORTED_FEATURE`` at the raise
+    site (:func:`canonical_refusal`), the code ``media-buy/package-request.json`` gives "a
+    single resolved route that does not satisfy" the product. ``CONFLICTING_SELECTORS`` is
+    not the code: enums/error-code.json defines it for "A 3.x package request" naming several
+    routes, and this is a creative.
+    """
+    by_option = _asked(replace(selector, legacy=None, legacy_parameters=(), assertion=None), contract)
+    if not by_option:
+        return by_option
+    by_reference = _asked(replace(selector, option=None), contract)
+    if not by_reference or by_option.declaration is None or by_option.declaration in by_reference.selection:
+        return by_reference if not by_reference else by_option
+    assert selector.assertion is not None, "a legacy creative asserts its reference"
+    return FormatSatisfaction(
+        satisfied=False,
+        refusal=FormatRefusal.LEGACY_NOT_OPTION,
+        rejected_value=selector.assertion.id,
+        accepted_values=(_declaration_label(by_option.declaration),),
+        summary=(
+            f"named format {selector.assertion.id!r} does not select the declaration "
+            f"{_declaration_label(by_option.declaration)!r} its format_option_ref names"
+        ),
     )
 
 
