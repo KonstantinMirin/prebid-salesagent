@@ -939,12 +939,11 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # it just as a wrong value does -- and core/format-id.json calls pixel_ratio "Required
     # intrinsic-pixel density for a parameterized visual format".
     #
-    # These two grade a check this seller makes BESIDE the SDK's, deliberately. adcp's
-    # format_is_supported compares a hand-written ("width", "height", "duration_ms") and
-    # never reads the fourth field, so a product requiring a 2x asset accepted a 1x one and
-    # also accepted one that said nothing. Measured on 9.0.0b3+sa.8qela.bf0228b68: all three
-    # of those answered supported=True. Without these rows the local supplement is correct
-    # and unfalsifiable -- removing it reddened nothing.
+    # Silence is refused because the field's own text gives it a value: "Omit for the
+    # backward-compatible 1x variant", and 1x is not the 2x the product fixes. adcp's
+    # format_is_supported reads the field that way and answers both rows; an earlier SDK
+    # compared only ("width", "height", "duration_ms") and accepted both, which is what these
+    # rows were written to catch.
 
     # wrong_publisher_domain is the second half of formats.mdx's fourth rule. It carries
     # the SAME format_option_id the product publishes under a DIFFERENT publisher_domain,

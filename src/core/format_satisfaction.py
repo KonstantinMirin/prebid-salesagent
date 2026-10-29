@@ -1529,8 +1529,10 @@ def _legacy_lane(
     reimplemented: it upgrades BOTH sides first -- which is the clause's "legacy named
     formats MUST be normalized to canonical declarations before comparison" -- then requires
     the claim to match every parameter the product fixed, while a parameter the product
-    leaves open permits anything. ``pixel_ratio`` is compared HERE because the SDK's field
-    loop names only three of the four; see :func:`_pixel_ratio_unsatisfied`.
+    leaves open permits anything. All four of ``core/format-id.json``'s parameters, the
+    density included: an omitted ``pixel_ratio`` on a sized reference is "the
+    backward-compatible 1x variant", so a product fixing 2x refuses a claim that states 1x
+    and one that states nothing, and a product fixing 1x accepts the silent one.
 
     ``identity.assertion`` is the input even though it is declared ``compare=False``. That
     flag means a reference is never compared BY RAW SPELLING -- the same agent respelled is
@@ -1567,11 +1569,7 @@ def _legacy_lane(
             return _SATISFIED
         return _kind_route(identity.kind, [d for d in projected if d is not None], params)
     accepted = tuple(sorted(_reference_display(reference) for reference in legacy_references))
-    accepting = [
-        index
-        for index, reference in enumerate(legacy_references)
-        if format_accepted_by(claimed, reference) and not _pixel_ratio_unsatisfied(claimed, reference)
-    ]
+    accepting = [index for index, reference in enumerate(legacy_references) if format_accepted_by(claimed, reference)]
     if accepting:
         # Satisfied whether or not an accepting entry projected: the deprecated arm accepts
         # the reference. What it SELECTS is the projections, which a co-present route's
@@ -1591,28 +1589,6 @@ def _legacy_lane(
         accepted_values=accepted,
         summary=(f"format {rejected!r} is not one this product accepts ({', '.join(accepted)})"),
     )
-
-
-def _pixel_ratio_unsatisfied(claimed: LibraryFormatId, supported: LibraryFormatId) -> bool:
-    """Whether the product fixes a ``pixel_ratio`` the claim does not match.
-
-    The one parameter ``format_is_supported`` does not read. Its field loop is the literal
-    ``("width", "height", "duration_ms")`` while ``core/format-id.json`` declares a fourth,
-    and calls it "**Required** intrinsic-pixel density for a parameterized visual format" --
-    so a product requiring a 2x asset accepts a 1x one. Measured on the pin
-    (9.0.0b3+sa.8qela.bf0228b68): against a product fixing ``pixel_ratio=2``, a claim
-    stating 2, a claim stating 1, and a claim stating nothing all answered True. The field is
-    not merely unenforced on silence; it is never read, so a CONTRADICTING value passes too
-    and both cases are refused here.
-
-    The same omission shape this repo already fixed in itself: ``_FORMAT_ID_PARAMETERS``
-    exists because three of the four were once copied by name. Two independent
-    implementations, one hand-written list each, the same field missing from both. This
-    supplement goes away when the SDK reads the field; it is deliberately a parameter check
-    beside the call rather than a reimplementation of the call.
-    """
-    required = supported.pixel_ratio
-    return required is not None and claimed.pixel_ratio != required
 
 
 def _reference_display(reference: LibraryFormatId) -> str:

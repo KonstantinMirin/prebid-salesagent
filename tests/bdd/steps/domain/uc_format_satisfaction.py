@@ -1182,10 +1182,9 @@ def _seed_legacy_sized_sync_chain(ctx: dict, width: int, height: int, *, agent_u
 def given_sync_legacy_density_product(ctx: dict, width: int, height: int, pixel_ratio: int) -> None:
     """The same legacy-only product, additionally fixing the asset DENSITY it requires.
 
-    ``pixel_ratio`` is the fourth parameterizing field and the one the SDK's comparison does
-    not read, so this row is what makes ``_pixel_ratio_unsatisfied`` falsifiable. Without it
-    that clause is in exactly the position the dimensions were in before this change: correct
-    per the pin, and unfalsifiable by the suite -- removing it reddened nothing (measured).
+    ``pixel_ratio`` is the fourth parameterizing field, and the one an earlier SDK's
+    comparison did not read. This row is what keeps the density comparison falsifiable: with
+    no product fixing a density, a comparison that ignored the field would pass every row.
 
     The pin requires the match and requires the dimensions alongside it:
     ``core/format-id.json`` calls the field "**Required** intrinsic-pixel density for a
