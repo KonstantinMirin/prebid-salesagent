@@ -8,6 +8,7 @@ conftest's _harness_env.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC
 from typing import Any
@@ -3322,6 +3323,19 @@ def _assert_submitted(ctx: dict) -> None:
     then_response_contains_task_id(ctx)
 
 
+def _assert_success_at_revision(ctx: dict, revision: int) -> None:
+    """Synchronous success that reports, and stores, the advanced *revision*.
+
+    update_media_buy.mdx: "Every mutating update increments ``revision`` and returns the new
+    value in the success response." The wire value is what the buyer hands back on its next
+    update; the stored value is what the seller will compare it against.
+    """
+    _assert_synchronous_success(ctx)
+    then_response_revision_value(ctx, revision)
+    (stored,) = _stored_buy_fields(ctx, "revision")
+    assert stored == revision, f"the response reports revision {revision} but the seller stored {stored!r}"
+
+
 _UPDATE_OUTCOMES = {
     "accepted": _assert_synchronous_success,
     "success with persisted records": _assert_persisted_success,
@@ -3329,14 +3343,21 @@ _UPDATE_OUTCOMES = {
     "submitted task envelope (awaiting approval)": _assert_submitted,
 }
 
+#: ``success at revision N``: the parametrized update outcome, graded by
+#: :func:`_assert_success_at_revision`.
+_SUCCESS_AT_REVISION = re.compile(r"success at revision (?P<revision>\d+)")
+
 
 def is_update_outcome(outcome: str) -> bool:
     """Whether *outcome* is one of the update-only outcome sentences graded here."""
-    return outcome in _UPDATE_OUTCOMES
+    return outcome in _UPDATE_OUTCOMES or _SUCCESS_AT_REVISION.fullmatch(outcome) is not None
 
 
 def assert_update_outcome(ctx: dict, outcome: str) -> None:
     """Grade an update-only outcome sentence."""
+    if (match := _SUCCESS_AT_REVISION.fullmatch(outcome)) is not None:
+        _assert_success_at_revision(ctx, int(match["revision"]))
+        return
     _UPDATE_OUTCOMES[outcome](ctx)
 
 

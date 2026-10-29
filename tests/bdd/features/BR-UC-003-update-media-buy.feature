@@ -2467,12 +2467,19 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
     # v3.1 (revision_optimistic_concurrency.yaml): revision optional; minimum 1; mismatch -> CONFLICT
+    # LOCAL CORRECTION: the valid rows read a bare "success", which a seller ignoring revision
+    # passes identically. update_media_buy.mdx: "Every mutating update increments revision and
+    # returns the new value in the success response", and update-media-buy-response.json
+    # requires revision, "Revision number after this update". paused: true is a mutation, so
+    # a buy at 7 must report and store 8, whether or not the request carried the token.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx
 
     Examples: Valid partitions
-      | partition       | value          | outcome |
-      | absent          | <not provided> | success |
-      | matches_current | 7              | success |
+      | partition       | value          | outcome               |
+      | absent          | <not provided> | success at revision 8 |
+      | matches_current | 7              | success at revision 8 |
 
     Examples: Invalid partitions
       | partition      | value | outcome                            |
