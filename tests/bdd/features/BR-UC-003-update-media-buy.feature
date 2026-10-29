@@ -2046,13 +2046,23 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    And the package "pkg_001" should have creative assignments [<stored>]
 
     Examples: Valid partitions
-      | partition                    | mode                                              | outcome |
-      | creative_ids_replace         | creative_ids=[cr_new_1, cr_new_2]                 | success |
-      | creative_assignments_replace | creative_assignments=[{cr_new_1, weight:70}]      | success |
-      | add_new_creative             | creative_ids=[cr_old_1, cr_old_2, cr_new_3]       | success |
-      | remove_existing_creative     | creative_ids=[cr_old_1]                           | success |
+      | partition                    | mode                                                      | stored                       | outcome |
+      | replace_all_existing         | creative_assignments=[{cr_new_1}, {cr_new_2}]             | cr_new_1, cr_new_2           | success |
+      | creative_assignments_replace | creative_assignments=[{cr_new_1, weight:70}]              | cr_new_1:70                  | success |
+      | add_new_creative             | creative_assignments=[{cr_old_1}, {cr_old_2}, {cr_new_3}] | cr_old_1, cr_old_2, cr_new_3 | success |
+      | remove_existing_creative     | creative_assignments=[{cr_old_1}]                         | cr_old_1                     | success |
+    # LOCAL CORRECTION (mirror upstream in adcp-req), two parts:
+    # 1. Three rows sent packages[].creative_ids, which the pinned package-update.json does
+    #    not declare. Replacement goes through creative_assignments ("Replace creative
+    #    assignments for this package ... Uses replacement semantics"), so every row now uses
+    #    it; creative_ids_replace is renamed replace_all_existing for that reason.
+    # 2. Every row ended in a bare success, which a seller that appended, or ignored the
+    #    array, also produced. Each row now names the assignment set the seller must store,
+    #    and the weighted row the stored weight.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/creative_assignments
 
   @T-UC-003-boundary-creative-replacement @boundary @creative_replacement
   Scenario Outline: Creative replacement boundary validation - <boundary_point>
