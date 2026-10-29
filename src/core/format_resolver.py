@@ -726,6 +726,27 @@ def format_contract(*, format_options: Iterable[Any] | None, format_ids: Iterabl
     return NamedFormats(format_ids=tuple(format_ids or ()))
 
 
+def linked_format_contract(
+    *, profile: Any | None, format_options: Iterable[Any] | None, format_ids: Iterable[Any] | None
+) -> FormatContract:
+    """The contract a product carries given its own arms and the inventory profile it links.
+
+    A linked *profile* supplies the contract, as it supplies the publisher properties; the
+    product's own arms answer only when it links none. The one exception is a profile with
+    no canonical arm beside a product that has one: the product's declarations are then
+    the canonical source, because the pin makes ``format_options`` the source of truth and
+    a legacy-only profile has none to offer.
+
+    ``Product.format_contract`` asks this of a stored row; the admin authoring surface asks
+    it of a product it has not written yet, so the two cannot disagree about which arm a
+    profile-linked product is served.
+    """
+    return format_contract(
+        format_options=(profile.format_options if profile else None) or format_options,
+        format_ids=profile.format_ids if profile else format_ids,
+    )
+
+
 def package_format_snapshot(
     declaration: Mapping[str, Any] | LibraryFormatDeclaration,
     *,
