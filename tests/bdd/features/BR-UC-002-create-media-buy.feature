@@ -3348,6 +3348,13 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # CORRECTED against the pin: the three "io_acceptance present but <member> missing" rows
+    # are deleted. io_acceptance declares "required": ["io_id", "accepted_at", "signatory"] on
+    # the object itself, so that refusal is a schema refusal that does not depend on the
+    # proposal's requires_signature, and @T-UC-002-v31-io-acceptance-incomplete grades exactly
+    # it, per member, with the error located at io_acceptance.<member>. The rows left here are
+    # the ones whose outcome does depend on the committed proposal's insertion_order.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/io_acceptance/required
 
     Examples: Boundary values
       | boundary_point                                                                 | outcome                               |
@@ -3356,9 +3363,6 @@ Feature: BR-UC-002 Create Media Buy
       | requires_signature true, io_acceptance present with signature_id also supplied | proceeds, gate satisfied              |
       | requires_signature false, io_acceptance present (no-op)                        | proceeds, io_acceptance ignored       |
       | requires_signature true, io_acceptance absent (gate blocks)                    | error IO_REQUIRED with suggestion     |
-      | requires_signature true, io_acceptance present but io_id missing               | error INVALID_REQUEST with suggestion |
-      | requires_signature true, io_acceptance present but accepted_at missing         | error INVALID_REQUEST with suggestion |
-      | requires_signature true, io_acceptance present but signatory missing           | error INVALID_REQUEST with suggestion |
 
   @T-UC-002-boundary-creative-asset-discriminator @boundary @creative-asset @br-rule-015
   Scenario Outline: v3.1 creative asset discriminator boundary validation - <boundary_point>
