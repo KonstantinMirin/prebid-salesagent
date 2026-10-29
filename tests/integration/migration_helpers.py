@@ -122,8 +122,11 @@ def reset_to_revision(
     with engine.begin() as conn:
         if any(column["name"] == "virtual_host_name" for column in inspect(conn).get_columns("tenants")):
             row["virtual_host_name"] = hostname_of(vhost)
-        conn.execute(text("DELETE FROM accounts"))
-        conn.execute(text("DELETE FROM tenants"))
+        # CASCADE, not a DELETE per known child table: every row a previous test seeded
+        # belongs to a tenant (accounts, products, ...), and a DELETE list names only the
+        # children its author knew of -- the placements tests' products outlived it and
+        # every later reset failed on products_tenant_id_fkey.
+        conn.execute(text("TRUNCATE TABLE tenants CASCADE"))
         conn.execute(
             text(
                 f"INSERT INTO tenants ({', '.join(row)}, ad_server, is_active) "
