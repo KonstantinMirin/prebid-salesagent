@@ -161,7 +161,7 @@ def _fail(attempts: int, http_status: int | None, retry_after: float | None = No
     return OutboundDeliveryFailed(
         attempts=attempts,
         http_status=http_status,
-        retry_after=clamp_retry_after(retry_after) if retry_after is not None else None,
+        retry_after=clamp_retry_after(retry_after),
     )
 
 

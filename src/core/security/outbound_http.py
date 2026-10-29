@@ -148,6 +148,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -399,7 +400,8 @@ def wrapped_failure(exc: BaseException) -> WrappedFailure | None:
     found = find_wrapped(exc, _httpx.HTTPStatusError)
     if found is None:
         return None
-    return WrappedFailure(status=found.response.status_code, retry_after=_retry_after_seconds(found.response))
+    status = found.response.status_code
+    return WrappedFailure(status=status, retry_after=retry_after_seconds(status, found.response.headers))
 
 
 def find_wrapped[Wrapped: BaseException](exc: BaseException, exc_type: type[Wrapped]) -> Wrapped | None:
@@ -564,12 +566,24 @@ async def sleep_backoff(attempts: Attempts) -> None:
     await asyncio.sleep(attempts.wait_seconds())
 
 
-def _retry_after_seconds(response: _httpx.Response) -> float | None:
-    """The origin's Retry-After in seconds, or ``None`` if it did not usably say.
+def retry_after_seconds(status: int, headers: Mapping[str, str]) -> float | None:
+    """How long a response with *status* and *headers* asked us to wait, or ``None``.
+
+    ``Retry-After`` on any status. On a 429 only, ``RateLimit-Reset`` when there is no
+    ``Retry-After``: the RateLimit header fields (draft-ietf-httpapi-ratelimit-headers,
+    the shape express-rate-limit's ``standardHeaders`` emits, which the reference agent's
+    MCP limiter turns on) put the window's remaining seconds there. On any other status it is
+    NOT a request to wait — a limiter stamps it on every response, a 200 or a 503
+    included — so honouring it there would lengthen a 5xx backoff to the end of a rate
+    window nobody exhausted.
 
     Delta-seconds only. RFC 9110 also permits an HTTP-date, but honouring one
     means trusting a counterparty's clock against ours; it is logged and treated
     as absent, which costs only the BR-RULE-029 wait we would have taken anyway.
+    A non-finite number is absent too (``core/error.json`` ``retry_after``:
+    "Non-finite values are treated as absent"), and it has to be, because
+    ``float("inf")`` parses and :func:`~src.core.exceptions.clamp_retry_after`
+    cannot round it.
 
     Deliberately UNCLAMPED. The raw value decides the WAIT (bounded separately by
     :data:`_MAX_HONOURED_RETRY_AFTER_SECONDS`); the value that rides out to the
@@ -577,20 +591,24 @@ def _retry_after_seconds(response: _httpx.Response) -> float | None:
     two would floor every wait at one second, so an origin could not answer
     ``Retry-After: 0`` — and a test suite could not avoid sleeping for real.
 
-    Module-private, and reached from outside only through
-    :func:`wrapped_failure`, which projects the parsed value onto
-    :class:`WrappedFailure`. That is what keeps the 429/Retry-After parsing rule
-    in one home regardless of which transport the seam used underneath WITHOUT
-    handing an ``_httpx.Response`` to a module that is forbidden to import _httpx.
+    Takes the headers as a plain mapping, not a response: the MCP seam reads an
+    ``httpx2`` response and this module's own loop an ``httpx`` one, and the rule
+    has one home either way without a response object of either generation
+    crossing the seam.
     """
-    raw = response.headers.get("Retry-After")
-    if raw is None:
-        return None
-    try:
-        return float(raw.strip())
-    except ValueError:
-        logger.debug("Ignoring non-delta-seconds Retry-After: %r", raw)
-        return None
+    names = ("Retry-After", "RateLimit-Reset") if status == 429 else ("Retry-After",)
+    for name in names:
+        raw = headers.get(name)
+        if raw is None:
+            continue
+        try:
+            seconds = float(raw.strip())
+        except ValueError:
+            seconds = math.nan
+        if math.isfinite(seconds):
+            return seconds
+        logger.debug("Ignoring non-delta-seconds %s: %r", name, raw)
+    return None
 
 
 def _build_request(
@@ -694,7 +712,9 @@ def _conclude_attempt(
     step. Pure sync, so both the sync and async drivers call it unchanged; the
     async/sync difference lives entirely in the I/O verbs around it.
     """
-    outcome = attempts.record_response(response.status_code, _retry_after_seconds(response))
+    outcome = attempts.record_response(
+        response.status_code, retry_after_seconds(response.status_code, response.headers)
+    )
     if outcome is Attempts.Outcome.SUCCESS:
         return _result(response, body, attempt, started)
     if outcome is Attempts.Outcome.TERMINAL:
