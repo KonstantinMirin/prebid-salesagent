@@ -197,6 +197,58 @@ def given_artifact_webhook_scheme(ctx: dict, scheme: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# invoice_recipient override (BR-RULE-214)
+# ═══════════════════════════════════════════════════════════════════════
+
+#: The account the override is addressed to: the id "the account exists and is active" seeds
+#: when no earlier Given names one, so the request and that Given meet on one row.
+_INVOICE_OVERRIDE_ACCOUNT = "acc-001"
+
+
+@given("a create_media_buy request that carries an invoice_recipient overriding the account default billing entity")
+def given_request_invoice_recipient_override(ctx: dict) -> None:
+    """The shared create request, naming one account and an invoice_recipient for this buy.
+
+    create-media-buy-request.json invoice_recipient: "Override the account's default billing
+    entity for this specific buy." The recipient is a whole business entity, so the request
+    carries one built by the request-payload factory under a legal name of its own.
+    """
+    from tests.factories.account import BusinessEntityFactory
+
+    kwargs = _create_request(ctx)
+    account_id = ctx.setdefault("request_account_id", _INVOICE_OVERRIDE_ACCOUNT)
+    kwargs["account"] = {"account_id": account_id}
+    kwargs["invoice_recipient"] = BusinessEntityFactory.build_payload(legal_name="Unlinked Receivables GmbH")
+
+
+@given("the invoice_recipient is not authorized for the account")
+def given_invoice_recipient_not_authorized_for_account(ctx: dict) -> None:
+    """Hold the precondition against the account the request names, read through its repository.
+
+    This seller links a business entity to an account in one place, the account's own
+    ``billing_entity``; there is no other authorization record. So the recipient is
+    unauthorized exactly when the named account exists and does not hold it as its billing
+    entity. Checked rather than assumed: an account Given that seeded the same entity would
+    turn this scenario into the authorized case without changing a word of it.
+    """
+    from src.core.database.repositories.uow import AccountUoW
+
+    kwargs = ctx["request_kwargs"]
+    recipient = kwargs.get("invoice_recipient")
+    assert recipient is not None, "the request carries no invoice_recipient to authorize"
+    account_id = kwargs["account"]["account_id"]
+    with AccountUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.accounts is not None
+        account = uow.accounts.get_by_id(account_id)
+        assert account is not None, f"the request names account {account_id!r}, which no Given seeded"
+        held = account.billing_entity
+    assert held is None or held.legal_name != recipient["legal_name"], (
+        f"account {account_id!r} holds {recipient['legal_name']!r} as its billing entity, so the "
+        "recipient is authorized and the scenario would grade the accepted case"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Sandbox boundary (@T-UC-002-boundary-sandbox-response)
 # ═══════════════════════════════════════════════════════════════════════
 
