@@ -1889,38 +1889,23 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         #   the last_a2a_task guard is Transport.A2A-gated and inert on e2e_rest.
         # No UC-003 entries remain in e2e_rest_known_failures.txt — no sibling conflict.
 
-        # FIXME: E2E_REST —
-        # set_registry_formats has no sidecar mock path. Docker's real creative
-        # agent serves its own catalog, so scenarios that inject specific format
-        # fixtures via Given steps and assert on those names can't run against
-        # E2E. Remove when E2E gains catalog-injection.
-        _UC005_E2E_FIXTURE_INJECTION_TAGS: set[str] = {
-            "T-UC-005-inv-031-1-holds",
-            # Graduated e2e_rest: inv-031-1-violated, inv-049-3-violated,
-            # inv-049-4-violated, inv-049-4-nodim (pass with strong assertions)
-            "T-UC-005-inv-031-2-holds",
-            # DELETED: inv-049-1-holds / -violated. No such scenario exists in any feature
-            # file, so these two matched nothing here either — see the note at their former
-            # _XFAIL_TAGS entry.
-            "T-UC-005-inv-049-2-holds",
-            "T-UC-005-inv-049-2-violated",
-            "T-UC-005-inv-049-3-holds",
-            "T-UC-005-inv-049-3-group",
-            "T-UC-005-inv-049-4-holds",
-            "T-UC-005-inv-049-5-holds",
-            "T-UC-005-inv-049-6-holds",
-            "T-UC-005-inv-049-7-holds",
-            "T-UC-005-inv-049-7-violated",
-            # Graduated: inv-049-9 and inv-049-10 (u04y: no e2e_rest variants exist)
-            "T-UC-005-dim-boundary",
-        }
-        if is_e2e_rest and (marker_names & _UC005_E2E_FIXTURE_INJECTION_TAGS):
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="E2E: set_registry_formats has no sidecar mock — real creative agent catalog used",
-                    strict=False,
-                )
-            )
+        # Graduated: the whole _UC005_E2E_FIXTURE_INJECTION_TAGS set that stood here, a
+        # strict=False xfail on e2e_rest over twelve scenarios: inv-031-1-holds,
+        # inv-031-2-holds, inv-049-2-holds, inv-049-2-violated, inv-049-3-holds,
+        # inv-049-3-group, inv-049-4-holds, inv-049-5-holds, inv-049-6-holds,
+        # inv-049-7-holds, inv-049-7-violated and dim-boundary. All twelve XPASSED on
+        # e2e_rest in box run innet_291026_0257 and passed on a2a, mcp and rest in the
+        # same run. The reason ("set_registry_formats has no sidecar mock") stopped being
+        # true when the format Givens began seeding through
+        # CreativeFormatsEnv.set_registry_formats -> seed_own_creative_agent: the tenant's
+        # own peer creative agent (the compose stack's capture service on e2e) serves
+        # exactly the Given's formats and use_default_creative_agent is off, so the live
+        # server lists those formats and no others. Each filter is graded against
+        # media-buy/list-creative-formats-request.json @ 3.2.7 (ANY-render inclusive
+        # widths, case-insensitive partial name_search, is_responsive, format_ids).
+        # The exclusion Thens ("no formats" / "X should not be returned") and
+        # inv-049-2-violated's "no error should be raised" now require a successful
+        # response on the wire, so a refusal can no longer satisfy them.
 
         # FIXME(#1291, #2098): E2E_REST — these Thens observe env.mock['post'],
         # the in-process local origin, or CircuitBreaker state, none of which is
