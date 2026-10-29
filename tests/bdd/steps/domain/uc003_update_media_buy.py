@@ -3157,18 +3157,36 @@ def given_update_request_with_account(ctx: dict, account_context: str) -> None:
     _update_request_for(ctx, None)
 
 
+#: The package update that makes a terminal-failure row fail, by the trigger the row names.
+#: ``None`` (the sentence without "because ...") is a negative budget, which the request
+#: schema refuses (package-update.json /properties/budget minimum 0) BEFORE the boundary
+#: resolves the account. A package the buy does not hold is refused inside the update,
+#: AFTER the account is resolved (PACKAGE_NOT_FOUND, update_media_buy.mdx error table),
+#: so a failure builder that read the resolved account would show on that refusal.
+_TERMINAL_FAILURE_PACKAGE: dict[str | None, dict[str, Any]] = {
+    None: {"package_id": "pkg_001", "budget": -50.0},
+    "the package update names a package the media buy does not hold": {
+        "package_id": "pkg_not_in_buy",
+        "budget": _UPDATED_BUDGET,
+    },
+}
+
+
 @given(parsers.parse("the update resolves to the {shape} response shape"))
 @given(parsers.parse("the update resolves to the {shape} response shape because {trigger}"))
 def given_update_response_shape(ctx: dict, shape: str, trigger: str | None = None) -> None:
     """Arrange the request and the approval path so the update answers with *shape*.
 
     synchronous success: auto-approval and a valid package budget change. terminal
-    failure: a negative package budget, which the budget rule rejects
-    (@T-UC-003-partition-budget-amount). submitted task: manual approval of a valid change.
+    failure: the package update :data:`_TERMINAL_FAILURE_PACKAGE` names for *trigger*.
+    submitted task: manual approval of a valid change.
     """
     kwargs = _ensure_update_defaults(ctx)
     if shape == "terminal failure":
-        kwargs["packages"] = [{"package_id": "pkg_001", "budget": -50.0}]
+        assert trigger in _TERMINAL_FAILURE_PACKAGE, (
+            f"unknown terminal-failure trigger {trigger!r}; known: {sorted(map(str, _TERMINAL_FAILURE_PACKAGE))}"
+        )
+        kwargs["packages"] = [dict(_TERMINAL_FAILURE_PACKAGE[trigger])]
         return
     kwargs.setdefault("packages", [{"package_id": "pkg_001", "budget": _UPDATED_BUDGET}])
     if shape == "synchronous success":

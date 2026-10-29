@@ -2870,7 +2870,8 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     And the update resolves to the <shape> response shape because <trigger>
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy spec
+    Then the response is compliant with the update_media_buy error spec
+    And the error code should be "<error_code>"
     And the response payload should NOT contain a "sandbox" field
     # BR-RULE-209 INV-10: update_media_buy three-way oneOf -- sandbox appears only on synchronous success
     # LOCAL CORRECTION: the "submitted task" row is removed. The pinned
@@ -2879,12 +2880,20 @@ Feature: BR-UC-003 Update Media Buy
     # submitted arm, whose `not` lists only media_buy_id and warnings and whose
     # additionalProperties is true. Asserting "forbidden" there grades a prohibition the
     # pin does not make.
+    # LOCAL CORRECTION: the terminal-failure row was triggered by a negative package budget,
+    # which the request schema refuses before the boundary resolves the account, so the
+    # sandbox account never reached the refusal and a failure builder that stamped sandbox
+    # from it could not show. The row now names a package the buy does not hold: that
+    # refusal happens inside the update, after the sandbox account is resolved, and its code
+    # is pinned so a refusal from any earlier stage fails the row. The compliance check
+    # names the error arm, the one that carries the prohibition.
     # ---------- BR-RULE-013 INV-6: package-level start_time 'asap' forbidden ----------
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json pointer=/oneOf/1/not
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx (error table: PACKAGE_NOT_FOUND)
 
     Examples:
-      | shape            | trigger                                            |
-      | terminal failure | a validation error rejects the update              |
+      | shape            | trigger                                                        | error_code        |
+      | terminal failure | the package update names a package the media buy does not hold | PACKAGE_NOT_FOUND |
 
   @T-UC-003-package-start-time-asap @invariant @BR-RULE-013 @error @schema-v3.1 @post-f2 @post-f3
   Scenario: Package-level start_time 'asap' is schema-forbidden (INV-6)
