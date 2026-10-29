@@ -58,7 +58,6 @@ from src.core.exceptions import (
     AdCPProductNotFoundError,
     AdCPValidationError,
 )
-from src.core.format_cache import load_reference_formats
 from src.core.schemas import (
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
@@ -100,12 +99,10 @@ def _peer_serving_display_300x250_image(env: MediaBuyCreateEnv) -> str:
     answers. The entry is the capture's, re-homed: its ``format_id.agent_url`` is the
     peer's own URL, as an agent states for a format it publishes.
     """
-    from tests.helpers.peer_creative_agent import new_peer_key, peer_agent_url
+    from tests.helpers.peer_creative_agent import new_peer_key, peer_agent_url, rehomed_reference_format
 
     key = new_peer_key()
-    (fmt,) = [f for f in load_reference_formats() if f.format_id.id == "display_300x250_image"]
-    entry = fmt.model_dump(mode="json", exclude_none=True)
-    entry["format_id"]["agent_url"] = peer_agent_url(key)
+    entry = rehomed_reference_format("display_300x250_image", peer_agent_url(key))
     return env.serve_peer_catalog(key, {"formats": [entry]})
 
 
