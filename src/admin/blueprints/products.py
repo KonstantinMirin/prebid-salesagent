@@ -1,7 +1,6 @@
 """Products management blueprint for admin UI."""
 
 import asyncio
-import functools
 import json
 import logging
 import uuid
@@ -9,7 +8,7 @@ from decimal import Decimal
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
 from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, url_for
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import joinedload
 from werkzeug.exceptions import HTTPException
@@ -23,6 +22,7 @@ from src.core.database.models import PersistedMediaBuyStatus, PricingOption, Pro
 from src.core.database.product_pricing import get_product_pricing_options
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.publisher_format_catalog import PublisherCatalog, format_declarations_type
 from src.core.schemas import Format
 from src.services.gam_product_config_service import GAMProductConfigService
 
@@ -99,24 +99,12 @@ def _parse_format_entries(formats_parsed: list[dict]) -> list[dict]:
     return entries
 
 
-@functools.cache
-def _format_options_type() -> TypeAdapter:
-    """The pinned type of a product's ``format_options``, read off the DTO that serves it.
-
-    Read rather than restated. The operator form must refuse exactly what
-    ``convert_product_model_to_schema`` would refuse later, and validating against the
-    same annotation is the only way to guarantee that -- a second spelling of
-    core/product-format-declaration.json here would drift from the pin on the next bump.
-    """
-    from src.core.schemas.product import Product as ProductSchema
-
-    return TypeAdapter(ProductSchema.model_fields["format_options"].annotation)
-
-
-def _parse_authored_format_options(raw: str | None) -> list[dict] | None:
+def _parse_authored_format_options(raw: str | None, catalog: PublisherCatalog) -> list[dict] | None:
     """The canonical arm of core/product.json's root anyOf, as the operator authored it.
 
-    Validated at AUTHOR time against the pinned discriminated union. An invalid
+    Validated at AUTHOR time against the pinned discriminated union
+    (``format_declarations_type``, read off the DTO that serves the column, so the form
+    refuses exactly what ``convert_product_model_to_schema`` would refuse later). An invalid
     declaration does not fail on the row -- it fails in
     ``convert_product_model_to_schema``, which ``get_products`` runs in a loop that
     re-raises, so one mis-authored product answers INTERNAL_ERROR for the whole tenant's
@@ -128,6 +116,10 @@ def _parse_authored_format_options(raw: str | None) -> list[dict] | None:
     NULL rather than as ``[]``. The pin gives ``format_options`` ``minItems: 1``, and the
     deprecated arm is satisfied by its KEY alone -- an empty array asserts a declaration
     that is not there.
+
+    A declaration naming a publisher option in this seller's OWN namespace must name one its
+    publisher format catalog declares (*catalog*, read off the tenant by the caller): RFC S3,
+    see ``src/core/publisher_format_catalog.py``.
     """
     if not raw or not raw.strip():
         return None
@@ -138,13 +130,14 @@ def _parse_authored_format_options(raw: str | None) -> list[dict] | None:
     if not document:
         return None
     try:
-        _format_options_type().validate_python(document)
+        format_declarations_type().validate_python(document)
     except ValidationError as e:
         first = e.errors()[0]
         location = "/".join(str(part) for part in first["loc"]) or "format_options"
         raise ValueError(
             f"format_options is not a valid canonical format declaration ({location}: {first['msg']})"
         ) from e
+    catalog.refuse_unresolved(document)
     return document
 
 
@@ -845,7 +838,9 @@ def add_product(tenant_id):
                 # Parse the CANONICAL arm the pin tells new products to author, and refuse
                 # only the state the anyOf actually refuses: neither arm.
                 try:
-                    format_options = _parse_authored_format_options(form_data.get("format_options"))
+                    format_options = _parse_authored_format_options(
+                        form_data.get("format_options"), PublisherCatalog.of(tenant)
+                    )
                     # ``None`` literally, not a variable that is always empty: a product
                     # created here HAS no legacy arm, and spelling that as a value keeps the
                     # check honest about which arm it is testing.
@@ -1433,7 +1428,9 @@ def edit_product(tenant_id, product_id):
     if request.method == "POST":
         if format_options_submitted:
             try:
-                authored_format_options = _parse_authored_format_options(request.form.get("format_options"))
+                authored_format_options = _parse_authored_format_options(
+                    request.form.get("format_options"), PublisherCatalog.of(tenant)
+                )
             except ValueError as e:
                 flash(str(e), "error")
                 return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))

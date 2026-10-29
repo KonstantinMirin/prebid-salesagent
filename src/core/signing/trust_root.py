@@ -261,6 +261,13 @@ def build_adagents_json(
             entry["signing_keys"] = [_published_jwk(key) for key in keys]
         document["authorized_agents"].append(entry)
 
+    # The publisher format catalog (RFC S3): canonical-formats-migration.mdx § Seller
+    # migration step 3, "Publish reusable publisher options in /.well-known/adagents.json".
+    # Authored on the tenant and published as stored -- adagents.json#/properties/formats is
+    # "Publisher-authoritative", so it is never synthesized from product declarations.
+    if tenant.publisher_format_options:
+        document["formats"] = list(tenant.publisher_format_options)
+
     if last_updated := _last_updated(keys):
         document["last_updated"] = last_updated
     # NOT routed through ``AdcpAgentsAuthorization`` (#1757): that generated model is

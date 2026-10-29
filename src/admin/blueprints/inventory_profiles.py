@@ -31,6 +31,7 @@ from src.core.database.models import (
     Tenant,
 )
 from src.core.format_resolver import format_contract
+from src.core.publisher_format_catalog import PublisherCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -194,19 +195,6 @@ def add_inventory_profile(tenant_id: str):
                 "include_descendants": form_data.get("include_descendants") == "on",
             }
 
-            # The profile's canonical format declarations: what every linked product is
-            # announced from. format_ids is not authored here (core/product.json: "Do not
-            # author a new product from format_ids alone"); a legacy projection comes from
-            # the declarations' v1_format_ref.
-            try:
-                format_options = _parse_authored_format_options(form_data.get("format_options"))
-            except ValueError as e:
-                flash(str(e), "error")
-                return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-            if not format_options:
-                flash("At least one canonical format declaration (format_options) is required", "error")
-                return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
-
             # Parse publisher properties based on property_mode
             # NOTE: New unified inventory page sends either:
             # - property_mode = "all" or "specific" with full publisher_properties JSON
@@ -218,6 +206,21 @@ def add_inventory_profile(tenant_id: str):
                 tenant = prop_session.get(Tenant, tenant_id)
                 if not tenant or not tenant.primary_domain:
                     flash("Tenant primary_domain not configured", "error")
+                    return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+
+                # The profile's canonical format declarations: what every linked product is
+                # announced from. format_ids is not authored here (core/product.json: "Do not
+                # author a new product from format_ids alone"); a legacy projection comes from
+                # the declarations' v1_format_ref.
+                try:
+                    format_options = _parse_authored_format_options(
+                        form_data.get("format_options"), PublisherCatalog.of(tenant)
+                    )
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
+                if not format_options:
+                    flash("At least one canonical format declaration (format_options) is required", "error")
                     return redirect(url_for("inventory_profiles.add_inventory_profile", tenant_id=tenant_id))
 
                 publisher_domain = tenant.primary_domain
@@ -415,24 +418,26 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                 }
                 profile.inventory_config = inventory_config
 
-                # The canonical arm. An empty editor leaves the stored arms alone, so a
-                # legacy-only profile stays editable; authoring declarations retires its
-                # stored format_ids, which its linked products no longer read once the
-                # profile carries a canonical arm (``Product.format_contract``).
-                authored_format_options = _parse_authored_format_options(form_data.get("format_options"))
-                if authored_format_options:
-                    profile.format_options = authored_format_options
-                    profile.format_ids = None
-
-                # Update publisher properties based on property_mode
-                property_mode = form_data.get("property_mode", "tags")
-
                 tenant_obj = session.get(Tenant, tenant_id)
                 if not tenant_obj or not tenant_obj.primary_domain:
                     flash("Tenant primary_domain not configured", "error")
                     return redirect(
                         url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
                     )
+
+                # The canonical arm. An empty editor leaves the stored arms alone, so a
+                # legacy-only profile stays editable; authoring declarations retires its
+                # stored format_ids, which its linked products no longer read once the
+                # profile carries a canonical arm (``Product.format_contract``).
+                authored_format_options = _parse_authored_format_options(
+                    form_data.get("format_options"), PublisherCatalog.of(tenant_obj)
+                )
+                if authored_format_options:
+                    profile.format_options = authored_format_options
+                    profile.format_ids = None
+
+                # Update publisher properties based on property_mode
+                property_mode = form_data.get("property_mode", "tags")
 
                 publisher_domain = tenant_obj.primary_domain
 

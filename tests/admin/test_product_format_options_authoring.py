@@ -32,7 +32,7 @@ import json
 import pytest
 from sqlalchemy import select
 
-from src.core.database.models import Product
+from src.core.database.models import Product, Tenant
 from src.core.product_conversion import convert_product_model_to_schema
 from tests.factories import AuthorizedPropertyFactory, ProductFactory, PropertyTagFactory, TenantFactory
 from tests.helpers.admin_session import admin_auth_session, admin_test_app
@@ -375,3 +375,123 @@ def test_editing_a_legacy_product_leaves_its_stored_arm_untouched(operator, sell
     row = _stored(factory_session, tenant_id, "legacy_product")
     assert row.format_ids == stored_arm, f"the edit changed the stored legacy arm: {row.format_ids!r}"
     assert row.name == "Renamed Legacy Product", "the edit did not take effect, so the arm survived vacuously"
+
+
+# ── RFC S3 (salesagent-ol033.20.3): options in this seller's own publisher namespace ───
+#
+# adagents.json#/properties/formats: products selling this publisher's inventory SHOULD
+# reference its declarations "via inline format_options whose format_option_id matches an
+# entry here". The seller serves that file at its own host, so a declaration naming
+# ``publisher_domain == tenant.primary_domain`` must name an option its catalog publishes.
+# Whether the catalog is PUBLISHED is graded on the four transports by
+# tests/bdd/features/local-publisher-format-catalog.feature; these grade the authoring
+# refusals, which only a Flask client reaches.
+
+#: One reusable publisher option, as the catalog stores it and the served formats[] carries it.
+CATALOG_OPTION = {"format_kind": "image", "format_option_id": "homepage_mrec", "params": {"width": 300, "height": 250}}
+
+
+def _stored_catalog(session, tenant_id: str) -> list | None:
+    """The tenant's catalog as the database now holds it."""
+    session.expire_all()
+    return session.get(Tenant, tenant_id).publisher_format_options
+
+
+@pytest.mark.parametrize(
+    ("catalog", "accepted"),
+    [([CATALOG_OPTION], True), (None, False)],
+    ids=["catalog_declares_it", "catalog_does_not"],
+)
+def test_an_own_publisher_option_must_be_one_the_catalog_publishes(
+    operator, seller, factory_session, catalog, accepted
+):
+    """The same declaration, stored or refused by what the seller's own catalog declares."""
+    tenant, tag_selection = seller
+    tenant.publisher_format_options = catalog
+    factory_session.commit()
+    reference = {**CATALOG_OPTION, "publisher_domain": tenant.primary_domain}
+
+    response = operator.post(
+        f"/tenant/{tenant.tenant_id}/products/add",
+        data=_create_form(tag_selection, product_id="own_option", format_options=json.dumps([reference])),
+    )
+
+    row = _stored(factory_session, tenant.tenant_id, "own_option")
+    if accepted:
+        assert response.status_code in (301, 302), response.data[:2000]
+        assert row is not None and row.format_options == [reference]
+    else:
+        assert response.status_code == 200, "a refusal re-renders the form rather than redirecting"
+        assert b"publisher format catalog does not declare" in response.data
+        assert row is None
+
+
+def test_another_publishers_option_is_not_resolved_against_this_sellers_catalog(operator, seller, factory_session):
+    """Only the seller's own namespace is checked: another publisher's file is the buyer's to resolve.
+
+    core/placement.json format_options: "buyers MUST also resolve" a publisher reference.
+    The tenant has NO catalog, so the same option under its own domain would be refused
+    (the parametrized test above); under a foreign domain it is stored.
+    """
+    tenant, tag_selection = seller
+    reference = {**CATALOG_OPTION, "publisher_domain": "another-publisher.example"}
+
+    response = operator.post(
+        f"/tenant/{tenant.tenant_id}/products/add",
+        data=_create_form(tag_selection, product_id="foreign_option", format_options=json.dumps([reference])),
+    )
+
+    assert response.status_code in (301, 302), response.data[:2000]
+    row = _stored(factory_session, tenant.tenant_id, "foreign_option")
+    assert row is not None and row.format_options == [reference]
+
+
+def test_the_operator_saves_the_publisher_format_catalog(operator, seller, factory_session):
+    tenant, _ = seller
+
+    response = operator.post(
+        f"/tenant/{tenant.tenant_id}/authorized-properties/format-catalog",
+        data={"publisher_format_options": json.dumps([CATALOG_OPTION])},
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200, response.data[:2000]
+    assert b"Publisher format catalog saved" in response.data
+    assert _stored_catalog(factory_session, tenant.tenant_id) == [CATALOG_OPTION]
+
+
+def test_a_catalog_option_without_an_id_is_refused(operator, seller, factory_session):
+    """An entry no {publisher_domain, format_option_id} can name is not a reusable option."""
+    tenant, _ = seller
+    unnamed = {key: value for key, value in CATALOG_OPTION.items() if key != "format_option_id"}
+
+    response = operator.post(
+        f"/tenant/{tenant.tenant_id}/authorized-properties/format-catalog",
+        data={"publisher_format_options": json.dumps([unnamed])},
+        follow_redirects=True,
+    )
+
+    assert b"needs a format_option_id" in response.data
+    assert _stored_catalog(factory_session, tenant.tenant_id) is None
+
+
+def test_withdrawing_an_option_a_product_names_is_refused(operator, seller, factory_session):
+    """A stored product never announces an own-namespace option its publisher file stopped declaring."""
+    tenant, _ = seller
+    tenant.publisher_format_options = [CATALOG_OPTION]
+    ProductFactory(
+        tenant=tenant,
+        product_id="names_the_option",
+        format_ids=None,
+        format_options=[{**CATALOG_OPTION, "publisher_domain": tenant.primary_domain}],
+    )
+    factory_session.commit()
+
+    response = operator.post(
+        f"/tenant/{tenant.tenant_id}/authorized-properties/format-catalog",
+        data={"publisher_format_options": ""},
+        follow_redirects=True,
+    )
+
+    assert b"products still reference it" in response.data
+    assert _stored_catalog(factory_session, tenant.tenant_id) == [CATALOG_OPTION]
