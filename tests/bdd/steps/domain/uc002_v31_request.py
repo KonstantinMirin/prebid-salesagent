@@ -168,6 +168,29 @@ def given_request_package_paused(ctx: dict) -> None:
     packages[0]["paused"] = True
 
 
+@given("a valid create_media_buy request with the plan_id field omitted")
+def given_request_without_plan_id(ctx: dict) -> None:
+    """The base request without plan_id, which create-media-buy-request.json marks deprecated."""
+    _create_request(ctx).pop("plan_id", None)
+
+
+@given("the account has no governance_agents configured")
+def given_account_without_governance_agents(ctx: dict) -> None:
+    """The account the request names registers no governance agent (the column is NULL).
+
+    Written rather than assumed: the seeded default leaves the column unset, and this
+    step makes the state the scenario is about explicit on the row the request resolves.
+    """
+    env = ctx["env"]
+    account = env.setup_default_account()
+    named = _create_request(ctx)["account"]
+    assert named == {"account_id": account.account_id}, (
+        f"the request names {named!r}, not the seeded account {account.account_id!r} this step configures"
+    )
+    account.governance_agents = None
+    env._commit_factory_data()
+
+
 @given(parsers.parse('a valid create_media_buy request with agency_estimate_number "{value}"'))
 def given_request_agency_estimate_number(ctx: dict, value: str) -> None:
     """Carry a buy-level agency_estimate_number."""

@@ -2812,16 +2812,25 @@ Feature: BR-UC-002 Create Media Buy
 
   @T-UC-002-v31-plan-id-optional-without-governance @v31 @governance @plan-id @ext-x @happy-path
   Scenario: v3.1 plan_id optional when account has no governance_agents configured
-    Given a valid create_media_buy request with the plan_id field omitted
-    And the account "acc-001" exists and is active
+    Given the tenant is configured for auto-approval
+    And a valid create_media_buy request with the plan_id field omitted
     And the account has no governance_agents configured
     When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy spec
-    And the request should proceed past the governance gate
-    And the governance path should be skipped
+    Then the response is compliant with the create_media_buy success spec
+    And the response should succeed
     # BR-RULE-212 INV-4: no governance agents -> plan_id optional, governance skipped
+    # CORRECTED against the pin. governance/campaign/specification.mdx: "When
+    # `governance_agents` is absent, the seller processes media buy requests normally ...
+    # there is no seller-side verification", and "Sellers MUST NOT require governance checks
+    # as a prerequisite for all accounts". plan_id itself is DEPRECATED on the request. So the
+    # one observable is a buy created normally: the success arm, on an auto-approved tenant.
+    # "proceed past the governance gate" and "the governance path should be skipped" named
+    # no observable beyond that (with no agent registered there is no call to watch), and
+    # the "acc-001" line seeded an account the request does not name; the account graded is
+    # the one the request names.
     # --- v3.1: invoice_recipient override ---
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=docs/governance/campaign/specification.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/plan_id
 
   @T-UC-002-v31-invoice-recipient-echoed @v31 @invoice-recipient @post-s5
   Scenario: v3.1 invoice_recipient overrides default billing and is echoed in response
