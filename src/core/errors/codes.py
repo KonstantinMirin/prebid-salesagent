@@ -299,7 +299,7 @@ def _message_from_prose(description: str) -> str:
 #: suggestion for these come from the pinned schema, which is authoritative for
 #: them.
 #:
-#: These nine are the published codes that resolve to no buyer-shippable text on
+#: These eleven are the published codes that resolve to no buyer-shippable text on
 #: their own: the pinned schema's prose for them is normative implementer text
 #: rather than a sentence for a buyer. Seven of them say nothing about the
 #: failure without also saying MUST/SHOULD about other codes and
@@ -309,8 +309,11 @@ def _message_from_prose(description: str) -> str:
 #: backward-compatible alias"), and ``AUTHORIZATION_REQUIRED``'s states the
 #: failure in its first clause and then spends 700 more characters on "Typical
 #: use", "Distinct from", and which ``error-details`` document a seller SHOULD
-#: populate. So all nine are authored here, and each one deletes itself the
-#: moment the pin ships prose that reduces to a buyer sentence on its own.
+#: populate. ``CREATIVE_SIZE_MISMATCH`` and ``CREATIVE_VALIDATION_FAILED_GENERIC``
+#: state the failure in one sentence and then tell the seller what it SHOULD and MUST
+#: put in ``error.field`` and ``error.details``. So all eleven are authored here, and
+#: each one deletes itself the moment the pin ships prose that reduces to a buyer
+#: sentence on its own.
 #:
 #: There were eight until ``CREATIVE_NOT_FOUND`` was removed: the pinned prose
 #: resolves it to one clean sentence unaided, which is strictly better than a
@@ -327,6 +330,8 @@ _AUTHORED_SPEC_MESSAGES: Final[Mapping[ErrorCode, str]] = MappingProxyType(
         ErrorCode.AUTH_REQUIRED: "Authentication is required",
         ErrorCode.BILLING_NOT_SUPPORTED: "Billing model is not supported by this seller",
         ErrorCode.CONFIGURATION_ERROR: "Configuration error",
+        ErrorCode.CREATIVE_SIZE_MISMATCH: "The creative's dimensions match no size the selected format accepts",
+        ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC: "The creative does not satisfy the selected format",
         ErrorCode.PERMISSION_DENIED: "Not authorized for this action",
         ErrorCode.UNSUPPORTED_PROVISIONING: "Settings-update entry matched no existing account",
         ErrorCode.VERSION_UNSUPPORTED: "Requested AdCP version is not supported",
@@ -400,6 +405,8 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
         ErrorCode.BUDGET_EXHAUSTED: 422,
         ErrorCode.BUDGET_TOO_LOW: 422,
         ErrorCode.CREATIVE_REJECTED: 422,
+        ErrorCode.CREATIVE_SIZE_MISMATCH: 422,
+        ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC: 422,
         ErrorCode.PROVENANCE_REQUIRED: 422,
         ErrorCode.PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING: 422,
         ErrorCode.PROVENANCE_DISCLOSURE_MISSING: 422,

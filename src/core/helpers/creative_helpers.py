@@ -251,7 +251,13 @@ def process_and_upload_package_creatives(
             )
             # The create controller resolved the caller before reaching here; no auth is
             # re-run inside a service, which is the layering this extraction removed.
-            sync_response = sync_creatives(sync_req, identity=identity, principal_id=principal_id, tenant=tenant)
+            # ``assigned_by_caller``: every creative here is assigned to this package once the
+            # buy exists, and the create gates grade its manifest against the declaration the
+            # package's product selects. Held to its kind's slots here instead, a creative keyed
+            # to a slot the product renamed would be refused for a slot it was never owed.
+            sync_response = sync_creatives(
+                sync_req, identity=identity, principal_id=principal_id, tenant=tenant, assigned_by_caller=True
+            )
 
             # A failed sync result means the creative was REJECTED (e.g. missing
             # required URL / dimensions in strict validation). Surface it instead

@@ -780,7 +780,9 @@ class CreativeFormatIdentity:
         )
 
     @classmethod
-    def of_legacy(cls, format_id: LibraryFormatId, *, kind: str) -> "CreativeFormatIdentity":
+    def of_legacy(
+        cls, format_id: LibraryFormatId, *, kind: str, option: FormatOptionIdentity | None = None
+    ) -> "CreativeFormatIdentity":
         """The identity of a retained legacy assertion and the kind it projects to.
 
         ``kind`` IS REQUIRED, and that is the ruling applied: a creative whose reference
@@ -793,9 +795,15 @@ class CreativeFormatIdentity:
         comparison form and the verbatim form cannot drift apart -- and the derivation is
         shared with :class:`FormatSelector` through :func:`_legacy_parameters_of`, so what a
         package names and what a creative carries cannot compare differently.
+
+        ``option`` is the ``format_option_ref`` the same item carries, when it carries one.
+        ``core/creative-asset.json`` puts ``format_option_ref`` beside the root oneOf rather
+        than inside the canonical arm, so the deprecated arm may route to an exact product
+        option too, and the reference is kept rather than dropped.
         """
         return cls(
             kind=kind,
+            option=option,
             legacy=format_id_identity(format_id),
             legacy_parameters=_legacy_parameters_of(format_id),
             assertion=format_id,
@@ -958,23 +966,24 @@ def creative_format_identity(
     declared_kind = creative.format_kind
     if (format_id is None) == (declared_kind is None):
         raise ValueError("a creative carries exactly one of format_id and format_kind")
-    if format_id is not None:
-        # The legacy arm. Its projected kind is refused by CreativeFormatIdentity itself if
-        # it lands outside the vocabulary -- a projection this seller cannot key on is not an
-        # identity, and the type says so. ``kind`` is REQUIRED now: the caller holding the
-        # projection either resolved one or raised before reaching here.
-        return CreativeFormatIdentity.of_legacy(format_id, kind=kind)
-    kind_value = str(declared_kind)
     # The reference arrives already validated into one arm of core/format-option-ref.json's
     # oneOf, so the only variance here is whether the creative carries one at all. WHICH arm
     # it is still has to be read, and ``of_reference`` is the one place that reads it: the
     # two generated arms carry identical field sets, so taking the members positionally --
     # which this did -- loses the product/publisher distinction the discriminator exists for.
+    #
+    # Read for BOTH arms. core/creative-asset.json declares ``format_option_ref`` at the top
+    # level and forbids it in neither oneOf arm, so a legacy item may carry one; reading it
+    # on the canonical arm only dropped it without a word.
     option_ref = creative.format_option_ref
-    return CreativeFormatIdentity(
-        kind=kind_value,
-        option=(FormatOptionIdentity.of_reference(option_ref) if option_ref is not None else None),
-    )
+    option = FormatOptionIdentity.of_reference(option_ref) if option_ref is not None else None
+    if format_id is not None:
+        # The legacy arm. Its projected kind is refused by CreativeFormatIdentity itself if
+        # it lands outside the vocabulary -- a projection this seller cannot key on is not an
+        # identity, and the type says so. ``kind`` is REQUIRED now: the caller holding the
+        # projection either resolved one or raised before reaching here.
+        return CreativeFormatIdentity.of_legacy(format_id, kind=kind, option=option)
+    return CreativeFormatIdentity(kind=str(declared_kind), option=option)
 
 
 class WireSerializerMixin:

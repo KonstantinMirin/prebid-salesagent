@@ -13,9 +13,9 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPValidationError,
 )
-from src.core.format_satisfaction import FormatRefusal, canonical_refusal, satisfies
+from src.core.format_satisfaction import FormatRefusal, creative_refusal, creative_satisfies
 from src.core.logging_config import log_safe
-from src.core.schemas import CreativeFormatIdentity, SyncCreativeResult
+from src.core.schemas import SyncCreativeResult
 from src.core.tenant_context import TenantContext
 from src.core.tools.creatives._processing import _failed_sync_result
 
@@ -252,19 +252,12 @@ def _process_assignments(
                         product = assignment_repo.get_product_by_id(product_id)
 
                         if product:
-                            # THE ONE satisfaction function, which the two create gates and
+                            # THE ONE creative validator, which the two create gates and
                             # update_media_buy also ask -- so no two of the four can disagree
-                            # about whether a creative's format is one the product declares.
-                            # This used to compare against ``product_format_identities``
-                            # alone, which sees only the DEPRECATED arm, so a product
-                            # declaring ``format_options[]`` imposed no restriction here.
-                            stored_identity = CreativeFormatIdentity.from_row(db_creative_result)
-                            contract = product.format_contract
-                            verdict = satisfies(
-                                stored_identity.as_selector(),
-                                contract.format_options,
-                                legacy_catalog=contract.format_ids,
-                            )
+                            # about whether a creative satisfies what the product declares,
+                            # its manifest included (creative-manifests.mdx § Validation:
+                            # "Sellers perform final acceptance during sync_creatives").
+                            verdict = creative_satisfies(db_creative_result, product.format_contract)
 
                             if not verdict:
                                 error_msg = (
@@ -274,13 +267,14 @@ def _process_assignments(
                                 assignment_errors_by_creative[creative_id][package_id] = error_msg
 
                                 if verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED:
-                                    # A canonical refusal is UNSUPPORTED_FEATURE, and it is
-                                    # raised in BOTH validation modes: lenient means "skip a
-                                    # creative this product will not take", and the product
-                                    # published a closed set this one is outside of, so there
+                                    # A canonical refusal -- the closed set, or a manifest that
+                                    # does not satisfy the declaration it selects -- is raised
+                                    # in BOTH validation modes: lenient means "skip a creative
+                                    # this product will not take", and the pin says a seller
+                                    # must "not silently relax the target contract", so there
                                     # is no partial assignment to fall back to. The legacy
                                     # lane below keeps its lenient skip, which scenarios grade.
-                                    raise canonical_refusal(verdict, creative_id=creative_id, package_id=package_id)
+                                    raise creative_refusal(verdict, creative_id=creative_id, package_id=package_id)
                                 if validation_mode == "strict":
                                     # Reverses #1417, which routed this to CREATIVE_REJECTED: adcp
                                     # 3.1.1's enum reserves that for "Creative failed content policy

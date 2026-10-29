@@ -686,7 +686,14 @@ def given_sync_canonical_creative_with_option_ref(ctx: dict, kind: str, scope: s
     the identifier, so the legacy arm has to be ABSENT rather than null. The reference the
     buyer sends is recorded in ``ctx`` so the readback compares against what was SENT,
     never against a value recomputed in the Then.
+
+    The assets fill the kind's required slots: a sync that assigns the creative to nothing
+    holds its manifest to the canonical format its kind names (creative-manifests.mdx
+    § Validation), so the factory's default ``image``-keyed asset would be refused for the
+    missing ``image_main`` before the identity this scenario reads back was stored.
     """
+    from tests.factories.creative_asset import canonical_assets
+
     reference = format_option_ref_for_scope(scope)
     ctx["creatives"] = [
         CreativeAssetRequestFactory.payload(
@@ -694,6 +701,7 @@ def given_sync_canonical_creative_with_option_ref(ctx: dict, kind: str, scope: s
             format_id=OMIT,
             format_kind=kind,
             format_option_ref=reference,
+            assets=canonical_assets(kind),
         )
     ]
     ctx["sent_format_option_ref"] = reference

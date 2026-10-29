@@ -24,7 +24,7 @@ from src.core.webhooks.registration import accept_push_notification_config
 
 from ._assignments import _process_assignments
 from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative, incoming_identity_of
-from ._validation import _get_field, _validate_creative_input, check_provenance_policy
+from ._validation import _get_field, _validate_creative_input, check_provenance_policy, check_unassigned_manifest
 from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creative_notifications
 
 logger = logging.getLogger(__name__)
@@ -67,12 +67,21 @@ def sync_creatives(
     identity: ResolvedIdentity,
     principal_id: str,
     tenant: TenantContext,
+    assigned_by_caller: bool = False,
 ) -> SyncCreativesResponse:
     """Sync creative assets to the centralized creative library.
 
     THE SERVICE. Takes a resolved caller and does the work: no auth, no transport concerns,
     no idempotency. Callable from any controller, and from any other service that needs
     creatives uploaded -- which is the point.
+
+    ``assigned_by_caller`` is True when the calling service assigns every creative in *req*
+    to a package once the sync returns -- ``create_media_buy``'s inline creatives, which are
+    synced before the packages they belong to exist, so ``req.assignments`` cannot name them.
+    Such a creative is graded against the declaration its package's product selects at that
+    service's own gate, and is not held to its kind here: a product may replace the kind's
+    slot list (core/product-format-declaration.json), and "assets is keyed by asset_group_id
+    from the matched declaration's params.slots[]" (creative-manifests.mdx § Basic structure).
     """
 
     # ``creatives`` is aliased because it is NARROWED below by the creative_ids filter.
@@ -137,6 +146,10 @@ def sync_creatives(
 
     # Track creatives requiring approval for workflow creation
     creatives_needing_approval = []
+
+    # The creatives this request assigns: each of those is graded against the declaration its
+    # package's product selects, and every other canonical one against its kind.
+    assigned_creative_ids = {assignment.creative_id for assignment in req.assignments or []}
 
     # Get tenant creative approval settings
     # approval_mode: "auto-approve", "require-human", "ai-powered"
@@ -243,6 +256,15 @@ def sync_creatives(
                     typed.details = _with_creative(typed.details, creative_id)
                     results.append(_failed_sync_result(creative_id, typed))
                     continue  # Skip to next creative
+
+                # A canonical manifest no assignment selects a declaration for is held to its
+                # kind; an assigned one -- by this request, or by the calling service right
+                # after it -- is graded against the product's declaration at that assignment's
+                # gate instead (creative_satisfies).
+                if not assigned_by_caller and validated_creative.creative_id not in assigned_creative_ids:
+                    check_unassigned_manifest(
+                        creative, index=creative_index, creative_id=validated_creative.creative_id
+                    )
 
                 # The product's provenance policy (core/creative-policy.json, EU AI Act
                 # Article 50): a creative that does not meet it is a per-item PROVENANCE_*

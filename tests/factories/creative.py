@@ -135,11 +135,11 @@ def seeded_format_identity(
     return a hand-built identity, skipping the accessor and with it the seller's vocabulary
     check, so a scenario could seed a kind production would refuse.
 
-    ``format_option_ref`` narrows the canonical arm to one of the enclosing product's
-    concrete options, exactly as ``core/format-option-ref.json`` declares it -- a
-    discriminated reference, so a scenario passes the document verbatim and the DTO picks
-    its branch. It belongs to the canonical arm only: ``core/creative-asset.json`` is a
-    oneOf on the identifier, so a legacy reference has no option to narrow.
+    ``format_option_ref`` narrows the creative to one of the enclosing product's concrete
+    options, exactly as ``core/format-option-ref.json`` declares it -- a discriminated
+    reference, so a scenario passes the document verbatim and the DTO picks its branch. It
+    rides with EITHER arm: ``core/creative-asset.json`` declares it beside the root oneOf on
+    the identifier, and neither arm forbids it.
 
     ``format_spec`` is the catalog declaration the projection resolves against, and
     defaults to whatever :func:`served_format_spec` finds in the capture the server
@@ -147,13 +147,14 @@ def seeded_format_identity(
     adapter-served id like ``broadstreet_display``, whose declaration belongs to the
     adapter rather than to a creative agent (salesagent-zthsk).
     """
-    if format_option_ref is not None and canonical_kind is None:
-        raise TypeError("format_option_ref narrows a canonical_kind; a legacy format_id has no option to narrow")
-    identity_arm: dict[str, Any] = (
-        {"format_kind": canonical_kind, "format_option_ref": format_option_ref}
-        if canonical_kind is not None
-        else {"format_id": FormatId(agent_url=agent_url, id=format_id, **(format_params or {}))}
-    )
+    identity_arm: dict[str, Any] = {
+        **(
+            {"format_kind": canonical_kind}
+            if canonical_kind is not None
+            else {"format_id": FormatId(agent_url=agent_url, id=format_id, **(format_params or {}))}
+        ),
+        "format_option_ref": format_option_ref,
+    }
     return creative_identity_of(
         CreativeAssetRequest(
             creative_id="seeded-identity",

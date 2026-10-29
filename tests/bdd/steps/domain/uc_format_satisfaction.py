@@ -216,6 +216,24 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "params": {"duration_ms_exact": 15000},
         }
     ],
+    # A 300x250 image declaration with no other constraint, and the same declaration
+    # accepting Retina renditions. The pair differs ONLY in ``pixel_ratios``, which
+    # formats/canonical/image.json makes the density axis: "Absence means [1]", and with
+    # ``[1, 2]`` "a 600x500 intrinsic asset at 2x satisfies a logical 300x250 size".
+    "plain_300x250": [
+        {
+            "format_kind": "image",
+            "format_option_id": _PRODUCT_OPTION_ID,
+            "params": {"width": 300, "height": 250},
+        }
+    ],
+    "retina_300x250": [
+        {
+            "format_kind": "image",
+            "format_option_id": _PRODUCT_OPTION_ID,
+            "params": {"width": 300, "height": 250, "pixel_ratios": [1, 2]},
+        }
+    ],
     # ``fixed_300x250`` with the ``v1_format_ref`` assertion REMOVED, and nothing else
     # changed. That one difference decides whether the accepted package's deprecated
     # ``format_ids_to_provide`` projection has a source at all, which is the pair the two
@@ -233,6 +251,44 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
 #: to one of them by restating it inline -- ``core/placement.json``'s ``format_options``
 #: items are whole declarations, matched to the product's by ``format_option_id``.
 _MREC, _LEADERBOARD = _DECLARATIONS["two_image_options"]
+
+
+def _manifest(name: str) -> dict[str, Any]:
+    """The ``assets`` of a canonical creative, by the name a scenario gives its manifest.
+
+    The third table, and data like the other two: each entry is the asset map a buyer
+    sends, keyed by slot id as creative-manifests.mdx § Basic structure keys it. Every entry
+    differs from ``image_300x250`` -- the manifest ``fixed_300x250`` accepts -- in ONE member,
+    so a refusal row and its accept row differ in the fact under test and nothing else.
+    Built per call because a scenario may mutate what it was handed.
+    """
+    from tests.factories.creative_asset import build_assets, image_spec, manifest_image_spec, text_spec
+
+    mrec = manifest_image_spec("image_main")
+    manifests: dict[str, Any] = {
+        "image_300x250": lambda: build_assets(mrec),
+        "image_728x90": lambda: build_assets(manifest_image_spec("image_main", width=728, height=90)),
+        "image_160x600": lambda: build_assets(manifest_image_spec("image_main", width=160, height=600)),
+        # 200 KB exactly, the cap ``fixed_300x250`` declares, and 500 KB over it.
+        "image_300x250_200kb": lambda: build_assets(mrec.with_fields(file_size_bytes=200 * 1024)),
+        "image_300x250_500kb": lambda: build_assets(mrec.with_fields(file_size_bytes=500 * 1024)),
+        # The 300x250 image silent about its file size -- the member a capped declaration needs.
+        "image_300x250_unsized": lambda: build_assets(image_spec("image_main")),
+        # A Retina rendition of the 300x250: 600x500 intrinsic pixels, the ratio stated or
+        # left for the seller to infer (core/assets/image-asset.json ``pixel_ratio``).
+        "image_600x500_2x": lambda: build_assets(
+            manifest_image_spec("image_main", width=600, height=500).with_fields(pixel_ratio=2)
+        ),
+        "image_600x500": lambda: build_assets(manifest_image_spec("image_main", width=600, height=500)),
+        # One of the image_formats ``fixed_300x250`` declares, and one it does not.
+        "image_300x250_png": lambda: build_assets(mrec.with_fields(format="png")),
+        "image_300x250_gif": lambda: build_assets(mrec.with_fields(format="gif")),
+        # The required slot holding the wrong asset type, and the media keyed by no slot.
+        "image_main_as_text": lambda: build_assets(text_spec("image_main", content="Trail Pro")),
+        "image_unnamed": lambda: build_assets(image_spec("banner")),
+    }
+    assert name in manifests, f"no manifest named {name!r}; have {sorted(manifests)}"
+    return manifests[name]()
 
 
 def _placement(placement_id: str, mode: str, *accepted: dict[str, Any]) -> dict[str, Any]:
@@ -838,16 +894,25 @@ def given_canonical_creative(ctx: dict, kind: str, asset_key: str) -> None:
 
 
 def _seed_canonical_creative(
-    ctx: dict, *, kind: str, asset_key: str = "image_main", status: str = "approved", **row: Any
+    ctx: dict,
+    *,
+    kind: str,
+    asset_key: str = "image_main",
+    assets: dict[str, Any] | None = None,
+    status: str = "approved",
+    **row: Any,
 ) -> Any:
     """One creative carrying the named CANONICAL kind, committed. Returns the row.
 
     Approved unless the caller names another review ``status``; ``row`` carries any other
-    column a caller pins (a ``creative_id`` a later sync must address).
+    column a caller pins (a ``creative_id`` a later sync must address). ``assets`` replaces
+    the one 300x250 image keyed ``asset_key`` with a whole named manifest (:func:`_manifest`).
 
     The default asset key is ``image_main``, which ``formats/canonical/image.json`` declares
     as the ``image`` kind's required image slot -- so a caller that does not care about the
-    key gets the one the pin names rather than a convention this seller invented.
+    key gets the one the pin names rather than a convention this seller invented. The image
+    states its file size (``manifest_image_spec``), because a declaration capping it is owed
+    the member.
 
     CANONICAL ONLY. This grew a ``format_id`` arm for a legacy caller and then lost that
     caller, and the dead parameter is removed rather than left: it built a creative carrying
@@ -859,19 +924,37 @@ def _seed_canonical_creative(
     door.
     """
     from tests.factories.creative import CreativeFactory
-    from tests.factories.creative_asset import build_assets, image_spec
+    from tests.factories.creative_asset import build_assets, manifest_image_spec
 
     arm: dict[str, Any] = {"canonical_kind": kind}
     creative = CreativeFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
         status=status,
-        data={"assets": build_assets(image_spec(asset_key))},
+        data={"assets": assets if assets is not None else build_assets(manifest_image_spec(asset_key))},
         **arm,
         **row,
     )
     ctx["env"]._commit_factory_data()
+    ctx["manifest_creative_id"] = creative.creative_id
     return creative
+
+
+@given(parsers.parse('the buyer assigns a canonical "{kind}" creative carrying the "{manifest}" manifest'))
+def given_canonical_creative_with_manifest(ctx: dict, kind: str, manifest: str) -> None:
+    """A stored canonical creative with the named manifest, assigned to the package.
+
+    The create path grades the STORED creative, so it is seeded as stored -- the same
+    production identity mapping a sync writes -- and only its assets vary between rows.
+    """
+    creative = _seed_canonical_creative(ctx, kind=kind, assets=_manifest(manifest))
+    ctx["request_kwargs"]["packages"][0]["creative_ids"] = [creative.creative_id]
+
+
+@given(parsers.parse('a canonical "{kind}" creative carrying the "{manifest}" manifest exists'))
+def given_canonical_creative_with_manifest_exists(ctx: dict, kind: str, manifest: str) -> None:
+    """The update path's creative: stored with the named manifest, assigned by the When."""
+    ctx["creative_to_assign"] = _seed_canonical_creative(ctx, kind=kind, assets=_manifest(manifest))
 
 
 # ── UPDATE path ─────────────────────────────────────────────────────
@@ -965,6 +1048,16 @@ def given_sync_canonical_product(ctx: dict) -> None:
     declared.
     """
     _seed_sync_chain(ctx, format_options=_DECLARATIONS["fixed_300x250"], format_ids=list(_LEGACY_ARM))
+
+
+@given(parsers.parse('a packaged product declaring canonical format options "{declaration}"'))
+def given_sync_declaring_product(ctx: dict, declaration: str) -> None:
+    """The sync chain over a dual-arm product carrying the named :data:`_DECLARATIONS` row.
+
+    The named sibling of the fixed-300x250 Given above, for the rows that need a product
+    publishing SEVERAL declarations of one kind -- the case ``format_option_ref`` exists for.
+    """
+    _seed_sync_chain(ctx, format_options=_DECLARATIONS[declaration], format_ids=list(_LEGACY_ARM))
 
 
 @given("a packaged product declaring only the deprecated format_ids")
@@ -1122,6 +1215,32 @@ def given_sync_canonical_creative_with_option(ctx: dict, option: str, kind: str)
     _sync_canonical_claim(ctx, kind, format_option_ref={"scope": "product", "format_option_id": option})
 
 
+@given(parsers.parse('the buyer syncs a canonical "{kind}" creative carrying the "{manifest}" manifest'))
+def given_sync_canonical_creative_with_manifest(ctx: dict, kind: str, manifest: str) -> None:
+    """The canonical claim on the wire with the named manifest (:func:`_manifest`)."""
+    _sync_canonical_claim(ctx, kind, assets=_manifest(manifest))
+
+
+@given(
+    parsers.parse(
+        'the buyer syncs a canonical "{kind}" creative carrying the "{manifest}" manifest '
+        'and naming product option "{option}"'
+    )
+)
+def given_sync_canonical_creative_with_manifest_and_option(ctx: dict, kind: str, manifest: str, option: str) -> None:
+    """The same claim routed to one product option by ``format_option_ref``.
+
+    creative-manifests.mdx § Exact option routing: "When a product accepts multiple
+    declarations of the same kind ... add format_option_ref."
+    """
+    _sync_canonical_claim(
+        ctx,
+        kind,
+        assets=_manifest(manifest),
+        format_option_ref={"scope": "product", "format_option_id": option},
+    )
+
+
 def _sync_canonical_claim(ctx: dict, kind: str, **members: Any) -> None:
     """ONE canonical claim on the wire: ``format_kind`` and no ``format_id`` key at all.
 
@@ -1129,12 +1248,24 @@ def _sync_canonical_claim(ctx: dict, kind: str, **members: Any) -> None:
     on the identifier, so the legacy arm has to be ABSENT rather than null -- the pin
     reports absent and null identically, and the factory's ``OMIT`` is the only way a call
     site can say which it meant.
+
+    The assets fill the kind's required slots (``canonical_assets``): the seller grades a
+    canonical manifest against the declaration it selects, or its kind when it selects none
+    (creative-manifests.mdx § Validation), so the factory's default ``image``-keyed asset
+    would be a manifest missing ``image_main``. *members* may replace them.
     """
+    from tests.factories.creative_asset import canonical_assets
     from tests.factories.request import OMIT, CreativeAssetRequestFactory
 
     ctx["creatives"] = [
-        CreativeAssetRequestFactory.payload(creative_id=_SYNC_CREATIVE_ID, format_id=OMIT, format_kind=kind, **members)
+        CreativeAssetRequestFactory.payload(
+            creative_id=_SYNC_CREATIVE_ID,
+            format_id=OMIT,
+            format_kind=kind,
+            **{"assets": canonical_assets(kind), **members},
+        )
     ]
+    ctx["manifest_creative_id"] = _SYNC_CREATIVE_ID
 
 
 def _mixed_identity_creative(format_id: str, kind: str) -> dict[str, Any]:
@@ -1168,6 +1299,29 @@ def _mixed_identity_creative(format_id: str, kind: str) -> dict[str, Any]:
 def given_sync_mixed_identity_creative(ctx: dict, format_id: str, kind: str) -> None:
     """The sync item carries both identifiers (see ``_mixed_identity_creative``)."""
     ctx["creatives"] = [_mixed_identity_creative(format_id, kind)]
+
+
+@given(parsers.parse('the buyer syncs a creative identified by canonical kind "{kind}" beside a null format_id'))
+def given_sync_kind_beside_null_format_id(ctx: dict, kind: str) -> None:
+    """The canonical claim with the legacy key PRESENT and null, as a dict on the wire.
+
+    A dict and not a model, because a model dumped for the wire drops the null (an unset
+    optional member is absent on a buyer's wire) and would send the legal canonical item.
+    """
+    from src.core.errors.codes import ErrorCode
+    from tests.factories.malformed import malformed
+    from tests.factories.request import CreativeAssetRequestFactory
+
+    ctx["creatives"] = [
+        malformed(
+            "explicit_none",
+            "format_kind beside format_id: null. core/creative-asset.json's root oneOf arms each pair a "
+            "required with a not-required, and required counts a present key whatever its value, so the "
+            "item names both identifiers and matches neither arm.",
+            CreativeAssetRequestFactory.payload(creative_id=_SYNC_CREATIVE_ID, format_id=None, format_kind=kind),
+            obligation=ErrorCode.INVALID_REQUEST,
+        )
+    ]
 
 
 @given(
@@ -1238,6 +1392,23 @@ def _sync_legacy_claim(ctx: dict, format_id: str, **parameters: int) -> None:
             format_id=resolvable_format_ref(format_id, **parameters),
         )
     ]
+
+
+@given(
+    parsers.parse(
+        'the buyer syncs a creative whose format_option_ref names product option "{option}" beside format_id "{format_id}"'
+    )
+)
+def given_sync_legacy_creative_with_option(ctx: dict, option: str, format_id: str) -> None:
+    """The DEPRECATED arm carrying a ``format_option_ref`` beside it.
+
+    ``core/creative-asset.json`` declares ``format_option_ref`` at the item's top level and
+    forbids it in neither oneOf arm, so a v1 item may route to an exact product option too.
+    Worded like the canonical sibling, option first, so neither this sentence nor the plain
+    ``identified by format_id "{format_id}"`` Given can bind the other's text.
+    """
+    _sync_legacy_claim(ctx, format_id)
+    ctx["creatives"][0]["format_option_ref"] = {"scope": "product", "format_option_id": option}
 
 
 @given(parsers.parse('the buyer syncs a creative identified by format_id "{format_id}"'))
@@ -1621,6 +1792,28 @@ def then_refused_and_nothing_stored(ctx: dict) -> None:
     and the typed model exposes ``action`` and ``errors`` as attributes, so no position is
     restated. Same primitive the UC-006 per-creative steps use.
     """
+    _assert_entry_failed_and_nothing_stored(ctx, "UNSUPPORTED_FEATURE")
+
+
+@then(parsers.parse("the creative is reported failed with {code:w} and nothing is stored"))
+def then_reported_failed_and_nothing_stored(ctx: dict, code: str) -> None:
+    """A library-only sync refused per item for its manifest, and the row not written.
+
+    The same two halves as the unprojectable-format refusal above, for a different code:
+    a canonical manifest assigned to nothing is held to the slots its kind declares
+    (creative-manifests.mdx § Validation), and one that does not fill them is a per-entry
+    failure of the batch, not a stored creative.
+    """
+    _assert_entry_failed_and_nothing_stored(ctx, code)
+
+
+def _assert_entry_failed_and_nothing_stored(ctx: dict, code: str) -> None:
+    """The synced creative's batch entry FAILED with exactly *code*, and no row was written.
+
+    Read off the typed payload by ``creative_id`` and the library read back through
+    ``CreativeUoW``; the reasons both halves are needed are on
+    :func:`then_refused_and_nothing_stored`.
+    """
     from src.core.database.repositories.uow import CreativeUoW
 
     resp = payload_or_none(ctx)
@@ -1633,14 +1826,13 @@ def then_refused_and_nothing_stored(ctx: dict) -> None:
     entry = entries[_SYNC_CREATIVE_ID]
     action = entry.action.value if hasattr(entry.action, "value") else str(entry.action)
     assert action == "failed", (
-        f"the unprojectable creative was reported {action!r}; the gate is supposed to "
-        f"refuse it, and any other action means it was admitted"
+        f"the creative was reported {action!r}; the gate is supposed to refuse it, and any "
+        f"other action means it was admitted"
     )
     codes = [error.code for error in entry.errors or []]
-    assert codes == ["UNSUPPORTED_FEATURE"], (
-        f"expected exactly UNSUPPORTED_FEATURE on the entry, got {codes!r}. The pinned enum "
-        f"classifies it correctable, which is what leaves the buyer a lever to resend under a "
-        f"ref this seller does serve"
+    assert codes == [code], (
+        f"expected exactly {code} on the entry, got {codes!r}. The pinned enum classifies it "
+        f"correctable, which is what leaves the buyer a lever to resend a creative this seller takes"
     )
     # Values, not rows: a ``Creative`` read past the UoW is detached and raises on attribute
     # access, which would surface as a DetachedInstanceError instead of this assertion.
@@ -1654,6 +1846,90 @@ def then_refused_and_nothing_stored(ctx: dict) -> None:
         f"format_kind={stored_kinds[_SYNC_CREATIVE_ID]!r}. The ruling is to gate at the "
         f"write, so a refusal that leaves the row behind is the defect rather than the fix."
     )
+
+
+@then(parsers.parse("the creative is refused {code:w} naming the packages field"))
+def then_creative_refused_naming_packages(ctx: dict, code: str) -> None:
+    """The create path's manifest refusal: the code, the ``packages`` pointer and the creative.
+
+    enums/error-code.json on CREATIVE_SIZE_MISMATCH: "Sellers SHOULD identify the offending
+    creative" -- the pointer names the request field the buyer sent (the packages array, as
+    every creative refusal on this path does) and ``details.creative_id`` names the creative.
+    """
+    _assert_creative_refused(ctx, code, field="packages")
+
+
+@then(parsers.parse('the creative is refused {code:w} naming the "{array}" array'))
+def then_creative_refused_naming_array(ctx: dict, code: str, array: str) -> None:
+    """The update path's manifest refusal, pointing at the creative array the buyer sent."""
+    _assert_creative_refused(ctx, code, field=f"packages[0].{array}")
+
+
+@then(parsers.parse("the creative is refused {code:w}"))
+def then_creative_refused(ctx: dict, code: str) -> None:
+    """The sync assignment path's manifest refusal: the code and the creative, no pointer.
+
+    No ``field`` for the reason :func:`then_refused_unsupported_feature_bare` gives: the
+    assignment gate refuses a STORED creative, and which one is ``details.creative_id``.
+    """
+    _assert_creative_refused(ctx, code, field=None)
+
+
+def _assert_creative_refused(ctx: dict, code: str, *, field: str | None) -> None:
+    """The wire envelope carries *code* (its pinned recovery) and names the scenario's creative."""
+    result = ctx["result"]
+    result.assert_wire_error(code, field=field)
+    details = result.wire_error_details(code)
+    assert details.get("creative_id") == ctx["manifest_creative_id"], (
+        f"the refusal names creative {details.get('creative_id')!r}, not {ctx['manifest_creative_id']!r}: {details}"
+    )
+    ctx["refused_code"] = code
+
+
+def _refusal_problem(ctx: dict, path: str) -> dict[str, Any]:
+    """The ``problems[]`` entry for manifest *path* in the refusal a prior Then asserted."""
+    details = ctx["result"].wire_error_details(ctx["refused_code"])
+    problems = {problem.get("field"): problem for problem in details.get("problems") or []}
+    assert path in problems, f"the refusal names no problem at {path!r}; it names {sorted(problems)}"
+    problem = problems[path]
+    assert problem.get("subject_id") == ctx["manifest_creative_id"], f"the problem is about another subject: {problem}"
+    return dict(problem)
+
+
+@then(parsers.parse('the refusal names "{path}" stating "{rejected}" where "{accepted}" is accepted'))
+def then_refusal_names_stated_value(ctx: dict, path: str, rejected: str, accepted: str) -> None:
+    """One failed constraint, as values: what the asset states and what the declaration accepts.
+
+    The SIZE_MISMATCH entry in enums/error-code.json: a seller "MAY include the submitted and
+    accepted dimensions in buyer-safe error.details". ``accepted`` is the declaration's set
+    or bound, comma-separated in the feature.
+    """
+    problem = _refusal_problem(ctx, path)
+    assert problem.get("rejected_value") == rejected, f"{path}: stated {problem.get('rejected_value')!r}"
+    assert problem.get("accepted_values") == [value.strip() for value in accepted.split(",")], (
+        f"{path}: accepted {problem.get('accepted_values')!r}"
+    )
+
+
+@then(parsers.parse('the refusal names "{path}" missing where "{accepted}" is accepted'))
+def then_refusal_names_missing_slot(ctx: dict, path: str, accepted: str) -> None:
+    """A required slot the manifest does not fill: nothing stated, the slot's type accepted."""
+    problem = _refusal_problem(ctx, path)
+    assert "rejected_value" not in problem, f"{path} is reported as stating {problem.get('rejected_value')!r}"
+    assert problem.get("accepted_values") == [accepted], f"{path}: accepted {problem.get('accepted_values')!r}"
+
+
+@then(parsers.parse('the refusal names the compatible options "{options}"'))
+def then_refusal_names_compatible_options(ctx: dict, options: str) -> None:
+    """An ambiguous selection names the declarations the manifest fits, the values a ref may take.
+
+    core/creative-asset.json, ``format_option_ref``: "Required when the target product has
+    multiple format_options entries sharing the same format_kind". ``accepted_values`` is the
+    pin's canonical rejection-set key, and here it lists exactly the options the buyer can
+    name to disambiguate.
+    """
+    details = ctx["result"].wire_error_details(ctx["refused_code"])
+    assert details.get("accepted_values") == [option.strip() for option in options.split(",")], details
 
 
 @then("the buyer is refused UNSUPPORTED_FEATURE")
@@ -1966,29 +2242,6 @@ def then_no_legacy_formats_to_provide(ctx: dict) -> None:
         "the declaration asserts no v1_format_ref, so there is nothing to project -- yet the "
         f"package carries format_ids_to_provide={package['format_ids_to_provide']!r}"
     )
-
-
-@then("the buyer is refused VALIDATION_ERROR naming the packages field")
-def then_refused_validation_naming_packages(ctx: dict) -> None:
-    """The ASSET gate's refusal: a creative whose media asset the seller could not read.
-
-    A DIFFERENT CODE from the closed-set refusal beside it, and that is the whole reason
-    this Then exists rather than reusing the sibling. The two conditions are not the same
-    and the pinned enum separates them: a creative outside the product's published set is
-    UNSUPPORTED_FEATURE ("pick a format this product publishes"), while a creative whose
-    stored assets do not carry the URL and dimensions the seller needs "violates business
-    rules beyond schema validation" -- VALIDATION_ERROR, correctable by re-syncing the
-    creative. A scenario that accepted either code would not notice a gate answering the
-    buyer "this product cannot do that" about a creative the product publishes.
-
-    The CODE and the FIELD, and deliberately not the reason text. The gate collects
-    free-text ``details.reasons``, and ``assert_wire_error`` has no ``message_substr`` on
-    purpose: pinning the sentence would grade the raise site's wording, and the one thing
-    the sentence carries that the envelope does not -- which creative -- is prose rather
-    than a protocol position. WHICH creative is unambiguous here anyway: the scenario
-    assigns exactly one.
-    """
-    ctx["result"].assert_wire_error("VALIDATION_ERROR", field="packages")
 
 
 @then("the buyer is refused UNSUPPORTED_FEATURE naming the packages field")

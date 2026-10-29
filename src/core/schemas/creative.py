@@ -59,6 +59,7 @@ from adcp.types.legacy import (
 )
 from pydantic import (
     AwareDatetime,
+    BaseModel,
     ConfigDict,
     Field,
     RootModel,
@@ -137,6 +138,10 @@ class CreativeStatusEnum(Enum):
     approved = "approved"
     rejected = "rejected"
     pending_review = "pending_review"
+
+
+#: The two members core/creative-asset.json's root oneOf discriminates on, one per arm.
+_FORMAT_IDENTIFIERS: tuple[str, str] = ("format_id", "format_kind")
 
 
 class CreativeAssetRequest(LibraryCreativeAsset):
@@ -233,11 +238,25 @@ class CreativeAssetRequest(LibraryCreativeAsset):
         """
         # The raw payload on the wire path, an instance on the model-to-model path
         # (``from_attributes=True``). Both answer "which identity did the caller supply".
+        #
+        # SUPPLIED MEANS PRESENT, NULL INCLUDED. Each arm of the pinned oneOf is a ``required``
+        # plus a ``not: {required: [...]}``, and JSON Schema's ``required`` is satisfied by the
+        # key being there whatever its value -- so ``{format_kind: "image", format_id: null}``
+        # names the legacy identifier and matches neither arm. Counting ``is not None`` let it
+        # through. A model instance answers the same question with ``model_fields_set``,
+        # which records an explicit null and omits a defaulted field. The one identifier
+        # present must also carry a value: a lone ``format_id: null`` satisfies the v1 arm's
+        # ``required`` and fails its type (core/format-id.json is an object), so it matches
+        # no arm either.
         if isinstance(data, Mapping):
-            supplied = sum(data.get(name) is not None for name in ("format_id", "format_kind"))
+            present = [name for name in _FORMAT_IDENTIFIERS if name in data]
+            valued = [name for name in present if data[name] is not None]
+        elif isinstance(data, BaseModel):
+            present = [name for name in _FORMAT_IDENTIFIERS if name in data.model_fields_set]
+            valued = [name for name in present if getattr(data, name) is not None]
         else:
-            supplied = sum(getattr(data, name, None) is not None for name in ("format_id", "format_kind"))
-        if supplied != 1:
+            present = valued = [name for name in _FORMAT_IDENTIFIERS if getattr(data, name, None) is not None]
+        if len(present) != 1 or present != valued:
             raise PydanticCustomError("oneOf", "provide exactly one of format_id or format_kind")
         return data
 

@@ -642,13 +642,12 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   # looked at format_options[] at all. So before this change a canonical creative was
   # accepted onto any product whatever its closed set said.
   #
-  # A creative passes params=None into the satisfaction function -- it states no canonical
-  # params, because the stored identity is a kind and an option and a creative's dimensions
-  # live on its assets. So the SATISFACTION function can refuse it only on the CLOSED-SET
-  # step, which is what the first two scenarios separate. The gate's OTHER check, the one
-  # that reads those assets, is a different refusal with a different code and is the third
-  # scenario. Grading a creative's assets as satisfaction PARAMS -- dimensions on the
-  # manifest against dimensions on the declaration -- is neither, and is salesagent-ol033.7.
+  # A creative states no canonical params -- the stored identity is a kind and an option --
+  # and its dimensions live on its ASSETS. So the first two scenarios separate the CLOSED-SET
+  # step: a kind the product does not publish is UNSUPPORTED_FEATURE before any asset is
+  # read. A creative whose kind IS published is then graded on its manifest against the
+  # declaration it selects (creative-manifests.mdx § Validation), which is the manifest
+  # section further down; the third scenario here is the first of those refusals.
 
   @T-UC-FORMAT-SATISFACTION-creative-accepted @format_satisfaction @requires_db
   Scenario: a creative whose canonical kind the product publishes is accepted
@@ -702,7 +701,19 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Given the seller declares a canonical format option "fixed_300x250"
     And the buyer assigns a creative identified by canonical kind "image" with its media asset keyed "banner"
     When the Buyer Agent sends the create_media_buy request
-    Then the buyer is refused VALIDATION_ERROR naming the packages field
+    Then the creative is refused CREATIVE_VALIDATION_FAILED_GENERIC naming the packages field
+    And the refusal names "assets.image_main" missing where "image" is accepted
+
+    # THE CODE MOVED, from VALIDATION_ERROR to CREATIVE_VALIDATION_FAILED_GENERIC, and the
+    # condition did not. creative-manifests.mdx § Validation step 2, "Confirm all required
+    # slots are present", is now asked of the declaration the creative selects, and
+    # image_main is the image kind's required slot (formats/canonical/image.json's slots
+    # default). The pinned enum has a creative code for a buyer-correctable creative failure
+    # that no more specific code names, and VALIDATION_ERROR is the generic business-rule
+    # code it is more specific than. The asset gate that answered VALIDATION_ERROR still
+    # runs; the manifest refusal is raised first because it is the creative's own failure.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-manifests.mdx section="Validation"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
 
     # THE CONTROL FOR THE ACCEPT ROW, and the reason that row is not satisfied by a gate
     # that simply stopped checking. This creative and the accepted one are the same kind,
@@ -715,9 +726,10 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     #
     # The CODE differs from its sibling refusal above, and that is graded rather than
     # incidental: a creative outside the published closed set is UNSUPPORTED_FEATURE, while
-    # a creative the product does publish whose assets cannot be read is VALIDATION_ERROR.
-    # The two have different buyer recoveries -- name another format, versus re-sync this
-    # creative -- so a gate that collapsed them would send the buyer to the wrong fix.
+    # a creative the product does publish whose manifest does not fill the declaration is a
+    # creative code. The two have different buyer recoveries -- name another format, versus
+    # re-sync this creative -- so a gate that collapsed them would send the buyer to the
+    # wrong fix.
     #
     # NOT GRADED HERE, and filed rather than assumed: a canonical audio creative carries no
     # dimensions at all and this same gate demands them of every creative
@@ -1362,6 +1374,21 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Then the buyer is refused INVALID_REQUEST
     And the response error issues include keyword oneOf for field creatives.0
 
+  @T-UC-FORMAT-SATISFACTION-manifest-null-legacy-sync @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives refuses a creative naming format_kind beside a null format_id
+    Given the buyer syncs a creative identified by canonical kind "image" beside a null format_id
+    When the Buyer Agent syncs it into the library
+    Then the buyer is refused INVALID_REQUEST
+    And the response error issues include keyword oneOf for field creatives.0
+
+    # REQUIRED COUNTS PRESENCE. core/creative-asset.json's root oneOf arms are
+    # {required: [format_id], not: {required: [format_kind]}} and its mirror, and JSON
+    # Schema's `required` is met by a present key whatever its value -- so a null format_id
+    # still names the legacy identifier, and beside format_kind the item matches neither arm.
+    # The row above sends both identifiers valued; this one differs in the legacy value
+    # being null, which a seller counting `is not None` accepted.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-asset.json pointer=/oneOf
+
   @T-UC-FORMAT-SATISFACTION-manifest-mixed-create @format_satisfaction @requires_db
   Scenario: create_media_buy refuses an uploaded creative naming both format_id and format_kind
     Given the seller declares a canonical format option "fixed_300x250"
@@ -1438,3 +1465,299 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | mode          | prior          | status         |
       | auto-approve  | pending_review | approved       |
       | require-human | approved       | pending_review |
+
+  # ── format_option_ref on the deprecated arm ───────────────────────────────────────────
+  #
+  # core/creative-asset.json declares format_option_ref at the item's top level, beside the
+  # root oneOf on the identifier, and neither arm forbids it: "Structured format option
+  # reference matching one of the target product's format_options[] declarations". So a v1
+  # item naming a format_id may route to an exact option too. The seller used to read the
+  # ref on the canonical arm only and drop it silently on this one. The pair differs only in
+  # whether the option exists; before the fix both were ACCEPTED, because the dropped ref
+  # left display_300x250_image to match the 300x250 declaration on its own.
+  #
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-asset.json pointer=/properties/format_option_ref
+
+  @T-UC-FORMAT-SATISFACTION-manifest-legacy-option-ref-stored @format_satisfaction_sync @requires_db
+  Scenario: a creative synced by format_id with a product option ref is assigned and keeps the ref
+    Given a packaged product declaring a canonical image option fixed at 300x250
+    And the buyer syncs a creative whose format_option_ref names product option "satisfaction_image_mrec" beside format_id "display_300x250_image"
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+    And the creative is stored with its format_option_ref naming product option "satisfaction_image_mrec"
+
+  @T-UC-FORMAT-SATISFACTION-manifest-legacy-option-ref-unpublished @format_satisfaction_sync @requires_db
+  Scenario: a creative synced by format_id with an option ref the product does not publish is refused
+    Given a packaged product declaring a canonical image option fixed at 300x250
+    And the buyer syncs a creative whose format_option_ref names product option "no_such_option" beside format_id "display_300x250_image"
+    When the Buyer Agent assigns it to that package
+    Then the buyer is refused UNSUPPORTED_FEATURE
+
+  @T-UC-FORMAT-SATISFACTION-manifest-legacy-option-ref-size-conflict @format_satisfaction_sync @requires_db
+  Scenario: a creative synced by format_id naming an option its format_id does not fit is refused
+    Given a packaged product declaring a canonical image option fixed at 300x250
+    And the buyer syncs a creative whose format_option_ref names product option "satisfaction_image_mrec" beside format_id "display_728x90_image"
+    When the Buyer Agent assigns it to that package
+    Then the buyer is refused UNSUPPORTED_FEATURE
+
+    # THE REF DOES NOT REPLACE THE format_id. Against the stored row above this differs only
+    # in the named format: display_728x90_image normalizes to image at 728x90, which the
+    # 300x250 declaration the ref names does not accept. Routed by the ref alone it was
+    # ACCEPTED, because the option route never graded the reference and a legacy creative
+    # carries no manifest to grade -- a 728x90 creative trafficked on a fixed 300x250
+    # product. formats.mdx: "Equal format_kind values alone do not prove compatibility";
+    # creative-manifests.mdx § Validation step 5: "do not silently relax the target
+    # contract". The reference resolves and selects nothing on this product, "a single
+    # resolved route that does not satisfy" (media-buy/package-request.json), so the code is
+    # UNSUPPORTED_FEATURE. CONFLICTING_SELECTORS is defined for "A 3.x package request", not
+    # a creative.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/formats.mdx section="Matching and satisfaction"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json
+
+  @T-UC-FORMAT-SATISFACTION-manifest-legacy-option-ref-agrees @format_satisfaction_sync @requires_db
+  Scenario: a creative synced by format_id whose option ref names the declaration its format_id selects is assigned
+    Given a packaged product declaring canonical format options "two_image_options"
+    And the buyer syncs a creative whose format_option_ref names product option "satisfaction_image_leaderboard" beside format_id "display_728x90_image"
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+  @T-UC-FORMAT-SATISFACTION-manifest-legacy-option-ref-disagrees @format_satisfaction_sync @requires_db
+  Scenario: a creative synced by format_id whose option ref names another declaration is refused
+    Given a packaged product declaring canonical format options "two_image_options"
+    And the buyer syncs a creative whose format_option_ref names product option "satisfaction_image_mrec" beside format_id "display_728x90_image"
+    When the Buyer Agent assigns it to that package
+    Then the buyer is refused UNSUPPORTED_FEATURE
+
+    # BOTH HALVES RESOLVE HERE, and still only the first row is assigned. two_image_options
+    # publishes the 300x250 and the 728x90; display_728x90_image selects the 728x90 and each
+    # ref selects one of the two. The two scenarios differ only in which option the ref
+    # names, so a seller that let the ref decide alone accepts both, and one that ignored the
+    # ref accepts both too -- only a seller holding each half to the other refuses the second.
+
+  # ── The MANIFEST against the declaration it selects ───────────────────────────────────
+  #
+  # docs/creative/creative-manifests.mdx § Validation, at the pin:
+  #
+  #   Validate a manifest against the selected product or publisher declaration:
+  #   1. Resolve format_option_ref when present; otherwise select the unambiguous
+  #      compatible format_kind declaration.
+  #   2. Confirm all required slots are present.
+  #   3. Validate each asset against its declared type and technical constraints.
+  #   4. Check fixed dimensions, durations, codecs, file-size limits, and required
+  #      disclosures.
+  #   5. Reject unknown or uncovered selections; do not silently relax the target contract.
+  #
+  #   ... Sellers perform final acceptance during sync_creatives ...
+  #
+  # and docs/creative/formats.mdx § Matching and satisfaction: "Equal format_kind values
+  # alone do not prove compatibility." Every gate that assigns a creative -- create_media_buy,
+  # update_media_buy and the sync_creatives assignment -- grades the creative's manifest
+  # against the declaration it selects. A sync that assigns nothing selects no declaration,
+  # and the manifest is held to its kind's slots.
+  #
+  # THE CODES are the pinned enum's: CREATIVE_SIZE_MISMATCH when only dimensions fail ("The
+  # submitted creative dimensions do not match any size accepted by the selected
+  # packages"), CREATIVE_VALIDATION_FAILED_GENERIC for every other buyer-correctable
+  # failure (a missing or mistyped slot, a file size, a file format, an ambiguous
+  # selection). details.problems[] names each failed manifest path with the value the
+  # asset states and the values the declaration accepts.
+  #
+  # EVERY REFUSAL ROW HAS AN ACCEPT ROW differing in one asset member against the same
+  # product, so a seller that refused every manifest reddens the accept rows and one that
+  # graded kinds alone reddens the refusals -- which is what every refusal row below was
+  # before this change: same-kind creatives were accepted whatever their assets said.
+  #
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-manifests.mdx section="Validation"
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/formats.mdx section="Matching and satisfaction"
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
+
+  @T-UC-FORMAT-SATISFACTION-manifest-create-size-mismatch @format_satisfaction @requires_db
+  Scenario: create_media_buy refuses a same-kind creative whose size the declaration does not accept
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the buyer assigns a canonical "image" creative carrying the "image_728x90" manifest
+    When the Buyer Agent sends the create_media_buy request
+    Then the creative is refused CREATIVE_SIZE_MISMATCH naming the packages field
+    And the refusal names "assets.image_main.width" stating "728" where "300" is accepted
+    And the refusal names "assets.image_main.height" stating "90" where "250" is accepted
+
+    # The accept row is @T-UC-FORMAT-SATISFACTION-creative-accepted: the same product, the
+    # same kind, image_main at 300x250.
+
+  @T-UC-FORMAT-SATISFACTION-manifest-update-size-mismatch @format_satisfaction @requires_db
+  Scenario: update_media_buy refuses a same-kind creative whose size the declaration does not accept
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the buyer already holds a media buy for that product
+    And a canonical "image" creative carrying the "image_728x90" manifest exists
+    When the Buyer Agent assigns that creative through update_media_buy
+    Then the creative is refused CREATIVE_SIZE_MISMATCH naming the "creative_ids" array
+    And the refusal names "assets.image_main.width" stating "728" where "300" is accepted
+
+    # The accept row is @T-UC-FORMAT-SATISFACTION-update-accepted: its creative is
+    # image_main at 300x250.
+
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-accepted @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives accepts an assignment whose manifest satisfies the selected declaration - <declaration> <manifest>
+    Given a packaged product declaring canonical format options "<declaration>"
+    And the buyer syncs a canonical "image" creative carrying the "<manifest>" manifest
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+    Examples:
+      | declaration       | manifest            |
+      | fixed_300x250     | image_300x250       |
+      | fixed_300x250     | image_300x250_200kb |
+      | fixed_300x250     | image_300x250_png   |
+      | two_image_options | image_300x250       |
+      | two_image_options | image_728x90        |
+      | two_mrec_options  | image_300x250_gif   |
+      | retina_300x250    | image_600x500_2x    |
+      | retina_300x250    | image_600x500       |
+      | retina_300x250    | image_300x250       |
+
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-refused @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives refuses an assignment whose manifest fails the selected declaration - <declaration> <manifest>
+    Given a packaged product declaring canonical format options "<declaration>"
+    And the buyer syncs a canonical "image" creative carrying the "<manifest>" manifest
+    When the Buyer Agent assigns it to that package
+    Then the creative is refused <code>
+    And the refusal names "<path>" stating "<stated>" where "<accepted>" is accepted
+
+    Examples:
+      | declaration       | manifest            | code                               | path                              | stated | accepted |
+      | fixed_300x250     | image_728x90        | CREATIVE_SIZE_MISMATCH             | assets.image_main.width           | 728    | 300      |
+      | fixed_300x250     | image_300x250_500kb | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main.file_size_bytes | 512000 | 200      |
+      | fixed_300x250     | image_300x250_gif   | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main.format          | gif    | jpg, png |
+      | fixed_300x250     | image_main_as_text  | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main.asset_type      | text   | image    |
+      | two_image_options | image_160x600       | CREATIVE_SIZE_MISMATCH             | assets.image_main.width           | 160    | 300      |
+      | plain_300x250     | image_600x500_2x    | CREATIVE_SIZE_MISMATCH             | assets.image_main.pixel_ratio     | 2      | 1        |
+      | plain_300x250     | image_600x500       | CREATIVE_SIZE_MISMATCH             | assets.image_main.width           | 600    | 300      |
+
+    # THE PAIRS. Against fixed_300x250 (image 300x250, max_file_size_kb 200, image_formats
+    # jpg/png): 728x90 against 300x250 is the creative half of formats.mdx's fifth rule; 500
+    # KB against 200 KB exactly; gif against png; the image_main slot holding a text asset
+    # against holding an image (step 3, "against its declared type"). The file-size and
+    # format rows are not size failures, so they take the generic code -- the code split is
+    # graded, not only the refusal. Against two_image_options (300x250 and 728x90), 160x600
+    # fits neither and 300x250 and 728x90 each fit one: the size refusal reports the first
+    # declaration's dimensions, and the selection is the one the manifest satisfies, not the
+    # first declared.
+    #
+    # DENSITY IS ITS OWN AXIS. A declaration's width and height are LOGICAL; an image asset's
+    # are intrinsic. formats/canonical/image.json: "an accepted asset's intrinsic width is
+    # width x pixel_ratio", pixel_ratios "[1, 2] accepts both standard and Retina
+    # renditions", "Absence means [1]", and "SDKs determine the effective ratio from
+    # asset.pixel_ratio when supplied, otherwise infer it from intrinsic asset dimensions
+    # divided by the matched logical size". So a 600x500 image -- its ratio stated as 2, or
+    # left to inference -- is accepted by retina_300x250 above, and refused by
+    # plain_300x250, which differs from it only in stating no pixel_ratios: stated, the
+    # ratio 2 is outside [1]; inferred, the only ratio left is 1 and the image is 600 wide.
+    # A density outside the accepted set is an intrinsic size the declaration does not
+    # accept, so it is CREATIVE_SIZE_MISMATCH. The 300x250 row above is the control that a
+    # [1, 2] declaration still takes a standard rendition.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image.json pointer=/properties/pixel_ratios
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/image-asset.json pointer=/properties/pixel_ratio
+
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-file-size-unstated @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives refuses an assignment whose manifest is silent about a capped file size
+    Given a packaged product declaring canonical format options "fixed_300x250"
+    And the buyer syncs a canonical "image" creative carrying the "image_300x250_unsized" manifest
+    When the Buyer Agent assigns it to that package
+    Then the creative is refused CREATIVE_VALIDATION_FAILED_GENERIC
+    And the refusal names "assets.image_main.file_size_bytes" missing where "200" is accepted
+
+    # A CAP THE MANIFEST DOES NOT ANSWER CANNOT BE CHECKED. core/assets/image-asset.json:
+    # file_size_bytes is "Required by agents that advertise a max_file_size_kb constraint",
+    # and fixed_300x250 advertises 200. The accept row is image_300x250 in the outline above,
+    # which differs from this one only in stating its file size; accepting the silent one
+    # would "silently relax the target contract" (creative-manifests.mdx § Validation step 5).
+    # A package SELECTOR silent about the cap still inherits it -- the canonical_formats
+    # storyboard's equivalent-direct-legacy step grades that -- because a selector names a
+    # format and a manifest is the creative.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/image-asset.json pointer=/properties/file_size_bytes
+
+  @T-UC-FORMAT-SATISFACTION-manifest-ambiguous @format_satisfaction_sync @requires_db
+  Scenario: an assignment whose manifest fits two same-kind declarations and names no option ref is refused
+    Given a packaged product declaring canonical format options "two_mrec_options"
+    And the buyer syncs a canonical "image" creative carrying the "image_300x250" manifest
+    When the Buyer Agent assigns it to that package
+    Then the creative is refused CREATIVE_VALIDATION_FAILED_GENERIC
+    And the refusal names the compatible options "satisfaction_image_mrec, satisfaction_image_mrec_gif"
+
+  @T-UC-FORMAT-SATISFACTION-manifest-ambiguous-resolved-by-ref @format_satisfaction_sync @requires_db
+  Scenario: the same manifest naming one of the two options is assigned to it
+    Given a packaged product declaring canonical format options "two_mrec_options"
+    And the buyer syncs a canonical "image" creative carrying the "image_300x250" manifest and naming product option "satisfaction_image_mrec_gif"
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+    And the creative is stored with its format_option_ref naming product option "satisfaction_image_mrec_gif"
+
+    # format_option_ref IS REQUIRED WHEN THE KIND ALONE CANNOT CHOOSE. core/creative-asset.json:
+    # "Required when the target product has multiple format_options entries sharing the same
+    # format_kind; optional when format_kind alone routes the creative to a single
+    # declaration", and canonical-formats.mdx: "without it, the seller can't disambiguate
+    # which option the buyer is shipping against". creative-manifests.mdx § Validation step 1
+    # says what routing by the kind alone means for a seller: "select the unambiguous
+    # compatible format_kind declaration". two_mrec_options publishes two 300x250 images
+    # differing in image_formats; a 300x250 manifest stating no file format is compatible
+    # with both, so nothing is unambiguous and the refusal names both options, the values the
+    # ref can take. The accept rows above are the other outcome of step 1: a gif manifest
+    # fits only the gif option, and each two_image_options row fits one size. The row just
+    # above resolves the ambiguous manifest by the ref.
+    #
+    # The pin names no code for a missing ref. CREATIVE_REPRESENTATION_UNRESOLVED is about a
+    # CreativeRepresentationSet and its details MUST carry one rejection per representation
+    # id, which a plain manifest has none of; the generic creative code is the one the enum
+    # reserves for a buyer-correctable creative failure no specific code names.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-asset.json pointer=/properties/format_option_ref
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/error-details/creative-representation-unresolved.json
+
+  @T-UC-FORMAT-SATISFACTION-manifest-library-accepted @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives stores a library creative that fills the slots its kind requires
+    Given the buyer syncs a canonical "image" creative carrying the "image_300x250" manifest
+    When the Buyer Agent syncs it into the library
+    Then the creative is stored carrying canonical kind "image"
+
+  @T-UC-FORMAT-SATISFACTION-manifest-library-slot-missing @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives refuses a library creative that does not fill its kind's slots - <manifest>
+    Given the buyer syncs a canonical "image" creative carrying the "<manifest>" manifest
+    When the Buyer Agent syncs it into the library
+    Then the creative is reported failed with CREATIVE_VALIDATION_FAILED_GENERIC and nothing is stored
+
+    Examples:
+      | manifest           |
+      | image_unnamed      |
+      | image_main_as_text |
+
+    # A SYNC THAT ASSIGNS NOTHING SELECTS NO DECLARATION, so the manifest is held to the
+    # canonical format its format_kind names: formats/canonical/image.json's slots default
+    # requires image_main, an image. image_unnamed keys its image as `banner`, which no slot
+    # names, and image_main_as_text fills the slot with a text asset. The accept row above
+    # differs from both in that one asset. The refusal is per creative -- the batch completes
+    # and the entry fails -- and nothing is written.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image.json pointer=/properties/slots/default
+
+  @T-UC-FORMAT-SATISFACTION-manifest-legacy-only-product-accepted @format_satisfaction_sync @requires_db
+  Scenario: a canonical creative filling its kind's slots is assigned to a product publishing no declaration
+    Given a packaged product declaring only the deprecated format_ids
+    And the buyer syncs a canonical "image" creative carrying the "image_300x250" manifest
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+  @T-UC-FORMAT-SATISFACTION-manifest-legacy-only-product-refused @format_satisfaction_sync @requires_db
+  Scenario: a canonical creative missing its kind's slot is refused by a product publishing no declaration
+    Given a packaged product declaring only the deprecated format_ids
+    And the buyer syncs a canonical "image" creative carrying the "image_unnamed" manifest
+    When the Buyer Agent assigns it to that package
+    Then the creative is refused CREATIVE_VALIDATION_FAILED_GENERIC
+    And the refusal names "assets.image_main" missing where "image" is accepted
+
+    # AN ASSIGNMENT THAT SELECTS NO DECLARATION STILL GRADES THE MANIFEST. A product
+    # publishing only the deprecated format_ids has no format_options[] entry for the
+    # canonical creative to select, so there is no declaration to hold it to -- and before
+    # this pair the manifest was graded nowhere: the same `banner`-keyed image the library
+    # sync refuses was assigned. It is held to its kind, as a sync that assigns nothing is:
+    # formats/canonical/image.json's slots default requires image_main. The two scenarios
+    # differ only in that one asset.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-manifests.mdx section="Validation"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image.json pointer=/properties/slots/default

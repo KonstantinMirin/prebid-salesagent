@@ -805,6 +805,28 @@ Feature: BR-UC-002 Create Media Buy
     # some other list also carries could not establish.
     #
     # @source repo=adcp ref=v3.2.7 path=dist/schemas/3.2.7/core/product-format-declaration.json
+
+  @T-UC-002-ext-canonical-product-slots-inline @extension @creative @post-f2
+  Scenario: an inline creative keyed to the slot its product renames is uploaded and assigned
+    Given a valid create_media_buy request uploading an inline creative keyed to the slot its product renames
+    And the account exists and is active
+    When the Buyer Agent sends the create_media_buy request
+    Then the response should succeed
+    And the system should upload the creatives to the creative library
+    And the system should assign the uploaded creatives to packages
+
+    # THE SAME CREATIVE AS THE SCENARIO ABOVE, SENT INLINE. create_media_buy syncs a
+    # package's inline creatives before the package exists, so that sync names no
+    # assignment -- and a sync that assigns nothing holds a canonical manifest to its kind's
+    # slots, where `image` requires `image_main`. This creative is assigned the moment the
+    # buy exists, and creative-manifests.mdx § Basic structure keys its assets "by
+    # asset_group_id from the matched declaration's params.slots[]": the product's, which
+    # names `hero_shot` and not `image_main`. Held to the kind, it was refused for a slot
+    # it was never owed, and the refusal came back as CREATIVE_REJECTED, a content-policy
+    # code. update_media_buy passes its assignments to the sync and already graded the same
+    # creative against the declaration, so the two tools gave the same input two answers.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-manifests.mdx section="Basic structure"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-format-declaration.json
     # --- ext-r: Account Not Found ---
 
   @T-UC-002-ext-r @extension @ext-r @error @post-f1 @post-f2 @post-f3
