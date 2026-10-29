@@ -1485,35 +1485,52 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Valid partitions
       | partition                        | goals_value                                                                                                                                                             | outcome |
-      | single_metric_goal               | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                | success |
-      | single_event_goal                | [{"kind": "event", "event_sources": [{"event_source_id": "pixel-1", "event_type": "purchase"}]}]                                                                        | success |
-      | multiple_mixed_goals             | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase"}], "priority": 2}]      | success |
-      | metric_with_cost_per_target      | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0.50}}]                                                                                 | success |
-      | metric_with_threshold_rate       | [{"kind": "metric", "metric": "views", "target": {"kind": "threshold_rate", "value": 0.70}}]                                                                            | success |
-      | event_with_roas_target           | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase", "value_field": "value"}], "target": {"kind": "per_ad_spend", "value": 4.0}}]   | success |
-      | event_with_maximize_value        | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase", "value_field": "value"}], "target": {"kind": "maximize_value"}}]                | success |
-      | reach_with_frequency             | [{"kind": "metric", "metric": "reach", "reach_unit": "individuals", "target_frequency": {"min": 1, "max": 3, "window": {"interval": 7, "unit": "days"}}}]              | success |
-      | completed_views_with_duration    | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 15}]                                                                                          | success |
-      | event_with_attribution_window    | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase"}], "attribution_window": {"post_click": {"interval": 7, "unit": "days"}, "post_view": {"interval": 1, "unit": "days"}}}] | success |
-      | event_multi_source_dedup         | [{"kind": "event", "event_sources": [{"event_source_id": "pixel", "event_type": "purchase", "value_field": "value"}, {"event_source_id": "api", "event_type": "purchase", "value_field": "order_total", "value_factor": 0.01}]}] | success |
-      | goals_with_explicit_priorities   | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "metric", "metric": "views", "priority": 2}]                                                          | success |
-      | refund_event_with_negative_factor | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "refund", "value_field": "value", "value_factor": -1}]}]                                   | success |
+      | single_metric_goal               | [{"kind": "metric", "metric": "clicks"}]                                                                                                                                | error UNSUPPORTED_FEATURE with suggestion |
+      | single_event_goal                | [{"kind": "event", "event_sources": [{"event_source_id": "pixel-1", "event_type": "purchase"}]}]                                                                        | error UNSUPPORTED_FEATURE with suggestion |
+      | multiple_mixed_goals             | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase"}], "priority": 2}]      | error UNSUPPORTED_FEATURE with suggestion |
+      | metric_with_cost_per_target      | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0.50}}]                                                                                 | error UNSUPPORTED_FEATURE with suggestion |
+      | metric_with_threshold_rate       | [{"kind": "metric", "metric": "views", "target": {"kind": "threshold_rate", "value": 0.70}}]                                                                            | error UNSUPPORTED_FEATURE with suggestion |
+      | event_with_roas_target           | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase", "value_field": "value"}], "target": {"kind": "per_ad_spend", "value": 4.0}}]   | error UNSUPPORTED_FEATURE with suggestion |
+      | event_with_maximize_value        | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase", "value_field": "value"}], "target": {"kind": "maximize_value"}}]                | error UNSUPPORTED_FEATURE with suggestion |
+      | reach_with_frequency             | [{"kind": "metric", "metric": "reach", "reach_unit": "individuals", "target_frequency": {"min": 1, "max": 3, "window": {"interval": 7, "unit": "days"}}}]              | error UNSUPPORTED_FEATURE with suggestion |
+      | completed_views_with_duration    | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 15}]                                                                                          | error UNSUPPORTED_FEATURE with suggestion |
+      | event_with_attribution_window    | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "purchase"}], "attribution_window": {"post_click": {"interval": 7, "unit": "days"}, "post_view": {"interval": 1, "unit": "days"}}}] | error UNSUPPORTED_FEATURE with suggestion |
+      | event_multi_source_dedup         | [{"kind": "event", "event_sources": [{"event_source_id": "pixel", "event_type": "purchase", "value_field": "value"}, {"event_source_id": "api", "event_type": "purchase", "value_field": "order_total", "value_factor": 0.01}]}] | error UNSUPPORTED_FEATURE with suggestion |
+      | goals_with_explicit_priorities   | [{"kind": "metric", "metric": "clicks", "priority": 1}, {"kind": "metric", "metric": "views", "priority": 2}]                                                          | error UNSUPPORTED_FEATURE with suggestion |
+      | refund_event_with_negative_factor | [{"kind": "event", "event_sources": [{"event_source_id": "px", "event_type": "refund", "value_field": "value", "value_factor": -1}]}]                                   | error UNSUPPORTED_FEATURE with suggestion |
 
     Examples: Invalid partitions
       | partition              | goals_value                                                                                                        | outcome                                      |
-      | empty_array            | []                                                                                                                  | error with suggestion                        |
-      | missing_kind           | [{"metric": "clicks"}]                                                                                              | error with suggestion                        |
-      | invalid_kind           | [{"kind": "custom"}]                                                                                                | error with suggestion                        |
-      | metric_missing_metric  | [{"kind": "metric"}]                                                                                                | error with suggestion                        |
-      | invalid_metric_enum    | [{"kind": "metric", "metric": "conversions"}]                                                                       | error with suggestion                        |
-      | event_missing_sources  | [{"kind": "event"}]                                                                                                 | error with suggestion                        |
-      | event_sources_empty    | [{"kind": "event", "event_sources": []}]                                                                            | error with suggestion                        |
-      | target_value_zero      | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0}}]                                | error with suggestion                        |
-      | target_value_negative  | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": -1.0}}]                             | error with suggestion                        |
-      | priority_zero          | [{"kind": "metric", "metric": "clicks", "priority": 0}]                                                             | error with suggestion                        |
-      | priority_negative      | [{"kind": "metric", "metric": "clicks", "priority": -1}]                                                            | error with suggestion                        |
-      | view_duration_zero     | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 0}]                                       | error with suggestion                        |
-      | event_source_id_empty  | [{"kind": "event", "event_sources": [{"event_source_id": "", "event_type": "purchase"}]}]                            | error with suggestion                        |
+      | empty_array            | []                                                                                                                  | error INVALID_REQUEST on packages[0].optimization_goals with suggestion |
+      | missing_kind           | [{"metric": "clicks"}]                                                                                              | error INVALID_REQUEST on packages[0].optimization_goals[0] with suggestion |
+      | invalid_kind           | [{"kind": "custom"}]                                                                                                | error INVALID_REQUEST on packages[0].optimization_goals[0] with suggestion |
+      | metric_missing_metric  | [{"kind": "metric"}]                                                                                                | error INVALID_REQUEST on packages[0].optimization_goals[0].metric with suggestion |
+      | invalid_metric_enum    | [{"kind": "metric", "metric": "conversions"}]                                                                       | error INVALID_REQUEST on packages[0].optimization_goals[0].metric with suggestion |
+      | event_missing_sources  | [{"kind": "event"}]                                                                                                 | error INVALID_REQUEST on packages[0].optimization_goals[0].event_sources with suggestion |
+      | event_sources_empty    | [{"kind": "event", "event_sources": []}]                                                                            | error INVALID_REQUEST on packages[0].optimization_goals[0].event_sources with suggestion |
+      | target_value_zero      | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": 0}}]                                | error INVALID_REQUEST on packages[0].optimization_goals[0].target.value with suggestion |
+      | target_value_negative  | [{"kind": "metric", "metric": "clicks", "target": {"kind": "cost_per", "value": -1.0}}]                             | error INVALID_REQUEST on packages[0].optimization_goals[0].target.value with suggestion |
+      | priority_zero          | [{"kind": "metric", "metric": "clicks", "priority": 0}]                                                             | error INVALID_REQUEST on packages[0].optimization_goals[0].priority with suggestion |
+      | priority_negative      | [{"kind": "metric", "metric": "clicks", "priority": -1}]                                                            | error INVALID_REQUEST on packages[0].optimization_goals[0].priority with suggestion |
+      | view_duration_zero     | [{"kind": "metric", "metric": "completed_views", "view_duration_seconds": 0}]                                       | error INVALID_REQUEST on packages[0].optimization_goals[0].view_duration_seconds with suggestion |
+      | event_source_id_empty  | [{"kind": "event", "event_sources": [{"event_source_id": "", "event_type": "purchase"}]}]                            | error INVALID_REQUEST on packages[0].optimization_goals[0].event_sources[0].event_source_id with suggestion |
+    # REGROUNDED to the pin. The product this outline seeds declares neither
+    # metric_optimization nor conversion_tracking, and core/product.json makes those the
+    # capability: metric_optimization "Presence indicates the product supports
+    # optimization_goals with kind: 'metric'", and "event optimization goals are only
+    # accepted on products with conversion_tracking". So the schema-valid goals (the
+    # "Valid partitions", which expected success) are refused with UNSUPPORTED_FEATURE.
+    # The schema-invalid goals are refused before that, by the request schema, as
+    # INVALID_REQUEST on the member that broke it (package-update.json minItems 1;
+    # optimization-goal.json kind discriminator, metric enum, event_sources minItems 1,
+    # target.value exclusiveMinimum 0, priority minimum 1, view_duration_seconds
+    # exclusiveMinimum 0, event_source_id minLength 1). The bare "error with suggestion"
+    # these rows carried was also satisfied by the UNSUPPORTED_FEATURE refusal, so it
+    # could not tell a schema rejection from the capability one.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/metric_optimization
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/conversion_tracking
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/optimization-goal.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/optimization_goals
 
   @T-UC-003-boundary-optimization-goals @boundary @optimization_goals
   Scenario Outline: Optimization goals boundary validation - <boundary_point>
