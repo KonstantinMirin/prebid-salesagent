@@ -3263,7 +3263,12 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy success spec
     And the response should succeed
+    And the package frequency_cap should be echoed and recorded on the package, not at the media buy root
     # v3.1: core/frequency-cap.json — the level follows the owning field, not a property
+    # core/package.json targeting_overlay: "Sellers MUST echo an applied package frequency_cap
+    # independently from any MediaBuy root cap"; the record is read too, since an echo of the
+    # request alone passes a seller that stores nothing.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/targeting_overlay
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-frequency-cap-scope-unregistered @v31 @frequency-cap-scope @targeting @validation @post-f2

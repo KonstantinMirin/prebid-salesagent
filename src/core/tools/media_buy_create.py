@@ -4196,7 +4196,12 @@ async def _create_media_buy_impl(
                         "name": getattr(resp_package, "name", None),  # Include package name from adapter response
                         "product_id": getattr(resp_package, "product_id", None),
                         "budget": getattr(resp_package, "budget", None),
-                        "targeting_overlay": getattr(resp_package, "targeting_overlay", None),
+                        # The buyer's overlay, as the pending path records it. The adapter's
+                        # package carries none (``_build_package_responses`` sets only id and
+                        # paused), so reading it there stored None for every auto-approved buy,
+                        # and readback lost the overlay core/package.json says the seller MUST
+                        # echo -- an applied package frequency_cap among it.
+                        "targeting_overlay": request_pkg.targeting_overlay if request_pkg else None,
                         "creative_ids": getattr(resp_package, "creative_ids", None),
                         "creative_assignments": getattr(resp_package, "creative_assignments", None),
                         # The buyer's catalogs, recorded so a later update_media_buy can
