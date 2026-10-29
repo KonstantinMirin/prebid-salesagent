@@ -2549,6 +2549,33 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F3: create the additional packages via a separate create_media_buy
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
 
+  @T-UC-003-ext-u-valid-actions @extension @ext-u @BR-RULE-217 @schema-v3.1 @post-s1
+  Scenario: A seller without mid-flight package additions does not advertise add_packages (ext-u)
+    Given the tenant is configured for auto-approval
+    And the existing media buy has start_time "2020-01-01T00:00:00Z" and end_time "2099-02-01T00:00:00Z"
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    | budget     | 5000    |
+    And the package "pkg_001" exists in the media buy
+    And the updated daily spend does not exceed max_daily_package_spend
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy success spec
+    And the response should succeed
+    And the wire valid_actions should include "update_packages"
+    And the wire valid_actions should not include "add_packages"
+    # LOCAL ADDITION, the advertisement half of BR-RULE-217 INV-1 graded on the wire.
+    # update-media-buy-request.json /properties/new_packages: "Sellers that support mid-flight
+    # package additions advertise add_packages in both valid_actions[] (deprecated) and as an
+    # entry in available_actions[] (authoritative)." This seller does not, so a live buy's
+    # valid_actions carries update_packages (its active status allows it) and not add_packages.
+    # The flight window spans today so the buy date-refines to active, not completed (whose
+    # valid_actions is empty and would satisfy "not include" vacuously).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/properties/new_packages
+
   @T-UC-003-new-packages-add @invariant @BR-RULE-217 @schema-v3.1 @post-s1 @post-s2
   Scenario: Supporting seller adds new packages atomically (INV-2/INV-4)
     Given the tenant is configured for auto-approval

@@ -615,14 +615,9 @@ def given_update_requires_admin(ctx: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# GIVEN steps — mid-flight package addition (ext-u) + cancellation (ext-v)
-#   #1417. Both are production gaps: update_media_buy never reads
-#   new_packages or canceled, and has_updatable_fields() (schemas/_base.py)
-#   omits both — so a request carrying only media_buy_id + one of them trips the
-#   empty-update VALIDATION_ERROR path instead of UNSUPPORTED_FEATURE /
-#   NOT_CANCELLABLE. These steps build the real request and dispatch it on the
-#   wire; the strict xfail markers in conftest flip to passes when production
-#   implements the mid-flight capability gate and state-based cancellation.
+# GIVEN steps — cancellation (ext-v)
+#   #1417. The mid-flight package-addition steps (ext-u) live beside their
+#   BR-RULE-217 siblings in uc003_update_media_buy.py.
 # ═══════════════════════════════════════════════════════════════════════
 
 
@@ -642,38 +637,6 @@ def given_named_media_buy_status(ctx: dict, mb_label: str, status: str) -> None:
     )
     mb.status = status
     ctx["env"]._commit_factory_data()
-
-
-@given("the request includes new_packages with one complete package-request")
-def given_request_new_packages_one(ctx: dict) -> None:
-    """Add one complete package-request to the update's new_packages list.
-
-    new_packages IS a valid UpdateMediaBuyRequest field, but production never
-    reads it and has_updatable_fields() omits it (production gap, ext-u).
-    """
-    kwargs = _ensure_update_defaults(ctx)
-    product = ctx.get("default_product")
-    product_id = product.product_id if product else "guaranteed_display"
-    kwargs["new_packages"] = [
-        {
-            "product_id": product_id,
-            "budget": 5000.0,
-            "pricing_option_id": "cpm_usd_fixed",
-        }
-    ]
-
-
-@given(parsers.parse('the media buy\'s valid_actions does NOT advertise "{action}"'))
-def given_valid_actions_excludes(ctx: dict, action: str) -> None:
-    """Record that the media buy's valid_actions does NOT advertise an action.
-
-    BR-RULE-217 INV-1: new_packages on a seller not advertising add_packages
-    must be rejected with UNSUPPORTED_FEATURE. Production has no such capability
-    gate (it never reads new_packages), so this precondition is recorded for the
-    wire-ready strict xfail. We assert the precondition is meaningful: the action
-    must be a real valid-action name the gate would consult.
-    """
-    assert action, "valid_actions exclusion step requires a non-empty action name"
 
 
 @given("the media buy has committed delivery that the seller cannot cancel mid-flight")

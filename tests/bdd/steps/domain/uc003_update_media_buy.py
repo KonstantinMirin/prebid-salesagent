@@ -245,6 +245,20 @@ def then_wire_valid_actions_include(ctx: dict, action: str) -> None:
     assert action in actions, f"Expected '{action}' in wire valid_actions, got {actions!r}"
 
 
+@then(parsers.parse('the wire valid_actions should not include "{action}"'))
+def then_wire_valid_actions_exclude(ctx: dict, action: str) -> None:
+    """Assert the REAL wire ``valid_actions`` list is present and does not contain *action*.
+
+    Present and non-empty, because an absent or empty list omits every action and so would
+    pass for a seller that advertised nothing; the scenarios using this step pair it with an
+    "include" line that names an action the buy's status does allow.
+    """
+    wire = wire_dict(ctx)
+    actions = wire.get("valid_actions")
+    assert actions, f"Expected a non-empty wire valid_actions, got {actions!r}"
+    assert action not in actions, f"Expected '{action}' absent from wire valid_actions, got {actions!r}"
+
+
 @given(parsers.parse('the media buy is in "{status}" status'))
 def given_media_buy_status(ctx: dict, status: str) -> None:
     """Set precondition: mutate the existing media buy to the specified status.
@@ -2804,9 +2818,11 @@ def given_idempotency_key_spent(ctx: dict, key: str) -> None:
 # BR-RULE-217 / BR-RULE-010: new_packages
 # ═══════════════════════════════════════════════════════════════════════
 #
-# Production does not read new_packages today (salesagent-ol033.20.11): the DTO accepts the
-# member and nothing applies it. These steps build the request the pin describes and grade
-# the result on the wire, so they fail until the seller implements the addition.
+# This seller does not add packages to a live buy: it advertises no add_packages and refuses
+# new_packages UNSUPPORTED_FEATURE (update-media-buy-request.json /properties/new_packages).
+# These steps build the request the pin describes and grade the result on the wire; the
+# scenarios written for a SUPPORTING seller fail at their own precondition, which reads the
+# seller's advertisement rather than asserting it (salesagent-ol033.25 owns the feature).
 
 
 def _product_pair(ctx: dict, product_id: str) -> tuple[str, str]:
@@ -2837,6 +2853,12 @@ def _set_new_packages(ctx: dict, product_ids: list[str]) -> list[dict[str, Any]]
     _ensure_update_defaults(ctx)["new_packages"] = entries
     ctx["new_package_product_ids"] = [product_id for product_id, _option in pairs]
     return entries
+
+
+@given("the request includes new_packages with one complete package-request")
+def given_new_packages_one(ctx: dict) -> None:
+    """One complete package-request for a product the buy does not hold yet."""
+    _set_new_packages(ctx, ["prod_new_a"])
 
 
 @given("the request includes new_packages with two complete package-requests")
@@ -2895,19 +2917,37 @@ def given_update_with_package_set(ctx: dict, label: str, boundary: str) -> None:
     )
 
 
-@given(parsers.parse('the media buy\'s valid_actions advertises "{action}"'))
-def given_valid_actions_advertise(ctx: dict, action: str) -> None:
-    """Assert the seller's own derivation advertises *action* for the buy in its seeded state.
+def _advertised_actions(ctx: dict) -> list[str]:
+    """The ``valid_actions`` the seller derives for the Background's buy in its seeded state.
 
     ``_adcp_status_and_actions`` is the one function every update response takes
     ``valid_actions`` from, so this is the list the buyer would read before the update.
     A precondition, read from production rather than set: a seller advertises what its
-    state machine says, and no test input can make it advertise more.
+    state machine says, and no test input can make it advertise more or less.
     """
     from src.core.tools.media_buy_update import _adcp_status_and_actions
 
     _status, actions = _adcp_status_and_actions(_existing_media_buy(ctx))
+    return actions
+
+
+@given(parsers.parse('the media buy\'s valid_actions advertises "{action}"'))
+def given_valid_actions_advertise(ctx: dict, action: str) -> None:
+    """Assert the seller advertises *action* for the buy in its seeded state."""
+    actions = _advertised_actions(ctx)
     assert action in actions, f"the seller does not advertise {action!r} for this buy; valid_actions={actions!r}"
+
+
+@given(parsers.parse('the media buy\'s valid_actions does NOT advertise "{action}"'))
+def given_valid_actions_excludes(ctx: dict, action: str) -> None:
+    """Assert the seller does not advertise *action* for the buy in its seeded state.
+
+    A non-empty list is required too: a terminal buy advertises nothing, and "add_packages
+    is absent" would then hold of a buy no update could reach at all.
+    """
+    actions = _advertised_actions(ctx)
+    assert actions, "the seeded buy advertises no action at all, so the absence of one grades nothing"
+    assert action not in actions, f"the seller advertises {action!r} for this buy; valid_actions={actions!r}"
 
 
 @then("both new packages should appear in the affected_packages")

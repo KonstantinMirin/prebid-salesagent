@@ -36,10 +36,40 @@ the reference date is the buyer-visible difference.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date
 from typing import Any
 
+from adcp.server.helpers import valid_actions_for_status
+
 from src.core.database.models import PersistedMediaBuyStatus
+
+#: The ``update_media_buy`` actions the SDK's state machine lists that THIS seller does not
+#: perform, each mapped to the request field that asks for it.
+#:
+#: ``adcp.server.helpers.MEDIA_BUY_STATE_MACHINE`` is a reference table -- its own docstring
+#: says to "inspect or extend" it -- and it lists ``add_packages`` for every pre-terminal
+#: status. ``media-buy/update-media-buy-request.json`` (``/properties/new_packages``) ties
+#: the advertisement to the capability: "Sellers that support mid-flight package additions
+#: advertise ``add_packages`` in both ``valid_actions[]`` (deprecated) and as an entry in
+#: ``available_actions[]`` (authoritative). Sellers that do not support this MUST reject
+#: with ACTION_NOT_ALLOWED (preferred) or UNSUPPORTED_FEATURE (legacy)." This seller does
+#: not add packages to a live buy, so it neither advertises the action nor accepts the field.
+#: ONE declaration, read twice: :func:`seller_valid_actions` leaves the action out of every
+#: ``valid_actions[]`` this seller emits, and ``update_media_buy`` refuses the field it maps
+#: to.
+UNSUPPORTED_ACTIONS: Mapping[str, str] = {"add_packages": "new_packages"}
+
+
+def seller_valid_actions(status: str) -> list[str]:
+    """The ``valid_actions[]`` this seller advertises for a media buy in *status*.
+
+    The SDK's state machine for the status, less :data:`UNSUPPORTED_ACTIONS`. Every surface
+    that emits ``valid_actions`` (create, update and get_media_buys) reads it here, so the
+    three cannot advertise different sets for one buy.
+    """
+    return [action for action in valid_actions_for_status(status) if action not in UNSUPPORTED_ACTIONS]
+
 
 # Keyed by the vocabulary TYPE rather than by bare strings, so a member with no
 # projection row is a missing key here rather than a value nobody notices. The

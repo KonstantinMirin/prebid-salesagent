@@ -15,10 +15,11 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
-from adcp.server.helpers import MEDIA_BUY_STATE_MACHINE, is_terminal_status, valid_actions_for_status
+from adcp.server.helpers import MEDIA_BUY_STATE_MACHINE, is_terminal_status
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
 
+from src.core.tools._media_buy_status import UNSUPPORTED_ACTIONS, seller_valid_actions
 from src.core.tools.media_buy_list import _compute_status
 
 if TYPE_CHECKING:
@@ -110,7 +111,7 @@ def _adcp_status_and_actions(buy: "MediaBuy", today: date | None = None) -> tupl
     ``valid_actions`` is derived from the resulting AdCP status so a persisted value
     whose name differs from its AdCP value (``scheduled``/``approved``/
     ``pending_approval``/``failed``/``draft``) never feeds a non-AdCP token to
-    ``valid_actions_for_status`` (which would yield ``[]`` + a null status).
+    ``seller_valid_actions`` (which would yield ``[]`` + a null status).
 
     The row is REQUIRED. Every caller obtains it from
     ``MediaBuyRepository.get_by_id_or_raise``, which raises
@@ -127,7 +128,7 @@ def _adcp_status_and_actions(buy: "MediaBuy", today: date | None = None) -> tupl
     if today is None:
         today = datetime.now(UTC).date()
     media_buy_status: MediaBuyStatus | None = _compute_status(buy, today) if buy.status else None
-    valid_actions = valid_actions_for_status(media_buy_status.value) if media_buy_status else []
+    valid_actions = seller_valid_actions(media_buy_status.value) if media_buy_status else []
     return media_buy_status, valid_actions
 
 
@@ -356,13 +357,34 @@ def _refuse_unapplied_package_fields(req: UpdateMediaBuyRequest) -> None:
                 raise AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(capability=name))
 
 
+def _refuse_unsupported_actions(req: UpdateMediaBuyRequest) -> None:
+    """Refuse an update asking for an action this seller does not perform, whatever the buy's state.
+
+    ``media-buy/update-media-buy-request.json`` (``/properties/new_packages``): "Sellers that
+    do not support this MUST reject with ACTION_NOT_ALLOWED (preferred) or
+    UNSUPPORTED_FEATURE (legacy)". UNSUPPORTED_FEATURE, the code BR-UC-003 BR-RULE-217 INV-1
+    grades. The action set and the field each one maps to are
+    :data:`~src.core.tools._media_buy_status.UNSUPPORTED_ACTIONS`, the same declaration that
+    keeps the action out of ``valid_actions[]``, so what is refused here is exactly what is
+    not advertised there.
+
+    Raised BEFORE the UoW opens, for the reason :func:`_refuse_unapplied_package_fields`
+    gives: the refusal is a property of the request, and the whole update stays unapplied.
+    """
+    for action in _requested_actions(req):
+        if (field := UNSUPPORTED_ACTIONS.get(action)) is not None:
+            raise AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(capability=action), field=field)
+
+
 def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
     """Derive the AdCP buyer-action names implied by an update request.
 
     Returned names align with ``MEDIA_BUY_STATE_MACHINE`` keys so they can
-    be intersected against ``valid_actions_for_status(current_status)``.
+    be intersected against ``seller_valid_actions(current_status)``.
     """
     actions: list[str] = []
+    if req.new_packages:
+        actions.append("add_packages")
     if req.paused is True:
         actions.append("pause")
     if req.paused is False:
@@ -641,6 +663,7 @@ def _update_media_buy_impl(
     # Capability refusal, above the UoW for the same reason the webhook gates are: the spec
     # puts this rejection "before any mutation", so no transaction may be open when it fires.
     _refuse_unapplied_package_fields(req)
+    _refuse_unsupported_actions(req)
 
     # ── Workflow-step bookkeeping fence ──────────────────────────────────
     # Hoist ``ctx_manager`` and ``step`` out of the try below so the
@@ -698,7 +721,7 @@ def _update_media_buy_impl(
                 )
 
             _requested = _requested_actions(req)
-            _allowed = set(valid_actions_for_status(_current_status))
+            _allowed = set(seller_valid_actions(_current_status))
             # Only enforce state machine for statuses defined in the spec.
             # Pre-confirmation internal states (e.g., "draft") are not in the
             # SDK state machine — allow all actions on those.
