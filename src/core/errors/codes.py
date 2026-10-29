@@ -415,7 +415,8 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
         ErrorCode.PRODUCT_UNAVAILABLE: 422,
         ErrorCode.UNSUPPORTED_FEATURE: 422,
         # Correctable per the pin ("adjust the proposed terms and retry"): the proposal is
-        # well-formed and refused on its merits against what the product offers.
+        # well-formed and refused on its merits -- against what the product offers, or as a
+        # combination (create_media_buy.mdx, the one-currency rule).
         ErrorCode.TERMS_REJECTED: 422,
         # Same band and the same reasoning as NOT_CANCELLABLE above: absent from this map
         # it fell to the 500 default, which the 5xx band below defines as "the buyer cannot

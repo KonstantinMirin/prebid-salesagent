@@ -2172,6 +2172,22 @@ def _validate_pricing_model_selection(
             ),
         )
 
+    # One currency per media buy (create_media_buy.mdx, Pricing & Currency): "Every selected
+    # pricing option MUST declare that currency ... Split products requiring another
+    # currency into a separate media buy." The refusal is TERMS_REJECTED naming the
+    # incompatible package (same document, seller-optimized allocation, which extends the
+    # rule to fixed buys; graded by seller_optimized_budget.yaml
+    # reject_mixed_currency_shared_buy).
+    if campaign_currency and selected_option.currency != campaign_currency:
+        raise AdCPTermsRejectedError(
+            field=package_field_path("pricing_option_id", package_index),
+            details=PricingValidationDetails(
+                product_id=product.product_id,
+                rejected_value=selected_option.currency,
+                accepted_values=[campaign_currency],
+            ),
+        )
+
     # Validate auction pricing
     if not selected_option.is_fixed:
         if not package.bid_price:
@@ -2971,11 +2987,14 @@ async def _create_media_buy_impl(
                                 f"Resolved legacy pricing_option_id for product {package.product_id}: {package.pricing_option_id}"
                             )
 
-            # Get currency from product pricing options (per AdCP spec)
-            request_currency: str | None = None
+            # The buy's one currency. When the buyer sends total_budget, its currency IS the
+            # denomination ("Its currency is the single media-buy denomination",
+            # create_media_buy.mdx, total_budget), so every package -- the first included --
+            # is checked against it below. Otherwise the first package's selected option sets it.
+            request_currency: str | None = req.total_budget.currency if req.total_budget else None
 
-            # First, try to get currency from first package's pricing option
-            if req.packages and len(req.packages) > 0:
+            # Otherwise, the currency of the first package's selected pricing option
+            if not request_currency and req.packages:
                 first_package = req.packages[0]
                 package_product_ids = [first_package.product_id] if first_package.product_id else []
 

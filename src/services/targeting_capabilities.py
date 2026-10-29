@@ -27,7 +27,7 @@ the per-dimension table and the apply-exactly-or-reject decision it needs.
 
 from collections import Counter
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
@@ -38,6 +38,12 @@ from src.core.validation_helpers import PACKAGES_FIELD, package_field_path
 
 if TYPE_CHECKING:
     from src.core.database.models import Product
+
+#: Whether a buyer can sync catalogs to this seller. False until a sync_catalogs tool
+#: ships. ONE fact with two readers: get_adcp_capabilities declares it as
+#: ``catalog_management``, and :func:`raise_if_undeclared_overlay_dimension` refuses
+#: ``store_catchments`` -- a dimension that references a synced catalog -- while it is False.
+CATALOG_MANAGEMENT_SUPPORTED: Final[bool] = False
 
 
 def supports_property_list_filtering(adapter: object | type | None) -> bool:
@@ -306,17 +312,32 @@ UNDECLARED_OVERLAY_DIMENSIONS: tuple[str, ...] = ("geo_proximity", "keyword_targ
 
 
 def raise_if_undeclared_overlay_dimension(targeting: AnyTargeting, package_index: int) -> None:
-    """Refuse an overlay carrying a dimension this seller does not declare (UNSUPPORTED_FEATURE).
+    """Refuse an overlay carrying a dimension this seller cannot apply (UNSUPPORTED_FEATURE).
 
     The one refusal for both tools that accept an overlay, so create and update cannot answer
-    the same targeting differently. ``field`` names the dimension on the package that sent it.
+    the same targeting differently. ``field`` names the dimension on the package that sent it;
+    ``details.capability`` names the declaration the seller lacks.
+
+    Two sources of "cannot apply": the :data:`UNDECLARED_OVERLAY_DIMENSIONS`, each its own
+    capability, and ``store_catchments`` while :data:`CATALOG_MANAGEMENT_SUPPORTED` is False.
+    A store_catchments entry targets stores "from a synced store catalog", its ``catalog_id``
+    being a "Synced store-type catalog ID from sync_catalogs" (core/targeting.json); with no
+    catalog management no such catalog exists. ``targeting.mdx``: "unsupported dimensions ...
+    produce ``UNSUPPORTED_FEATURE``" with an exact ``error.field``.
     """
-    for dimension in UNDECLARED_OVERLAY_DIMENSIONS:
-        if getattr(targeting, dimension) is not None:
-            raise AdCPCapabilityNotSupportedError(
-                details=CapabilityRefusalDetails(capability=dimension, package_index=package_index),
-                field=package_field_path(f"targeting_overlay.{dimension}", package_index),
-            )
+    refused = [
+        (dimension, dimension)
+        for dimension in UNDECLARED_OVERLAY_DIMENSIONS
+        if getattr(targeting, dimension) is not None
+    ]
+    if targeting.store_catchments and not CATALOG_MANAGEMENT_SUPPORTED:
+        refused.append(("store_catchments", "catalog_management"))
+    if refused:
+        dimension, capability = refused[0]
+        raise AdCPCapabilityNotSupportedError(
+            details=CapabilityRefusalDetails(capability=capability, package_index=package_index),
+            field=package_field_path(f"targeting_overlay.{dimension}", package_index),
+        )
 
 
 def refuse_invalid_package_overlays(overlays: Sequence[AnyTargeting | None]) -> None:

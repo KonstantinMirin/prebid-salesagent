@@ -1130,7 +1130,11 @@ def given_pricing_option_configuration(ctx: dict, config: str) -> None:
         _setup_auction_pricing(ctx)
 
     elif config == "cpa_model":
-        _select_new_pricing_option(ctx, pricing_model="cpa", currency="USD", is_fixed=True, rate=10.00)
+        # pricing-options/cpa-option.json requires event_type, and the seller cannot
+        # publish a CPA option without one (product_conversion refuses the row).
+        _select_new_pricing_option(
+            ctx, pricing_model="cpa", currency="USD", is_fixed=True, rate=10.00, parameters={"event_type": "purchase"}
+        )
 
     elif config in ("both_set", "fixed+floor"):
         _setup_both_pricing(ctx)
@@ -1271,6 +1275,8 @@ def given_currency_configuration(ctx: dict, config: str) -> None:
       spellings of each pair are one request.
     - 1 pkg XYZ: single package, currency the tenant does not hold
     - 1 pkg JPY (GAM no JPY): tenant holds JPY, the ad-server network does not
+    - total_budget USD, 1 pkg EUR: the buyer's total_budget names USD (equal to the
+      package budget sum, as fixed mode requires) while the only package selects EUR
     """
     config = config.strip()
 
@@ -1288,6 +1294,11 @@ def given_currency_configuration(ctx: dict, config: str) -> None:
 
     elif config == "1 pkg JPY (GAM no JPY)":
         _setup_ad_server_currencies(ctx, "JPY", secondary=[])
+
+    elif config == "total_budget USD, 1 pkg EUR":
+        _select_currency_option(ctx, "EUR")
+        kwargs = ctx["request_kwargs"]
+        kwargs["total_budget"] = {"amount": sum(pkg["budget"] for pkg in kwargs["packages"]), "currency": "USD"}
 
     else:
         raise ValueError(f"Unknown currency boundary config: {config}")

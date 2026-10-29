@@ -1443,14 +1443,21 @@ class AdCPCapabilityNotSupportedError(AdCPSalesAgentError[CapabilityRefusalDetai
     _code: ClassVar[ErrorCodeT] = ErrorCode.UNSUPPORTED_FEATURE
 
 
-class AdCPTermsRejectedError(AdCPSalesAgentError[CapabilityRefusalDetails]):
-    """Buyer-proposed package terms exceed what the product offers (422, TERMS_REJECTED).
+class AdCPTermsRejectedError(AdCPSalesAgentError[EntityRefDetails]):
+    """Buyer-proposed terms the seller will not accept (422, TERMS_REJECTED).
 
     media-buy/package-request.json negotiates ``committed_metrics``, ``measurement_terms`` and
     ``performance_standards`` one way: the seller accepts, normalizes, or "rejects with
-    ``TERMS_REJECTED`` (with explanation of which entries were unworkable)". ``field`` points at
-    the offending entry; the details carry the refused value and the product's accepted range,
-    which the code's own description asks for.
+    ``TERMS_REJECTED`` (with explanation of which entries were unworkable)".
+    ``create_media_buy.mdx`` refuses terms as a combination the same way: "Every selected
+    pricing option MUST declare that currency ... Sellers reject incompatible product
+    combinations, currencies, pricing terms, or delivery constraints with ``TERMS_REJECTED``
+    ... and identify the incompatible package."
+
+    ``field`` points at the offending entry or package (enums/error-code.json: "The error
+    details SHOULD identify which specific term was rejected"). The declared details type is
+    the shared base of what the raise sites carry: a refused value beside the accepted ones
+    (``CapabilityRefusalDetails``, ``PricingValidationDetails``) or the package alone.
     """
 
     _code: ClassVar[ErrorCodeT] = ErrorCode.TERMS_REJECTED
