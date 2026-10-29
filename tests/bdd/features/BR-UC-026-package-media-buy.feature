@@ -346,10 +346,12 @@ Feature: BR-UC-026 Package Media Buy
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "UNSUPPORTED_FEATURE"
+    And the error field should contain "format_ids"
     And the error should include "suggestion" field
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
-    # POST-F2: Error identifies unsupported format_ids
+    # POST-F2: Error identifies unsupported format_ids -- graded by the core/error.json
+    # `field` pointer, which the selector gate sets to packages[0].format_ids
     # POST-F3: Suggestion advises checking product's supported formats
     # The request is schema-valid, so INVALID_REQUEST (schema violation) does not apply.
     # The package selector contract codes the refusal: "A single resolved route that does
