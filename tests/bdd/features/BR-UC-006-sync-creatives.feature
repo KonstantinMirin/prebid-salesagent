@@ -1792,6 +1792,110 @@ Feature: BR-UC-006 Sync Creative Assets
     # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats-migration.mdx section="Completion checklist"
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/creative-action.json
 
+  @T-UC-006-canonical-identity-through-preview @schema-v3.2 @format-kind @format-option-ref
+  Scenario: A creative synced by format_kind is previewed by the operator's creative agent with that identity intact
+    Given the Buyer is authenticated
+    And the buyer syncs a creative carrying only a tag_url, identified by canonical kind "display_tag" with a publisher-scope format_option_ref
+    And the operator's creative agent previews that creative's canonical identity
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "created"
+    And the stored creative carries the preview the operator's creative agent returned
+    And listing the library returns the creative on format_kind "display_tag" with the format_option_ref the buyer last sent, scope included
+
+    # The PREVIEW half of the completion checklist ("Preview, sync, library, and delivery
+    # paths preserve `format_kind` and `format_option_ref`"). A creative identified by
+    # format_kind names no creative agent, so the seller previews it with its own -- the
+    # operator's -- and the request carries the identity where
+    # creative/preview-creative-request.json puts it: no `format_id` (deprecated in 3.2) and
+    # `creative_manifest.format_kind` plus `creative_manifest.format_option_ref`.
+    #
+    # display_tag because the operator's agent declares exactly one format of that kind.
+    # The same schema lets a request omit `target_capability_id` only when exactly one
+    # advertised capability matches; this seller does not read the agent's capabilities,
+    # so that is the case it can route, and on e2e the pinned reference agent resolves it.
+    # The creative carries only the slot formats/canonical/display_tag.json requires.
+    #
+    # What is graded is what the seller STORED and RETURNED, not the agent's rendering: the
+    # sync answers "created", the stored row holds a preview with a render, and the listing
+    # returns the identity whole. A seller that never previews a format_kind creative stores
+    # no preview; one that previews it without the canonical identity is not rendered.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats-migration.mdx section="Completion checklist"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/preview-creative-request.json pointer=/properties/format_id
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/preview-creative-request.json pointer=/properties/target_capability_id
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/display_tag.json pointer=/properties/slots
+
+  @T-UC-006-canonical-unchanged-resync-keeps-review @schema-v3.2 @format-kind @format-option-ref
+  Scenario: An unchanged resync of an approved creative identified by format_kind keeps its approval
+    Given the Buyer is authenticated
+    And the tenant has approval_mode "auto-approve"
+    And the buyer syncs a creative identified by canonical kind "image" with a product-scope format_option_ref
+    And the creative already exists with identical data
+    And the tenant has approval_mode "require-human"
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "unchanged"
+    And the per-creative result should carry advisory status "approved"
+
+  @T-UC-006-canonical-changed-resync-enters-review @schema-v3.2 @format-kind @format-option-ref
+  Scenario: A resync that changes the format_option_ref of an approved creative sends it back to review
+    Given the Buyer is authenticated
+    And the tenant has approval_mode "auto-approve"
+    And the buyer syncs a creative identified by canonical kind "image" with a product-scope format_option_ref
+    And the creative already exists with identical data
+    And the tenant has approval_mode "require-human"
+    And the resync narrows the same creative to a publisher-scope format_option_ref
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "updated"
+    And the per-creative result should carry advisory status "pending_review"
+
+    # Review on RESYNC, for a creative identified by format_kind. Both scenarios approve the
+    # creative on its first sync (auto-approve) and switch the tenant to require-human
+    # before the second, so the mode now in force would move the status if it were applied.
+    #
+    # Changed content enters review. docs/creative/specification.mdx § Creative revision
+    # identity: "Prior approval does not transfer: an accepted content-bearing unversioned
+    # update enters the ordinary review lifecycle", and format identity is revision-bearing
+    # content in the same section. A different format_option_ref is a different identity,
+    # so the second scenario answers "updated" and goes back to pending_review.
+    #
+    # An unchanged resync is not an update and keeps its review state. § Creative Status
+    # Lifecycle allows approved -> pending_review for a buyer-initiated revision update, or as a
+    # seller-initiated re-review that MUST fire creative.status_changed. A resync that
+    # changes nothing is neither, so the first scenario answers "unchanged" and stays
+    # approved; a seller that re-applies the mode on every resync answers pending_review.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/specification.mdx section="Creative revision identity"
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/specification.mdx section="Creative Status Lifecycle"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json pointer=/oneOf/0/properties/creatives/items/properties/status
+
+  @T-UC-006-canonical-renamed-resync-keeps-review @schema-v3.2 @format-kind @format-option-ref
+  Scenario: A resync that only renames an approved creative identified by format_kind is updated and keeps its approval
+    Given the Buyer is authenticated
+    And the tenant has approval_mode "auto-approve"
+    And the buyer syncs a creative identified by canonical kind "image" with a product-scope format_option_ref
+    And the creative already exists with identical data
+    And the tenant has approval_mode "require-human"
+    And the creative name is changed to "Renamed Canonical Creative"
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "updated"
+    And the per-creative result should carry advisory status "approved"
+
+    # A rename is metadata, not revision content. docs/creative/specification.mdx
+    # § Creative revision identity excludes "the explicit operational/metadata fields
+    # `name`, `tags`, `status`, `weight`, `placement_refs`, and `placement_ids`" from
+    # revision content, and says "a metadata-only mutation may still return `updated`"
+    # while the current revision, and so its review state, is kept. The resync therefore
+    # answers "updated" (the name did change) and stays "approved" under the require-human
+    # mode now in force. § Creative Status Lifecycle allows approved -> pending_review for a
+    # buyer-initiated revision update or a seller-initiated re-review that MUST fire
+    # creative.status_changed; a rename is neither, so a seller that re-reviews on it
+    # answers pending_review here.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/specification.mdx section="Creative revision identity"
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/specification.mdx section="Creative Status Lifecycle"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/creative-action.json
+
   @T-UC-006-storyboard-creative-reception-stateful-render @uc006-storyboard-routing @schema-v3.1 @v3-1 @stateful-push @creative-reception
   Scenario: Stateful sales agent accepts pushed creatives and exposes them via per-creative status transitions
     Given the Buyer is authenticated

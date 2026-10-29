@@ -243,6 +243,20 @@ def _has_ai_review_outcome(row: Any) -> bool:
     return data.get("ai_review") is not None or data.get("ai_review_error") is not None
 
 
+#: Where the in-process stand-in for the operator agent says its canonical render lives.
+_CANONICAL_PREVIEW_URL = "https://preview.example.com/canonical.html"
+
+
+def _the_pinned_agent_answers_for_itself(self: CreativeSyncEnv, *args: Any, **kwargs: Any) -> None:
+    """The e2e leg of a preview answer: nothing to arrange.
+
+    The e2e server dials the pinned reference agent at CREATIVE_AGENT_URL
+    (docker-compose.e2e.yml), and that agent answers a preview request for itself. The
+    scenario's precondition -- that the agent can resolve the request at all -- is checked
+    by the caller against the capture both legs serve, before either leg runs.
+    """
+
+
 class HarnessCreativeAgentRegistry(ReferenceFormatsRegistry):
     """PRODUCTION's testing-mode registry, used as itself rather than stood in for.
 
@@ -902,6 +916,66 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         fmt = self.configure_agent_served_creative(generative=False, format_id=format_id)
         self.mock["registry"].return_value.preview_creative = AsyncMock(return_value={})
         return fmt
+
+    def operator_agent_previews_canonical_identity(self, kind: str, format_option_ref: dict[str, Any] | None) -> None:
+        """The operator's creative agent renders a creative identified by *kind*, on every transport.
+
+        THE PRECONDITION IS SHARED and checked here, against the capture both legs serve:
+        the operator's agent declares exactly ONE format of *kind*.
+        creative/preview-creative-request.json (v3.2.7) lets a preview omit
+        ``target_capability_id`` and says the agent "MAY resolve the renderer only if
+        exactly one advertised preview capability satisfies the manifest's canonical
+        declaration", so that is the condition under which the pinned agent on e2e can
+        answer at all -- and the condition under which production asks.
+
+        The in-process leg then answers the way that contract reads (see
+        :meth:`_answer_canonical_previews`); the e2e leg sends the request to the pinned
+        reference agent, which answers for itself.
+        """
+        declaring = [fmt for fmt in _get_reference_formats() if fmt.canonical and str(fmt.canonical.kind) == kind]
+        assert len(declaring) == 1, (
+            f"the pinned capture declares {len(declaring)} formats of canonical kind {kind!r} "
+            f"({sorted(fmt.format_id.id for fmt in declaring)}); an untargeted canonical preview resolves "
+            "only when exactly one does, so this scenario would grade the agent's refusal instead"
+        )
+        self._answer_canonical_previews(kind, format_option_ref)
+
+    @realize_e2e(_the_pinned_agent_answers_for_itself)
+    def _answer_canonical_previews(self, kind: str, format_option_ref: dict[str, Any] | None) -> None:
+        """Answer a preview request with a render ONLY when it routes the canonical identity.
+
+        Not a blanket answer, because a recorder that renders anything grades nothing: the
+        request has to carry no ``format_id`` at either level (deprecated in 3.2, and a
+        canonical identity names none) and the manifest has to name *kind* and the
+        creative's ``format_option_ref`` (``None`` when it has none) -- the identity
+        creative/preview-creative-request.json (v3.2.7) puts in
+        ``creative_manifest.format_kind`` and ``creative_manifest.format_option_ref``.
+        Anything else is answered the way the pinned agent answers an unresolvable route:
+        an ``errors`` payload with no previews.
+        """
+
+        async def _preview(*, agent_url: str, format_id: str | None, creative_manifest: dict[str, Any]) -> dict:
+            routes_canonically = (
+                format_id is None
+                and "format_id" not in creative_manifest
+                and creative_manifest.get("format_kind") == kind
+                and creative_manifest.get("format_option_ref") == format_option_ref
+            )
+            if not routes_canonically:
+                return {"errors": [{"code": "FORMAT_NOT_SUPPORTED"}]}
+            return {
+                "previews": [
+                    {
+                        "preview_id": "prev_canonical",
+                        "renders": [
+                            {"render_id": "r_canonical", "role": "primary", "preview_url": _CANONICAL_PREVIEW_URL}
+                        ],
+                        "input": {"name": "Default preview"},
+                    }
+                ]
+            }
+
+        self.mock["registry"].return_value.preview_creative = AsyncMock(side_effect=_preview)
 
     def served_format(self, format_id: str, *, generative: bool | None = None) -> Format:
         """The CAPTURE's own declaration for *format_id*. A FILTER, never a fabrication.

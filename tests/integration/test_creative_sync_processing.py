@@ -37,6 +37,12 @@ from tests.helpers.creative_test_helpers import (
 #: the registry was a stand-in (salesagent-6xtxb).
 DEFAULT_AGENT_URL = DEFAULT_FORMAT_REFERENCE["agent_url"]
 
+#: A banner at a different url than ``creative_payload``'s default: a resync carrying it
+#: changes revision content, which is what review on update is decided on. A rename alone
+#: is metadata and keeps the review state (docs/creative/specification.mdx, v3.2.7,
+#: § Creative revision identity).
+_REVISED_BANNER = image_spec("banner", url="https://example.com/banner-revised.png")
+
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
@@ -397,17 +403,18 @@ class TestApprovalModeUpdate:
         """Update with auto-approve → status=approved in DB."""
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            env.configure_tenant_field("approval_mode", "auto-approve")
 
-            # Create (auto-approve)
+            # Create under the default require-human, so the status is not already approved
             env.call_impl(creatives=[_creative(creative_id="c_auto_up")])
 
-            # Update with format change to trigger approval logic
+            env.configure_tenant_field("approval_mode", "auto-approve")
+
+            # Update with changed content, which is what re-applies the approval mode
             result = env.call_impl(
                 creatives=[
                     _creative(
                         creative_id="c_auto_up",
-                        name="Updated Auto",
+                        assets=build_assets(_REVISED_BANNER),
                     )
                 ]
             )
@@ -441,7 +448,7 @@ class TestApprovalModeUpdate:
                     creatives=[
                         _creative(
                             creative_id="c_ai_up",
-                            name="Updated for AI Review",
+                            assets=build_assets(_REVISED_BANNER),
                         )
                     ]
                 )

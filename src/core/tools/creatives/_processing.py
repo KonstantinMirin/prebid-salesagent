@@ -25,7 +25,13 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPServiceUnavailableError,
 )
-from src.core.format_resolver import creative_identity_of, find_format, is_dialled_agent_format, is_generative
+from src.core.format_resolver import (
+    creative_identity_of,
+    find_format,
+    find_operator_format_of_kind,
+    is_dialled_agent_format,
+    is_generative,
+)
 from src.core.helpers import _validate_creative_assets
 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import CreativeFormatIdentity, CreativeStatusEnum, SyncCreativeResult
@@ -44,6 +50,7 @@ from ._assets import (
 
 if TYPE_CHECKING:
     from src.core.database.repositories.creative import CreativeRepository
+    from src.core.schemas import Format
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +60,16 @@ logger = logging.getLogger(__name__)
 #: against the row's prior value -- see :class:`SubmittedUpsertFields`, which also says why
 #: the agent's back-fill of the ones the buyer left empty is not compared at all.
 _UPSERT_FIELDS = ("url", "click_url", "width", "height", "duration")
+
+#: The members of ``changes`` that are metadata, not revision content. A change to one of
+#: these is reported (``action: updated``) and keeps the creative's review state.
+#: docs/creative/specification.mdx (v3.2.7) § Creative revision identity excludes the
+#: "explicit operational/metadata fields `name`, `tags`, `status`, `weight`,
+#: `placement_refs`, and `placement_ids`" from revision content and says "a metadata-only
+#: mutation may still return `updated`" while preserving the current revision. Of those,
+#: ``name`` is the one change detection reports; everything else it reports (format
+#: identity, assets, the upsert fields) is revision-bearing.
+_METADATA_CHANGES = frozenset({"name"})
 
 
 @dataclass(frozen=True)
@@ -217,18 +234,31 @@ def comparison_changes(
     return changes
 
 
-def build_update_sync_result(
-    creative_id: str,
-    *,
+def update_changes(
     creative: CreativeAsset,
     prior: PriorCreativeState,
     identity: CreativeFormatIdentity,
     submitted: SubmittedUpsertFields,
+) -> list[str]:
+    """What an update CHANGED: the one answer the result reports and review is decided on.
+
+    Computed once per update, before the creative agent is asked anything, so the reported
+    ``changes`` and the review decision in ``_update_existing_creative`` read one value:
+    the result reports all of it, and review reads the part outside ``_METADATA_CHANGES``.
+    """
+    # dict.fromkeys: each field once, first occurrence's position kept.
+    return list(dict.fromkeys([*comparison_changes(creative, prior, identity), *submitted.changed_against(prior)]))
+
+
+def build_update_sync_result(
+    creative_id: str,
+    *,
+    changes: list[str],
     internal_status: str | None = None,
 ) -> SyncCreativeResult:
     """The ONE place an ``updated`` or ``unchanged`` sync result is built, for both branches.
 
-    ``changes`` is ``[name?, format?] + the SUBMITTED upsert fields whose value differs
+    ``changes`` (:func:`update_changes`) is ``[name?, format?] + the SUBMITTED upsert fields whose value differs
     from the row's``, each field once. That group used to be all five unconditionally,
     which made ``unchanged`` -- a member of the pinned enums/creative-action.json --
     unreachable: a resync of identical data always reported five changed fields.
@@ -246,9 +276,6 @@ def build_update_sync_result(
     read a status from. The field is ``exclude=True``, so it never reaches the
     wire and its absence cannot make a preview diverge from a live run.
     """
-    # dict.fromkeys: each field once, first occurrence's position kept.
-    changes = list(dict.fromkeys([*comparison_changes(creative, prior, identity), *submitted.changed_against(prior)]))
-
     action: Literal["updated", "unchanged"] = "updated" if changes else "unchanged"
 
     return SyncCreativeResult(
@@ -437,19 +464,63 @@ def incoming_identity_of(creative: CreativeAsset, all_formats: list[Any]) -> Cre
     return creative_identity_of(creative, spec=spec)
 
 
-def _preview_manifest(
-    creative: CreativeAsset, data: Mapping[str, Any], *, creative_id: str, name: Any
-) -> dict[str, Any]:
-    """The manifest this seller sends a creative agent's ``preview_creative``, minus its format.
+def _dialled_format_for(
+    creative: CreativeAsset, identity: CreativeFormatIdentity, all_formats: list[Any]
+) -> Format | None:
+    """The served format whose creative agent this item is previewed (or built) by, or None.
 
-    ``format_id`` is deliberately NOT written here: the registry composes it from the same
-    ``{agent_url, id}`` object it sends as the call's own ``format_id``
-    (``CreativeAgentRegistry.preview_creative``). Both builders used to write the bare id
-    string, which satisfies neither arm of core/creative-manifest.json (v3.2.7) -- the named
-    arm's ``format_id`` is a core/format-id.json OBJECT -- so the seller authored an invalid
-    manifest on every static preview.
+    A LEGACY item names its format, and with it the agent: ``find_format`` over the
+    catalogue pre-fetched outside the transaction (pure, so nothing is dialled inside the
+    savepoint; and not a ``==`` loop, because pydantic v2 equality is class-sensitive and a
+    raw comparison matched nothing on A2A -- salesagent-kyc89). A CANONICAL item names
+    neither, so it is previewed by the operator's own agent when that agent declares the
+    kind (:func:`find_operator_format_of_kind`). Both used to be gated on
+    ``creative.format_id``, so a creative identified by ``format_kind`` was never previewed
+    at all (salesagent-ol033.20.16).
+
+    ``is_dialled_agent_format``, not ``is_agent_backed``: an adapter-served format declares
+    a pseudo-URL with no host, and dialling it sends preview_creative at a url the egress
+    seam refuses (salesagent-zufx8). A format this seller serves but will not dial
+    (unresolved, or an adapter pseudo-URL) is processed with no external validation and no
+    preview fetched -- BR-RULE-035 INV-2, as ``is_dialled_agent_format`` states.
+    """
+    fmt = (
+        find_format(all_formats, creative.format_id)
+        if creative.format_id is not None
+        else find_operator_format_of_kind(all_formats, identity.kind)
+    )
+    return fmt if fmt is not None and is_dialled_agent_format(fmt) else None
+
+
+def _preview_manifest(
+    creative: CreativeAsset,
+    data: Mapping[str, Any],
+    *,
+    identity: CreativeFormatIdentity,
+    creative_id: str,
+    name: Any,
+) -> dict[str, Any]:
+    """The manifest this seller sends a creative agent's ``preview_creative``.
+
+    A legacy creative's ``format_id`` is deliberately NOT written here: the registry
+    composes it from the same ``{agent_url, id}`` object it sends as the call's own
+    ``format_id`` (``CreativeAgentRegistry.preview_creative``). Both builders used to write
+    the bare id string, which satisfies neither arm of core/creative-manifest.json (v3.2.7)
+    -- the named arm's ``format_id`` is a core/format-id.json OBJECT -- so the seller
+    authored an invalid manifest on every static preview.
+
+    A CANONICAL creative's identity IS written here, because the manifest is where the pin
+    puts it: creative/preview-creative-request.json (v3.2.7) marks ``format_id`` deprecated
+    and says new requests "carry portable format identity in creative_manifest.format_kind
+    plus optional creative_manifest.format_option_ref". ``wire_format_kind`` chooses the arm,
+    the same oneOf core/creative-manifest.json declares; ``option.document`` is the
+    core/format-option-ref.json document, ``scope`` included, exactly as stored.
     """
     manifest: dict[str, Any] = {"creative_id": creative_id, "name": name}
+    if identity.wire_format_kind is not None:
+        manifest["format_kind"] = identity.wire_format_kind
+        if identity.option is not None:
+            manifest["format_option_ref"] = identity.option.document
     # Validate assets are in dict format (AdCP v2.4+)
     if creative.assets:
         validated_assets = _validate_creative_assets(creative.assets)
@@ -458,6 +529,76 @@ def _preview_manifest(
     if data.get("url"):
         manifest["url"] = data.get("url")
     return manifest
+
+
+def _request_static_preview(
+    creative_repo: CreativeRepository,
+    registry: Any,
+    creative: CreativeAsset,
+    data: Mapping[str, Any],
+    *,
+    identity: CreativeFormatIdentity,
+    format_obj: Format,
+    creative_id: str,
+    name: Any,
+) -> dict[str, Any] | None:
+    """Ask *format_obj*'s agent to preview this static creative. ONE request, both paths.
+
+    A legacy creative routes by the ``format_id`` it named; a canonical one sends no
+    ``format_id`` at all and carries its identity in the manifest (:func:`_preview_manifest`).
+    """
+    manifest = _preview_manifest(creative, data, identity=identity, creative_id=creative_id, name=name)
+    legacy_id = creative.format_id.id if creative.format_id is not None else None
+    logger.info(
+        "[sync_creatives] Calling preview_creative for validation: %s (%s) from agent %s, has_assets=%s, has_url=%s",
+        creative_id,
+        identity.label,
+        format_obj.agent_url,
+        bool(creative.assets),
+        bool(data.get("url")),
+    )
+    # OUT-OF-TRANSACTION EFFECT: a preview must not fire a request at a creative agent's
+    # endpoint (same rule accounts.py states for activation proofs). None here is already
+    # the no-result case the consumer guards for, so no second result path appears.
+    return creative_repo.outbound(
+        lambda: run_async_in_sync_context(
+            registry.preview_creative(
+                agent_url=format_obj.agent_url,
+                format_id=legacy_id,
+                creative_manifest=manifest,
+            )
+        )
+    )
+
+
+def _store_previews(data: dict[str, Any], preview_result: Mapping[str, Any] | None) -> bool:
+    """Write the agent's previews into *data*. Returns whether it answered any.
+
+    The full answer is kept for the admin UI (AdCP PR #119), and the first render
+    back-fills ``url`` and the dimensions only where the buyer supplied none, so a buyer's
+    own values are never overwritten by a render. ``False`` is the no-previews state
+    :func:`_no_previews_refusal` owns.
+    """
+    if not (preview_result and preview_result.get("previews")):
+        return False
+    data["preview_response"] = preview_result
+    renders = preview_result["previews"][0].get("renders", [])
+    if renders:
+        first_render = renders[0]
+        if first_render.get("preview_url") and not data.get("url"):
+            data["url"] = first_render["preview_url"]
+        dimensions = first_render.get("dimensions", {})
+        for key in ("width", "height", "duration"):
+            if dimensions.get(key) and not data.get(key):
+                data[key] = dimensions[key]
+    logger.info(
+        "[sync_creatives] Preview data populated: url=%s, width=%s, height=%s, variants=%s",
+        bool(data.get("url")),
+        data.get("width"),
+        data.get("height"),
+        len(preview_result["previews"]),
+    )
+    return True
 
 
 def _apply_approval_mode(
@@ -557,13 +698,6 @@ def _update_existing_creative(
     if incoming_identity != prior.identity:
         creative_repo.set_identity(existing_creative, incoming_identity)
 
-    needs_approval = _apply_approval_mode(
-        creative_repo,
-        existing_creative,
-        tenant=tenant,
-        webhook_url=webhook_url,
-        principal_id=principal_id,
-    )
     creative_format = creative.format_id
 
     # Store creative properties in data field
@@ -578,243 +712,187 @@ def _update_existing_creative(
     # document -- is what makes the preview branch and the live branch report the same
     # `changes` by construction instead of by a residual-divergence note.
     submitted = SubmittedUpsertFields.submitted_by(data)
+    changes = update_changes(creative, prior, incoming_identity, submitted)
+
+    # CHANGED CONTENT ENTERS REVIEW; AN UNCHANGED OR METADATA-ONLY RESYNC KEEPS ITS REVIEW
+    # STATE. Decided on the content part of the one change list the result reports.
+    # docs/creative/specification.mdx (v3.2.7) § Creative revision identity: "Prior approval
+    # does not transfer: an accepted content-bearing unversioned update enters the ordinary
+    # review lifecycle", and the same section excludes ``name`` from revision content, so a
+    # rename answers ``updated`` and keeps its approval. § Creative Status Lifecycle allows
+    # ``approved -> pending_review`` only for a buyer-initiated revision update or for a
+    # seller-initiated re-review that MUST fire ``creative.status_changed``; re-reviewing an
+    # unchanged or renamed creative is neither. Either identity arm reaches this the same
+    # way: a canonical creative whose format_option_ref or assets change re-enters review
+    # exactly as a legacy one does.
+    needs_approval = (
+        _apply_approval_mode(
+            creative_repo,
+            existing_creative,
+            tenant=tenant,
+            webhook_url=webhook_url,
+            principal_id=principal_id,
+        )
+        if not _METADATA_CHANGES.issuperset(changes)
+        else False
+    )
 
     # ALWAYS validate updates with creative agent
-    if creative_format:
+    format_obj = _dialled_format_for(creative, incoming_identity, all_formats)
+    if format_obj is not None:
         try:
-            # Use pre-fetched formats (fetched outside transaction at function start)
-            # This avoids async HTTP calls inside savepoint.
-            #
-            # find_format, not a `==` loop: format references reach this point in
-            # either of two classes and pydantic v2 equality is class-sensitive,
-            # so a raw comparison silently matched NOTHING on A2A and demoted
-            # every generative creative to a static one (salesagent-kyc89).
-            format_obj = find_format(all_formats, creative_format)
-
-            # is_dialled_agent_format, not is_agent_backed: an adapter-served format
-            # declares a pseudo-URL with no host, so entering this branch for one sends
-            # preview_creative at a url the egress seam then refuses (salesagent-zufx8).
             preview_requested = True
-            if format_obj and is_dialled_agent_format(format_obj):
-                if is_generative(format_obj):
-                    # Generative creative update - rebuild using AI
+            if creative_format is not None and is_generative(format_obj):
+                # Generative creative update - rebuild using AI
+                logger.info(
+                    f"[sync_creatives] Detected generative format update: {creative_format}, "
+                    f"checking for Gemini API key"
+                )
+
+                # Get Gemini API key from config
+                from src.core.config import get_settings
+
+                gemini_api_key = get_settings().integrations.gemini_api_key
+
+                if not gemini_api_key:
+                    error_msg = f"Cannot update generative creative {creative_format}: GEMINI_API_KEY not configured"
+                    logger.error(f"[sync_creatives] {error_msg}")
+                    raise AdCPConfigurationError()
+
+                # Extract message/brief from assets or inputs
+                message = _extract_message_from_assets(creative)
+
+                # Extract promoted_offerings from assets if available
+                promoted_offerings = None
+                if creative.assets:
+                    for role, asset in creative.assets.items():
+                        if role == "promoted_offerings":
+                            promoted_offerings = asset
+                            break
+
+                # Get existing context_id for refinement
+                existing_context_id = None
+                if existing_creative.data:
+                    existing_context_id = existing_creative.data.get("generative_context_id")
+
+                # Use provided context_id or existing one
+                context_id = getattr(creative, "context_id", None) or existing_context_id
+
+                # Only call build_creative if we have a message (refinement)
+                if message:
                     logger.info(
-                        f"[sync_creatives] Detected generative format update: {creative_format}, "
-                        f"checking for Gemini API key"
-                    )
-
-                    # Get Gemini API key from config
-                    from src.core.config import get_settings
-
-                    gemini_api_key = get_settings().integrations.gemini_api_key
-
-                    if not gemini_api_key:
-                        error_msg = (
-                            f"Cannot update generative creative {creative_format}: GEMINI_API_KEY not configured"
-                        )
-                        logger.error(f"[sync_creatives] {error_msg}")
-                        raise AdCPConfigurationError()
-
-                    # Extract message/brief from assets or inputs
-                    message = _extract_message_from_assets(creative)
-
-                    # Extract promoted_offerings from assets if available
-                    promoted_offerings = None
-                    if creative.assets:
-                        for role, asset in creative.assets.items():
-                            if role == "promoted_offerings":
-                                promoted_offerings = asset
-                                break
-
-                    # Get existing context_id for refinement
-                    existing_context_id = None
-                    if existing_creative.data:
-                        existing_context_id = existing_creative.data.get("generative_context_id")
-
-                    # Use provided context_id or existing one
-                    context_id = getattr(creative, "context_id", None) or existing_context_id
-
-                    # Only call build_creative if we have a message (refinement)
-                    if message:
-                        logger.info(
-                            f"[sync_creatives] Calling build_creative for update: "
-                            f"{existing_creative.creative_id} format {creative_format} "
-                            f"from agent {format_obj.agent_url}, "
-                            f"message_length={len(message) if message else 0}, "
-                            f"context_id={context_id}"
-                        )
-
-                        # OUT-OF-TRANSACTION EFFECT: a preview must not fire a request at a
-                        # creative agent's endpoint (same rule accounts.py states for
-                        # activation proofs). None here is already the no-result case the
-                        # consumer below guards for, so no second result path appears.
-                        build_result = creative_repo.outbound(
-                            lambda: run_async_in_sync_context(
-                                registry.build_creative(
-                                    agent_url=format_obj.agent_url,
-                                    format_id=creative_format,
-                                    message=message,
-                                    gemini_api_key=gemini_api_key,
-                                    promoted_offerings=promoted_offerings,
-                                    context_id=context_id,
-                                    finalize=getattr(creative, "approved", False),
-                                )
-                            )
-                        )
-
-                        # Store build result in data
-                        if build_result:
-                            data["generative_build_result"] = build_result
-                            data["generative_status"] = build_result.get("status", "draft")
-                            data["generative_context_id"] = build_result.get("context_id")
-
-                            # Extract creative output if available
-                            if build_result.get("creative_output"):
-                                creative_output = build_result["creative_output"]
-
-                                # Only use generative assets if user didn't provide their own
-                                user_provided_assets = creative.assets
-                                if creative_output.get("assets") and not user_provided_assets:
-                                    data["assets"] = _generative_assets(creative_output["assets"])
-                                    logger.info("[sync_creatives] Using assets from generative output (update)")
-                                elif user_provided_assets:
-                                    logger.info(
-                                        "[sync_creatives] Preserving user-provided assets in update, "
-                                        "not overwriting with generative output"
-                                    )
-
-                                if creative_output.get("output_format"):
-                                    output_format = creative_output["output_format"]
-                                    data["output_format"] = output_format
-
-                                    # Only use generative URL if user didn't provide one
-                                    if isinstance(output_format, dict) and output_format.get("url"):
-                                        if not data.get("url"):
-                                            data["url"] = output_format["url"]
-                                            logger.info(
-                                                f"[sync_creatives] Got URL from generative output (update): "
-                                                f"{data['url']}"
-                                            )
-                                        else:
-                                            logger.info(
-                                                "[sync_creatives] Preserving user-provided URL in update, "
-                                                "not overwriting with generative output"
-                                            )
-
-                            logger.info(
-                                f"[sync_creatives] Generative creative updated: "
-                                f"status={data.get('generative_status')}, "
-                                f"context_id={data.get('generative_context_id')}"
-                            )
-                    else:
-                        # No prompt → skip build, but preserve generative fields
-                        # from existing data (data was rebuilt from scratch above)
-                        if existing_creative.data:
-                            for key in (
-                                "generative_build_result",
-                                "generative_status",
-                                "generative_context_id",
-                                "output_format",
-                            ):
-                                if key in existing_creative.data:
-                                    data[key] = existing_creative.data[key]
-                        logger.info("[sync_creatives] No message for generative update, keeping existing creative data")
-
-                    # Skip preview_creative call since we already have the output
-                    preview_result = None
-                    # ... and say so, rather than leaving the refusal below to read a falsy
-                    # result as "the agent returned nothing" (salesagent-hkq9p).
-                    preview_requested = False
-                else:
-                    # Static creative - use preview_creative
-                    creative_manifest = _preview_manifest(
-                        creative,
-                        data,
-                        creative_id=existing_creative.creative_id,
-                        name=creative.name or existing_creative.name,
-                    )
-                    format_id_str = creative_format.id
-                    logger.info(
-                        f"[sync_creatives] Calling preview_creative for validation (update): "
-                        f"{existing_creative.creative_id} format {format_id_str} "
-                        f"from agent {format_obj.agent_url}, has_assets={bool(creative.assets)}, "
-                        f"has_url={bool(data.get('url'))}"
+                        f"[sync_creatives] Calling build_creative for update: "
+                        f"{existing_creative.creative_id} format {creative_format} "
+                        f"from agent {format_obj.agent_url}, "
+                        f"message_length={len(message) if message else 0}, "
+                        f"context_id={context_id}"
                     )
 
                     # OUT-OF-TRANSACTION EFFECT: a preview must not fire a request at a
                     # creative agent's endpoint (same rule accounts.py states for
                     # activation proofs). None here is already the no-result case the
                     # consumer below guards for, so no second result path appears.
-                    preview_result = creative_repo.outbound(
+                    build_result = creative_repo.outbound(
                         lambda: run_async_in_sync_context(
-                            registry.preview_creative(
+                            registry.build_creative(
                                 agent_url=format_obj.agent_url,
-                                format_id=format_id_str,
-                                creative_manifest=creative_manifest,
+                                format_id=creative_format,
+                                message=message,
+                                gemini_api_key=gemini_api_key,
+                                promoted_offerings=promoted_offerings,
+                                context_id=context_id,
+                                finalize=getattr(creative, "approved", False),
                             )
                         )
                     )
 
-                # Extract preview data and store in data field
-                if preview_result and preview_result.get("previews"):
-                    # Store full preview response for UI (per AdCP PR #119)
-                    # This preserves all variants and renders for UI display
-                    data["preview_response"] = preview_result
+                    # Store build result in data
+                    if build_result:
+                        data["generative_build_result"] = build_result
+                        data["generative_status"] = build_result.get("status", "draft")
+                        data["generative_context_id"] = build_result.get("context_id")
 
-                    # Also extract primary preview URL for backward compatibility
-                    first_preview = preview_result["previews"][0]
-                    renders = first_preview.get("renders", [])
-                    if renders:
-                        first_render = renders[0]
+                        # Extract creative output if available
+                        if build_result.get("creative_output"):
+                            creative_output = build_result["creative_output"]
 
-                        # Store preview URL from render ONLY if we don't already have a URL from assets
-                        # This preserves user-provided URLs in assets instead of overwriting with preview URLs
-                        if first_render.get("preview_url") and not data.get("url"):
-                            data["url"] = first_render["preview_url"]
-                            logger.info(f"[sync_creatives] Got preview URL from creative agent: {data['url']}")
-                        elif data.get("url"):
-                            logger.info(
-                                "[sync_creatives] Preserving user-provided URL from assets, "
-                                "not overwriting with preview URL"
-                            )
+                            # Only use generative assets if user didn't provide their own
+                            user_provided_assets = creative.assets
+                            if creative_output.get("assets") and not user_provided_assets:
+                                data["assets"] = _generative_assets(creative_output["assets"])
+                                logger.info("[sync_creatives] Using assets from generative output (update)")
+                            elif user_provided_assets:
+                                logger.info(
+                                    "[sync_creatives] Preserving user-provided assets in update, "
+                                    "not overwriting with generative output"
+                                )
 
-                        # Extract dimensions from dimensions object
-                        # Only use preview dimensions if not already provided by user
-                        dimensions = first_render.get("dimensions", {})
-                        if dimensions.get("width") and not data.get("width"):
-                            data["width"] = dimensions["width"]
-                        if dimensions.get("height") and not data.get("height"):
-                            data["height"] = dimensions["height"]
-                        if dimensions.get("duration") and not data.get("duration"):
-                            data["duration"] = dimensions["duration"]
+                            if creative_output.get("output_format"):
+                                output_format = creative_output["output_format"]
+                                data["output_format"] = output_format
 
-                    logger.info(
-                        f"[sync_creatives] Preview data populated for update: "
-                        f"url={bool(data.get('url'))}, "
-                        f"width={data.get('width')}, "
-                        f"height={data.get('height')}, "
-                        f"variants={len(preview_result.get('previews', []))}"
-                    )
+                                # Only use generative URL if user didn't provide one
+                                if isinstance(output_format, dict) and output_format.get("url"):
+                                    if not data.get("url"):
+                                        data["url"] = output_format["url"]
+                                        logger.info(
+                                            f"[sync_creatives] Got URL from generative output (update): {data['url']}"
+                                        )
+                                    else:
+                                        logger.info(
+                                            "[sync_creatives] Preserving user-provided URL in update, "
+                                            "not overwriting with generative output"
+                                        )
+
+                        logger.info(
+                            f"[sync_creatives] Generative creative updated: "
+                            f"status={data.get('generative_status')}, "
+                            f"context_id={data.get('generative_context_id')}"
+                        )
                 else:
-                    # No previews came back from an agent-backed format. ONE policy, shared
-                    # with the create path -- see _no_previews_refusal for why this sits
-                    # here and not on the `else` of the agent-backed test above.
-                    refusal = _no_previews_refusal(
-                        existing_creative.creative_id,
-                        creative=creative,
-                        data=data,
-                        is_preview=creative_repo.is_preview,
-                        preview_requested=preview_requested,
-                    )
-                    if refusal is not None:
-                        return (refusal, False)
-            # NO `else` for the agent-backed test: a format this seller serves but will not
-            # dial (unresolved, or an adapter pseudo-URL with no host) is processed with no
-            # external validation and no preview fetched -- BR-RULE-035 INV-2, as
-            # is_dialled_agent_format's own docstring states, and exactly what the create
-            # path does. The refusal that used to live here fired when NO preview had been
-            # requested, so it told a buyer whose format is simply not in the catalogue
-            # that the agent had failed to render (salesagent-2je8o).
+                    # No prompt → skip build, but preserve generative fields
+                    # from existing data (data was rebuilt from scratch above)
+                    if existing_creative.data:
+                        for key in (
+                            "generative_build_result",
+                            "generative_status",
+                            "generative_context_id",
+                            "output_format",
+                        ):
+                            if key in existing_creative.data:
+                                data[key] = existing_creative.data[key]
+                    logger.info("[sync_creatives] No message for generative update, keeping existing creative data")
+
+                # Skip preview_creative call since we already have the output
+                preview_result = None
+                # ... and say so, rather than leaving the refusal below to read a falsy
+                # result as "the agent returned nothing" (salesagent-hkq9p).
+                preview_requested = False
+            else:
+                preview_result = _request_static_preview(
+                    creative_repo,
+                    registry,
+                    creative,
+                    data,
+                    identity=incoming_identity,
+                    format_obj=format_obj,
+                    creative_id=existing_creative.creative_id,
+                    name=creative.name or existing_creative.name,
+                )
+
+            if not _store_previews(data, preview_result):
+                # No previews came back from an agent-backed format. ONE policy, shared
+                # with the create path -- see _no_previews_refusal for why this sits
+                # here and not on the `else` of the agent-backed test above.
+                refusal = _no_previews_refusal(
+                    existing_creative.creative_id,
+                    creative=creative,
+                    data=data,
+                    is_preview=creative_repo.is_preview,
+                    preview_requested=preview_requested,
+                )
+                if refusal is not None:
+                    return (refusal, False)
 
         except AdCPConfigurationError as config_error:
             # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
@@ -892,10 +970,7 @@ def _update_existing_creative(
     return (
         build_update_sync_result(
             existing_creative.creative_id,
-            creative=creative,
-            prior=prior,
-            identity=incoming_identity,
-            submitted=submitted,
+            changes=changes,
             internal_status=existing_creative.status,
         ),
         needs_approval,
@@ -937,205 +1012,142 @@ def _create_new_creative(
 
     # ALWAYS validate creatives with the creative agent (validation + preview generation)
     creative_format = creative.format_id
-    if creative_format:
+    format_obj = _dialled_format_for(creative, incoming_identity, all_formats)
+    if format_obj is not None:
         try:
-            # Use pre-fetched formats (fetched outside transaction at function start)
-            # This avoids async HTTP calls inside savepoint.
-            #
-            # find_format, not a `==` loop: format references reach this point in
-            # either of two classes and pydantic v2 equality is class-sensitive,
-            # so a raw comparison silently matched NOTHING on A2A and demoted
-            # every generative creative to a static one (salesagent-kyc89).
-            format_obj = find_format(all_formats, creative_format)
-
-            # is_dialled_agent_format, not is_agent_backed — see the note at the update
-            # site above (salesagent-zufx8).
             preview_requested = True
-            if format_obj and is_dialled_agent_format(format_obj):
-                if is_generative(format_obj):
-                    # Generative creative - call build_creative
-                    logger.info(
-                        f"[sync_creatives] Detected generative format: {creative_format}, checking for Gemini API key"
+            if creative_format is not None and is_generative(format_obj):
+                # Generative creative - call build_creative
+                logger.info(
+                    f"[sync_creatives] Detected generative format: {creative_format}, checking for Gemini API key"
+                )
+
+                # Get Gemini API key from config
+                from src.core.config import get_settings
+
+                gemini_api_key = get_settings().integrations.gemini_api_key
+
+                if not gemini_api_key:
+                    error_msg = f"Cannot build generative creative {creative_format}: GEMINI_API_KEY not configured"
+                    logger.error(f"[sync_creatives] {error_msg}")
+                    raise AdCPConfigurationError()
+
+                # Extract message/brief from assets or inputs
+                message = _extract_message_from_assets(creative)
+
+                if not message:
+                    message = f"Create a creative for: {creative.name}"
+                    logger.warning(
+                        "[sync_creatives] No message found in assets/inputs, using creative name as fallback"
                     )
 
-                    # Get Gemini API key from config
-                    from src.core.config import get_settings
+                # Extract promoted_offerings from assets if available
+                promoted_offerings = None
+                if creative.assets:
+                    for role, asset in creative.assets.items():
+                        if role == "promoted_offerings":
+                            promoted_offerings = asset
+                            break
 
-                    gemini_api_key = get_settings().integrations.gemini_api_key
+                # Call build_creative
+                # Extract string ID from FormatId object if needed
+                format_id_str = creative_format.id
+                logger.info(
+                    f"[sync_creatives] Calling build_creative for generative format: "
+                    f"{format_id_str} from agent {format_obj.agent_url}, "
+                    f"message_length={len(message) if message else 0}"
+                )
 
-                    if not gemini_api_key:
-                        error_msg = f"Cannot build generative creative {creative_format}: GEMINI_API_KEY not configured"
-                        logger.error(f"[sync_creatives] {error_msg}")
-                        raise AdCPConfigurationError()
-
-                    # Extract message/brief from assets or inputs
-                    message = _extract_message_from_assets(creative)
-
-                    if not message:
-                        message = f"Create a creative for: {creative.name}"
-                        logger.warning(
-                            "[sync_creatives] No message found in assets/inputs, using creative name as fallback"
-                        )
-
-                    # Extract promoted_offerings from assets if available
-                    promoted_offerings = None
-                    if creative.assets:
-                        for role, asset in creative.assets.items():
-                            if role == "promoted_offerings":
-                                promoted_offerings = asset
-                                break
-
-                    # Call build_creative
-                    # Extract string ID from FormatId object if needed
-                    format_id_str = creative_format.id
-                    logger.info(
-                        f"[sync_creatives] Calling build_creative for generative format: "
-                        f"{format_id_str} from agent {format_obj.agent_url}, "
-                        f"message_length={len(message) if message else 0}"
-                    )
-
-                    # OUT-OF-TRANSACTION EFFECT: a preview must not fire a request at a
-                    # creative agent's endpoint (same rule accounts.py states for
-                    # activation proofs). None here is already the no-result case the
-                    # consumer below guards for, so no second result path appears.
-                    build_result = creative_repo.outbound(
-                        lambda: run_async_in_sync_context(
-                            registry.build_creative(
-                                agent_url=format_obj.agent_url,
-                                format_id=format_id_str,
-                                message=message,
-                                gemini_api_key=gemini_api_key,
-                                promoted_offerings=promoted_offerings,
-                                context_id=getattr(creative, "context_id", None),
-                                finalize=getattr(creative, "approved", False),
-                            )
+                # OUT-OF-TRANSACTION EFFECT: a preview must not fire a request at a
+                # creative agent's endpoint (same rule accounts.py states for
+                # activation proofs). None here is already the no-result case the
+                # consumer below guards for, so no second result path appears.
+                build_result = creative_repo.outbound(
+                    lambda: run_async_in_sync_context(
+                        registry.build_creative(
+                            agent_url=format_obj.agent_url,
+                            format_id=format_id_str,
+                            message=message,
+                            gemini_api_key=gemini_api_key,
+                            promoted_offerings=promoted_offerings,
+                            context_id=getattr(creative, "context_id", None),
+                            finalize=getattr(creative, "approved", False),
                         )
                     )
+                )
 
-                    # Store build result
-                    if build_result:
-                        data["generative_build_result"] = build_result
-                        data["generative_status"] = build_result.get("status", "draft")
-                        data["generative_context_id"] = build_result.get("context_id")
+                # Store build result
+                if build_result:
+                    data["generative_build_result"] = build_result
+                    data["generative_status"] = build_result.get("status", "draft")
+                    data["generative_context_id"] = build_result.get("context_id")
 
-                        # Extract creative output
-                        if build_result.get("creative_output"):
-                            creative_output = build_result["creative_output"]
+                    # Extract creative output
+                    if build_result.get("creative_output"):
+                        creative_output = build_result["creative_output"]
 
-                            # Only use generative assets if user didn't provide their own
-                            if creative_output.get("assets") and not user_provided_assets:
-                                data["assets"] = _generative_assets(creative_output["assets"])
-                                logger.info("[sync_creatives] Using assets from generative output")
-                            elif user_provided_assets:
-                                logger.info(
-                                    "[sync_creatives] Preserving user-provided assets, "
-                                    "not overwriting with generative output"
-                                )
-
-                            if creative_output.get("output_format"):
-                                output_format = creative_output["output_format"]
-                                data["output_format"] = output_format
-
-                                # Only use generative URL if user didn't provide one
-                                if isinstance(output_format, dict) and output_format.get("url"):
-                                    if not data.get("url"):
-                                        data["url"] = output_format["url"]
-                                        logger.info(f"[sync_creatives] Got URL from generative output: {data['url']}")
-                                    else:
-                                        logger.info(
-                                            "[sync_creatives] Preserving user-provided URL, "
-                                            "not overwriting with generative output"
-                                        )
-
-                        logger.info(
-                            f"[sync_creatives] Generative creative built: "
-                            f"status={data.get('generative_status')}, "
-                            f"context_id={data.get('generative_context_id')}"
-                        )
-
-                    # Skip preview_creative call since we already have the output
-                    preview_result = None
-                    # ... and say so, rather than leaving the refusal below to read a falsy
-                    # result as "the agent returned nothing" (salesagent-hkq9p).
-                    preview_requested = False
-                else:
-                    # Static creative - use preview_creative
-                    creative_manifest = _preview_manifest(
-                        creative, data, creative_id=creative.creative_id or str(uuid.uuid4()), name=creative.name
-                    )
-                    format_id_str = creative_format.id
-                    logger.info(
-                        f"[sync_creatives] Calling preview_creative for validation: {format_id_str} "
-                        f"from agent {format_obj.agent_url}, has_assets={bool(creative.assets)}, "
-                        f"has_url={bool(data.get('url'))}"
-                    )
-
-                    # OUT-OF-TRANSACTION EFFECT: a preview must not fire a request at a
-                    # creative agent's endpoint (same rule accounts.py states for
-                    # activation proofs). None here is already the no-result case the
-                    # consumer below guards for, so no second result path appears.
-                    preview_result = creative_repo.outbound(
-                        lambda: run_async_in_sync_context(
-                            registry.preview_creative(
-                                agent_url=format_obj.agent_url,
-                                format_id=format_id_str,
-                                creative_manifest=creative_manifest,
-                            )
-                        )
-                    )
-
-                # Extract preview data and store in data field
-                if preview_result and preview_result.get("previews"):
-                    # Store full preview response for UI (per AdCP PR #119)
-                    # This preserves all variants and renders for UI display
-                    data["preview_response"] = preview_result
-
-                    # Also extract primary preview URL for backward compatibility
-                    first_preview = preview_result["previews"][0]
-                    renders = first_preview.get("renders", [])
-                    if renders:
-                        first_render = renders[0]
-
-                        # Only use preview URL if user didn't provide one
-                        if first_render.get("preview_url") and not data.get("url"):
-                            data["url"] = first_render["preview_url"]
-                            logger.info(f"[sync_creatives] Got preview URL from creative agent: {data['url']}")
-                        elif data.get("url"):
+                        # Only use generative assets if user didn't provide their own
+                        if creative_output.get("assets") and not user_provided_assets:
+                            data["assets"] = _generative_assets(creative_output["assets"])
+                            logger.info("[sync_creatives] Using assets from generative output")
+                        elif user_provided_assets:
                             logger.info(
-                                "[sync_creatives] Preserving user-provided URL from assets, "
-                                "not overwriting with preview URL"
+                                "[sync_creatives] Preserving user-provided assets, "
+                                "not overwriting with generative output"
                             )
 
-                        # Only use preview dimensions if user didn't provide them
-                        dimensions = first_render.get("dimensions", {})
-                        if dimensions.get("width") and not data.get("width"):
-                            data["width"] = dimensions["width"]
-                        if dimensions.get("height") and not data.get("height"):
-                            data["height"] = dimensions["height"]
-                        if dimensions.get("duration") and not data.get("duration"):
-                            data["duration"] = dimensions["duration"]
+                        if creative_output.get("output_format"):
+                            output_format = creative_output["output_format"]
+                            data["output_format"] = output_format
+
+                            # Only use generative URL if user didn't provide one
+                            if isinstance(output_format, dict) and output_format.get("url"):
+                                if not data.get("url"):
+                                    data["url"] = output_format["url"]
+                                    logger.info(f"[sync_creatives] Got URL from generative output: {data['url']}")
+                                else:
+                                    logger.info(
+                                        "[sync_creatives] Preserving user-provided URL, "
+                                        "not overwriting with generative output"
+                                    )
 
                     logger.info(
-                        f"[sync_creatives] Preview data populated: "
-                        f"url={bool(data.get('url'))}, "
-                        f"width={data.get('width')}, "
-                        f"height={data.get('height')}, "
-                        f"variants={len(preview_result.get('previews', []))}"
+                        f"[sync_creatives] Generative creative built: "
+                        f"status={data.get('generative_status')}, "
+                        f"context_id={data.get('generative_context_id')}"
                     )
-                else:
-                    # No previews came back from an agent-backed format. ONE policy, shared
-                    # with the update path -- see _no_previews_refusal, which also owns the
-                    # "a preview transaction did not ask" arm that used to be an `elif`
-                    # here.
-                    refusal = _no_previews_refusal(
-                        creative_id,
-                        creative=creative,
-                        data=data,
-                        is_preview=creative_repo.is_preview,
-                        preview_requested=preview_requested,
-                    )
-                    if refusal is not None:
-                        return (refusal, False)
+
+                # Skip preview_creative call since we already have the output
+                preview_result = None
+                # ... and say so, rather than leaving the refusal below to read a falsy
+                # result as "the agent returned nothing" (salesagent-hkq9p).
+                preview_requested = False
+            else:
+                preview_result = _request_static_preview(
+                    creative_repo,
+                    registry,
+                    creative,
+                    data,
+                    identity=incoming_identity,
+                    format_obj=format_obj,
+                    creative_id=creative.creative_id or str(uuid.uuid4()),
+                    name=creative.name,
+                )
+
+            if not _store_previews(data, preview_result):
+                # No previews came back from an agent-backed format. ONE policy, shared
+                # with the update path -- see _no_previews_refusal, which also owns the
+                # "a preview transaction did not ask" arm that used to be an `elif`
+                # here.
+                refusal = _no_previews_refusal(
+                    creative_id,
+                    creative=creative,
+                    data=data,
+                    is_preview=creative_repo.is_preview,
+                    preview_requested=preview_requested,
+                )
+                if refusal is not None:
+                    return (refusal, False)
 
         except AdCPConfigurationError as config_error:
             # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal

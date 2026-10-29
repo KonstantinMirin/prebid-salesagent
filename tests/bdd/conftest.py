@@ -6656,6 +6656,15 @@ _UC006_WIRED_SCENARIOS = frozenset(
         # roundtrip does.
         "T-UC-006-canonical-identity-roundtrip-on-sync",
         "T-UC-006-canonical-identity-resync-replaces-option",
+        # The preview half of the same checklist item, and review on resync of a creative
+        # identified by format_kind. CreativeSyncEnv serves all three: the preview answer
+        # is the env's preview_creative seam in process and the pinned agent on e2e, and
+        # the approval mode is the env's tenant writer.
+        "T-UC-006-canonical-identity-through-preview",
+        "T-UC-006-canonical-unchanged-resync-keeps-review",
+        "T-UC-006-canonical-changed-resync-enters-review",
+        # A rename on resync is metadata: "updated", review state kept.
+        "T-UC-006-canonical-renamed-resync-keeps-review",
     }
 )
 
