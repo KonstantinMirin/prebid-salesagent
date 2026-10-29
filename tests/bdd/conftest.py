@@ -6236,6 +6236,9 @@ _UC003_REVISION_TAGS = frozenset(
 _UC003_STORYBOARD_CLIENT_TAGS = frozenset(
     {"T-UC-003-storyboard-media-buy-not-found", "T-UC-003-storyboard-not-cancellable-on-recancel"}
 )
+_UC003_INLINE_CREATIVES_READBACK_TAGS = frozenset(
+    {"T-UC-003-local-inline-creatives-replace", "T-UC-003-local-inline-creatives-keep-library"}
+)
 
 #: UC-006 scenarios CreativeSyncEnv provably serves, keyed by SCENARIO IDENTITY.
 #:
@@ -6916,6 +6919,14 @@ ENV_ROUTES: list[EnvRoute] = [
         xfail_reason="UC-002 harness not yet wired for non-extension scenarios",
     ),
     # ── UC-003 ──────────────────────────────────────────────────────────────
+    # The local inline-creatives scenarios: the uc003-ext seed, on the env that also routes
+    # get_media_buys, because they read the package's creatives back the way a buyer does.
+    EnvRoute(
+        tag="uc003-inline-creatives-readback",
+        when=_uc("UC-003", lambda m: bool(m & _UC003_INLINE_CREATIVES_READBACK_TAGS)),
+        env_builder=_env("tests.harness.media_buy_create_update_list.MediaBuyCreateUpdateListEnv"),
+        seed=_seed_update_with_existing_buy,
+    ),
     EnvRoute(
         tag="uc003-ext",
         # The two creative-state outlines share this row rather than getting one of their
@@ -6934,9 +6945,6 @@ ENV_ROUTES: list[EnvRoute] = [
                 or bool(m & _UC003_PACKAGE_UPDATE_NOT_TAGS)
                 or "T-UC-003-partition-creative-state" in m
                 or "T-UC-003-boundary-creative-state" in m
-                # The local inline-creatives replacement scenario: the same seed, and a
-                # factory-built assignment row its own Given adds on top of it.
-                or "T-UC-003-local-inline-creatives-replace" in m
             ),
         ),
         env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),

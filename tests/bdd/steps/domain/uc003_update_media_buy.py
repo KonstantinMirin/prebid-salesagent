@@ -753,23 +753,10 @@ def given_package_update_inline_creatives(ctx: dict) -> None:
     already carries with the same reasoning. The invalidity was never this
     scenario's subject, so it is fixed rather than declared malformed.
     """
-    from tests.factories.creative_asset import build_assets, image_spec
-    from tests.factories.request import CreativeAssetRequestFactory
-
     kwargs = _ensure_update_defaults(ctx)
     if not kwargs.get("packages"):
         kwargs["packages"] = [{"package_id": "pkg_001"}]
-    kwargs["packages"][0]["creatives"] = [
-        CreativeAssetRequestFactory.payload(
-            creative_id="inline-cr-001",
-            name="Inline Creative 1",
-            format_id={
-                "agent_url": "https://creative.adcontextprotocol.org",
-                "id": "display_300x250_image",
-            },
-            assets=build_assets(image_spec("primary", url="https://example.com/banner-1.png")),
-        )
-    ]
+    kwargs["packages"][0]["creatives"] = [_inline_creative_payload("inline-cr-001", "Inline Creative 1")]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1429,56 +1416,104 @@ def then_old_assignments_removed(ctx: dict, old_ids: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given(parsers.parse('library creative "{creative_id}" is assigned to package "{package_id}"'))
-def given_library_creative_assigned(ctx: dict, creative_id: str, package_id: str) -> None:
-    """An assignment ROW for *creative_id* on the Background's package, built by factories.
+def _inline_creative_payload(creative_id: str, name: str) -> dict[str, Any]:
+    """One valid inline display creative, as a package update's ``creatives`` item carries it.
 
-    A row, not a ``package_config`` entry: the assignment table is what the update's
-    replacement drops from and what ``get_media_buys`` reads ``creative_approvals`` from,
-    so a precondition written anywhere else would leave the replacement nothing to replace.
+    The ``asset_type`` discriminator comes from ``image_spec``: a hand-built asset map
+    without it is refused by ``AdCPPackageUpdate.creatives`` before the update runs.
     """
-    from tests.factories.creative import CreativeAssignmentFactory, CreativeFactory
+    from tests.factories.creative_asset import build_assets, image_spec
+    from tests.factories.request import CreativeAssetRequestFactory
 
-    pkg = ctx["existing_package"]
-    assert pkg.package_id == _resolve_package_id(ctx, package_id), (
-        f"package {package_id!r} is not the Background's package {pkg.package_id!r}"
+    return CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name=name,
+        format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+        assets=build_assets(image_spec("primary", url=f"https://example.com/{creative_id}.png")),
     )
-    creative = CreativeFactory(
+
+
+def _approved_display_creative(ctx: dict, creative_id: str) -> None:
+    """An approved display creative in the buyer's library, compatible with the display product."""
+    from tests.factories.creative import CreativeFactory
+
+    CreativeFactory(
         creative_id=creative_id,
         tenant=ctx["tenant"],
         principal=ctx["principal"],
         format="display_300x250_image",
         approved=True,
+        data={"assets": {"primary": {"url": f"https://example.com/{creative_id}.png", "width": 300, "height": 250}}},
     )
-    CreativeAssignmentFactory(
-        creative=creative,
-        media_buy=ctx["existing_media_buy"],
-        package_id=pkg.package_id,
-    )
-    ctx["env"]._commit_factory_data()
 
 
-@then(parsers.parse('the package "{package_id}" should be assigned exactly the inline creatives the update sent'))
-def then_package_assigned_exactly_inline(ctx: dict, package_id: str) -> None:
-    """The seller's record of the package's assignments is the inline set, and nothing else.
+def _send_earlier_update(ctx: dict, package_label: str, **package_fields: Any) -> None:
+    """Put the package's prior creatives on the record the way a buyer does: an update.
 
-    package-update.json /properties/creatives: "Replace this package's inline creative
-    assets". Read through the repositories while the unit is open; the live e2e server
-    writes the database this process reads, so the read answers on every transport.
+    Sent over the scenario's own transport, through ``env.call_via`` rather than
+    ``dispatch_request``: that is the one writer of ``ctx["result"]``, and this update is
+    the scenario's precondition, not the request it grades. Its own bag, so it carries its
+    own idempotency key rather than the graded request's.
     """
-    from src.core.database.repositories.uow import MediaBuyUoW
+    from tests.bdd.steps.generic._dispatch import _as_transport, gate_and_record
 
-    sent = sorted(c["creative_id"] for c in ctx["update_kwargs"]["packages"][0]["creatives"])
-    assert sent, "the update sent no inline creatives, so there is no replacement to grade"
-    with MediaBuyUoW(str(ctx["tenant"].tenant_id)) as uow:
-        assert uow.assignments is not None
-        assigned = sorted(
-            a.creative_id
-            for a in uow.assignments.get_by_media_buy_and_package(
-                ctx["existing_media_buy"].media_buy_id, _resolve_package_id(ctx, package_id)
-            )
-        )
-    assert assigned == sent, f"package {package_id!r} is assigned {assigned}, expected exactly the inline {sent}"
+    bag = apply_required_update_fields(
+        ctx,
+        {
+            "media_buy_id": _existing_media_buy(ctx).media_buy_id,
+            "packages": [{"package_id": _resolve_package_id(ctx, package_label), **package_fields}],
+        },
+    )
+    gate_and_record(bag)
+    result = ctx["env"].call_via(_as_transport(ctx, "_send_earlier_update"), **bag)
+    assert result.is_success, (
+        f"the earlier update_media_buy that sets up {package_label!r} was refused: {result.error!r}"
+    )
+
+
+@given(parsers.parse('an earlier update gave package "{package_id}" the inline creative "{creative_id}"'))
+def given_earlier_inline_creative(ctx: dict, package_id: str, creative_id: str) -> None:
+    """The package's prior creative arrived inline, as in the pin's storyboard
+    (inline_creatives_without_sync: an inline creative, then a replacement inline update)."""
+    _send_earlier_update(ctx, package_id, creatives=[_inline_creative_payload(creative_id, "Earlier inline creative")])
+
+
+@given(parsers.parse('an earlier update assigned library creative "{creative_id}" to package "{package_id}"'))
+def given_earlier_library_assignment(ctx: dict, creative_id: str, package_id: str) -> None:
+    """The package's prior creative is a library creative assigned through ``creative_assignments``."""
+    _approved_display_creative(ctx, creative_id)
+    ctx["env"]._commit_factory_data()
+    _send_earlier_update(ctx, package_id, creative_assignments=[{"creative_id": creative_id, "weight": 1.0}])
+
+
+@when(parsers.parse('the Buyer Agent reads media buy "{media_buy_id}" back with get_media_buys'))
+def when_read_back_media_buy(ctx: dict, media_buy_id: str) -> None:
+    """The buyer-visible readback of the package's creatives: get_media_buys by id.
+
+    The pin's inline_creatives_without_sync storyboard reads the replacement back the same
+    way, from ``media_buys[].packages[].creative_approvals[].creative_id``.
+    """
+    from src.core.schemas._base import GetMediaBuysRequest
+
+    dispatch_request(ctx, req=GetMediaBuysRequest(media_buy_ids=[_existing_media_buy(ctx, media_buy_id).media_buy_id]))
+
+
+@then(parsers.parse('the package "{package_id}" should report creative approvals for exactly {creative_ids}'))
+def then_package_reports_exactly(ctx: dict, package_id: str, creative_ids: str) -> None:
+    """The package's ``creative_approvals`` on the get_media_buys wire name exactly *creative_ids*.
+
+    ``get_media_buys`` reports one ``creative_approvals`` entry per creative assigned to the
+    package, so this set is the seller's record of the package's creatives as the buyer
+    sees it.
+    """
+    import json
+
+    from tests.bdd.steps.domain.uc019_query_media_buys import _wire_package
+
+    expected = sorted(json.loads(creative_ids))
+    package = _wire_package(ctx, _resolve_package_id(ctx, package_id))
+    reported = sorted(approval["creative_id"] for approval in package.get("creative_approvals") or [])
+    assert reported == expected, f"package {package_id!r} reports creatives {reported} on the wire, expected {expected}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2008,14 +2043,7 @@ def given_creative_assignments_with_state(ctx: dict, creative_state: str) -> Non
     state = creative_state.strip()
     cid = f"cr_{state}_001"
     if state == "approved":
-        CreativeFactory(
-            creative_id=cid,
-            tenant=ctx["tenant"],
-            principal=ctx["principal"],
-            format="display_300x250_image",
-            approved=True,
-            data={"assets": {"primary": {"url": f"https://example.com/{cid}.png", "width": 300, "height": 250}}},
-        )
+        _approved_display_creative(ctx, cid)
     elif state == "error":
         CreativeFactory(
             creative_id=cid,
