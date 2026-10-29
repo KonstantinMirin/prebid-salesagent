@@ -3537,6 +3537,7 @@ Feature: BR-UC-002 Create Media Buy
   @T-UC-002-storyboard-pending-creatives-state-transition @schema-v3.1 @v3-1 @lifecycle @pending-creatives @pending-start
   Scenario: Media buy created without creatives sits in pending_creatives until sync_creatives completes, then transitions to pending_start
     Given the tenant is configured for auto-approval
+    And the tenant creative approval mode is configured as auto-approve
     And the buyer sends create_media_buy without inline creatives
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy success spec
@@ -3555,6 +3556,11 @@ Feature: BR-UC-002 Create Media Buy
     # ("Envelope task-status is completed on synchronous success"); "status pending_creatives"
     # conflated them. The unblock is sync_creatives AND then update_media_buy with
     # creative_assignments (step assign_creative_to_package), not sync_creatives alone. The
-    # storyboard gates on media_buy.creative_approval_mode == auto_approve, hence the tenant
-    # Given.
+    # storyboard gates on media_buy.creative_approval_mode == auto_approve, which is the
+    # tenant's creative approval mode (the creative Given); the media-buy auto-approval Given
+    # keeps the create synchronous. The buyer's one update carries the creative inline, which
+    # package-update.json `creatives` defines as entering the library and assigning to the
+    # package. The flight is in the future, so the transition lands on pending_start.
     # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/pending_creatives_to_start.yaml phase=create_without_creatives step=create_buy_no_creatives
+    # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/pending_creatives_to_start.yaml phase=supply_creatives step=assign_creative_to_package
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/specification.mdx section="Media Buy State Transitions"

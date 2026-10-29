@@ -8188,6 +8188,16 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
         seed=_seed_media_buy_chain_create_dispatch,
     ),
+    # The pending_creatives_to_start lifecycle creates a buy and then updates it, so it needs
+    # the env that dispatches both: MediaBuyDualEnv subclasses MediaBuyCreateEnv and routes a
+    # request carrying media_buy_id to update_media_buy. The seed is the uc002-ext one, so the
+    # first When dispatches the create its Givens built.
+    EnvRoute(
+        tag="uc002-create-then-update",
+        when=_uc("UC-002", lambda m: "T-UC-002-storyboard-pending-creatives-state-transition" in m),
+        env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
+        seed=_seed_media_buy_chain_create_dispatch,
+    ),
     # The remainder of UC-002. It seeds what the uc002-ext row seeds, for the same reason:
     # its Background claims "a tenant exists with completed setup checklist", and
     # validate_setup_complete reads the rows setup_media_buy_data writes on every

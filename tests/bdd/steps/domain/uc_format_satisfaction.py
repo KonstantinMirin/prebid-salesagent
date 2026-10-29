@@ -23,7 +23,6 @@ carrying JSON a reader has to decode.
 
 from __future__ import annotations
 
-import uuid
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -40,7 +39,6 @@ from tests.bdd.steps._outcome_helpers import (
 )
 from tests.factories import PricingOptionFactory, ProductFactory, StoredPlacementFactory
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
-from tests.factories.mint import mint
 
 #: The legacy arm every product here also carries, matching ``MediaBuyCreateEnv``'s own
 #: seeded default so the deprecated selector route and the rest of the create flow behave
@@ -1284,19 +1282,14 @@ def when_update_assigns_routed_creatives(ctx: dict, routing: str) -> None:
 
 
 def _dispatch_package_update(ctx: dict, **package_members: Any) -> None:
-    """One update_media_buy against the held buy's package, carrying *package_members*.
+    """One update_media_buy against the held buy's package, carrying *package_members*."""
+    from tests.bdd.steps.generic._dispatch import dispatch_package_update
 
-    A RAW flat body: ``media_buy_id`` is what ``MediaBuyDualEnv._is_update_request`` routes
-    on, and the transport validates, so a malformed member reaches production's boundary.
-    """
-    from tests.bdd.steps.generic._dispatch import dispatch_request
-
-    dispatch_request(
+    dispatch_package_update(
         ctx,
         media_buy_id=ctx["existing_media_buy"].media_buy_id,
-        account={"account_id": ctx["env"].setup_default_account().account_id},
-        idempotency_key=mint(f"satisfaction-update-{uuid.uuid4().hex}"),
-        packages=[{"package_id": ctx["existing_package"].package_id, **package_members}],
+        package_id=ctx["existing_package"].package_id,
+        **package_members,
     )
 
 

@@ -2002,21 +2002,23 @@ def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x
     if kwargs.get("packages"):
         pkg = kwargs["packages"][0]
         creatives = pkg.get("creatives") or []
-        for i in range(count):
-            creatives.append(
-                CreativeAssetRequestFactory.payload(
-                    creative_id=f"inline-cr-{i + 1:03d}",
-                    name=f"Inline Creative {i + 1}",
-                    format_id={
-                        "agent_url": "https://creative.adcontextprotocol.org",
-                        "id": fmt_id,
-                    },
-                    # Keyed by the asset_id the CAPTURE declares for this format, not by the
-                    # deleted stub's ``primary``. See _create_approved_creative.
-                    assets=build_assets(image_spec("banner_image", url=f"https://example.com/banner-{i + 1}.png")),
-                )
-            )
+        creatives.extend(inline_creative_payload(i + 1, fmt_id) for i in range(count))
         pkg["creatives"] = creatives
+
+
+def inline_creative_payload(number: int, fmt_id: str = "display_300x250_image") -> dict[str, Any]:
+    """The *number*-th inline creative ``_add_inline_creatives`` builds: one image for *fmt_id*."""
+    return CreativeAssetRequestFactory.payload(
+        creative_id=f"inline-cr-{number:03d}",
+        name=f"Inline Creative {number}",
+        format_id={
+            "agent_url": "https://creative.adcontextprotocol.org",
+            "id": fmt_id,
+        },
+        # Keyed by the asset_id the CAPTURE declares for this format, not by the
+        # deleted stub's ``primary``. See _create_approved_creative.
+        assets=build_assets(image_spec("banner_image", url=f"https://example.com/banner-{number}.png")),
+    )
 
 
 @given(parsers.parse("the creative scenario is {partition}"))
