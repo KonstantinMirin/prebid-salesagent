@@ -404,10 +404,12 @@ class TestEnvMethodNamingConsistency:
     def test_creative_sync_env_has_set_served_catalogue(self):
         """CreativeSyncEnv uses set_served_catalogue, not set_registry_formats.
 
-        set_registry_formats patches registry.list_all_formats (CreativeFormatsEnv) —
-        a stand-in answer in place of a catalogue. set_served_catalogue NARROWS the real
-        registry's catalogue, which every read then answers from consistently. Both the
-        name and the mechanic differ, and sharing the name is a trap for new Env authors.
+        Both seed a real peer creative agent through the one shared mechanism
+        (PeerCreativeAgentMixin.seed_own_creative_agent), but they promise different
+        identities: set_registry_formats (CreativeFormatsEnv) serves each format_id
+        verbatim, and set_served_catalogue re-homes each at the peer's URL so a sync
+        resolves the creative by dialling that peer (env.seeded_format_ids()). Sharing
+        the name would hide that difference from new Env authors.
 
         (``set_run_async_result`` was the previous name here. It configured the sync
         BRIDGE rather than the registry, so ``get_format`` never saw what it set — see

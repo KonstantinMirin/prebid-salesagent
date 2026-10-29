@@ -104,12 +104,16 @@ _FORMAT_ID = "display_300x250"
 _OPERATOR_ROLE = "the creative agent"
 _OPERATOR_REFUSAL_LOGGER = "src.core.tools.creatives._processing"
 
-# The endpoint, in both spellings a leak could take, plus the scheme marker that
-# catches a third. ``urlsplit`` rather than a second literal: a hostname
-# transcribed by hand is one edit away from disagreeing with the URL it is
-# supposed to be the host of.
-_AGENT_HOST = urlsplit(AGENT_URL).hostname
-_WITHHELD_FROM_THE_BUYER = (AGENT_URL, _AGENT_HOST, "://")
+
+def _withheld_from_the_buyer(agent_url: str) -> tuple[str, str, str]:
+    """The endpoint, in both spellings a leak could take, plus the scheme marker that catches a third.
+
+    ``urlsplit`` rather than a second literal: a hostname transcribed by hand is one edit
+    away from disagreeing with the URL it is supposed to be the host of.
+    """
+    host = urlsplit(agent_url).hostname
+    assert host, f"{agent_url!r} has no host to withhold"
+    return agent_url, host, "://"
 
 
 def _buyer_visible_error_regions(result: TransportResult, creative_id: str) -> list[dict[str, Any]]:
@@ -231,7 +235,12 @@ class TestAnOperatorRefusalNamesNoEndpoint:
             env.setup_default_data()
 
             registry = env.mock["registry"].return_value
+            # The tenant's own creative agent serves the format, so the dial the sync makes is
+            # an OPERATOR dial to the endpoint this deployment configured -- the address the
+            # refusal must not disclose.
             env.set_served_catalogue([FormatFactory(format_id={"id": _FORMAT_ID, "agent_url": AGENT_URL})])
+            (seeded,) = env.seeded_format_ids()
+            withheld_markers = _withheld_from_the_buyer(seeded.agent_url)
             registry.preview_creative.side_effect = OutboundRequestBlocked()
 
             from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId
@@ -242,7 +251,7 @@ class TestAnOperatorRefusalNamesNoEndpoint:
                     creatives=[
                         CreativeAssetFactory(
                             creative_id=creative_id,
-                            format_id=FormatId(id=_FORMAT_ID, agent_url=AGENT_URL),
+                            format_id=FormatId(id=seeded.id, agent_url=seeded.agent_url),
                         )
                     ],
                 )
@@ -273,7 +282,7 @@ class TestAnOperatorRefusalNamesNoEndpoint:
             # topology on a refusal, and transport-errors.mdx § Security
             # Considerations opens with "Every field is client-facing".
             for region in _buyer_visible_error_regions(result, creative_id):
-                for withheld in _WITHHELD_FROM_THE_BUYER:
+                for withheld in withheld_markers:
                     assert_no_marker_in_payload_errors(region, withheld)
 
             # The ROLE, on the surface ADR-010 left it on. Without this the class
@@ -290,8 +299,9 @@ class TestAnOperatorRefusalNamesNoEndpoint:
                 "authored sentence off the buyer's message, this log is the only place an operator learns WHICH "
                 "of their configured endpoints egress policy refused"
             )
+            endpoint, host, _scheme = withheld_markers
             for line in named:
-                assert AGENT_URL not in line and _AGENT_HOST not in line, (
+                assert endpoint not in line and host not in line, (
                     f"the label is an address, not a role: {line!r} — an OperatorEndpoint names what this "
                     "deployment stands behind, and a name that is a URL is exactly what its constructor refuses"
                 )

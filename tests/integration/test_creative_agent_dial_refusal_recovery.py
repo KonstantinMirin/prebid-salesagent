@@ -53,27 +53,30 @@ import pytest
 from src.core.schemas import CreativeFormatIdentity
 from src.core.security.outbound_http import OutboundRequestBlocked
 from tests.factories.creative_asset import CreativeAssetFactory
-from tests.factories.format import AGENT_URL
 from tests.harness.creative_sync import CreativeSyncEnv
 from tests.harness.transport import Transport
-from tests.integration._egress_ingest_helpers import (
-    _FORMAT_ID,
-    _registered_format,
-)
+from tests.integration._egress_ingest_helpers import _registered_format
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 _ALL_TRANSPORTS = [Transport.A2A, Transport.REST, Transport.MCP]
 
 
-def _creative_for_registered_format(creative_id: str):
-    """A creative naming the registered format — the buyer only chooses WHICH format."""
+def _seed_registered_format(env: CreativeSyncEnv):
+    """Serve the registered format from the tenant's own creative agent.
+
+    Returns the identity the agent publishes it under and the declaration it serves. The
+    agent is a real peer the tenant configured, so the dial ``_processing.py`` makes for a
+    creative in this format is an OPERATOR dial to a deployment-configured endpoint -- the
+    provenance this module grades. The buyer only chooses WHICH format, by naming this
+    identity.
+    """
     from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId
 
-    return CreativeAssetFactory(
-        creative_id=creative_id,
-        format_id=FormatId(id=_FORMAT_ID, agent_url=AGENT_URL),
-    )
+    declaration = _registered_format()
+    env.set_served_catalogue([declaration])
+    (seeded,) = env.seeded_format_ids()
+    return FormatId(id=seeded.id, agent_url=seeded.agent_url), declaration
 
 
 class TestOperatorDialRefusalIsTerminalNotTransient:
@@ -93,12 +96,12 @@ class TestOperatorDialRefusalIsTerminalNotTransient:
             env.setup_default_data()
 
             registry = env.mock["registry"].return_value
-            env.set_served_catalogue([_registered_format()])
+            format_id, _declaration = _seed_registered_format(env)
             registry.preview_creative = AsyncMock(side_effect=OutboundRequestBlocked())
 
             result = env.call_via(
                 transport,
-                creatives=[_creative_for_registered_format(creative_id)],
+                creatives=[CreativeAssetFactory(creative_id=creative_id, format_id=format_id)],
             )
 
             payload = result.payload
@@ -142,13 +145,17 @@ class TestOperatorDialRefusalIsTerminalNotTransient:
 
         with CreativeSyncEnv() as env:
             tenant, principal = env.setup_default_data()
+            format_id, declaration = _seed_registered_format(env)
             original = CreativeFactory(
                 tenant=tenant,
                 principal=principal,
                 creative_id=creative_id,
                 name="Original Name",
-                format=_FORMAT_ID,
-                agent_url=AGENT_URL,
+                format=format_id.id,
+                agent_url=format_id.agent_url,
+                # The capture does not carry the peer's identity, so the seed resolves
+                # against the declaration the peer serves -- the one the sync resolves.
+                format_spec=declaration,
                 status="approved",
                 data={"assets": {}, "url": "https://example.com/original.png"},
             )
@@ -161,15 +168,12 @@ class TestOperatorDialRefusalIsTerminalNotTransient:
             )
 
             registry = env.mock["registry"].return_value
-            env.set_served_catalogue([_registered_format()])
             registry.preview_creative = AsyncMock(side_effect=OutboundRequestBlocked())
-
-            from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId
 
             update_creative = CreativeAssetFactory(
                 creative_id=creative_id,
                 name="Attempted New Name",
-                format_id=FormatId(id=_FORMAT_ID, agent_url=AGENT_URL),
+                format_id=format_id,
             )
 
             result = env.call_via(transport, creatives=[update_creative])

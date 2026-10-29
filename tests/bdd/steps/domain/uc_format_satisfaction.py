@@ -1371,8 +1371,8 @@ def _sync_legacy_claim(ctx: dict, format_id: str, **parameters: int) -> None:
     ``video_1280x720`` is in the capture and declares ``canonical.kind = video_hosted``,
     and no registry glob matches it.
 
-    THIS STEP USED TO CALL ``serve_reference_catalog()`` HERE, AND MUST NOT AGAIN. That
-    method writes through ``mock["registry"]``, a key ``LibraryUpsertCreativeSyncEnv``
+    THIS STEP USED TO CALL ``serve_reference_catalog()`` HERE (since deleted). That
+    method wrote through ``mock["registry"]``, a key ``LibraryUpsertCreativeSyncEnv``
     DELETES after ``__enter__`` (the trap its own docstring names), so the two
     ``@creative_library_upsert`` scenarios routed there died in this Given with
     ``KeyError: 'registry'`` on all four transports -- measured red at
@@ -1380,8 +1380,8 @@ def _sync_legacy_claim(ctx: dict, format_id: str, **parameters: int) -> None:
     1883dedc4 renamed the key, as ``KeyError: 'run_async'`` in innet_171026_2038. The call
     bought nothing on either env: it only UNDOES a prior narrowing, no Given here narrows,
     and the capture is the default. A catalogue a scenario needs narrowed says so with
-    ``set_served_catalogue``, which is a different sentence and not available on the
-    real-registry env at all.
+    ``set_served_catalogue``, which seeds a real peer agent rather than the registry and
+    so works on the real-registry env too.
     """
     from tests.factories.format import resolvable_format_ref
     from tests.factories.request import CreativeAssetRequestFactory

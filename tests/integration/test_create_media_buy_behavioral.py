@@ -100,13 +100,8 @@ def _peer_serving_display_300x250_image(env: MediaBuyCreateEnv) -> str:
     answers. The entry is the capture's, re-homed: its ``format_id.agent_url`` is the
     peer's own URL, as an agent states for a format it publishes.
     """
-    from tests.helpers.peer_creative_agent import new_peer_key, peer_agent_url
-
-    key = new_peer_key()
     (fmt,) = [f for f in load_reference_formats() if f.format_id.id == "display_300x250_image"]
-    entry = fmt.model_dump(mode="json", exclude_none=True)
-    entry["format_id"]["agent_url"] = peer_agent_url(key)
-    return env.serve_peer_catalog(key, {"formats": [entry]})
+    return env.publish_formats([fmt], rehome=True)
 
 
 def _require_manual_approval(env: MediaBuyCreateEnv) -> None:

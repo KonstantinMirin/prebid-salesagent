@@ -6,6 +6,10 @@ reads), notifications, audit; pins the Gemini key in the environment.
 Real: get_db_session, CreativeRepository, the format catalogue and every format
 resolution, all validation/processing (all hit real DB).
 
+A scenario whose subject is the catalogue itself calls ``set_served_catalogue``: the
+formats are served by a real peer creative agent the tenant configures (in process and on
+the live server alike), and the creative names them by ``env.seeded_format_ids()``.
+
 Requires: integration_db fixture (creates test PostgreSQL DB).
 
 Usage::
@@ -80,12 +84,12 @@ from src.core.creative_agent_registry import (
     ReferenceFormatsRegistry,
     _get_reference_formats,
 )
-from src.core.schemas import Format, SyncCreativesRequest, SyncCreativesResponse
+from src.core.schemas import Format, FormatId, SyncCreativesRequest, SyncCreativesResponse
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
-from tests.harness.egress import EgressHatchMixin
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
+from tests.harness.peer_agent import PeerCreativeAgentMixin
 from tests.harness.transport import DeliverResult
 from tests.helpers.creative_test_helpers import creative_payload
 
@@ -271,7 +275,8 @@ class HarnessCreativeAgentRegistry(ReferenceFormatsRegistry):
     scenario graded two different sellers.
 
     What this subclass adds is two recorders, two counters and one fault, and no
-    catalogue of its own:
+    catalogue of its own -- a scenario that needs a different catalogue gets one from a
+    real peer agent (:meth:`CreativeSyncEnv.set_served_catalogue`), not from here:
 
     ``preview_creative`` / ``build_creative`` are OUTBOUND AdCP operations with NO
     capture. ``_get_reference_formats`` covers ``list_creative_formats`` only;
@@ -293,9 +298,10 @@ class HarnessCreativeAgentRegistry(ReferenceFormatsRegistry):
     attached to a mock's answers.
 
     Everything else is production: ``list_all_formats``, ``list_all_formats_with_errors``,
-    ``get_format``, ``get_formats_for_agent`` and ``search_formats`` all consult the one
-    override hook, so a format resolves here exactly when the reference agent serves it
-    and is ``None`` exactly when it does not. An UNCONFIGURED attribute raises
+    ``get_format``, ``get_formats_for_agent`` and ``search_formats`` all consult production's
+    one override hook for the operator agent and dial every agent the tenant configured, so
+    a format resolves here exactly when one of the seller's agents serves it and is
+    ``None`` exactly when none does. An UNCONFIGURED attribute raises
     ``AttributeError`` instead of answering a truthy child mock -- which is the second
     defect a ``MagicMock`` caused: ``canonical_kind_for``'s first step read
     ``spec.canonical.kind`` off a mock and got the string
@@ -304,10 +310,6 @@ class HarnessCreativeAgentRegistry(ReferenceFormatsRegistry):
 
     def __init__(self) -> None:
         super().__init__()
-        #: ``None`` means "the committed capture, unfiltered" -- what the e2e server
-        #: serves, so it is the default. A scenario that needs a narrower catalogue
-        #: SAYS so through :meth:`CreativeSyncEnv.set_served_catalogue`.
-        self._catalogue: list[Format] | None = None
         # The two with no capture. Defaults are the previous stand-in's defaults
         # verbatim, so this change moves the CATALOGUE and nothing else: an empty
         # preview answer is the no-previews case _processing.py already guards for.
@@ -334,11 +336,6 @@ class HarnessCreativeAgentRegistry(ReferenceFormatsRegistry):
         #: answers nothing, records nothing, and cannot invent a Format.
         self._format_fetch_error: BaseException | None = None
 
-    def _operator_formats_override(self) -> list[Format] | None:
-        if self._catalogue is None:
-            return _get_reference_formats()
-        return list(self._catalogue)
-
     async def list_all_formats_with_errors(self, *args: Any, **kwargs: Any) -> FormatFetchResult:
         """Production's catalogue read, counted. ``list_all_formats`` delegates here."""
         self.catalogue_reads += 1
@@ -355,14 +352,6 @@ class HarnessCreativeAgentRegistry(ReferenceFormatsRegistry):
         """Make every subsequent :meth:`get_format` raise *exc*."""
         self._format_fetch_error = exc
 
-    def serve_only(self, formats: list[Format]) -> None:
-        """Narrow what every read answers from to exactly *formats*."""
-        self._catalogue = list(formats)
-
-    def serve_capture(self) -> None:
-        """Undo a narrowing: serve the committed capture, which is the default."""
-        self._catalogue = None
-
 
 def creative_fingerprint(creative: Any) -> tuple[str, str]:
     """The per-row state comparison every creative-effect oracle uses.
@@ -378,7 +367,7 @@ def creative_fingerprint(creative: Any) -> tuple[str, str]:
     return (creative.status, repr(creative.data))
 
 
-class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
+class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
     """Integration test environment for _sync_creatives_impl.
 
     Only mocks external services (creative agent registry, async runner,
@@ -445,6 +434,9 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
     #:    transport"); the harness was the half that had not followed.
     DEFAULT_AGENT_URL = PUBLIC_DEFAULT_AGENT_URL
     REST_ENDPOINT = "/api/v1/creatives/sync"
+
+    #: The identities :meth:`set_served_catalogue` seeded, re-homed at the peer, or None.
+    _seeded_format_ids: list[FormatId] | None = None
 
     #: {creative_id: fingerprint-or-None} as seen by an INDEPENDENT connection at
     #: the instant the sync handed that creative to the AI-review executor. The
@@ -1145,21 +1137,35 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         self._apply_gemini_api_key(value)
 
     def set_served_catalogue(self, formats: list[Format]) -> None:
-        """NARROW the catalogue every registry read answers from, to exactly *formats*.
+        """The seller's catalog is exactly *formats*, on every transport.
 
-        A RESTRICTION, and the default is no restriction: the registry serves the whole
-        committed capture, which is what the e2e server serves. Call this only for a
-        scenario whose subject IS the catalogue's contents -- an empty one, or a tenant
-        whose own registered agent carries a format the reference agent does not.
+        A RESTRICTION, and the default is no restriction: the standard creative agent
+        answers from the committed capture, which is what the e2e server serves. Call this
+        only for a scenario whose subject IS the catalogue's contents -- an empty one, or a
+        format the reference agent does not carry.
 
-        Replaces ``set_run_async_result``, which configured the sync BRIDGE
-        (``run_async_in_sync_context``) to answer with a fixed list and so bypassed the
-        registry entirely -- the measured reason ``_sync.py:151`` read ``len=0`` no
-        matter which registry was installed. This writes the catalogue onto the registry,
-        so ``list_all_formats`` AND ``get_format`` both see it and cannot disagree; the
-        bridge is production's.
+        The formats are served by a real peer creative agent and the tenant stops
+        federating the standard one (``seed_own_creative_agent``), so ``list_all_formats``
+        and ``get_format`` both read the peer's catalog through production's own registry,
+        in process and on the live server alike. Each entry is RE-HOMED at the peer's URL:
+        a single-format lookup routes by ``format_id.agent_url``, and a URL naming the
+        standard agent is answered from the capture, never from the peer. So a creative
+        has to name the identity the peer publishes -- :meth:`seeded_format_ids` hands it
+        over, and no step spells an agent URL for a seeded format.
         """
-        self.mock["registry"].return_value.serve_only(formats)
+        url = self.seed_own_creative_agent(formats, rehome=True)
+        self._seeded_format_ids = [fmt.format_id.model_copy(update={"agent_url": url}) for fmt in formats]
+
+    def seeded_format_ids(self) -> list[FormatId]:
+        """The ``format_id`` of each format :meth:`set_served_catalogue` seeded, in order, as the peer publishes it.
+
+        Raises rather than answering an empty list when nothing was seeded: a When step that
+        reads these with no seeding Given would otherwise send a creative naming nothing.
+        """
+        assert self._seeded_format_ids is not None, (
+            "no catalogue was seeded on this env; call set_served_catalogue() first"
+        )
+        return list(self._seeded_format_ids)
 
     @property
     def catalogue_reads(self) -> int:
@@ -1206,20 +1212,6 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         the per-item handler this grades -- a pass for the wrong reason.
         """
         self.mock["registry"].return_value.fail_format_fetch_with(exc)
-
-    def serve_reference_catalog(self) -> None:
-        """Serve the pinned capture, unrestricted -- what the e2e server serves.
-
-        THE DEFAULT, kept as an explicit spelling because scenarios call it to SAY that
-        the catalogue matters to them. It used to be an opt-in: ``all_formats`` in
-        ``_sync.py`` was ``[]`` on this env, so ``find_format`` answered None,
-        ``canonical_kind_for`` never saw a spec, and the projection fell back to the
-        registry glob -- which covers 22 of the 71 formats the reference agent serves, so
-        a scenario naming one of the other 49 was refused for the ENV's reason instead of
-        reaching its own subject. The registry now answers from the capture through
-        ``_operator_formats_override``, so this only undoes a prior restriction.
-        """
-        self.mock["registry"].return_value.serve_capture()
 
     #: AdCP 3.1.1 makes idempotency_key REQUIRED on sync-creatives-request. Supplied here so
     #: every scenario gets a spec-conformant request without each of ~200 call sites naming a
@@ -1493,8 +1485,9 @@ class RealRegistryCreativeSyncEnv(CreativeSyncEnv):
 
     TRAP inherited from the same pattern in ``RealResolverProductEnv``:
     ``self.mock["registry"]`` does not exist after ``__enter__``, so any helper
-    that programs the registry (``setup_generative_build``, ``set_served_catalogue``)
-    will ``KeyError`` on this env.
+    that programs the registry (``setup_generative_build``) will ``KeyError`` on this
+    env. ``set_served_catalogue`` does not program the registry -- it seeds a real peer
+    agent and the tenant's row -- so it works here too.
     """
 
     EXTERNAL_PATCHES = {name: target for name, target in CreativeSyncEnv.EXTERNAL_PATCHES.items() if name != "registry"}

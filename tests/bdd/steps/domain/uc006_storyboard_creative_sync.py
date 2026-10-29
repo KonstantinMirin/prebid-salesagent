@@ -197,15 +197,14 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
     catalog behavior (that is UC-005's concern).
 
     THE PROJECTION IS A SECOND QUESTION and ``get_format`` is not on its path. The
-    canonical kind comes from ``find_format(all_formats, ...)``, which this env answers
-    with ``[]`` by default — so ``native_content``, which the reference agent SERVES and
-    no registry glob matches, had no canonical projection and was refused. Serving the
-    capture in process is what the e2e server does anyway, so the three transports now
-    resolve these three ids the same way.
+    canonical kind comes from ``find_format(all_formats, ...)``, which this env once
+    answered with ``[]`` -- so ``native_content``, which the reference agent SERVES and
+    no registry glob matches, had no canonical projection and was refused. The env now
+    serves the capture in process by default, which is what the e2e server does, so the
+    four transports resolve these three ids the same way with nothing to arrange here.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    env.serve_reference_catalog()
     display = _creative_format_id_entry(ctx, env)
     agent_url = display["agent_url"]
     # The video and native formats must be ones the transport's agent SERVES: on
@@ -213,8 +212,8 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
     # v1-reference-formats.json) answers, and an unserved id is a failed entry with no
     # status -- which would grade the catalog, not the per-creative status. Their asset
     # slots are the catalog's required ones for the same reason.
-    # VIDEO IS NOT FORKED. ``serve_reference_catalog()`` above serves the in-process
-    # transports the same committed capture the e2e server reads, so the rule this
+    # VIDEO IS NOT FORKED. The env serves the in-process transports the same
+    # committed capture the e2e server reads, so the rule this
     # docstring states -- name a format the agent SERVES -- now has one answer for all
     # four. The in-process half named ``video_30s``, which the capture's 71 formats do
     # not carry, so production refused it with AdCPFormatNotFoundError and the entry came
