@@ -16,7 +16,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
 from adcp.server.helpers import MEDIA_BUY_STATE_MACHINE, is_terminal_status
-from adcp.types import CreativeAssignment as LibraryCreativeAssignment
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
 
@@ -88,7 +87,7 @@ from src.core.schemas import (
     UpdateMediaBuySuccess,
 )
 from src.core.tools.creatives import sync_creatives
-from src.core.tools.creatives._assignments import require_package_covered
+from src.core.tools.creatives._assignments import assignments_by_package, require_package_covered
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
     validate_budget_positive,
@@ -277,10 +276,9 @@ def _affected_package(
     stored_budget = float(stored.budget) if stored is not None and stored.budget is not None else None
     stored_bid_price = float(stored.bid_price) if stored is not None and stored.bid_price is not None else None
     assert uow.assignments is not None
-    assignments = [
-        LibraryCreativeAssignment(creative_id=row.creative_id, weight=row.weight, placement_ids=row.placement_ids)
-        for row in uow.assignments.get_by_media_buy_and_package(media_buy_id, package_id)
-    ]
+    assignments = assignments_by_package(uow.assignments.get_by_media_buy_and_package(media_buy_id, package_id)).get(
+        package_id
+    )
     return AffectedPackage(
         package_id=package_id,
         paused=bool(config.get("paused", False)) if changes.paused is None else changes.paused,
@@ -291,7 +289,7 @@ def _affected_package(
         pacing=stored.pacing if stored is not None else None,
         product_id=config.get("product_id"),
         pricing_option_id=config.get("pricing_option_id"),
-        creative_assignments=assignments or None,
+        creative_assignments=assignments,
         # Written by create_media_buy from the validated request and by the catalogs branch
         # below, both from the pinned core/catalog.json model, so the stored document has
         # one shape -- not a blob some past client left behind.
