@@ -1861,26 +1861,19 @@ def given_budget_greater_than_zero(ctx: dict, amount: int) -> None:
 
 @given(parsers.parse('the package "{package_id}" has existing creative assignments [{assignments}]'))
 def given_package_existing_creatives(ctx: dict, package_id: str, assignments: str) -> None:
-    """Create existing creative assignments on a package.
+    """Assign each listed creative to the package, as the seller stores an assignment.
 
-    Parses comma-separated creative IDs (e.g., 'cr_old_1, cr_old_2') and creates
-    Creative records + assignment config on the package.
+    Parses comma-separated creative IDs (e.g., 'cr_old_1, cr_old_2') and creates, for
+    each, an approved library Creative and a ``CreativeAssignment`` row on the Background's
+    media buy and package. The rows are the state the update replaces: production reads and
+    drops a package's assignments through ``uow.assignments`` (``_replace_package_assignments``),
+    so an assignment written anywhere else -- this step once wrote ``package_config`` -- is
+    one the seller never sees, and replace and append semantics then give the same result.
     """
-    from tests.factories.creative import CreativeFactory
+    from tests.factories.creative import CreativeAssignmentFactory, CreativeFactory
 
     env = ctx["env"]
-    creative_ids = [cid.strip() for cid in assignments.split(",")]
-    # Create Creative records
-    for cid in creative_ids:
-        CreativeFactory(
-            creative_id=cid,
-            tenant=ctx["tenant"],
-            principal=ctx["principal"],
-            format="display_300x250_image",
-            approved=True,
-            data={"assets": {"primary": {"url": f"https://example.com/{cid}.png", "width": 300, "height": 250}}},
-        )
-    # Set creative_assignments on the existing package — fail loudly if package missing
+    mb = _existing_media_buy(ctx)
     pkg = ctx.get("existing_package")
     assert pkg is not None, (
         f"No 'existing_package' in ctx — step claims package '{package_id}' has creative assignments "
@@ -1889,9 +1882,17 @@ def given_package_existing_creatives(ctx: dict, package_id: str, assignments: st
     # package_id is a Gherkin label; register it against the existing package
     # so later resolver calls can translate label → real package_id.
     _register_package(ctx, package_id, pkg)
-    config = pkg.package_config or {}
-    config["creative_assignments"] = [{"creative_id": cid, "weight": 1.0} for cid in creative_ids]
-    pkg.package_config = config
+    creative_ids = [cid.strip() for cid in assignments.split(",")]
+    for cid in creative_ids:
+        creative = CreativeFactory(
+            creative_id=cid,
+            tenant=ctx["tenant"],
+            principal=ctx["principal"],
+            format="display_300x250_image",
+            approved=True,
+            data={"assets": {"primary": {"url": f"https://example.com/{cid}.png", "width": 300, "height": 250}}},
+        )
+        CreativeAssignmentFactory(creative=creative, media_buy=mb, package_id=pkg.package_id)
     env._commit_factory_data()
     ctx["existing_creative_ids"] = creative_ids
 
