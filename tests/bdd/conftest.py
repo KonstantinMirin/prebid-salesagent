@@ -6635,6 +6635,8 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-canonical-identity-through-preview",
         "T-UC-006-canonical-unchanged-resync-keeps-review",
         "T-UC-006-canonical-changed-resync-enters-review",
+        # A rename on resync is metadata: "updated", review state kept.
+        "T-UC-006-canonical-renamed-resync-keeps-review",
     }
 )
 

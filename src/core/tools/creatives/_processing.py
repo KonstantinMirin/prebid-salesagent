@@ -61,6 +61,16 @@ logger = logging.getLogger(__name__)
 #: the agent's back-fill of the ones the buyer left empty is not compared at all.
 _UPSERT_FIELDS = ("url", "click_url", "width", "height", "duration")
 
+#: The members of ``changes`` that are metadata, not revision content. A change to one of
+#: these is reported (``action: updated``) and keeps the creative's review state.
+#: docs/creative/specification.mdx (v3.2.7) § Creative revision identity excludes the
+#: "explicit operational/metadata fields `name`, `tags`, `status`, `weight`,
+#: `placement_refs`, and `placement_ids`" from revision content and says "a metadata-only
+#: mutation may still return `updated`" while preserving the current revision. Of those,
+#: ``name`` is the one change detection reports; everything else it reports (format
+#: identity, assets, the upsert fields) is revision-bearing.
+_METADATA_CHANGES = frozenset({"name"})
+
 
 @dataclass(frozen=True)
 class SubmittedUpsertFields:
@@ -233,7 +243,8 @@ def update_changes(
     """What an update CHANGED: the one answer the result reports and review is decided on.
 
     Computed once per update, before the creative agent is asked anything, so the reported
-    ``changes`` and the review decision in ``_update_existing_creative`` read one value.
+    ``changes`` and the review decision in ``_update_existing_creative`` read one value:
+    the result reports all of it, and review reads the part outside ``_METADATA_CHANGES``.
     """
     # dict.fromkeys: each field once, first occurrence's position kept.
     return list(dict.fromkeys([*comparison_changes(creative, prior, identity), *submitted.changed_against(prior)]))
@@ -701,16 +712,17 @@ def _update_existing_creative(
     submitted = SubmittedUpsertFields.submitted_by(data)
     changes = update_changes(creative, prior, incoming_identity, submitted)
 
-    # CHANGED CONTENT ENTERS REVIEW; AN UNCHANGED RESYNC KEEPS ITS REVIEW STATE. Decided by
-    # the one change detection the result reports, so ``action`` and the review decision
-    # cannot disagree: an ``unchanged`` resync of an approved creative used to be sent back
-    # to ``pending_review`` under require-human, a seller-initiated re-review with no
-    # ``creative.status_changed`` behind it. docs/creative/specification.mdx (v3.2.7)
-    # § Creative revision identity: "Prior approval does not transfer: an accepted
-    # content-bearing unversioned update enters the ordinary review lifecycle", and § Creative
-    # lifecycle allows ``approved -> pending_review`` for a buyer-initiated revision update.
-    # Either identity arm reaches this the same way: a canonical creative whose
-    # format_option_ref or assets change re-enters review exactly as a legacy one does.
+    # CHANGED CONTENT ENTERS REVIEW; AN UNCHANGED OR METADATA-ONLY RESYNC KEEPS ITS REVIEW
+    # STATE. Decided on the content part of the one change list the result reports.
+    # docs/creative/specification.mdx (v3.2.7) § Creative revision identity: "Prior approval
+    # does not transfer: an accepted content-bearing unversioned update enters the ordinary
+    # review lifecycle", and the same section excludes ``name`` from revision content, so a
+    # rename answers ``updated`` and keeps its approval. § Creative Status Lifecycle allows
+    # ``approved -> pending_review`` only for a buyer-initiated revision update or for a
+    # seller-initiated re-review that MUST fire ``creative.status_changed``; re-reviewing an
+    # unchanged or renamed creative is neither. Either identity arm reaches this the same
+    # way: a canonical creative whose format_option_ref or assets change re-enters review
+    # exactly as a legacy one does.
     needs_approval = (
         _apply_approval_mode(
             creative_repo,
@@ -720,7 +732,7 @@ def _update_existing_creative(
             webhook_url=webhook_url,
             principal_id=principal_id,
         )
-        if changes
+        if not _METADATA_CHANGES.issuperset(changes)
         else False
     )
 

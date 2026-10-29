@@ -1869,6 +1869,33 @@ Feature: BR-UC-006 Sync Creative Assets
     # @source repo=adcp ref=v3.2.7 path=docs/creative/specification.mdx section="Creative Status Lifecycle"
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/sync-creatives-response.json pointer=/oneOf/0/properties/creatives/items/properties/status
 
+  @T-UC-006-canonical-renamed-resync-keeps-review @schema-v3.2 @format-kind @format-option-ref
+  Scenario: A resync that only renames an approved creative identified by format_kind is updated and keeps its approval
+    Given the Buyer is authenticated
+    And the tenant has approval_mode "auto-approve"
+    And the buyer syncs a creative identified by canonical kind "image" with a product-scope format_option_ref
+    And the creative already exists with identical data
+    And the tenant has approval_mode "require-human"
+    And the creative name is changed to "Renamed Canonical Creative"
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "updated"
+    And the per-creative result should carry advisory status "approved"
+
+    # A rename is metadata, not revision content. docs/creative/specification.mdx
+    # § Creative revision identity excludes "the explicit operational/metadata fields
+    # `name`, `tags`, `status`, `weight`, `placement_refs`, and `placement_ids`" from
+    # revision content, and says "a metadata-only mutation may still return `updated`"
+    # while the current revision, and so its review state, is kept. The resync therefore
+    # answers "updated" (the name did change) and stays "approved" under the require-human
+    # mode now in force. § Creative Status Lifecycle allows approved -> pending_review for a
+    # buyer-initiated revision update or a seller-initiated re-review that MUST fire
+    # creative.status_changed; a rename is neither, so a seller that re-reviews on it
+    # answers pending_review here.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/specification.mdx section="Creative revision identity"
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/specification.mdx section="Creative Status Lifecycle"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/creative-action.json
+
   @T-UC-006-storyboard-creative-reception-stateful-render @uc006-storyboard-routing @schema-v3.1 @v3-1 @stateful-push @creative-reception
   Scenario: Stateful sales agent accepts pushed creatives and exposes them via per-creative status transitions
     Given the Buyer is authenticated

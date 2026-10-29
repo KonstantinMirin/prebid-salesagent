@@ -3510,6 +3510,12 @@ def given_creative_reaching_the_agent(ctx: dict, creative_state: str, format_kin
         # action "updated" and that is only true if the resync changes something. Seeded
         # identically, the row answers "unchanged" -- which is the correct answer and
         # would make those rows wrong rather than the production path wrong.
+        #
+        # The name alone does not send the update to review: it is metadata, not revision
+        # content (docs/creative/specification.mdx, v3.2.7, § Creative revision identity).
+        # The rows that assert an AI review submission rely on the CONTENT difference the
+        # seed also carries: the factory row stores its default banner image, and this
+        # payload submits a text prompt, so the resync reports ``assets`` as changed.
         given_creative_already_exists(ctx, stored_name="Agent-served Creative (prior revision)")
 
     # The persisted set BEFORE the request. A preview must leave it exactly as
@@ -7277,10 +7283,13 @@ def given_creative_already_synced_with_key(ctx: dict, key: str) -> None:
 
 @given(parsers.parse('the creative name is changed to "{name}"'))
 def given_creative_name_changed(ctx: dict, name: str) -> None:
-    """Materially change the pending creative payload, keeping the same key.
+    """Change only the name on the pending creative payload.
 
-    This is the spec's "same key, materially different payload" input: the key
-    the buyer reuses no longer describes the request it originally identified.
+    Two uses. Under an idempotency key it is the spec's "same key, materially different
+    payload" input: the key the buyer reuses no longer describes the request it
+    originally identified. On a resync it is a metadata-only update: ``name`` is excluded
+    from revision content (docs/creative/specification.mdx, v3.2.7, § Creative revision
+    identity), so the creative is ``updated`` and keeps its review state.
     """
     creatives = ctx.get("creatives")
     assert creatives, "no creative payload to modify — the creative Given must run first"
