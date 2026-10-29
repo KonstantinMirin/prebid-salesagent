@@ -219,7 +219,8 @@ jobs:
     # When the pin-keyed ghcr image cannot be pulled (a pin no main run has published
     # yet, or a pull request whose token cannot read the package), the agent is built
     # from source first: 11m on a hosted runner for adcp@8d1d3244b2ef. 35m then ran out
-    # mid-suite, so the ceiling covers the source build as well.
+    # mid-suite, so the ceiling covers the source build as well. Measured with that
+    # build and three workers: 17m to a healthy stack, 26m of pytest, 43m in all.
     timeout-minutes: 75
     strategy:
       fail-fast: false
@@ -311,7 +312,6 @@ jobs:
         run: |
           sudo fallocate -l 8G /ci-swapfile && sudo chmod 600 /ci-swapfile
           sudo mkswap /ci-swapfile && sudo swapon /ci-swapfile
-          (while true; do date -u +%T; free -m | sed -n 2,3p; uptime; cat /proc/pressure/memory 2>/dev/null; docker stats --no-stream --format "{{.Name}} {{.MemUsage}} {{.CPUPerc}}" 2>/dev/null; ps -eo rss,comm,args --sort=-rss | head -12 | cut -c1-160; sleep 60; done) &
           ./run_all_tests.sh integration
         env:
           DOCKER_BUILDKIT: 1
@@ -326,15 +326,13 @@ jobs:
           # growing, both app servers ~1.8 GiB, the nested BDD/storyboard pytest
           # runs ~1 GiB each, and harden-runner's agent climbing past 2 GiB; RAM
           # and swap were exhausted 16 minutes into the suite and the runner was
-          # shut down. Three workers plus the swapfile above leave room for it.
+          # shut down. Three workers plus the swapfile above finished it with swap
+          # peaking at 5.5 of 11 GiB.
           INTEGRATION_XDIST_N: 3
-      - name: Show runner resources
-        if: always() && matrix.group == 'creative'
-        run: |
-          sudo dmesg | grep -iE "oom|killed process" | tail -20 || true
-          free -m; docker ps -a || true
+      # On a failed run, run_all_tests.sh saves every container's log beside the
+      # reports under test-results/innet_*/ (as in bdd-in-network below).
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always() && matrix.group == 'creative'
+        if: failure() && matrix.group == 'creative'
         with:
           name: integration-in-network-results
           path: test-results/innet_*/
