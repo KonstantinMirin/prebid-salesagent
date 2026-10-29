@@ -1284,6 +1284,7 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | <amount> |
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
+    And the tenant sets no min_package_budget
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
@@ -1296,6 +1297,10 @@ Feature: BR-UC-003 Update Media Buy
     # LOCAL CORRECTION: "amount negative" asserted BUDGET_TOO_LOW. The pinned package-update.json
     # gives budget "minimum": 0, so -1 is a schema violation, answered INVALID_REQUEST.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/budget
+    # LOCAL CORRECTION: the outline grades the request's budget boundaries, which the pin sets
+    # at "minimum": 0; a seller's own package minimum is policy layered on top. The seeded
+    # tenant's min_package_budget of 100 refused 0.01 BUDGET_TOO_LOW and made the 0 row pass
+    # with or without the positivity rule, so the outline clears it.
 
   @T-UC-003-partition-daily-spend-cap @partition @daily_spend_cap
   Scenario Outline: Daily spend cap partition validation - <partition>
