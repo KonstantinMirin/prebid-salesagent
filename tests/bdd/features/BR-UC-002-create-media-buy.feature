@@ -1316,6 +1316,10 @@ Feature: BR-UC-002 Create Media Buy
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
+    And the error should include "field" field with value "account"
+    # account is in /required; the refusal names the absent member, so a refusal of any
+    # other missing field cannot pass this scenario.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/required
     # --- BR-RULE-087: Optimization Goal Validation ---
 
   @T-UC-002-inv-080-11 @invariant @BR-RULE-080 @v31

@@ -106,8 +106,14 @@ def given_request_with_natural_key(ctx: dict, brand: str, operator: str) -> None
 
 @given("a create_media_buy request without account field")
 def given_request_without_account(ctx: dict) -> None:
-    """Set up a create_media_buy request with no account field."""
+    """Set up an otherwise complete create_media_buy request with no account field.
+
+    The complete request is what makes the refusal the missing-account one: setting only
+    ``account_ref`` sent no brand, dates or packages, and the harness defaulted an account
+    in, so the INVALID_REQUEST it drew named some other field.
+    """
     ctx["account_ref"] = None
+    _attach_raw_account_shape(ctx, None)
 
 
 @given("a valid create_media_buy request with creative assignments")
