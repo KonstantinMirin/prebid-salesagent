@@ -280,22 +280,27 @@ class SelectorRouteSummary(BaseModel):
     their normalized canonical summaries". A list of supplied routes beside a separate
     list of summaries would leave the buyer to re-pair them by position.
 
-    ``field`` is the request arm the route was read from (``format_option_refs``,
-    ``format_kind``, ``format_ids``) and ``selector`` the value the buyer put there,
-    rendered — the two together name the route, because one arm may carry several
-    routes. ``format_kind`` and ``selected_option`` are the normalized summary:
-    which canonical shape the route resolved to, and which of the product's
-    ``format_options[]`` entries it then selected. ``selected_option`` is ``None``
-    where the route resolved and selected NOTHING, which is itself a differing
-    selected set and so is a conflict the buyer has to see.
+    ONE ROW PER ROUTE, and a route is a request ARM: ``media-buy/package-request.json``
+    names the routes "format_option_refs, or format_kind with optional params" and the
+    deprecated ``format_ids``, and an array arm selects an option SET ("Each reference
+    matches one target product ``format_options[]`` entry"; receivers "require each route to
+    select the same product option set").
+
+    ``field`` is the arm (``format_option_refs``, ``format_kind``, ``format_ids``) and
+    ``selector`` every value the buyer put there, rendered. ``format_kind`` and
+    ``selected_option`` are the normalized summary: the canonical shapes the arm resolved
+    to, and the SET of the product's ``format_options[]`` entries it selected -- the set
+    step (2) compares across routes. An empty ``selected_option`` is an arm that resolved
+    and selected NOTHING, which is itself a differing selected set and so is a conflict
+    the buyer has to see.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     field: str
-    selector: str
-    format_kind: str | None = None
-    selected_option: str | None = None
+    selector: list[str]
+    format_kind: list[str]
+    selected_option: list[str]
 
 
 class SelectorConflictDetails(EntityRefDetails):

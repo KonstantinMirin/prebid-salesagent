@@ -248,6 +248,20 @@ def _placement(placement_id: str, mode: str, *accepted: dict[str, Any]) -> dict[
     return placement
 
 
+#: The publisher-referenced placement the unresolved-layer rows store: ``core/placement.json``
+#: ``kind: publisher_ref``, identified by ``{publisher_domain, placement_id}`` in the
+#: publisher's adagents.json, which this seller does not resolve on the buy path.
+_PUBLISHER_PLACEMENT_ID = "satisfaction_publisher_slot"
+
+
+def _publisher_placement(mode: str) -> dict[str, Any]:
+    """One stored publisher-referenced placement, in *mode*, narrowing nothing inline."""
+    placement: dict[str, Any] = StoredPlacementFactory(
+        kind="publisher_ref", placement_id=_PUBLISHER_PLACEMENT_ID, publisher_domain=_PUBLISHER_DOMAIN, mode=mode
+    )
+    return placement
+
+
 #: What the seller STORES in ``placements``, per name, for the coverage scenarios. Every
 #: row but ``narrowed_inline`` is stored beside ``two_image_options``, and the rows differ
 #: only in which option each placement accepts and whether it is included.
@@ -331,6 +345,19 @@ _PLACEMENTS: dict[str, list[dict[str, Any]]] = {
             "included",
             {"format_kind": "video_hosted", "params": {"duration_ms_range": [5000, 30000]}},
         ),
+    ],
+    # Stored beside ``two_image_options``: the 300x250 seller-inline placement of ``split``
+    # plus a PUBLISHER-REFERENCED one. Included, its effective set is the intersection with
+    # the publisher's adagents.json catalog, which this seller cannot resolve, so it fails
+    # closed (core/product.json: "an unresolved publisher placement or format-option
+    # reference MUST fail closed"). Targetable, it is not bought, so it does not constrain.
+    "publisher_ref_included": [
+        _placement("satisfaction_mrec_slot", "included", _MREC),
+        _publisher_placement("included"),
+    ],
+    "publisher_ref_targetable": [
+        _placement("satisfaction_mrec_slot", "included", _MREC),
+        _publisher_placement("targetable"),
     ],
 }
 
@@ -573,6 +600,39 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     "bare_kind_beside_option_ref": {
         "format_option_refs": [{"scope": "product", "format_option_id": _PRODUCT_OPTION_ID}],
         "format_kind": "image",
+    },
+    # The broad legacy template beside the option ref. display_image states no size, so --
+    # like a bare ``format_kind: image`` -- it selects no fixed-size declaration (package-
+    # request.json format_kind: broad image "does not satisfy a fixed-size product
+    # declaration"), while the option ref selects the 300x250: the sets differ.
+    "option_plus_broad_legacy": {
+        "format_option_refs": [{"scope": "product", "format_option_id": _PRODUCT_OPTION_ID}],
+        "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_image"}],
+    },
+    # ``both_option_refs`` beside display_300x250: the option arm selects BOTH of
+    # ``two_image_options``' entries, the legacy route only the 300x250 one its projection
+    # narrows to. One option SET against another, so the two refs are not a conflict between
+    # themselves and the arm as a whole is.
+    "both_option_refs_plus_legacy": {
+        "format_option_refs": [
+            {"scope": "product", "format_option_id": _PRODUCT_OPTION_ID},
+            {"scope": "product", "format_option_id": _LEADERBOARD["format_option_id"]},
+        ],
+        "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250"}],
+    },
+    # --- co-present routes on a product publishing ONLY the deprecated arm ---
+    # A direct route of another size beside the legacy id the product carries: against the
+    # SDK's projection of that id (image 300x250) the direct route selects nothing.
+    "kind_728x90_plus_legacy": {
+        "format_kind": "image",
+        "params": {"width": 728, "height": 90},
+        "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250"}],
+    },
+    # A direct route of another SHAPE: video beside an image legacy id.
+    "video_kind_plus_legacy": {
+        "format_kind": "video_hosted",
+        "params": {"duration_ms_exact": 15000},
+        "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250"}],
     },
 }
 
@@ -1353,10 +1413,31 @@ def then_refused_uncovered_placement(ctx: dict, arm: str, selected: str) -> None
     option id the scenario names. ``core/error.json`` defines it as "the offending value the
     buyer supplied", and here that is the selection the placement does not admit.
     """
+    _assert_placement_refusal(ctx, arm, "placement_uncovered", selected)
+
+
+@then(
+    parsers.parse(
+        'the buyer is refused UNSUPPORTED_FEATURE naming the "{arm}" selector '
+        'for the unresolved publisher placement "{placement_id}"'
+    )
+)
+def then_refused_unresolved_placement(ctx: dict, arm: str, placement_id: str) -> None:
+    """The selector refusal for an included placement whose effective set cannot be resolved.
+
+    ``details.capability`` names the rule (``placement_unresolved``) and
+    ``details.rejected_value`` the placement, which is what the buyer cannot be sold until
+    the seller resolves the publisher's catalog for it.
+    """
+    _assert_placement_refusal(ctx, arm, "placement_unresolved", placement_id)
+
+
+def _assert_placement_refusal(ctx: dict, arm: str, capability: str, rejected: str) -> None:
+    """A placement-rule UNSUPPORTED_FEATURE at the arm, naming the rule and the rejected value."""
     ctx["result"].assert_wire_error(
         "UNSUPPORTED_FEATURE",
         field=f"packages[0].{arm}",
-        details={"capability": "placement_uncovered", "rejected_value": selected},
+        details={"capability": capability, "rejected_value": rejected},
     )
 
 
@@ -1670,24 +1751,58 @@ def then_refused_conflicting_selectors(ctx: dict) -> None:
     The DETAILS are asserted too, and they are what stops this passing on a seller that
     answers the code without having compared anything: the pin asks for "the supplied
     selector routes and their normalized canonical summaries", so every route the buyer
-    sent must appear, and exactly one of them must name the declaration it selected. A
-    seller that refused before resolving could not fill that in.
+    sent must appear ONCE -- a route is an arm, and an array arm is one route selecting a
+    set -- and the selected sets the summaries report must differ, which is the refusal.
+    WHICH sets each route selected is the scenario's to state, through
+    :func:`then_conflict_route_selects`.
+    """
+    routes = _conflict_route_summaries(ctx)
+    sent = [arm for arm in ("format_option_refs", "format_kind", "format_ids") if arm in _SELECTORS[ctx["selector"]]]
+    assert sorted(route.get("field") for route in routes) == sorted(sent), (
+        f"the refusal summarizes routes {[r.get('field') for r in routes]}, but the buyer sent one route per arm {sent}"
+    )
+    sets = {frozenset(route.get("selected_option") or ()) for route in routes}
+    assert len(sets) > 1, f"the summarized routes all selected the same option set, so nothing conflicts: {routes!r}"
+
+
+def _conflict_route_summaries(ctx: dict) -> list[dict[str, Any]]:
+    """The wire ``CONFLICTING_SELECTORS`` refusal at the package, and its per-route summaries.
+
+    ``wire_error_object`` and not the envelope dict: the envelope WRAPS ``errors[]`` and
+    ``details`` lives on the error object inside it, which this reader resolves through the
+    one locator the assertion also uses.
     """
     result = ctx["result"]
     result.assert_wire_error("CONFLICTING_SELECTORS", field="packages[0]")
-    # ``wire_error_object`` and not the envelope dict: the envelope WRAPS ``errors[]`` and
-    # ``details`` lives on the error object inside it, which this reader resolves through
-    # the one locator the assertion also uses.
     error_object = result.wire_error_object() or {}
-    routes = ((error_object.get("details") or {}).get("selector_routes")) or []
-    sent = {arm for arm in ("format_option_refs", "format_kind", "format_ids") if arm in _SELECTORS[ctx["selector"]]}
-    assert {route.get("field") for route in routes} == sent, (
-        f"the refusal summarizes routes {[r.get('field') for r in routes]}, but the buyer sent {sorted(sent)}"
-    )
-    selected = [route.get("selected_option") for route in routes]
-    assert selected.count(_PRODUCT_OPTION_ID) == 1 and None in selected, (
-        f"expected exactly one route to have selected {_PRODUCT_OPTION_ID!r} and another to have selected "
-        f"nothing -- that disagreement IS the refusal -- got {selected!r}"
+    return list(((error_object.get("details") or {}).get("selector_routes")) or [])
+
+
+@then(parsers.parse('the conflict summarizes the "{arm}" route as selecting "{options}"'))
+def then_conflict_route_selects(ctx: dict, arm: str, options: str) -> None:
+    """Assert the summary of route *arm* reports exactly the option SET *options* (comma-separated).
+
+    ``enums/error-code.json`` asks ``CONFLICTING_SELECTORS`` details to "identify the supplied
+    selector routes and their normalized canonical summaries", and step (2) of
+    ``media-buy/package-request.json`` compares "the selected option sets", so a summary
+    carries the set its route selected and this compares it as a set.
+    """
+    _assert_conflict_route_selected(ctx, arm, set(options.split(",")))
+
+
+@then(parsers.parse('the conflict summarizes the "{arm}" route as selecting nothing'))
+def then_conflict_route_selects_nothing(ctx: dict, arm: str) -> None:
+    """Assert the summary of route *arm* reports an EMPTY selected set: it resolved and selected no option."""
+    _assert_conflict_route_selected(ctx, arm, set())
+
+
+def _assert_conflict_route_selected(ctx: dict, arm: str, expected: set[str]) -> None:
+    """The one summary for *arm* names *expected* as its selected option set."""
+    summaries = [route for route in _conflict_route_summaries(ctx) if route.get("field") == arm]
+    assert len(summaries) == 1, f"expected one summary for the {arm!r} route, got {summaries!r}"
+    selected = summaries[0].get("selected_option")
+    assert isinstance(selected, list) and set(selected) == expected, (
+        f"the {arm!r} route is summarized as selecting {selected!r}, expected the set {sorted(expected)!r}"
     )
 
 

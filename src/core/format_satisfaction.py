@@ -67,8 +67,10 @@ from typing import Any, get_args
 
 from adcp.canonical_formats import upgrade_legacy_format_id
 from adcp.canonical_formats.format_options import FormatKindNotInClosedSetError
+from adcp.canonical_formats.projection import project_legacy_format_id
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from adcp.types.domains.core.format_option_ref import FormatOptionReference as LibraryFormatOptionReference
+from adcp.types.domains.core.placement import Kind as LibraryPlacementKind
 from adcp.types.domains.core.placement import Mode as LibraryPlacementMode
 from adcp.types.domains.core.product_format_declaration import (
     ProductFormatDeclaration as LibraryFormatDeclaration,
@@ -124,6 +126,7 @@ class FormatRefusal(StrEnum):
     LEGACY_NOT_SELECTED = "legacy_not_selected"
     LEGACY_NOT_ACCEPTED = "legacy_not_accepted"
     PLACEMENT_UNCOVERED = "placement_uncovered"
+    PLACEMENT_UNRESOLVED = "placement_unresolved"
 
 
 #: The two members that are a RESOLUTION failure in ``media-buy/package-request.json``'s
@@ -929,11 +932,64 @@ def _canonical_lane(
     return _SATISFIED
 
 
+def _projected_declaration(reference: LibraryFormatId) -> LibraryFormatDeclaration | None:
+    """The canonical declaration the SDK projects one deprecated ``format_ids`` entry to, or None.
+
+    ``adcp.canonical_formats.projection.project_legacy_format_id`` is the projection
+    ``project_legacy_product`` applies to each entry of a product's ``format_ids``, in the
+    registry's order (``registries/v1-canonical-mapping.json``), and it fails CLOSED: an
+    entry it cannot map yields a ``FORMAT_PROJECTION_FAILED`` diagnostic and no declaration.
+    The per-entry function and not the product one because ``project_legacy_product`` ends by
+    validating a whole wire ``Product``, and the gate holds a product's two format arms, not a
+    product. None is that closed failure, and so is an ``agent_url`` the SDK's own
+    canonicalization refuses: either way the entry has no canonical shape to compare.
+
+    Canonically addressed first, as :func:`_legacy_projection` is and for its reason: the
+    SDK's agent comparison applies only part of ``docs/reference/url-canonicalization``.
+    Read into the pinned union through ``from_attributes``, so a projected declaration is
+    graded exactly as a published one is, defaults included.
+    """
+    from src.core.format_resolver import canonically_addressed
+
+    try:
+        projected = project_legacy_format_id(
+            canonically_addressed(reference), product_id="", field="format_ids"
+        ).declaration
+    except ValueError:
+        return None
+    if projected is None:
+        return None
+    try:
+        return _DECLARATION.validate_python(projected, from_attributes=True)
+    except ValidationError:
+        logger.warning("SDK projection of %r is not a pinned format declaration; treated as unprojectable", reference)
+        return None
+
+
 def _legacy_lane(
     identity: FormatSelector,
     legacy_references: tuple[LibraryFormatId, ...],
+    projected: tuple[LibraryFormatDeclaration | None, ...],
+    params: Mapping[str, Any] | None,
 ) -> FormatSatisfaction:
     """Grade a claim against a product that declares only the deprecated ``format_ids``.
+
+    *projected* is the SDK's canonical projection of each entry of *legacy_references*,
+    aligned by position (:func:`_projected_declaration`). It is what lets the routes of one
+    package be COMPARED on this lane, which ``media-buy/package-request.json``'s selector
+    contract requires of every receiver: "(1) independently resolve each present route to
+    canonical declarations ... (2) derive the product format_options[] entries selected by
+    each route ... and require the selected option sets to match". A legacy-only product
+    publishes no ``format_options[]``, so the entries a route selects are the projections of
+    the deprecated entries it is accepted by, and a direct ``format_kind`` route is graded
+    against those projections with :func:`_kind_route`, which is how a bare ``image`` and a
+    ``format_kind`` of another shape beside ``format_ids`` came to be accepted unexamined
+    here. A kind route against a product none of whose entries project selects nothing,
+    which fails closed.
+
+    A KIND CLAIM THAT STATES NO PARAMS is still satisfied here, as before: that is a stored
+    creative, whose params are unknown (see :func:`satisfies`), and grading it against
+    projections it cannot state its dimensions for would refuse it on what it never claimed.
 
     DIRECTIONAL SATISFACTION, not identity membership, and the distinction is the pin's.
     ``core/product-format-declaration.json`` states it under "Format matching vs
@@ -984,14 +1040,27 @@ def _legacy_lane(
         # compared. The deprecated arm is no substitute: it names legacy ids, not options.
         # This used to fall through to the ``claimed is None`` acceptance below, so an
         # option ref the product could not have published was accepted, alone or beside a
-        # legacy id that did match.
+        # legacy id that did match. The SDK's projection mints a migrated option id for each
+        # entry, but the product never published it, so it is no entry a ref can match.
         return _option_route(option, (), None)
+    if claimed is None:
+        if identity.kind is None or params is None:
+            return _SATISFIED
+        return _kind_route(identity.kind, [d for d in projected if d is not None], params)
     accepted = tuple(sorted(_reference_display(reference) for reference in legacy_references))
-    if claimed is None or any(
-        format_accepted_by(claimed, reference) and not _pixel_ratio_unsatisfied(claimed, reference)
-        for reference in legacy_references
-    ):
-        return _SATISFIED
+    accepting = [
+        index
+        for index, reference in enumerate(legacy_references)
+        if format_accepted_by(claimed, reference) and not _pixel_ratio_unsatisfied(claimed, reference)
+    ]
+    if accepting:
+        # Satisfied whether or not an accepting entry projected: the deprecated arm accepts
+        # the reference. What it SELECTS is the projections, which a co-present route's
+        # selection is compared with; an entry the SDK could not project contributes none.
+        return FormatSatisfaction(
+            satisfied=True,
+            selection=tuple(declaration for index in accepting if (declaration := projected[index]) is not None),
+        )
     # ``claimed`` is not None past the guard above, so the display takes the reference with no
     # narrowing cast and no fallback: a ``format_display(identity.legacy)`` branch here would be
     # unreachable, and the ``type: ignore`` it needed is what the ratchet refused.
@@ -1063,10 +1132,16 @@ class PlacementLayer:
     publisher_ref, the named publisher's adagents.json catalog narrowing". This is layer
     (2). Layer (1) is the product's declarations, which the selected declaration already
     belongs to.
+
+    ``declarations`` is None for a placement whose layer (3) this seller cannot resolve: a
+    ``publisher_ref`` placement, whose effective set depends on the publisher's adagents.json,
+    for which this seller has no resolver on the buy path. The pin is explicit that such a
+    layer is not "unconstrained": "an unresolved publisher placement or format-option
+    reference MUST fail closed" (``core/product.json``).
     """
 
     placement_id: str
-    declarations: tuple[LibraryFormatDeclaration, ...]
+    declarations: tuple[LibraryFormatDeclaration, ...] | None
 
 
 def included_placement_layers(placements: Iterable[Any] | None) -> tuple[PlacementLayer, ...]:
@@ -1084,14 +1159,19 @@ def included_placement_layers(placements: Iterable[Any] | None) -> tuple[Placeme
     inline declarations are all unparseable keeps an EMPTY layer, which covers nothing, so
     it fails closed rather than widening to the product set.
 
-    CEILING: layer (3), a ``publisher_ref`` placement's adagents.json narrowing, is not
-    read. This seller has no resolver for it on the buy path; the pin says "an unresolved
-    publisher placement or format-option reference MUST fail closed", which this reader
-    does not yet do. Products this seller authors carry ``seller_inline`` placements.
+    An included ``publisher_ref`` placement is kept as an UNRESOLVED layer (``declarations``
+    None), whatever inline ``format_options`` it also states: layer (3) is that placement's
+    adagents.json narrowing, which this seller has no resolver for on the buy path, and the
+    pin says "an unresolved publisher placement or format-option reference MUST fail
+    closed". So it refuses every package that selects a format until a resolver exists.
+    Products this seller authors carry ``seller_inline`` placements, which are unaffected.
     """
     layers = []
     for placement in placements or []:
         if not isinstance(placement, Mapping) or placement.get("mode") != LibraryPlacementMode.included:
+            continue
+        if placement.get("kind") == LibraryPlacementKind.publisher_ref:
+            layers.append(PlacementLayer(placement_id=str(placement.get("placement_id")), declarations=None))
             continue
         if placement.get("format_options") is None:
             continue
@@ -1267,6 +1347,12 @@ class SelectorResolution:
     #: The product's canonical declarations, for :attr:`uncovered`'s ``accepted_values``:
     #: the ones every included placement admits.
     declarations: tuple[LibraryFormatDeclaration, ...] = dataclass_field(default=(), compare=False)
+    #: Whether those declarations are ones the PRODUCT published. False on the deprecated
+    #: lane, where they are the SDK's projection of its ``format_ids``: the routes are resolved
+    #: and compared against the projection, but the product published no declaration, so an
+    #: accepted package records none (:attr:`selection`) -- a snapshot of a projection would
+    #: name an option id the buyer was never shown.
+    published: bool = dataclass_field(default=True, compare=False)
 
     @property
     def unresolved(self) -> FormatSatisfaction | None:
@@ -1283,29 +1369,45 @@ class SelectorResolution:
         return next((verdict for _, verdict in self.routes if verdict.refusal in _RESOLUTION_FAILURES), None)
 
     @property
-    def _arm_selections(self) -> tuple[tuple[LibraryFormatDeclaration | None, ...], ...]:
-        """The declarations each ARM selected, one tuple per request field, winner first.
+    def _arms(self) -> tuple[tuple[tuple[FormatRoute, FormatSatisfaction], ...], ...]:
+        """The (route, verdict) pairs grouped by ARM -- one request field each -- winner first.
 
-        An arm is one request field, and an array arm selects a SET: ``format_option_refs``
-        "Each reference matches one target product ``format_options[]`` entry", and the
-        receiver must "require each route to select the same product option set"
-        (``media-buy/package-request.json``). Two refs on one arm are therefore one selection
-        of two options, which is how a buyer covers two included placements that accept
-        different formats (``core/product.json``: "Distinct per-placement creatives MAY use
-        the union, but the selected creative set MUST cover every included placement").
+        THE PIN'S ROUTE IS THE ARM. ``media-buy/package-request.json`` names three selector
+        routes -- "format_option_refs, or format_kind with optional params", and the
+        deprecated format_ids -- and an array arm is ONE route selecting an option SET:
+        ``format_option_refs`` "Each reference matches one target product ``format_options[]``
+        entry", and the receiver must "require each route to select the same product option
+        set". :func:`selector_routes` still builds one :class:`FormatRoute` per array entry,
+        because step (1) resolves each reference and refuses an unresolved one "with a field
+        path to the failing entry"; this is where they are put back together for steps (2)
+        and (3), and for the refusal's per-route summary.
 
         Grouped in :attr:`routes` order, which :func:`selector_routes` builds arm by arm in
         step (4)'s precedence, so the first group is the winning arm's.
-
-        A route contributes EVERY entry it selected (:func:`_selecting`: a broad legacy id or
-        a bare kind selects each declaration it is compatible with), and a route that selected
-        nothing contributes ``None``, which matches no entry and so still differs from any arm
-        that selected something.
         """
-        arms: dict[str | None, list[LibraryFormatDeclaration | None]] = {}
+        arms: dict[str | None, list[tuple[FormatRoute, FormatSatisfaction]]] = {}
         for route, verdict in self.routes:
-            arms.setdefault(route.field, []).extend(verdict.selection or (None,))
-        return tuple(tuple(selection) for selection in arms.values())
+            arms.setdefault(route.field, []).append((route, verdict))
+        return tuple(tuple(pairs) for pairs in arms.values())
+
+    @property
+    def _arm_selections(self) -> tuple[tuple[LibraryFormatDeclaration | None, ...], ...]:
+        """The declarations each ARM selected, one tuple per request field, winner first.
+
+        Two refs on one arm are one selection of two options, which is how a buyer covers two
+        included placements that accept different formats (``core/product.json``: "Distinct
+        per-placement creatives MAY use the union, but the selected creative set MUST cover
+        every included placement").
+
+        An entry contributes EVERY declaration it selected (:func:`_selecting`: a broad legacy
+        id or a bare kind selects each declaration it is compatible with), and an entry that
+        selected nothing contributes ``None``, which matches no declaration and so still
+        differs from any arm that selected something.
+        """
+        return tuple(
+            tuple(declaration for _, verdict in pairs for declaration in (verdict.selection or (None,)))
+            for pairs in self._arms
+        )
 
     @property
     def _winning_arm(self) -> tuple[LibraryFormatDeclaration, ...]:
@@ -1390,17 +1492,32 @@ class SelectorResolution:
 
         Read off :attr:`_winning_arm` and never through :attr:`selection`, which asks
         ``bool(self)`` and so this property: the winning arm is the first, as there.
+
+        AN UNRESOLVED PLACEMENT is reported first, and whatever was selected: a
+        ``publisher_ref`` placement's effective set cannot be computed here, so no selection
+        can be shown to cover it, and ``core/product.json`` says "an unresolved publisher
+        placement or format-option reference MUST fail closed" (:class:`PlacementLayer`).
         """
         if not self.routes or not self.placements:
             return None
         if self.unresolved is not None or self.conflicting or self.unsatisfied is not None:
             return None
+        field = self.routes[0][0].field
+        for layer in self.placements:
+            if layer.declarations is None:
+                return FormatSatisfaction(
+                    satisfied=False,
+                    refusal=FormatRefusal.PLACEMENT_UNRESOLVED,
+                    rejected_value=layer.placement_id,
+                    summary=f"included placement {layer.placement_id!r} is publisher-referenced and unresolved",
+                    field=field,
+                )
         chosen = self._winning_arm
         if not chosen:
             return None
         labels = sorted(_declaration_label(d) for d in chosen)
         for layer in self.placements:
-            if not any(_placement_accepts(d, accepted) for d in chosen for accepted in layer.declarations):
+            if not any(_placement_accepts(d, accepted) for d in chosen for accepted in layer.declarations or ()):
                 return FormatSatisfaction(
                     satisfied=False,
                     refusal=FormatRefusal.PLACEMENT_UNCOVERED,
@@ -1415,13 +1532,13 @@ class SelectorResolution:
                             _declaration_label(d)
                             for d in self.declarations
                             if all(
-                                any(_placement_accepts(d, accepted) for accepted in each.declarations)
+                                any(_placement_accepts(d, accepted) for accepted in each.declarations or ())
                                 for each in self.placements
                             )
                         )
                     ),
                     summary=f"selected formats {labels!r} do not cover included placement {layer.placement_id!r}",
-                    field=self.routes[0][0].field,
+                    field=field,
                 )
         return None
 
@@ -1452,9 +1569,10 @@ class SelectorResolution:
         (:attr:`_arm_selections`). Empty where the selector imposes nothing -- a package
         naming no format, or a product that narrows neither arm -- which is a real answer
         and not a missing one: there is no canonical declaration to record for such a
-        package.
+        package. Empty too where the declarations are the projection of a legacy-only
+        product's deprecated arm (:attr:`published`).
         """
-        return self._winning_arm if bool(self) else ()
+        return self._winning_arm if bool(self) and self.published else ()
 
     def __bool__(self) -> bool:
         return self.refused is None and not self.conflicting
@@ -1476,9 +1594,14 @@ def resolve_routes(
     route was never resolved at all.
 
     *placements* is the product's stored ``placements`` (served unchanged), for the coverage rule
-    (:attr:`SelectorResolution.uncovered`). Read on the canonical lane only: a placement's
-    inline narrowing is a set of canonical declarations, and the deprecated lane selects
-    none to compare it with.
+    (:attr:`SelectorResolution.uncovered`). Read on both lanes: on the deprecated one the
+    selected set is the SDK's projection of the deprecated arm (:func:`_legacy_lane`), and an
+    included ``publisher_ref`` placement fails closed whichever arm the product publishes.
+
+    A product publishing ``format_options[]`` is graded on them; one publishing only the
+    deprecated ``format_ids`` is graded on that arm, with each entry also projected to its
+    canonical declaration so routes of different arms can be compared
+    (:func:`_projected_declaration`).
     """
     from src.core.format_resolver import product_format_references
 
@@ -1490,6 +1613,7 @@ def resolve_routes(
         # resolved, which is also what makes ``selection`` empty: there is no declaration.
         return SelectorResolution()
 
+    projected = () if declared else tuple(_projected_declaration(reference) for reference in legacy_references)
     # ``routes`` may be empty -- a package naming no format at all. Which arm it SHOULD
     # have named is the product's business, not this function's: ``core/product.json`` does
     # not require a package to select a format, and the pre-existing legacy branch handles
@@ -1501,14 +1625,15 @@ def resolve_routes(
                 replace(
                     _canonical_lane(route.claim, declared, route.params)
                     if declared
-                    else _legacy_lane(route.claim, legacy_references),
+                    else _legacy_lane(route.claim, legacy_references, projected, route.params),
                     field=route.field,
                 ),
             )
             for route in routes
         ),
-        placements=included_placement_layers(placements) if declared else (),
-        declarations=declared,
+        placements=included_placement_layers(placements),
+        declarations=declared or tuple(declaration for declaration in projected if declaration is not None),
+        published=bool(declared),
     )
 
 
@@ -1645,28 +1770,42 @@ def conflicting_selectors(
     no single arm is at fault, the set of them is.
 
     Every route is summarized, not the disagreeing pair; see
-    :class:`SelectorConflictDetails`.
+    :class:`SelectorConflictDetails`. A route is an ARM (:attr:`SelectorResolution._arms`),
+    so each summary carries the arm's whole selected option SET -- the thing step (2)
+    compares -- and an arm whose entries selected nothing carries an empty one.
     """
     assert resolution.conflicting, "conflicting_selectors called on a resolution that does not conflict"
     return AdCPConflictingSelectorsError(
         details=SelectorConflictDetails(
-            selector_routes=[
-                SelectorRouteSummary(
-                    field=route.field or "",
-                    selector=_route_selector(route),
-                    # The canonical shape the route resolved to. The selected declaration's
-                    # kind when it selected one; otherwise the kind the route itself named,
-                    # which for a legacy reference is what ``canonical_kind_for`` projected.
-                    format_kind=(
-                        str(verdict.declaration.format_kind) if verdict.declaration is not None else route.claim.kind
-                    ),
-                    selected_option=(
-                        _declaration_label(verdict.declaration) if verdict.declaration is not None else None
-                    ),
-                )
-                for route, verdict in resolution.routes
-            ],
+            selector_routes=[_arm_summary(pairs) for pairs in resolution._arms],
             **entity,
         ),
         field=field,
     )
+
+
+def _arm_summary(pairs: Sequence[tuple[FormatRoute, FormatSatisfaction]]) -> SelectorRouteSummary:
+    """One arm as the buyer sent it and as it normalized: its values, shapes and selected set.
+
+    ``format_kind`` is the canonical shape each entry resolved to: the selected declarations'
+    kinds, or, for an entry that selected nothing, the kind the entry itself named -- which
+    for a legacy reference is what ``canonical_kind_for`` projected. Each list keeps first-seen
+    order and names a value once.
+    """
+    kinds: list[str] = []
+    for route, verdict in pairs:
+        if verdict.selection:
+            kinds.extend(str(d.format_kind) for d in verdict.selection)
+        elif route.claim.kind is not None:
+            kinds.append(route.claim.kind)
+    return SelectorRouteSummary(
+        field=pairs[0][0].field or "",
+        selector=_distinct(_route_selector(route) for route, _ in pairs),
+        format_kind=_distinct(kinds),
+        selected_option=_distinct(_declaration_label(d) for _, verdict in pairs for d in verdict.selection),
+    )
+
+
+def _distinct(values: Iterable[str]) -> list[str]:
+    """*values* in first-seen order, each once."""
+    return list(dict.fromkeys(values))

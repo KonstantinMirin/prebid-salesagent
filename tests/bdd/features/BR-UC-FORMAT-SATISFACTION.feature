@@ -97,8 +97,14 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | two_image_options    | mismatched_728x90              |
       | fixed_300x250        | legacy_display_300x250_image        |
       | fixed_300x250        | option_plus_equivalent_legacy_image |
+      | two_image_options    | both_option_refs                    |
 
-    # THE LAST TWO ROWS GRADE NORMALIZATION RATHER THAN SPELLING. Every other legacy row here
+    # both_option_refs names BOTH of two_image_options' options on one format_option_refs
+    # arm. That arm is one route selecting a set (package-request.json: "Each reference
+    # matches one target product format_options[] entry"), so the two refs agree with each
+    # other by construction; they are not two routes to be equivalence-checked.
+
+    # THE TWO ROWS BEFORE IT GRADE NORMALIZATION RATHER THAN SPELLING. Every other legacy row here
     # sends display_300x250, which is literally the product's deprecated entry AND its
     # declaration's v1_format_ref, so a seller that exact-matched raw (agent_url, id) pairs
     # passed them unchanged. display_300x250_image is spelled by neither and reaches the
@@ -276,12 +282,27 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     And the buyer's package selects "<selector>"
     When the Buyer Agent sends the create_media_buy request
     Then the buyer is refused CONFLICTING_SELECTORS naming the package
+    And the conflict summarizes the "format_option_refs" route as selecting "satisfaction_image_mrec"
+    And the conflict summarizes the "<other_route>" route as selecting nothing
 
     Examples:
-      | selector                       |
-      | option_plus_conflicting_legacy |
-      | option_plus_conflicting_direct |
-      | bare_kind_beside_option_ref    |
+      | selector                       | other_route |
+      | option_plus_conflicting_legacy | format_ids  |
+      | option_plus_conflicting_direct | format_kind |
+      | bare_kind_beside_option_ref    | format_kind |
+      | option_plus_broad_legacy       | format_ids  |
+
+    # option_plus_broad_legacy is bare_kind_beside_option_ref with the broad route spelled
+    # as the legacy template display_image, which states no size. package-request.json's
+    # format_kind: broad image "does not satisfy a fixed-size product declaration", and a
+    # legacy reference that normalizes to the kind alone is graded the same way, so it
+    # selects nothing beside an option ref that selects the 300x250 (salesagent-ol033.20.22).
+    #
+    # THE SUMMARIES are per ROUTE, and a route is an arm: enums/error-code.json asks the
+    # details to "identify the supplied selector routes and their normalized canonical
+    # summaries", and each summary carries the option SET its route selected, the thing step
+    # (2) compares. The second Then lines name those sets, so a seller that answered the code
+    # without resolving cannot pass them.
 
     # THE STORYBOARD'S TWO CONFLICT STEPS, as inputs.
     # option_plus_conflicting_legacy is reject_conflicting_dual_emission ("The canonical
@@ -321,12 +342,22 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     And the buyer's package selects "<selector>"
     When the Buyer Agent sends the create_media_buy request
     Then the buyer is refused CONFLICTING_SELECTORS naming the package
+    And the conflict summarizes the "format_option_refs" route as selecting "<option_set>"
+    And the conflict summarizes the "format_ids" route as selecting <legacy_set>
 
     Examples:
-      | declaration      | selector                                |
-      | two_mrec_options | option_plus_projectable_legacy          |
-      | two_mrec_options | second_mrec_option_plus_legacy          |
-      | fixed_15s_video  | option_plus_conflicting_duration_legacy |
+      | declaration       | selector                                | option_set                                             | legacy_set                                               |
+      | two_mrec_options  | option_plus_projectable_legacy          | satisfaction_image_mrec                                | "satisfaction_image_mrec,satisfaction_image_mrec_gif"    |
+      | two_mrec_options  | second_mrec_option_plus_legacy          | satisfaction_image_mrec_gif                            | "satisfaction_image_mrec,satisfaction_image_mrec_gif"    |
+      | fixed_15s_video   | option_plus_conflicting_duration_legacy | satisfaction_video_15s                                 | nothing                                                  |
+      | two_image_options | both_option_refs_plus_legacy            | satisfaction_image_mrec,satisfaction_image_leaderboard | "satisfaction_image_mrec"                                |
+
+    # both_option_refs_plus_legacy grades format_option_refs as ONE route selecting a SET
+    # (package-request.json: "Each reference matches one target product format_options[]
+    # entry"; receivers "require each route to select the same product option set"). Its two
+    # refs select both of two_image_options' entries and do not conflict with each other --
+    # both_option_refs alone is accepted in the accept outline -- while display_300x250
+    # beside them selects only the 300x250 its projection narrows to, so the arms differ.
 
     # media-buy/package-request.json step (2): "derive the product format_options[] entries
     # selected by each route using directional product satisfaction, and require the
@@ -387,6 +418,72 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_option_refs
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json
 
+  # ── Direct and co-present routes on a product publishing ONLY format_ids ──────────────
+  #
+  # media-buy/package-request.json's selector contract binds every receiver, whichever arm
+  # the product publishes: "(1) independently resolve each present route to canonical
+  # declarations ... (2) derive the product format_options[] entries selected by each route
+  # using directional product satisfaction, and require the selected option sets to match;
+  # ... (3) reject different format shapes, selected option sets, or incompatible
+  # dimensions with CONFLICTING_SELECTORS". A product publishing only the deprecated arm
+  # has no format_options[] of its own, so the seller projects each deprecated entry to its
+  # canonical declaration through the SDK (adcp.canonical_formats.projection, the
+  # registries/v1-canonical-mapping.json order, failing closed) and resolves every route
+  # against that. display_300x250 projects to image 300x250. Before this, a format_kind
+  # route on such a product was never graded: a bare image, a 728x90 and a video route
+  # beside display_300x250 were all accepted.
+  #
+  # The direct route alone is graded like any direct route: exact_300x250 states the size
+  # the projection fixes and is accepted; bare_image_kind states none and is refused, which
+  # is package-request.json's format_kind: broad image "does not satisfy a fixed-size
+  # product declaration". legacy_unsized_template is the same broad shape on the legacy arm
+  # and is refused as well.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_kind
+
+  @T-UC-FORMAT-SATISFACTION-legacy-only-direct-accepted @format_satisfaction @requires_db
+  Scenario Outline: a direct route satisfying a legacy-only product's projected format is accepted - <selector>
+    Given the seller publishes only the deprecated format_ids
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+    Examples:
+      | selector           |
+      | exact_300x250      |
+      | direct_plus_legacy |
+
+  @T-UC-FORMAT-SATISFACTION-legacy-only-direct-refused @format_satisfaction @requires_db
+  Scenario Outline: a broad route against a legacy-only product's fixed-size format is refused - <selector>
+    Given the seller publishes only the deprecated format_ids
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "<arm>" selector
+
+    Examples:
+      | selector                | arm         |
+      | bare_image_kind         | format_kind |
+      | legacy_unsized_template | format_ids  |
+
+  @T-UC-FORMAT-SATISFACTION-legacy-only-conflicting @format_satisfaction @requires_db
+  Scenario Outline: co-present routes selecting different formats of a legacy-only product are refused - <selector>
+    Given the seller publishes only the deprecated format_ids
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused CONFLICTING_SELECTORS naming the package
+    And the conflict summarizes the "format_kind" route as selecting nothing
+
+    Examples:
+      | selector                |
+      | kind_728x90_plus_legacy |
+      | video_kind_plus_legacy  |
+
+    # The first row is incompatible dimensions, the second a different format shape: step
+    # (3) names both. Their accept control is direct_plus_legacy above, the same two routes
+    # agreeing on 300x250. The format_ids route selects the projection of display_300x250 --
+    # the Then on the CONFLICTING_SELECTORS line asserts the two summarized sets differ, so it
+    # cannot be empty -- and the format_kind route selects nothing.
+
   # ── Coverage: the selected format must cover every INCLUDED placement ─────────────────
   #
   # docs/creative/formats.mdx § Matching and satisfaction: "For a product with multiple
@@ -435,6 +532,8 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | duration_range    | widened_inline               | contained_range    |
       | two_image_options | unnarrowed                   | product_option_ref |
       | fixed_300x250     | narrowed_file_size           | product_option_ref |
+      | two_image_options | publisher_ref_targetable     | product_option_ref |
+      | two_image_options | publisher_ref_included       | no_selector        |
 
     # both_option_refs is the spec-valid way to cover `split` explicitly: two
     # format_option_refs on ONE arm select a SET (package-request.json: "require each route
@@ -504,6 +603,31 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # the field, because UNSUPPORTED_FEATURE naming format_option_refs is also what an
     # unpublished option ref gets. The capability names the rule that refused, and the
     # rejected value is the declaration the package selected.
+
+  @T-UC-FORMAT-SATISFACTION-placements-unresolved @format_satisfaction @requires_db
+  Scenario Outline: an included publisher-referenced placement fails closed for a selecting package - <selector>
+    Given the seller declares canonical format options "two_image_options" across placements "publisher_ref_included"
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "<arm>" selector for the unresolved publisher placement "satisfaction_publisher_slot"
+
+    Examples:
+      | selector           | arm                |
+      | product_option_ref | format_option_refs |
+      | exact_300x250      | format_kind        |
+
+    # core/product.json format_options: a placement's effective set intersects "(3) for kind
+    # publisher_ref, the named publisher's adagents.json catalog narrowing", and "an
+    # unresolved publisher placement or format-option reference MUST fail closed". This
+    # seller has no adagents.json resolver on the buy path, so an INCLUDED publisher_ref
+    # placement cannot be shown to accept anything a package selects, and the package is
+    # refused until a resolver exists. The seller-inline placement beside it accepts the
+    # 300x250 both rows select, so the refusal is the publisher placement's. The accept
+    # controls are in the covered outline: the same placement TARGETABLE (not bought), and
+    # the same placements with no selector ("omitting both selects all formats supported by
+    # the product", which the product set covers by construction).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/format_options/description
 
   # ── The CREATIVE side of the same function ────────────────────────────────────────────
   #
