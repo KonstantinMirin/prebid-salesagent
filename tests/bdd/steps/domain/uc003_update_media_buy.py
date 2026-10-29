@@ -3250,8 +3250,21 @@ def _assert_submitted(ctx: dict) -> None:
     then_response_contains_task_id(ctx)
 
 
+def _assert_completed(ctx: dict) -> None:
+    """Applied in-line: the protocol status is ``completed`` on the success arm naming the buy.
+
+    ``update-media-buy-response.json`` (adcp v3.2.7) separates the synchronous success arm
+    from the submitted envelope; the top-level ``status`` (protocol-envelope TaskStatus) is
+    what tells the buyer which one it got, so an approval-gated update fails here.
+    """
+    _assert_wire_field_equals(ctx, "status", "completed")
+    _assert_synchronous_success(ctx)
+
+
 _UPDATE_OUTCOMES = {
     "accepted": _assert_synchronous_success,
+    "success (completed)": _assert_completed,
+    "success (submitted)": _assert_submitted,
     "success with persisted records": _assert_persisted_success,
     "success with pending status": _assert_submitted,
     "submitted task envelope (awaiting approval)": _assert_submitted,
