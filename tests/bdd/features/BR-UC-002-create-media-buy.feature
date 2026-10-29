@@ -2828,16 +2828,25 @@ Feature: BR-UC-002 Create Media Buy
 
   @T-UC-002-v31-plan-id-optional-without-governance @v31 @governance @plan-id @ext-x @happy-path
   Scenario: v3.1 plan_id optional when account has no governance_agents configured
-    Given a valid create_media_buy request with the plan_id field omitted
-    And the account "acc-001" exists and is active
+    Given the tenant is configured for auto-approval
+    And a valid create_media_buy request with the plan_id field omitted
     And the account has no governance_agents configured
     When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy spec
-    And the request should proceed past the governance gate
-    And the governance path should be skipped
+    Then the response is compliant with the create_media_buy success spec
+    And the response should succeed
     # BR-RULE-212 INV-4: no governance agents -> plan_id optional, governance skipped
+    # CORRECTED against the pin. governance/campaign/specification.mdx: "When
+    # `governance_agents` is absent, the seller processes media buy requests normally ...
+    # there is no seller-side verification", and "Sellers MUST NOT require governance checks
+    # as a prerequisite for all accounts". plan_id itself is DEPRECATED on the request. So the
+    # one observable is a buy created normally: the success arm, on an auto-approved tenant.
+    # "proceed past the governance gate" and "the governance path should be skipped" named
+    # no observable beyond that (with no agent registered there is no call to watch), and
+    # the "acc-001" line seeded an account the request does not name; the account graded is
+    # the one the request names.
     # --- v3.1: invoice_recipient override ---
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=docs/governance/campaign/specification.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/plan_id
 
   @T-UC-002-v31-invoice-recipient-echoed @v31 @invoice-recipient @post-s5
   Scenario: v3.1 invoice_recipient overrides default billing and is echoed in response
@@ -3233,18 +3242,19 @@ Feature: BR-UC-002 Create Media Buy
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json
     # --- v3.1 wave A: price (catalog/proposal pricing surface) ---
 
-  @T-UC-002-v31-price-shape-on-proposal-item @v31 @price @proposal-based @post-s11
-  Scenario: v3.1 proposal item carries price with amount, ISO 4217 currency, and period
-    Given a proposal "prop-001" referenced by proposal_id
-    And the proposal's product allocation item carries a price {amount: 1200, currency: "USD", period: "one_time"}
-    And the total_budget covers the proposal allocations
-    And the account "acc-001" exists and is active
-    And the tenant is configured for auto-approval
-    When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy success spec
-    And the response should succeed
-    And the response status should be "completed"
-    # v3.1: core/price.json — amount >= 0, currency ^[A-Z]{3}$, optional period (night|month|year|one_time)
+  # DELETED: @T-UC-002-v31-price-shape-on-proposal-item. It seeded "a price {amount,
+  # currency, period}" on a proposal's product allocation item, a field the pin does not
+  # declare there: core/product-allocation.json lists product_id, allocation_percentage,
+  # min_spend_target_percentage, max_spend_percentage, pacing, pricing_option_id, rationale,
+  # sequence, tags, start_time, end_time, daypart_targets, forecast and ext, and a committed
+  # allocation names its commercial terms by pricing_option_id ("Required when the containing
+  # proposal is committed so create_media_buy executes the exact disclosed commercial
+  # terms"). core/price.json is the catalog-item price ("Used across catalog item types for
+  # product prices, nightly hotel rates, salary ranges, rental costs"), not a proposal field.
+  # Its Thens graded only a successful create, so nothing of the price shape it was named
+  # for was ever asserted.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-allocation.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/price.json
     # --- v3.1 wave A: frequency_cap scope is POSITIONAL, not a property ---
     # CORRECTED against the pin, which binds the scope vocabulary to no wire field:
     #   * core/frequency-cap.json declares five properties -- suppress, suppress_minutes,
@@ -3368,6 +3378,13 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # CORRECTED against the pin: the three "io_acceptance present but <member> missing" rows
+    # are deleted. io_acceptance declares "required": ["io_id", "accepted_at", "signatory"] on
+    # the object itself, so that refusal is a schema refusal that does not depend on the
+    # proposal's requires_signature, and @T-UC-002-v31-io-acceptance-incomplete grades exactly
+    # it, per member, with the error located at io_acceptance.<member>. The rows left here are
+    # the ones whose outcome does depend on the committed proposal's insertion_order.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/io_acceptance/required
 
     Examples: Boundary values
       | boundary_point                                                                 | outcome                               |
@@ -3376,9 +3393,6 @@ Feature: BR-UC-002 Create Media Buy
       | requires_signature true, io_acceptance present with signature_id also supplied | proceeds, gate satisfied              |
       | requires_signature false, io_acceptance present (no-op)                        | proceeds, io_acceptance ignored       |
       | requires_signature true, io_acceptance absent (gate blocks)                    | error IO_REQUIRED with suggestion     |
-      | requires_signature true, io_acceptance present but io_id missing               | error INVALID_REQUEST with suggestion |
-      | requires_signature true, io_acceptance present but accepted_at missing         | error INVALID_REQUEST with suggestion |
-      | requires_signature true, io_acceptance present but signatory missing           | error INVALID_REQUEST with suggestion |
 
   @T-UC-002-boundary-creative-asset-discriminator @boundary @creative-asset @br-rule-015
   Scenario Outline: v3.1 creative asset discriminator boundary validation - <boundary_point>
