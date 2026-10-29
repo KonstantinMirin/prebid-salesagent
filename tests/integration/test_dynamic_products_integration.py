@@ -28,7 +28,7 @@ from src.services.dynamic_products import (
     generate_variants_for_brief,
     generate_variants_from_signals,
 )
-from tests.factories import ProductFactory, TenantFactory
+from tests.factories import InventoryProfileFactory, ProductFactory, TenantFactory
 from tests.harness._base import IntegrationEnv
 
 # ---------------------------------------------------------------------------
@@ -590,4 +590,31 @@ class TestCreateVariantFromTemplate:
         )
 
         assert variant.format_options == declarations
+        assert variant.format_ids is None
+
+    def test_a_profile_linked_template_produces_variants_that_carry_its_profiles_declarations(self, factory_env):
+        """The variant takes the template's CONTRACT, which a linked profile supplies.
+
+        A template linked to an inventory profile is served the profile's declarations
+        (``Product.format_contract``), and the variant does not carry the link. The
+        template's own arms differ from the profile's here, so a copy of the template's
+        columns hands the variant a contract the template was never served.
+        """
+        tenant = TenantFactory(tenant_id="test-cvft-profile", subdomain="cvft-profile")
+        profile_declarations = [{"format_kind": "image", "params": {"width": 728, "height": 90}}]
+        profile = InventoryProfileFactory(tenant=tenant, format_ids=None, format_options=profile_declarations)
+        template = _make_template(tenant, product_id="template_profile")
+        template.inventory_profile_id = profile.id
+        template.format_options = [{"format_kind": "image", "params": {"width": 300, "height": 250}}]
+        factory_env._commit_factory_data()
+
+        variant = create_variant_from_template(
+            template,
+            _make_signal(name="Premium Users"),
+            {"type": "key_value", "key": "audience", "value": "premium"},
+            "template_profile__variant_abc",
+            "video ads",
+        )
+
+        assert variant.format_options == profile_declarations
         assert variant.format_ids is None
