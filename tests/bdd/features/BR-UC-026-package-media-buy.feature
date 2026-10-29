@@ -1258,10 +1258,32 @@ Feature: BR-UC-026 Package Media Buy
     Examples: Valid partitions
       | partition                      | outcome                                    |
       | replace_catalogs               | success with catalogs replaced             |
-      | replace_optimization_goals     | success with goals replaced                |
-      | replace_creative_assignments   | success with assignments replaced          |
       | omit_array_fields              | success with existing values preserved     |
-      | replace_targeting_overlay      | success with overlay replaced              |
+    # LOCAL CORRECTION (mirror upstream in adcp-req), applied to this outline and the
+    # boundary outline below: three rows are removed, each contradicting the pin as written
+    # and each graded on all four transports by a sibling that does follow it.
+    # 1. optimization_goals: the row sent {"metric": "clicks", "priority": 1}, which has no
+    #    `kind`, the discriminator core/optimization-goal.json requires, so the request
+    #    schema refused it as INVALID_REQUEST before any replacement happened. A well-formed
+    #    goal is not replaceable on this product either: core/product.json metric_optimization,
+    #    "Presence indicates the product supports optimization_goals with kind: 'metric'", and
+    #    the seeded product declares none. @T-UC-003-partition-optimization-goals and
+    #    @T-UC-003-boundary-optimization-goals grade both answers, row by row.
+    # 2. creative_assignments: the row assigned "cr-new", a creative the Given never put in
+    #    the library, so the seller answered CREATIVE_NOT_FOUND. Replacement of a package's
+    #    assignments is graded with seeded creatives, an existing assignment set and the
+    #    stored result by @T-UC-003-partition-creative-replacement and
+    #    @T-UC-003-boundary-creative-replacement.
+    # 3. targeting_overlay: the row sent an `audiences` dimension that
+    #    core/targeting-input.json does not declare (refused as INVALID_REQUEST), and called
+    #    the change a "full swap", while the pin makes the overlay a per-dimension patch: "Omit
+    #    targeting_overlay, or omit an individual dimension inside it, to leave the
+    #    corresponding effective targeting unchanged. A non-null dimension replaces its current
+    #    value". @T-UC-003-alt-targeting grades that replacement on a declared dimension.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/optimization-goal.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/metric_optimization
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/creative_assignments
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/targeting_overlay
 
   @T-UC-026-boundary-replacement @boundary @package_update_array_fields
   Scenario Outline: Update replacement semantics boundary validation -- <boundary_point>
@@ -1273,8 +1295,7 @@ Feature: BR-UC-026 Package Media Buy
     Examples: Boundary values
       | boundary_point                                       | outcome                                    |
       | catalogs provided with one entry (replaces existing) | success                                    |
-      | optimization_goals provided (replaces existing)      | success                                    |
-      | creative_assignments provided (replaces existing)    | success                                    |
       | all array fields omitted (existing preserved)        | success                                    |
       | only scalar fields updated (patch semantics)         | success                                    |
-      | targeting_overlay replacement (full swap)            | success                                    |
+    # LOCAL CORRECTION: the optimization_goals, creative_assignments and targeting_overlay
+    # rows are removed for the reasons stated under the partition outline above.

@@ -1645,14 +1645,8 @@ def given_partition_replacement(ctx: dict, partition: str) -> None:
     update_kwargs, pkg_update = _setup_update_partition(ctx, **seed)
     if partition == "replace_catalogs":
         pkg_update["catalogs"] = [{"type": "store", "catalog_id": "cat-new"}]
-    elif partition == "replace_optimization_goals":
-        pkg_update["optimization_goals"] = [{"metric": "clicks", "priority": 1}]
-    elif partition == "replace_creative_assignments":
-        pkg_update["creative_assignments"] = [{"creative_id": "cr-new", "weight": 1.0}]
     elif partition == "omit_array_fields":
         pkg_update["budget"] = 8000  # Only scalar update
-    elif partition == "replace_targeting_overlay":
-        pkg_update["targeting_overlay"] = {"audiences": [{"audience_id": "aud-new"}]}
     else:
         raise ValueError(f"Unknown replacement partition: {partition}")
     update_kwargs["packages"] = [pkg_update]
@@ -1667,17 +1661,11 @@ def given_boundary_replacement(ctx: dict, boundary_point: str) -> None:
     update_kwargs, pkg_update = _setup_update_partition(ctx, **seed)
     if "catalogs provided" in bp:
         pkg_update["catalogs"] = [{"type": "store", "catalog_id": "cat-new"}]
-    elif "optimization_goals provided" in bp:
-        pkg_update["optimization_goals"] = [{"metric": "clicks", "priority": 1}]
-    elif "creative_assignments provided" in bp:
-        pkg_update["creative_assignments"] = [{"creative_id": "cr-new", "weight": 1.0}]
     elif "all array fields omitted" in bp:
         pkg_update["budget"] = 8000
     elif "only scalar fields" in bp:
         pkg_update["budget"] = 8000
         pkg_update["pacing"] = "even"
-    elif "targeting_overlay replacement" in bp:
-        pkg_update["targeting_overlay"] = {"audiences": [{"audience_id": "aud-new"}]}
     else:
         raise ValueError(f"Unknown replacement boundary: {bp}")
     update_kwargs["packages"] = [pkg_update]

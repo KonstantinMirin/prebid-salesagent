@@ -3100,8 +3100,12 @@ class Package(LibraryPackage):
     #: * ``measurement_terms`` -- "Reflects what was negotiated -- may differ from the
     #:   buyer's proposal or the product's defaults".
     #: * ``performance_standards`` -- "Agreed performance standards", negotiated the same way.
+    #: * ``creative_assignments`` -- "Creative assets assigned to this package": the
+    #:   assignment record, which the inline ``creatives`` write as well as this array. An
+    #:   echo reported none for a package whose creatives arrived inline, and reported the
+    #:   buyer's array whether or not it was applied.
     SELLER_DECIDED: ClassVar[frozenset[str]] = frozenset(
-        {"paused", "committed_metrics", "measurement_terms", "performance_standards"}
+        {"paused", "committed_metrics", "measurement_terms", "performance_standards", "creative_assignments"}
     )
 
     @classmethod

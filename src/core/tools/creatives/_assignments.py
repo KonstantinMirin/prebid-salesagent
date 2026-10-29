@@ -1,10 +1,13 @@
 """Creative-to-package assignment processing."""
 
 import logging
+from collections.abc import Iterable
 from contextlib import ExitStack
 from typing import Any
 
-from src.core.database.models import PersistedMediaBuyStatus
+from adcp.types import CreativeAssignment as LibraryCreativeAssignment
+
+from src.core.database.models import CreativeAssignment, PersistedMediaBuyStatus
 from src.core.database.repositories.creative import CreativeAssignmentRepository
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import CreativeRefDetails, EntityRefDetails, ValidationDetails
@@ -116,6 +119,23 @@ def require_package_covered(
         package_id=package_id,
         product_id=product.product_id,
     )
+
+
+def assignments_by_package(rows: Iterable[CreativeAssignment]) -> dict[str, list[LibraryCreativeAssignment]]:
+    """Stored assignment rows as core/package.json ``creative_assignments``, keyed by package_id.
+
+    "Creative assets assigned to this package": every surface that reports a package's
+    state reads its creative set from the rows, so ``create_media_buy``'s ``packages`` and
+    ``update_media_buy``'s ``affected_packages`` report what was assigned, whichever request
+    array wrote it (the inline ``creatives``, ``creative_ids`` or ``creative_assignments``),
+    and report it the same way. Call inside the unit of work that loaded *rows*.
+    """
+    by_package: dict[str, list[LibraryCreativeAssignment]] = {}
+    for row in rows:
+        by_package.setdefault(row.package_id, []).append(
+            LibraryCreativeAssignment(creative_id=row.creative_id, weight=row.weight, placement_ids=row.placement_ids)
+        )
+    return by_package
 
 
 def _process_assignments(

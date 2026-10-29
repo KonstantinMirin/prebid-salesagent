@@ -6510,6 +6510,7 @@ _UC003_INLINE_CREATIVES_READBACK_TAGS = frozenset(
         "T-UC-003-local-inline-creatives-replace",
         "T-UC-003-local-inline-creatives-keep-library",
         "T-UC-003-alt-creatives-inline",
+        "T-UC-003-storyboard-creative-fate-after-cancellation",
     }
 )
 
@@ -7225,8 +7226,9 @@ ENV_ROUTES: list[EnvRoute] = [
         seed=_seed_media_buy_chain_create_dispatch,
     ),
     # ── UC-003 ──────────────────────────────────────────────────────────────
-    # The inline-creatives scenarios: the uc003-ext seed, on the env that also routes
-    # get_media_buys, because they read the package's creatives back the way a buyer does.
+    # The scenarios that read a package's creatives back the way a buyer does (the
+    # inline-creatives uploads and the release on cancel): the uc003-ext seed, on the env
+    # that also routes get_media_buys.
     EnvRoute(
         tag="uc003-inline-creatives-readback",
         when=_uc("UC-003", lambda m: bool(m & _UC003_INLINE_CREATIVES_READBACK_TAGS)),

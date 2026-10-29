@@ -123,6 +123,7 @@ from src.core.schemas import (
 from src.core.security.outbound_http import CounterpartyUrl, UrlProvenance
 from src.core.tools._media_buy_status import seller_valid_actions
 from src.core.tools._media_buy_transitions import resolve_flight_window_status
+from src.core.tools.creatives._assignments import assignments_by_package
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
     validate_budget_positive,
@@ -4671,6 +4672,12 @@ async def _create_media_buy_impl(
         # Get adapter response packages (have package_ids)
         adapter_packages = response.packages if response.packages else []
 
+        # The creatives each package was assigned, as the rows written above record them:
+        # core/package.json ``creative_assignments`` (``Package.SELLER_DECIDED``).
+        with MediaBuyUoW(tenant.tenant_id) as assignment_uow:
+            assert assignment_uow.assignments is not None
+            assigned = assignments_by_package(assignment_uow.assignments.get_by_media_buy(response.media_buy_id or ""))
+
         assert req.packages is not None, "packages required - validated earlier"
         for i, package in enumerate(req.packages):
             # Get package_id and paused from adapter response
@@ -4715,6 +4722,7 @@ async def _create_media_buy_impl(
                     package,
                     package_id=adapter_package_id,
                     paused=adapter_paused,
+                    creative_assignments=assigned.get(adapter_package_id),
                     formats_to_provide=list(pkg_snapshots) or None,
                     format_ids_to_provide=_legacy_formats_to_provide(pkg_snapshots, package),
                 )
