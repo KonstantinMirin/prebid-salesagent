@@ -782,8 +782,13 @@ def given_canonical_creative(ctx: dict, kind: str, asset_key: str) -> None:
     ctx["request_kwargs"]["packages"][0]["creative_ids"] = [creative.creative_id]
 
 
-def _seed_canonical_creative(ctx: dict, *, kind: str, asset_key: str = "image_main") -> Any:
-    """One approved creative carrying the named CANONICAL kind, committed. Returns the row.
+def _seed_canonical_creative(
+    ctx: dict, *, kind: str, asset_key: str = "image_main", status: str = "approved", **row: Any
+) -> Any:
+    """One creative carrying the named CANONICAL kind, committed. Returns the row.
+
+    Approved unless the caller names another review ``status``; ``row`` carries any other
+    column a caller pins (a ``creative_id`` a later sync must address).
 
     The default asset key is ``image_main``, which ``formats/canonical/image.json`` declares
     as the ``image`` kind's required image slot -- so a caller that does not care about the
@@ -805,9 +810,10 @@ def _seed_canonical_creative(ctx: dict, *, kind: str, asset_key: str = "image_ma
     creative = CreativeFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
-        approved=True,
+        status=status,
         data={"assets": build_assets(image_spec(asset_key))},
         **arm,
+        **row,
     )
     ctx["env"]._commit_factory_data()
     return creative
@@ -860,6 +866,26 @@ def when_update_assigns_creative(ctx: dict) -> None:
     Pydantic rather than constructing the request in the test process -- the same reason the
     create side dispatches raw.
     """
+    _dispatch_package_update(ctx, creative_ids=[ctx["creative_to_assign"].creative_id])
+
+
+@when("the Buyer Agent uploads the package's creatives through update_media_buy")
+def when_update_uploads_creatives(ctx: dict) -> None:
+    """Dispatch a real update_media_buy whose package carries the creatives inline.
+
+    The creatives are the ones a Given put on the package the buyer is building
+    (``ctx["request_kwargs"]["packages"][0]["creatives"]``), so the create and update
+    scenarios upload the same bytes through one Given.
+    """
+    _dispatch_package_update(ctx, creatives=ctx["request_kwargs"]["packages"][0]["creatives"])
+
+
+def _dispatch_package_update(ctx: dict, **package_members: Any) -> None:
+    """One update_media_buy against the held buy's package, carrying *package_members*.
+
+    A RAW flat body: ``media_buy_id`` is what ``MediaBuyDualEnv._is_update_request`` routes
+    on, and the transport validates, so a malformed member reaches production's boundary.
+    """
     from tests.bdd.steps.generic._dispatch import dispatch_request
 
     dispatch_request(
@@ -867,12 +893,7 @@ def when_update_assigns_creative(ctx: dict) -> None:
         media_buy_id=ctx["existing_media_buy"].media_buy_id,
         account={"account_id": ctx["env"].setup_default_account().account_id},
         idempotency_key=mint(f"satisfaction-update-{uuid.uuid4().hex}"),
-        packages=[
-            {
-                "package_id": ctx["existing_package"].package_id,
-                "creative_ids": [ctx["creative_to_assign"].creative_id],
-            }
-        ],
+        packages=[{"package_id": ctx["existing_package"].package_id, **package_members}],
     )
 
 
@@ -1026,6 +1047,28 @@ def given_sync_canonical_creative(ctx: dict, kind: str) -> None:
     required with ``min_length=1`` -- a buyer cannot assign without syncing, so sync-and-
     assign in one call IS the real flow and seeding a row then sending an empty list is a
     shape the pin refuses (measured: ``List should have at least 1 item``).
+    """
+    _sync_canonical_claim(ctx, kind)
+
+
+@given(
+    parsers.parse(
+        'the buyer syncs a creative whose format_option_ref names product option "{option}" of canonical kind "{kind}"'
+    )
+)
+def given_sync_canonical_creative_with_option(ctx: dict, option: str, kind: str) -> None:
+    """The canonical claim NARROWED to one product option, as creative-manifests.mdx
+    § Exact option routing spells it: ``format_kind`` plus a product-scoped
+    ``format_option_ref`` ``{scope: "product", format_option_id}``.
+
+    Worded to not end on the kind's quoted value, so the bare-kind Given above (whose
+    ``"{kind}"`` would otherwise match across the rest of this sentence) cannot bind it.
+    """
+    _sync_canonical_claim(ctx, kind, format_option_ref={"scope": "product", "format_option_id": option})
+
+
+def _sync_canonical_claim(ctx: dict, kind: str, **members: Any) -> None:
+    """ONE canonical claim on the wire: ``format_kind`` and no ``format_id`` key at all.
 
     ``format_id=OMIT`` is what makes it canonical: ``core/creative-asset.json`` is a oneOf
     on the identifier, so the legacy arm has to be ABSENT rather than null -- the pin
@@ -1035,8 +1078,66 @@ def given_sync_canonical_creative(ctx: dict, kind: str) -> None:
     from tests.factories.request import OMIT, CreativeAssetRequestFactory
 
     ctx["creatives"] = [
-        CreativeAssetRequestFactory.payload(creative_id=_SYNC_CREATIVE_ID, format_id=OMIT, format_kind=kind)
+        CreativeAssetRequestFactory.payload(creative_id=_SYNC_CREATIVE_ID, format_id=OMIT, format_kind=kind, **members)
     ]
+
+
+def _mixed_identity_creative(format_id: str, kind: str) -> dict[str, Any]:
+    """A creative naming BOTH identifiers, declared as the malformation it is.
+
+    creative-manifests.mdx § Deprecated compatibility branch: a 3.2 implementation "must
+    not ... mix format_id and format_kind in one manifest", and core/creative-asset.json's
+    root oneOf refuses it (each arm carries a ``not`` on the other's identifier). The
+    ``format_id`` is one the agent serves (``resolvable_format_ref``) and the kind is in the
+    vocabulary, so each half is valid alone and only the MIX is wrong.
+    """
+    from src.core.errors.codes import ErrorCode
+    from tests.factories.format import resolvable_format_ref
+    from tests.factories.malformed import malformed
+    from tests.factories.request import CreativeAssetRequestFactory
+
+    return malformed(
+        "semantic",
+        "both format_id and format_kind present, each valid on its own; core/creative-asset.json's "
+        "root oneOf admits exactly one, so the pin refuses the item with [type=oneOf].",
+        CreativeAssetRequestFactory.payload(
+            creative_id=_SYNC_CREATIVE_ID, format_id=resolvable_format_ref(format_id), format_kind=kind
+        ),
+        obligation=ErrorCode.INVALID_REQUEST,
+    )
+
+
+@given(
+    parsers.parse('the buyer syncs a creative identified by both format_id "{format_id}" and canonical kind "{kind}"')
+)
+def given_sync_mixed_identity_creative(ctx: dict, format_id: str, kind: str) -> None:
+    """The sync item carries both identifiers (see ``_mixed_identity_creative``)."""
+    ctx["creatives"] = [_mixed_identity_creative(format_id, kind)]
+
+
+@given(
+    parsers.parse(
+        'the buyer\'s package uploads a creative identified by both format_id "{format_id}" and canonical kind "{kind}"'
+    )
+)
+def given_package_mixed_identity_creative(ctx: dict, format_id: str, kind: str) -> None:
+    """The package the buyer is building carries the mixed creative inline.
+
+    ``packages[].creatives[]`` is core/creative-asset.json on both create_media_buy
+    (media-buy/package-request.json) and update_media_buy (media-buy/package-update.json),
+    so the create When sends this package as built and the update When sends its creatives.
+    """
+    ctx["request_kwargs"]["packages"][0]["creatives"] = [_mixed_identity_creative(format_id, kind)]
+
+
+@given(parsers.parse('a creative identified by canonical kind "{kind}" is already in the library as "{status}"'))
+def given_canonical_creative_in_library(ctx: dict, kind: str, status: str) -> None:
+    """The library row a later sync of the SAME creative_id updates, in review *status*.
+
+    Same id as the sync Givens' item, and the route's principal, so the sync takes the
+    update path (``creative_repo.get_by_id(creative_id, principal_id)``).
+    """
+    _seed_canonical_creative(ctx, kind=kind, status=status, creative_id=_SYNC_CREATIVE_ID)
 
 
 def _sync_legacy_claim(ctx: dict, format_id: str, **parameters: int) -> None:
@@ -1297,13 +1398,14 @@ def then_assignment_recorded(ctx: dict) -> None:
     BOTH halves, and the second is the load-bearing one: lenient mode answers SUCCESS while
     recording per-package failures in ``assignment_errors``, so a scenario asserting only
     that the sync succeeded would pass on a refusal that was merely recorded instead of
-    raised. Read off the typed result because ``assignment_errors`` is a per-creative map
-    the wire carries inside ``creatives[]``.
+    raised. Read off the WIRE entry for this creative (``creatives[]`` carries the
+    per-creative ``assignment_errors`` map), not the typed payload, which has already been
+    coerced to its declared type.
     """
-    creative_results = ctx["result"].payload.creatives
-    assert creative_results, "sync_creatives answered with no creative results"
-    errors = creative_results[0].assignment_errors or {}
-    assert not errors, f"expected no assignment error, got {errors!r}"
+    entry = wire_entry(ctx, "creatives", creative_id=_SYNC_CREATIVE_ID)
+    assert entry.get("action") in ("created", "updated"), f"the creative was not accepted: {entry!r}"
+    errors = entry.get("assignment_errors") or {}
+    assert errors == {}, f"expected no assignment error, got {errors!r}"
 
 
 @then("the sync succeeds and records an assignment error for that package")
@@ -1362,6 +1464,35 @@ def then_stored_with_canonical_kind(ctx: dict, kind: str) -> None:
     stored nothing and answered an error would make the kind assertion fail for the wrong
     reason and read as a projection bug.
     """
+    stored_kind = _stored_synced_creative_column(ctx, "format_kind")
+    assert stored_kind == kind, (
+        f"stored format_kind={stored_kind!r}, expected {kind!r} -- the kind the buyer named, or the "
+        f"one the registry projects its legacy id to; a different value is not the identity it sent"
+    )
+
+
+@then(parsers.parse('the creative is stored with its format_option_ref naming product option "{option}"'))
+def then_stored_with_option_ref(ctx: dict, option: str) -> None:
+    """The option ref the buyer sent reaches the column WHOLE, scope discriminator included.
+
+    core/format-option-ref.json is a oneOf whose arms differ by ``scope`` (and by
+    ``publisher_domain``, required on one arm and forbidden on the other), so the stored
+    document is compared whole: an id kept without its scope would read back as neither arm.
+    """
+    stored = _stored_synced_creative_column(ctx, "format_option_ref")
+    assert stored == {"scope": "product", "format_option_id": option}, (
+        f"stored format_option_ref={stored!r}, expected the product-scoped ref to {option!r}"
+    )
+
+
+def _stored_synced_creative_column(ctx: dict, column: str) -> Any:
+    """One column of the synced creative's stored row, after asserting the sync succeeded.
+
+    The sync is asserted to have SUCCEEDED first: an exception path that stored nothing
+    and answered an error would otherwise fail the column assertion for the wrong reason.
+    Read off the row because the column is the subject -- a constraint is satisfied by any
+    value, so what has to be shown is that the value is the one the buyer's identity names.
+    """
     from src.core.database.repositories.uow import CreativeUoW
 
     result = ctx["result"]
@@ -1370,17 +1501,11 @@ def then_stored_with_canonical_kind(ctx: dict, kind: str) -> None:
     # the block is detached and every attribute read raises DetachedInstanceError.
     with CreativeUoW(ctx["tenant"].tenant_id) as uow:
         assert uow.creatives is not None
-        stored_kinds = {
-            c.creative_id: c.format_kind for c in uow.creatives.list_by_principal(ctx["principal"].principal_id)
+        stored = {
+            c.creative_id: getattr(c, column) for c in uow.creatives.list_by_principal(ctx["principal"].principal_id)
         }
-    assert _SYNC_CREATIVE_ID in stored_kinds, (
-        f"no creative {_SYNC_CREATIVE_ID!r} was stored; library holds {sorted(stored_kinds)}"
-    )
-    assert stored_kinds[_SYNC_CREATIVE_ID] == kind, (
-        f"stored format_kind={stored_kinds[_SYNC_CREATIVE_ID]!r}, expected {kind!r} -- the "
-        f"registry projects this legacy id to {kind!r}, so a different value means the "
-        f"projection was not the thing written"
-    )
+    assert _SYNC_CREATIVE_ID in stored, f"no creative {_SYNC_CREATIVE_ID!r} was stored; library holds {sorted(stored)}"
+    return stored[_SYNC_CREATIVE_ID]
 
 
 @then("the buyer is refused UNSUPPORTED_FEATURE and nothing is stored")

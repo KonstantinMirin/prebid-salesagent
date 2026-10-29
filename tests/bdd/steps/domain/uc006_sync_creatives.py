@@ -4726,10 +4726,10 @@ def given_creative_with_no_format_id(ctx: dict) -> None:
     (``And a creative with <format_setup>``, row ``missing_format_id`` whose
     ``format_setup`` is ``no format_id``). That renders to exactly this step name and
     resolves here — confirmed against pytest-bdd's own registered parsers, not by
-    grep. It grades three nodeids, ``test_format_validation__partition``
-    ``[a2a|mcp|rest-missing_format_id-...]``, all xfail-dormant at SETUP on
-    "UC-006 harness not yet wired for non-account scenarios" — so deleting this step
-    would leave every count unchanged while removing the binding.
+    grep. It grades the ``test_format_validation__partition`` ``missing_format_id``
+    row on every transport, and it is the only TRUE "neither identifier" case: the
+    ext-e Given sends ``format_id: null`` as a present key, which the pin's ``required``
+    counts as supplied.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)

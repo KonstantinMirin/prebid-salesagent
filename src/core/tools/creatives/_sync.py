@@ -23,7 +23,7 @@ from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
 
 from ._assignments import _process_assignments
-from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative
+from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative, incoming_identity_of
 from ._validation import _get_field, _validate_creative_input, check_provenance_policy
 from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creative_notifications
 
@@ -267,6 +267,12 @@ def sync_creatives(
                     if creative.creative_id:
                         existing_creative = creative_repo.get_by_id(creative.creative_id, principal_id)
 
+                    # The identity this item names, read ONCE: it is what the row stores and
+                    # what an operator's review record names (``label``), whichever arm the
+                    # buyer used. The record used to name ``creative.format_id``, so a
+                    # creative identified by format_kind reached review as "format: None".
+                    incoming_identity = incoming_identity_of(creative, all_formats)
+
                     if existing_creative:
                         update_result, needs_approval = _update_existing_creative(
                             creative=creative,
@@ -279,6 +285,7 @@ def sync_creatives(
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
+                            incoming_identity=incoming_identity,
                         )
 
                         # Handle failed updates
@@ -287,7 +294,7 @@ def sync_creatives(
                                 {
                                     "creative_id": existing_creative.creative_id,
                                     "error": update_result.errors[0] if update_result.errors else "Unknown error",
-                                    "format": creative.format_id,
+                                    "format": incoming_identity.label,
                                 }
                             )
                             failed_count += 1
@@ -304,7 +311,7 @@ def sync_creatives(
                         if needs_approval:
                             creative_info: dict[str, Any] = {
                                 "creative_id": existing_creative.creative_id,
-                                "format": creative.format_id,
+                                "format": incoming_identity.label,
                                 "name": creative.name,
                                 "status": existing_creative.status,
                             }
@@ -331,6 +338,7 @@ def sync_creatives(
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
+                            incoming_identity=incoming_identity,
                         )
 
                         # Handle failed creates
@@ -340,7 +348,7 @@ def sync_creatives(
                                 {
                                     "creative_id": creative_id,
                                     "error": create_result.errors[0] if create_result.errors else "Unknown error",
-                                    "format": creative.format_id,
+                                    "format": incoming_identity.label,
                                 }
                             )
                             failed_count += 1
@@ -354,7 +362,7 @@ def sync_creatives(
                         if needs_approval:
                             creative_info = {
                                 "creative_id": create_result.creative_id,
-                                "format": creative.format_id,
+                                "format": incoming_identity.label,
                                 "name": creative.name,
                                 "status": create_result.internal_status,
                             }

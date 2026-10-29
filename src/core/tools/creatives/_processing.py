@@ -416,6 +416,85 @@ def _defer_ai_review(
     creative_repo.after_commit(_submit, label=f"ai_review:{creative_id}")
 
 
+def incoming_identity_of(creative: CreativeAsset, all_formats: list[Any]) -> CreativeFormatIdentity:
+    """The identity a sync item names, with its canonical kind projected. Read ONCE per item.
+
+    The create path, the update path and the review record all need it, and each used to
+    compute it (or, the review record, to read the deprecated ``format_id`` instead).
+
+    The SPEC is passed, and that is the whole of why format_kind used to be NULL. The
+    resolver's own docstring: passing it "is what makes the agent's own explicit projection
+    (step 1) reachable; without it only the registry glob (step 3) is consulted". Measured
+    against the pinned capture of 71 formats -- 15 project from the glob route alone, 64 with
+    the spec -- so a bare call stored NULL for 56 of the formats the agent actually serves.
+
+    ``find_format`` is pure (no HTTP, no DB) and ``all_formats`` is pre-fetched outside the
+    transaction, so resolving it costs nothing and adds no call inside the savepoint. A
+    reference that projects to no canonical kind is refused here (UNSUPPORTED_FEATURE, see
+    ``creative_identity_of``), before any creative agent is dialled for it.
+    """
+    spec = find_format(all_formats, creative.format_id) if creative.format_id else None
+    return creative_identity_of(creative, spec=spec)
+
+
+def _preview_manifest(
+    creative: CreativeAsset, data: Mapping[str, Any], *, creative_id: str, name: Any
+) -> dict[str, Any]:
+    """The manifest this seller sends a creative agent's ``preview_creative``, minus its format.
+
+    ``format_id`` is deliberately NOT written here: the registry composes it from the same
+    ``{agent_url, id}`` object it sends as the call's own ``format_id``
+    (``CreativeAgentRegistry.preview_creative``). Both builders used to write the bare id
+    string, which satisfies neither arm of core/creative-manifest.json (v3.2.7) -- the named
+    arm's ``format_id`` is a core/format-id.json OBJECT -- so the seller authored an invalid
+    manifest on every static preview.
+    """
+    manifest: dict[str, Any] = {"creative_id": creative_id, "name": name}
+    # Validate assets are in dict format (AdCP v2.4+)
+    if creative.assets:
+        validated_assets = _validate_creative_assets(creative.assets)
+        if validated_assets:
+            manifest["assets"] = validated_assets
+    if data.get("url"):
+        manifest["url"] = data.get("url")
+    return manifest
+
+
+def _apply_approval_mode(
+    creative_repo: CreativeRepository,
+    row: Any,
+    *,
+    approval_mode: str,
+    tenant: TenantContext,
+    webhook_url: str | None,
+    principal_id: str,
+) -> bool:
+    """Set *row*'s review status from the tenant's approval mode. Returns whether it needs approval.
+
+    ONE policy for a created and an updated creative, whichever identity arm it carries. The
+    update path used to run this only ``if creative.format_id``, so re-syncing a creative
+    identified by ``format_kind`` kept its old status under every mode and never reached AI
+    or human review: business logic keyed on the deprecated arm, which
+    docs/creative/creative-manifests.mdx (v3.2.7) § Basic structure makes the legacy branch
+    ("New manifests use the canonical branch"). Every sync item carries exactly one
+    identity (``CreativeAssetRequest`` refuses neither and both), so there is no item this
+    policy has nothing to say about.
+    """
+    if approval_mode == "auto-approve":
+        row.status = CreativeStatusEnum.approved.value
+        return False
+    row.status = CreativeStatusEnum.pending_review.value
+    if approval_mode == "ai-powered":
+        _defer_ai_review(
+            creative_repo,
+            creative_id=row.creative_id,
+            tenant=tenant,
+            webhook_url=webhook_url,
+            principal_id=principal_id,
+        )
+    return True
+
+
 def _update_existing_creative(
     creative: CreativeAsset,
     existing_creative: Any,
@@ -427,6 +506,7 @@ def _update_existing_creative(
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
+    incoming_identity: CreativeFormatIdentity,
 ) -> tuple[SyncCreativeResult, bool]:
     """Update an existing creative with upsert semantics .
 
@@ -445,6 +525,7 @@ def _update_existing_creative(
         all_formats: Pre-fetched creative formats from registry.
         registry: CreativeAgentRegistry instance.
         principal_id: Authenticated principal ID for AI review callbacks.
+        incoming_identity: The identity this sync item names (``incoming_identity_of``).
 
     Returns:
         Tuple of (SyncCreativeResult, needs_approval).
@@ -466,51 +547,23 @@ def _update_existing_creative(
         name_value = creative.name
         if name_value is not None:
             existing_creative.name = str(name_value)
-    # The identity the buyer sent this time, with its canonical kind projected. Written only
-    # when it differs from the stored one, and the difference is the identity's own equality
-    # -- which canonicalizes agent_url, the comparison ``core/format-id.json`` makes a MUST,
-    # and ignores the verbatim spelling it retains. Four columns move together or not at all,
-    # through the one repository mapping that ``create`` also uses.
-    # The SPEC is passed, and that is the whole of why format_kind used to be NULL. The
-    # resolver's own docstring: passing it "is what makes the agent's own explicit projection
-    # (step 1) reachable; without it only the registry glob (step 3) is consulted". Measured
-    # against the pinned capture of 71 formats -- 15 project from the glob route alone, 64
-    # with the spec -- so the three bare calls on this path stored NULL for 56 of the formats
-    # the agent actually serves.
-    #
-    # ``find_format`` is pure (no HTTP, no DB) and ``all_formats`` is pre-fetched outside the
-    # transaction at function start, so resolving it here costs nothing and adds no call
-    # inside the savepoint. Hoisted above the identity because the later use at the
-    # agent-backed branch comes after it.
-    identity_spec = find_format(all_formats, creative.format_id) if creative.format_id else None
-    incoming_identity = creative_identity_of(creative, spec=identity_spec)
+    # The identity the buyer sent this time (``incoming_identity``, read once by the caller).
+    # Written only when it differs from the stored one, and the difference is the identity's
+    # own equality -- which canonicalizes agent_url, the comparison ``core/format-id.json``
+    # makes a MUST, and ignores the verbatim spelling it retains. Four columns move together
+    # or not at all, through the one repository mapping that ``create`` also uses.
     if incoming_identity != prior.identity:
         creative_repo.set_identity(existing_creative, incoming_identity)
 
-    # Determine creative status based on approval mode
+    needs_approval = _apply_approval_mode(
+        creative_repo,
+        existing_creative,
+        approval_mode=approval_mode,
+        tenant=tenant,
+        webhook_url=webhook_url,
+        principal_id=principal_id,
+    )
     creative_format = creative.format_id
-    needs_approval = False
-    if creative_format:  # Only update approval status if format is provided
-        if approval_mode == "auto-approve":
-            existing_creative.status = CreativeStatusEnum.approved.value
-            needs_approval = False
-        elif approval_mode == "ai-powered":
-            # Submit to background AI review (async)
-
-            # Set status to pending_review for AI review
-            existing_creative.status = CreativeStatusEnum.pending_review.value
-            needs_approval = True
-
-            _defer_ai_review(
-                creative_repo,
-                creative_id=existing_creative.creative_id,
-                tenant=tenant,
-                webhook_url=webhook_url,
-                principal_id=principal_id,
-            )
-        else:  # require-human
-            existing_creative.status = CreativeStatusEnum.pending_review.value
-            needs_approval = True
 
     # Store creative properties in data field
     # Full upsert semantics (replace all data, not merge)
@@ -673,26 +726,12 @@ def _update_existing_creative(
                     preview_requested = False
                 else:
                     # Static creative - use preview_creative
-                    # Build creative manifest from available data
-                    # Extract string ID from FormatId object if needed
-                    format_id_str = creative_format.id
-                    creative_manifest: dict[str, Any] = {
-                        "creative_id": existing_creative.creative_id,
-                        "name": creative.name or existing_creative.name,
-                        "format_id": format_id_str,
-                    }
-
-                    # Add any provided asset data for validation
-                    # Validate assets are in dict format (AdCP v2.4+)
-                    if creative.assets:
-                        validated_assets = _validate_creative_assets(creative.assets)
-                        if validated_assets:
-                            creative_manifest["assets"] = validated_assets
-                    if data.get("url"):
-                        creative_manifest["url"] = data.get("url")
-
-                    # Call creative agent's preview_creative for validation + preview
-                    # Extract string ID from FormatId object if needed
+                    creative_manifest = _preview_manifest(
+                        creative,
+                        data,
+                        creative_id=existing_creative.creative_id,
+                        name=creative.name or existing_creative.name,
+                    )
                     format_id_str = creative_format.id
                     logger.info(
                         f"[sync_creatives] Calling preview_creative for validation (update): "
@@ -872,6 +911,7 @@ def _create_new_creative(
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
+    incoming_identity: CreativeFormatIdentity,
 ) -> tuple[SyncCreativeResult, bool]:
     """Create a new creative and persist it to the database .
 
@@ -1020,26 +1060,9 @@ def _create_new_creative(
                     preview_requested = False
                 else:
                     # Static creative - use preview_creative
-                    # Build creative manifest from available data
-                    # Extract string ID from FormatId object if needed
-                    format_id_str = creative_format.id
-                    creative_manifest: dict[str, Any] = {
-                        "creative_id": creative.creative_id or str(uuid.uuid4()),
-                        "name": creative.name,
-                        "format_id": format_id_str,
-                    }
-
-                    # Add any provided asset data for validation
-                    # Validate assets are in dict format (AdCP v2.4+)
-                    if creative.assets:
-                        validated_assets = _validate_creative_assets(creative.assets)
-                        if validated_assets:
-                            creative_manifest["assets"] = validated_assets
-                    if data.get("url"):
-                        creative_manifest["url"] = data.get("url")
-
-                    # Call creative agent's preview_creative for validation + preview
-                    # Extract string ID from FormatId object if needed
+                    creative_manifest = _preview_manifest(
+                        creative, data, creative_id=creative.creative_id or str(uuid.uuid4()), name=creative.name
+                    )
                     format_id_str = creative_format.id
                     logger.info(
                         f"[sync_creatives] Calling preview_creative for validation: {format_id_str} "
@@ -1173,11 +1196,8 @@ def _create_new_creative(
                 False,
             )
 
-    # Determine creative status based on approval mode
-
     # Create initial creative with pending_review status (will be updated based on approval mode)
     creative_status = CreativeStatusEnum.pending_review.value
-    needs_approval = False
 
     db_creative = creative_repo.create(
         creative_id=creative.creative_id or None,
@@ -1186,13 +1206,7 @@ def _create_new_creative(
         # kind. ONE value for all four columns: the three legacy strings this used to pass
         # could only ever persist the deprecated arm, and a parameter the hand-written
         # extraction did not name was dropped on the way in.
-        #
-        # ``spec=`` is what makes the projection reach past the registry glob -- see the
-        # same call in ``_update_existing_creative`` for the measurement. Without it this
-        # stored format_kind=NULL for 56 of the 71 formats the agent serves.
-        identity=creative_identity_of(
-            creative, spec=find_format(all_formats, creative.format_id) if creative.format_id else None
-        ),
+        identity=incoming_identity,
         principal_id=principal_id,
         status=creative_status,
         data=data,
@@ -1205,27 +1219,14 @@ def _create_new_creative(
     if not creative.creative_id:
         creative.creative_id = db_creative.creative_id
 
-    # Now apply approval mode logic
-    if approval_mode == "auto-approve":
-        db_creative.status = CreativeStatusEnum.approved.value
-        needs_approval = False
-    elif approval_mode == "ai-powered":
-        # Submit to background AI review (async)
-
-        # Set status to pending_review for AI review
-        db_creative.status = CreativeStatusEnum.pending_review.value
-        needs_approval = True
-
-        _defer_ai_review(
-            creative_repo,
-            creative_id=db_creative.creative_id,
-            tenant=tenant,
-            webhook_url=webhook_url,
-            principal_id=principal_id,
-        )
-    else:  # require-human
-        db_creative.status = CreativeStatusEnum.pending_review.value
-        needs_approval = True
+    needs_approval = _apply_approval_mode(
+        creative_repo,
+        db_creative,
+        approval_mode=approval_mode,
+        tenant=tenant,
+        webhook_url=webhook_url,
+        principal_id=principal_id,
+    )
 
     return (
         SyncCreativeResult(
