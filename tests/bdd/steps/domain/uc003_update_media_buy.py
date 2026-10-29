@@ -39,6 +39,10 @@ from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 #: persistence assertion would hold vacuously.
 _UPDATED_BUDGET = 7500.0
 
+#: The value cell that leaves its field out of the update request (``a valid
+#: update_media_buy request with:``), for an outline row that omits a field the others send.
+_OMITTED = "(omitted)"
+
 # ═══════════════════════════════════════════════════════════════════════
 # Label mapping — Gherkin package labels → real package_ids
 # ═══════════════════════════════════════════════════════════════════════
@@ -147,6 +151,38 @@ def _stored_package(ctx: dict, label: str) -> tuple[Any, dict[str, Any]]:
         row = uow.media_buys.get_package(mb.media_buy_id, package_id)
         assert row is not None, f"no persisted package {package_id!r} (label {label!r}) on {mb.media_buy_id!r}"
         return row.budget, dict(row.package_config or {})
+
+
+def _assert_stored_flight(ctx: dict, *, start: Any, end: Any) -> None:
+    """The persisted media buy's ``start_time``/``end_time`` are *start*/*end* (UTC datetimes).
+
+    Read through ``MediaBuyUoW`` for the reason :func:`_stored_package` gives: the claim is
+    what the seller stored, and the response does not carry the flight at all.
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    mb = _existing_media_buy(ctx)
+    with MediaBuyUoW(ctx["tenant"].tenant_id) as uow:
+        assert uow.media_buys is not None
+        row = uow.media_buys.get_by_id(mb.media_buy_id)
+        assert row is not None, f"Media buy {mb.media_buy_id} not found in DB after update"
+        actual_start, actual_end = row.start_time, row.end_time
+    # The columns are timezone-aware; normalize to UTC so equal instants compare equal.
+    actual_start = actual_start.astimezone(UTC) if actual_start is not None else None
+    actual_end = actual_end.astimezone(UTC) if actual_end is not None else None
+    assert actual_start == start, f"stored start_time is {actual_start}, expected {start}"
+    assert actual_end == end, f"stored end_time is {actual_end}, expected {end}"
+
+
+def _original_flight(ctx: dict) -> tuple[Any, Any]:
+    """The flight the Given 'the existing media buy has start_time ... and end_time ...' stored."""
+    original_start = ctx.get("original_start_time")
+    original_end = ctx.get("original_end_time")
+    assert original_start is not None and original_end is not None, (
+        "original_start_time/original_end_time not in ctx — "
+        "missing prior Given step 'the existing media buy has start_time ... and end_time ...'"
+    )
+    return original_start, original_end
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -363,7 +399,10 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
             f"step silently drops it. Supported: {sorted(_supported_fields)}. "
             f"Add handling for '{field}' if it's a valid UpdateMediaBuyRequest field."
         )
-        if field == "media_buy_id":
+        if value == _OMITTED:
+            # An Examples cell that leaves the field out of the request altogether.
+            kwargs.pop(field, None)
+        elif field == "media_buy_id":
             # Resolve Gherkin label (e.g. "mb_existing") to real factory ID
             kwargs["media_buy_id"] = _resolve_media_buy_id(ctx, value)
         elif field == "paused":
@@ -982,30 +1021,8 @@ def then_start_end_time_unchanged(ctx: dict) -> None:
     Reloads the media buy from DB and compares against the values stored in ctx
     by the Given step 'the existing media buy has start_time ... and end_time ...'.
     """
-
-    from sqlalchemy import select
-
-    from src.core.database.models import MediaBuy
-
-    original_start = ctx.get("original_start_time")
-    original_end = ctx.get("original_end_time")
-    assert original_start is not None and original_end is not None, (
-        "original_start_time/original_end_time not in ctx — "
-        "missing prior Given step 'the existing media buy has start_time ... and end_time ...'"
-    )
-    mb = ctx["existing_media_buy"]
-    with db_session(ctx) as session:
-        refreshed = session.scalars(select(MediaBuy).filter_by(media_buy_id=mb.media_buy_id)).first()
-        assert refreshed is not None, f"Media buy {mb.media_buy_id} not found in DB after update"
-        actual_start = refreshed.start_time
-        actual_end = refreshed.end_time
-    # Normalize to UTC for comparison (DB may return timezone-aware or naive)
-    if actual_start is not None and actual_start.tzinfo is not None:
-        actual_start = actual_start.astimezone(UTC)
-    if actual_end is not None and actual_end.tzinfo is not None:
-        actual_end = actual_end.astimezone(UTC)
-    assert actual_start == original_start, f"start_time changed: expected {original_start}, got {actual_start}"
-    assert actual_end == original_end, f"end_time changed: expected {original_end}, got {actual_end}"
+    start, end = _original_flight(ctx)
+    _assert_stored_flight(ctx, start=start, end=end)
 
 
 @then("the response should contain media_buy_id")
@@ -3242,8 +3259,26 @@ def _assert_submitted(ctx: dict) -> None:
     then_response_contains_task_id(ctx)
 
 
+def _assert_end_time_stored(ctx: dict) -> None:
+    """Synchronous success; the seller stored the requested end_time and kept the start."""
+    from datetime import datetime
+
+    _assert_synchronous_success(ctx)
+    start, _end = _original_flight(ctx)
+    requested = datetime.fromisoformat(ctx["update_kwargs"]["end_time"].replace("Z", "+00:00")).astimezone(UTC)
+    _assert_stored_flight(ctx, start=start, end=requested)
+
+
+def _assert_flight_unchanged(ctx: dict) -> None:
+    """Synchronous success, and the stored flight is the one the Given seeded."""
+    _assert_synchronous_success(ctx)
+    then_start_end_time_unchanged(ctx)
+
+
 _UPDATE_OUTCOMES = {
     "accepted": _assert_synchronous_success,
+    "accepted with the requested end_time stored": _assert_end_time_stored,
+    "accepted with the stored flight unchanged": _assert_flight_unchanged,
     "success with persisted records": _assert_persisted_success,
     "success with pending status": _assert_submitted,
     "submitted task envelope (awaiting approval)": _assert_submitted,
