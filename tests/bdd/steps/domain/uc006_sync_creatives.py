@@ -3903,20 +3903,24 @@ def given_product_agent_url_different_path(ctx: dict) -> None:
 
 @given("the creative agent is reachable")
 def given_creative_agent_is_reachable(ctx: dict) -> None:
-    """Ensure the creative agent mock returns valid format data (agent reachable).
+    """The agent the creative's format names serves that format, so the seller can reach it.
 
-    The CreativeSyncEnv already mocks the registry by default. This step
-    explicitly configures it to return a successful response for the creative's
-    format, confirming the agent is reachable.
+    A PRECONDITION, checked rather than arranged: the format Given before it
+    (``configure_agent_served_creative``) already put the format in the catalogue of the
+    agent its identity names -- the standard agent's capture in process, the tenant's
+    hosted agent on e2e -- and that agent answers the preview request. Arranging it a
+    second time here would be a second spelling of one setup.
+
+    This step used to replace ``registry.get_format`` with a stand-in answering a
+    FormatFactory declaration: an invented Format no agent serves, and an instrument
+    with no e2e realization, which parked the scenario on e2e_rest.
     """
     env = ctx["env"]
-    agent_url = env.DEFAULT_AGENT_URL
     format_id = _scenario_format_id(ctx, env)
-
-    from tests.factories.format import FormatFactory, FormatIdFactory
-
-    fid = FormatIdFactory(agent_url=agent_url, id=format_id)
-    env.record_format_lookups(answering=FormatFactory(format_id=fid))
+    assert env.serves_format(format_id), (
+        f"the creative names format {format_id!r}, which no creative agent of this env serves; "
+        "a Given naming a served HTTP format has to run before this one"
+    )
 
 
 # --- rx9u: asset-level provenance replaces creative-level (BR-RULE-094 INV-5) ---
@@ -6013,11 +6017,21 @@ def then_existing_creative_unchanged(ctx: dict, principal_id: str) -> None:
 
 @then("the creative should be validated by the creative agent")
 def then_creative_validated_by_agent(ctx: dict) -> None:
-    """Assert the creative was processed through external agent validation.
+    """BR-RULE-035: the creative was synced AND the agent its format names validated it.
 
-    BR-RULE-035: HTTP-based format_ids trigger external creative agent validation.
-    Verifies registry.get_format was called for the specific format_id from Given,
-    and that the response shows a successful sync outcome (action created/updated).
+    The validation production performs for a static agent-served creative is the
+    ``preview_creative`` request ``_processing.py`` sends that agent ("Calling
+    preview_creative for validation"), and it reaches that request only after resolving
+    the format through the same agent. So the observation is the agent's side of it:
+    ``env.creative_agent_requests`` reads the registry's recorder in process and, over
+    e2e_rest, the tool calls the tenant's hosted agent received on its side of the wire.
+    The manifest's ``creative_id`` is what both legs carry verbatim
+    (``CreativeAgentRegistry.preview_creative`` forwards the manifest unchanged); the
+    format route is spelled differently per leg, so it is not compared.
+
+    This used to read ``registry.get_format`` call counts off a stand-in the Given
+    installed -- an instrument with no e2e realization, which parked the scenario on
+    e2e_rest, and a count of a lookup rather than of the validation itself.
     """
     error = ctx.get("error")
     assert error is None, (
@@ -6033,25 +6047,12 @@ def then_creative_validated_by_agent(ctx: dict) -> None:
         f"Expected created/updated action for agent-validated creative, got {actions}"
     )
 
-    # Assert the registry was consulted for the specific format_id
-    env = ctx["env"]
-    registry_mock = env.mock.get("registry")
-    assert registry_mock is not None, "Harness must wire registry mock for agent validation scenario"
-    registry_instance = registry_mock.return_value
-    assert registry_instance.get_format.call_count > 0, (
-        "Expected creative agent validation (registry.get_format called), but it was never called"
+    requests = ctx["env"].creative_agent_requests("preview_creative")
+    validated = sorted({(request.get("creative_manifest") or {}).get("creative_id") for request in requests})
+    assert validated == _requested_creative_ids(ctx), (
+        f"expected the creative agent to be asked to validate exactly {_requested_creative_ids(ctx)}, "
+        f"but its preview_creative requests named {validated} ({len(requests)} request(s))"
     )
-    expected_format_id = ctx.get("creative_format_id")
-    if expected_format_id is not None:
-        # get_format(agent_url, format_id): the id is the SECOND positional argument (or
-        # the keyword). This read args[0] -- the agent_url -- and so could never match.
-        called_format_ids = [
-            c.kwargs.get("format_id", c.args[1] if len(c.args) > 1 else None)
-            for c in registry_instance.get_format.call_args_list
-        ]
-        assert expected_format_id in called_format_ids, (
-            f"Expected get_format called with format_id={expected_format_id!r}, but was called with {called_format_ids}"
-        )
 
 
 @then(parsers.parse('the response should include one creative with action "{action}"'))

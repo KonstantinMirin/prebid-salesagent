@@ -994,19 +994,6 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
         """
         setattr(self.mock["registry"].return_value, tool, AsyncMock(return_value=document))
 
-    @realize_e2e(
-        e2e_unsupported(
-            "the Then this serves asks WHICH format ids the seller looked up with the agent, read "
-            "off a recorder standing in for registry.get_format. Under e2e_rest the lookup runs in "
-            "the server and reaches the hosted agent as a list_creative_formats call, which names no "
-            "format id and may be answered from the catalogue the same request already listed, so "
-            "'looked up THIS format' has no observable there"
-        )
-    )
-    def record_format_lookups(self, *, answering: Format) -> None:
-        """Record every single-format lookup, answering each with *answering*."""
-        self.mock["registry"].return_value.get_format = AsyncMock(return_value=answering)
-
     @realize_e2e(_the_hosted_agent_received)
     def creative_agent_requests(self, tool: str) -> list[dict[str, Any]]:
         """The arguments of every *tool* request the seller made of the creative agent, oldest first.
