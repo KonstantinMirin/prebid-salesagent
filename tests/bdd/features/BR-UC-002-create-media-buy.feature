@@ -3226,18 +3226,19 @@ Feature: BR-UC-002 Create Media Buy
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json
     # --- v3.1 wave A: price (catalog/proposal pricing surface) ---
 
-  @T-UC-002-v31-price-shape-on-proposal-item @v31 @price @proposal-based @post-s11
-  Scenario: v3.1 proposal item carries price with amount, ISO 4217 currency, and period
-    Given a proposal "prop-001" referenced by proposal_id
-    And the proposal's product allocation item carries a price {amount: 1200, currency: "USD", period: "one_time"}
-    And the total_budget covers the proposal allocations
-    And the account "acc-001" exists and is active
-    And the tenant is configured for auto-approval
-    When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy success spec
-    And the response should succeed
-    And the response status should be "completed"
-    # v3.1: core/price.json — amount >= 0, currency ^[A-Z]{3}$, optional period (night|month|year|one_time)
+  # DELETED: @T-UC-002-v31-price-shape-on-proposal-item. It seeded "a price {amount,
+  # currency, period}" on a proposal's product allocation item, a field the pin does not
+  # declare there: core/product-allocation.json lists product_id, allocation_percentage,
+  # min_spend_target_percentage, max_spend_percentage, pacing, pricing_option_id, rationale,
+  # sequence, tags, start_time, end_time, daypart_targets, forecast and ext, and a committed
+  # allocation names its commercial terms by pricing_option_id ("Required when the containing
+  # proposal is committed so create_media_buy executes the exact disclosed commercial
+  # terms"). core/price.json is the catalog-item price ("Used across catalog item types for
+  # product prices, nightly hotel rates, salary ranges, rental costs"), not a proposal field.
+  # Its Thens graded only a successful create, so nothing of the price shape it was named
+  # for was ever asserted.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-allocation.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/price.json
     # --- v3.1 wave A: frequency_cap scope is POSITIONAL, not a property ---
     # CORRECTED against the pin, which binds the scope vocabulary to no wire field:
     #   * core/frequency-cap.json declares five properties -- suppress, suppress_minutes,
