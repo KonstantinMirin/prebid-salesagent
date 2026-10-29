@@ -36,29 +36,12 @@ from unittest.mock import MagicMock
 
 from src.core.schemas import ListCreativeFormatsResponse
 from tests.harness._base import IntegrationEnv
-from tests.harness._realize import realize_e2e
-from tests.harness.egress import EgressHatchMixin
+from tests.harness.peer_agent import PeerCreativeAgentMixin
 from tests.harness.transport import DeliverResult
-from tests.helpers.peer_creative_agent import new_peer_key, serve_peer_catalog
-from tests.helpers.tls_material import trust_test_ca
+from tests.helpers.peer_creative_agent import new_peer_key
 
 
-def _serve_peer_catalog_on_the_live_stack(env: CreativeFormatsEnv, key: str, document: dict[str, Any]) -> str:
-    """E2E realization of the peer agent: the compose stack's capture service serves *document*.
-
-    The live server cannot reach a socket in the runner, so the peer it dials is the
-    webhook-capture service, which already sits behind the shared TLS front and answers
-    ``list_creative_formats`` over MCP for a key a test programs. Returns the URL the
-    server dials, which the tenant's ``creative_agents`` row then names; the factory writes
-    that row to the live server's own database, as every e2e factory row is written.
-    """
-    from tests.e2e import _webhook_capture
-
-    _webhook_capture.serve_peer_catalog(key, document)
-    return _webhook_capture.peer_agent_url(key)
-
-
-class CreativeFormatsEnv(EgressHatchMixin, IntegrationEnv):
+class CreativeFormatsEnv(PeerCreativeAgentMixin, IntegrationEnv):
     """Integration test environment for _list_creative_formats_impl.
 
     Runs production's testing-mode registry against real ``creative_agents`` rows and a
@@ -97,8 +80,6 @@ class CreativeFormatsEnv(EgressHatchMixin, IntegrationEnv):
     _peer_agent_row: Any = None
     #: The URL that row names: where the seller dials its peer, and what it refers buyers to.
     _peer_agent_url: str | None = None
-    #: Whether this env trusts the test CA and opened the private-range hatch yet.
-    _peer_reachable: bool = False
 
     def _configure_mocks(self) -> None:
         """Install production's testing-mode registry, fresh per env, and a no-op audit logger.
@@ -129,7 +110,7 @@ class CreativeFormatsEnv(EgressHatchMixin, IntegrationEnv):
         format, which is the point of serving it for real.
         """
         document = {"formats": [fmt.model_dump(mode="json", exclude_none=True) for fmt in formats]}
-        self.configure_peer_agent(self._serve_peer_catalog(document), use_default_creative_agent=False)
+        self.configure_peer_agent(self.serve_peer_catalog(new_peer_key(), document), use_default_creative_agent=False)
         self._seeded_formats = list(formats)
 
     def set_peer_format_payload(self, payload: list[dict[str, Any]]) -> None:
@@ -142,25 +123,7 @@ class CreativeFormatsEnv(EgressHatchMixin, IntegrationEnv):
         testing-mode ``ReferenceFormatsRegistry``. The standard creative agent stays
         federated: these scenarios locate the peer's formats by the agent_url it published.
         """
-        self.configure_peer_agent(self._serve_peer_catalog({"formats": payload}))
-
-    def _serve_peer_catalog(self, document: dict[str, Any]) -> str:
-        """Serve *document* from the peer creative agent under a fresh key; return its URL."""
-        return self._realize_peer_catalog(new_peer_key(), document)
-
-    @realize_e2e(_serve_peer_catalog_on_the_live_stack)
-    def _realize_peer_catalog(self, key: str, document: dict[str, Any]) -> str:
-        """In process: this worker's shared peer agent, on loopback over TLS.
-
-        The registry dials it through the egress seam, so the env trusts the shared test
-        CA and opens the private-range hatch -- once, for the env's lifetime. The live
-        stack's posture is already open.
-        """
-        if not self._peer_reachable:
-            trust_test_ca(self._guard)
-            self.set_egress_hatches(private=True)
-            self._peer_reachable = True
-        return serve_peer_catalog(key, document)
+        self.configure_peer_agent(self.serve_peer_catalog(new_peer_key(), {"formats": payload}))
 
     def configure_peer_agent(self, agent_url: str, **tenant_columns: Any) -> None:
         """The tenant's one peer creative agent is *agent_url* -- one row, both worlds.

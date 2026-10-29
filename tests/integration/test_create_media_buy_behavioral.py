@@ -41,6 +41,7 @@ do not use the harness.
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from urllib.parse import urlsplit
 
 import pytest
 from pydantic import ValidationError
@@ -57,6 +58,7 @@ from src.core.exceptions import (
     AdCPProductNotFoundError,
     AdCPValidationError,
 )
+from src.core.format_cache import load_reference_formats
 from src.core.schemas import (
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
@@ -88,6 +90,23 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # in-memory tenant override that the boundary's resolver never reads -- the row decides.
 # A bag that takes anything cannot tell a caller it was ignored. The fact is a COLUMN and
 # is stated where the row is written: ``env.setup_default_data(human_review_required=True)``.
+
+
+def _peer_serving_display_300x250_image(env: MediaBuyCreateEnv) -> str:
+    """A real peer creative agent that publishes ``display_300x250_image`` as its own; returns its URL.
+
+    A tenant-configured agent is dialled for a format lookup -- the reference capture stands
+    in for the operator agent only -- so a test that registers one needs an agent that
+    answers. The entry is the capture's, re-homed: its ``format_id.agent_url`` is the
+    peer's own URL, as an agent states for a format it publishes.
+    """
+    from tests.helpers.peer_creative_agent import new_peer_key, peer_agent_url
+
+    key = new_peer_key()
+    (fmt,) = [f for f in load_reference_formats() if f.format_id.id == "display_300x250_image"]
+    entry = fmt.model_dump(mode="json", exclude_none=True)
+    entry["format_id"]["agent_url"] = peer_agent_url(key)
+    return env.serve_peer_catalog(key, {"formats": [entry]})
 
 
 def _require_manual_approval(env: MediaBuyCreateEnv) -> None:
@@ -1303,8 +1322,10 @@ class TestInlineCreativeObligations:
 
         with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
-            # Well-formed registration the buyer's format_id should match.
-            CreativeAgentFactory(tenant=tenant, agent_url="https://creative.example.com", enabled=True)
+            # Well-formed registration the buyer's format_id should match: a real peer that
+            # serves the format, since a registered agent is dialled for the lookup.
+            peer_url = _peer_serving_display_300x250_image(env)
+            CreativeAgentFactory(tenant=tenant, agent_url=peer_url, enabled=True)
             # Malformed pre-existing registration -- bypasses admin-ingestion
             # validation entirely by writing directly to the DB, which is
             # exactly how such a row would already exist in production.
@@ -1314,20 +1335,16 @@ class TestInlineCreativeObligations:
             # case grading nothing. An unparseable authority is refused for real.
             CreativeAgentFactory(tenant=tenant, agent_url="https://[::1", enabled=True)
 
-            # No get_format mocking needed: ADCP_TESTING=true (autouse fixture)
-            # makes CreativeAgentRegistry serve the checked-in reference formats
-            # for any agent_url, so this exercises the real registry lookup.
+            # No get_format mocking: the real registry dials the registered peer.
             result = await _validate_and_convert_format_ids(
-                format_ids=[{"agent_url": "https://creative.example.com", "id": "display_300x250_image"}],
+                format_ids=[{"agent_url": peer_url, "id": "display_300x250_image"}],
                 tenant_id=tenant.tenant_id,
                 package_idx=0,
             )
 
-        # Returned in CANONICAL form, trailing slash and all: the merged canonicalizer
-        # applies url-canonicalization step 5 ("empty path + authority -> /"), which the
-        # pre-merge one undid with a now-deleted rstrip("/"). Same obligation, spelled in
-        # the one canonical form both sides of the registration check now use.
-        assert result == [{"agent_url": "https://creative.example.com/", "id": "display_300x250_image"}]
+        # Returned in CANONICAL form, the one form both sides of the registration check use.
+        # The peer URL already is: a lowercase IP host, a non-default port, a non-empty path.
+        assert result == [{"agent_url": peer_url, "id": "display_300x250_image"}]
 
     @pytest.mark.asyncio
     async def test_the_operator_agent_is_registered_by_origin_and_no_other_agent_is(self, integration_db, monkeypatch):
@@ -1350,7 +1367,9 @@ class TestInlineCreativeObligations:
 
         with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
-            CreativeAgentFactory(tenant=tenant, agent_url="https://partner.example/api/creative-agent", enabled=True)
+            # A real peer that serves the format: a registered agent is dialled for the lookup.
+            partner = _peer_serving_display_300x250_image(env)
+            CreativeAgentFactory(tenant=tenant, agent_url=partner, enabled=True)
 
             async def validate(agent_url: str) -> list[dict[str, str]]:
                 return await _validate_and_convert_format_ids(
@@ -1360,16 +1379,14 @@ class TestInlineCreativeObligations:
                 )
 
             mounted = await validate(f"{operator}/api/creative-agent")
-            registered = await validate("https://partner.example/api/creative-agent")
+            registered = await validate(partner)
             with pytest.raises(AdCPAuthorizationError) as foreign:
                 await validate("https://creative.other.example/api/creative-agent")
             with pytest.raises(AdCPAuthorizationError) as other_path:
-                await validate("https://partner.example/other-agent")
+                await validate(urlsplit(partner)._replace(path="/other-agent").geturl())
 
         assert mounted == [{"agent_url": f"{operator}/api/creative-agent", "id": "display_300x250_image"}]
-        assert registered == [
-            {"agent_url": "https://partner.example/api/creative-agent", "id": "display_300x250_image"}
-        ]
+        assert registered == [{"agent_url": partner, "id": "display_300x250_image"}]
         assert foreign.value.error_code == "PERMISSION_DENIED"
         assert other_path.value.error_code == "PERMISSION_DENIED"
 

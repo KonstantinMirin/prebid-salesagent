@@ -46,10 +46,14 @@ def new_peer_key() -> str:
     return f"peer-{uuid4().hex}"
 
 
-def serve_peer_catalog(key: str, document: dict) -> str:
-    """Serve *document* as ``list_creative_formats`` under *key*; return the agent URL a seller dials."""
+def peer_agent_url(key: str) -> str:
+    """The agent URL a seller dials for the catalog served under *key*."""
     from tests.e2e.webhook_capture_service import peer_path
 
-    server = _shared_peer_agent()
-    server.store.serve_peer_catalog(key, document)
-    return f"https://127.0.0.1:{server.server_address[1]}{peer_path(key)}"
+    return f"https://127.0.0.1:{_shared_peer_agent().server_address[1]}{peer_path(key)}"
+
+
+def serve_peer_catalog(key: str, document: dict) -> str:
+    """Serve *document* as ``list_creative_formats`` under *key*; return the agent URL a seller dials."""
+    _shared_peer_agent().store.serve_peer_catalog(key, document)
+    return peer_agent_url(key)
