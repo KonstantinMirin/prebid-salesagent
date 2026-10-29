@@ -2276,16 +2276,20 @@ Feature: BR-UC-002 Create Media Buy
       | 0 catalogs (empty array)                                                     | empty array          | catalog validation passes                    |
       | 1 catalog (uniqueness trivially satisfied)                                   | 1 product            | catalog validation passes                    |
       | 2 catalogs, different types (product + store)                                | product+store        | catalog validation passes                    |
-      | 2 catalogs, same type (product + product) — first duplicate violation        | product+product      | error VALIDATION_ERROR with suggestion         |
-      | 3 catalogs, two share same type (product + product + store)                  | 2prod+store          | error VALIDATION_ERROR with suggestion         |
+      | 2 catalogs, same type (product + product) — first duplicate violation        | product+product      | error VALIDATION_ERROR on packages[0].catalogs with suggestion |
+      | 3 catalogs, two share same type (product + product + store)                  | 2prod+store          | error VALIDATION_ERROR on packages[0].catalogs with suggestion |
       | 13 catalogs, all 13 distinct enum values                                     | all 13 types         | catalog validation passes                    |
       | Two packages each with type=product (distinct per-package, not cross-package) | cross-pkg product    | catalog validation passes                    |
       | catalog_id references a synced catalog                                       | valid catalog_id     | catalog validation passes                    |
       | catalog_id references a non-existent catalog                                 | bad catalog_id       | error INVALID_REQUEST with suggestion          |
     # LOCAL CORRECTION: the two duplicate-type rows asserted INVALID_REQUEST. The pinned
     # package-request.json catalogs: "sellers MUST reject requests containing multiple catalogs
-    # of the same type with a validation_error", so the code is VALIDATION_ERROR.
+    # of the same type with a validation_error", so the code is VALIDATION_ERROR, and the
+    # refused package's catalogs array is the field. "catalog validation passes" also grades
+    # that every package echoes the catalogs it was sent (core/package.json catalogs: "Echoed
+    # from the create_media_buy request"), so a seller that ignored catalogs cannot pass it.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/catalogs
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/catalogs
 
   @T-UC-002-boundary-format-id-structure @boundary @format-id-structure
   Scenario Outline: Format ID structure boundary validation - <boundary_point>
