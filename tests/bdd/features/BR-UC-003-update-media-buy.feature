@@ -309,21 +309,30 @@ Feature: BR-UC-003 Update Media Buy
     # BR-RULE-022 INV-1: Field present → updated
     # BR-RULE-022 INV-2: Field omitted → unchanged
 
-  @T-UC-003-empty-update @invariant @BR-RULE-022 @error
+  @T-UC-003-empty-update @invariant @BR-RULE-022
   Scenario: Empty update -- no updatable fields specified
-    Given a valid update_media_buy request with:
+    Given the tenant is configured for auto-approval
+    And the existing media buy has start_time "2026-04-01T00:00:00Z" and end_time "2026-06-30T23:59:59Z"
+    And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
     And the request does not include any updatable fields
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy error spec
-    And the operation should fail
-    And the error code should be "INVALID_REQUEST"
-    And the error should include "suggestion" field
-    # BR-RULE-022 INV-3: No updatable fields → rejected
-    # POST-F1: System state unchanged
-    # POST-F2: Error code explains failure
-    # POST-F3: Suggestion for recovery
+    Then the response is compliant with the update_media_buy success spec
+    And the response should contain media_buy_id "mb_existing"
+    And the response should list no affected packages
+    And the existing start_time and end_time should remain unchanged
+    # BR-RULE-022 INV-2: Field omitted → unchanged
+    # LOCAL CORRECTION: the generated scenario refused this request with INVALID_REQUEST
+    # (BR-RULE-022 INV-3, "No updatable fields → rejected"). The pin requires no updatable
+    # field: update-media-buy-request.json lists only idempotency_key, account and
+    # media_buy_id in /required and has no anyOf/minProperties over the rest, so a request
+    # carrying just those three is valid and nothing in the pin refuses it. What the pin
+    # does say about such an update is graded instead: an omitted field leaves the buy as
+    # it was, and affected_packages names "each modified package" ("Campaign-level updates
+    # that do not modify packages may return an empty array"), so it names none here.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/required
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json pointer=/oneOf/0/properties/affected_packages
 
   @T-UC-003-idempotency-valid @invariant @BR-RULE-081
   Scenario: Idempotency key -- valid key accepted

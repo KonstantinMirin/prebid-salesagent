@@ -1108,6 +1108,21 @@ def then_affected_packages_include(ctx: dict, package_id: str) -> None:
     assert resolved in pkg_ids, f"Expected '{resolved}' (label '{package_id}') in affected_packages, got {pkg_ids}"
 
 
+@then("the response should list no affected packages")
+def then_no_affected_packages(ctx: dict) -> None:
+    """Assert the WIRE names no package as modified: ``affected_packages`` absent or ``[]``.
+
+    update-media-buy-response.json ``/oneOf/0/properties/affected_packages`` holds "each
+    modified package" and is optional; "Campaign-level updates that do not modify packages
+    may return an empty array". So an update that modifies no package lists none, in
+    either spelling, and any entry is a package the seller claims to have changed.
+    """
+    affected = wire_lookup(ctx, "affected_packages")
+    assert affected is WIRE_MISSING or affected == [], (
+        f"the update modified no package, but the wire lists affected_packages {affected!r}"
+    )
+
+
 @then("the response should contain affected_packages")
 def then_affected_packages_present(ctx: dict) -> None:
     """Assert affected_packages contains the package(s) belonging to the media buy.
