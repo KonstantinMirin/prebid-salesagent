@@ -76,10 +76,6 @@ class CreativeFormatsEnv(PeerCreativeAgentMixin, IntegrationEnv):
 
     #: The formats :meth:`set_registry_formats` seeded, or None when no Given named any.
     _seeded_formats: list[Any] | None = None
-    #: The tenant's one peer ``creative_agents`` row, created on first use.
-    _peer_agent_row: Any = None
-    #: The URL that row names: where the seller dials its peer, and what it refers buyers to.
-    _peer_agent_url: str | None = None
 
     def _configure_mocks(self) -> None:
         """Install production's testing-mode registry, fresh per env, and a no-op audit logger.
@@ -98,19 +94,12 @@ class CreativeFormatsEnv(PeerCreativeAgentMixin, IntegrationEnv):
     def set_registry_formats(self, formats: list[Any]) -> None:
         """The seller's catalog is exactly *formats*, on every transport.
 
-        Serves *formats* from the peer creative agent under a fresh key, points the
-        tenant's one peer ``creative_agents`` row at it, and turns off the tenant's
-        federation of the standard creative agent (``use_default_creative_agent``), so the
-        seller lists these formats and nothing else. Each call mints a new key, so a
-        cumulative re-sync from successive Givens is never answered from a catalog the
-        registry cached for an earlier URL.
-
-        A format the seller's own parse refuses (``PeerFormat``) is discarded and
-        reported, as it would be from any real peer: the Given has to build a conforming
-        format, which is the point of serving it for real.
+        ``seed_own_creative_agent`` serves them from the peer, points the tenant's peer row at
+        it and stops federating the standard creative agent. The entries are served
+        verbatim (no re-homing): the listing path returns each ``format_id`` as published,
+        so a Given's format keeps the identity its request steps name.
         """
-        document = {"formats": [fmt.model_dump(mode="json", exclude_none=True) for fmt in formats]}
-        self.configure_peer_agent(self.serve_peer_catalog(new_peer_key(), document), use_default_creative_agent=False)
+        self.seed_own_creative_agent(formats, rehome=False)
         self._seeded_formats = list(formats)
 
     def set_peer_format_payload(self, payload: list[dict[str, Any]]) -> None:
@@ -124,29 +113,6 @@ class CreativeFormatsEnv(PeerCreativeAgentMixin, IntegrationEnv):
         federated: these scenarios locate the peer's formats by the agent_url it published.
         """
         self.configure_peer_agent(self.serve_peer_catalog(new_peer_key(), {"formats": payload}))
-
-    def configure_peer_agent(self, agent_url: str, **tenant_columns: Any) -> None:
-        """The tenant's one peer creative agent is *agent_url* -- one row, both worlds.
-
-        The row is created on the first call and re-pointed after, so a scenario never
-        configures two peers by re-seeding. *tenant_columns* go through ``ensure_tenant``,
-        which applies them to the tenant row the test or the e2e auto-seed already created
-        and seeds nothing else: this configures the seller, not a buyer.
-        """
-        from tests.factories import CreativeAgentFactory
-
-        tenant = self.ensure_tenant(**tenant_columns)
-        if self._peer_agent_row is None:
-            self._peer_agent_row = CreativeAgentFactory(tenant=tenant, agent_url=agent_url, name="Peer Creative Agent")
-        else:
-            self._peer_agent_row.agent_url = agent_url
-        self._commit_factory_data()
-        self._peer_agent_url = agent_url
-
-    def peer_agent_url(self) -> str:
-        """The URL of the tenant's peer creative agent, as its ``creative_agents`` row names it."""
-        assert self._peer_agent_url is not None, "no peer creative agent is configured on this tenant"
-        return self._peer_agent_url
 
     def served_registry_formats(self) -> list[Any]:
         """The formats the seller's creative agents serve this scenario, on every transport.
