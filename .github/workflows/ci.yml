@@ -305,20 +305,11 @@ jobs:
       # run_all_tests.sh's argument contract sends `ci <target> [args]` to the
       # HOST runner, so a marker-scoped run cannot stay in-network. See the
       # wall-clock note on salesagent-2xnqw.
-      - name: Sample runner resources
-        if: matrix.group == 'creative'
-        run: |
-          nohup sh -c 'while true; do date -u +%T; df -h / | tail -1; free -m | sed -n 2,3p; uptime; cat /proc/pressure/memory /proc/pressure/io 2>/dev/null; docker stats --no-stream --format "{{.Name}} {{.CPUPerc}} {{.MemUsage}}" 2>/dev/null; sleep 60; done' > /tmp/runner-resources.log 2>&1 &
       - name: Run integration suite in-network
         if: matrix.group == 'creative'
         timeout-minutes: 55
         run: |
-          df -h /
-          ./scripts/creative-agent-stack.sh build
-          df -h /; docker system df
-          rm -rf /tmp/adcp-server-*
-          docker builder prune -af
-          df -h /
+          (while true; do date -u +%T; free -m | sed -n 2,3p; uptime; cat /proc/pressure/memory 2>/dev/null; docker stats --no-stream --format "{{.Name}} {{.MemUsage}} {{.CPUPerc}}" 2>/dev/null; ps -eo rss,comm,args --sort=-rss | head -12 | cut -c1-160; sleep 60; done) &
           ./run_all_tests.sh integration
         env:
           DOCKER_BUILDKIT: 1
@@ -331,8 +322,8 @@ jobs:
       - name: Show runner resources
         if: always() && matrix.group == 'creative'
         run: |
-          cat /tmp/runner-resources.log || true
-          df -h; docker system df || true; docker ps -a || true
+          sudo dmesg | grep -iE "oom|killed process" | tail -20 || true
+          free -m; docker ps -a || true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always() && matrix.group == 'creative'
         with:
