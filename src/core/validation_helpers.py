@@ -11,9 +11,10 @@ import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from adcp.types import Catalog
+from adcp.types import Catalog, Duration
 from pydantic import ValidationError
 
+from src.core.enum_helpers import enum_value
 from src.core.exceptions import (
     AdCPValidationError,
     adcp_error_for,
@@ -213,6 +214,18 @@ def refuse_duplicate_catalog_types(catalogs: list[Catalog] | None, index: int) -
     catalog_types = [catalog.type for catalog in catalogs or []]
     if len(catalog_types) != len(set(catalog_types)):
         raise AdCPValidationError(field=package_field_path("catalogs", index))
+
+
+def campaign_interval_violated(duration: Duration | None) -> bool:
+    """Whether *duration* breaks core/duration.json's "Must be 1 when unit is 'campaign'".
+
+    The pin states the rule in the ``interval`` description only, a relationship between two
+    individually valid fields that its JSON Schema cannot express, so the SDK model accepts
+    ``{"interval": 2, "unit": "campaign"}``. Every tool that takes a Duration asks this one
+    predicate, and refuses with VALIDATION_ERROR ("violates business rules beyond schema
+    validation", enums/error-code.json).
+    """
+    return duration is not None and enum_value(duration.unit) == "campaign" and duration.interval != 1
 
 
 def format_validation_error(validation_error: ValidationError, label: str = "request") -> str:

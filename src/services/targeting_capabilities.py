@@ -34,7 +34,7 @@ from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
 from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPInvalidRequestError, AdCPValidationError
 from src.core.schemas import AnyTargeting, Error
-from src.core.validation_helpers import PACKAGES_FIELD, package_field_path
+from src.core.validation_helpers import PACKAGES_FIELD, campaign_interval_violated, package_field_path
 
 if TYPE_CHECKING:
     from src.core.database.models import Product
@@ -218,6 +218,25 @@ def raise_if_property_targeting_violations(violations: list[str]) -> None:
         )
 
 
+def raise_if_campaign_frequency_cap_invalid(overlays: Sequence[AnyTargeting | None]) -> None:
+    """Refuse a package frequency cap whose ``suppress`` or ``window`` is a campaign Duration
+    with ``interval != 1`` (core/duration.json, see ``campaign_interval_violated``).
+
+    *overlays* are the packages' ``targeting_overlay`` values in request order, so the pointer
+    names the package and the Duration at fault. :func:`refuse_invalid_package_overlays` calls
+    it for both create_media_buy and update_media_buy, before anything is written.
+    """
+    for index, overlay in enumerate(overlays):
+        cap = overlay.frequency_cap if overlay is not None else None
+        if cap is None:
+            continue
+        for slot in ("suppress", "window"):
+            if campaign_interval_violated(getattr(cap, slot)):
+                raise AdCPValidationError(
+                    field=package_field_path(f"targeting_overlay.frequency_cap.{slot}.interval", index)
+                )
+
+
 # Geo inclusion/exclusion field pairs for same-value overlap detection.
 # Per adcp PR #1010: sellers SHOULD reject when the same value appears in both
 # the inclusion and exclusion field at the same level.
@@ -379,13 +398,16 @@ def refuse_invalid_package_overlays(overlays: Sequence[AnyTargeting | None]) -> 
     the same overlay with the same code. ``overlays[i]`` is package ``i``'s overlay (``None``
     when it sent none). Every overlay is checked for a request fault before any is asked
     whether this seller applies what it names, so a request fault outranks a capability gap.
-    The first package with a fault is the one refused, with that package's violations.
+    The first package with a fault is the one refused, with that package's violations. The
+    request faults are the shape rules (INVALID_REQUEST), then a campaign frequency-cap
+    Duration whose interval is not 1 (VALIDATION_ERROR).
     """
     sent = [(index, overlay) for index, overlay in enumerate(overlays) if overlay is not None]
     for _, overlay in sent:
         violations = collect_targeting_violations(overlay)
         if violations:
             raise AdCPInvalidRequestError(details=ValidationDetails(**violations), field="targeting_overlay")
+    raise_if_campaign_frequency_cap_invalid(overlays)
     for index, overlay in sent:
         raise_if_undeclared_overlay_dimension(overlay, index)
 
