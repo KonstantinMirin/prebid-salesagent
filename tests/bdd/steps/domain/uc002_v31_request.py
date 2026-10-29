@@ -297,6 +297,59 @@ def then_sandbox_absent_or_false(ctx: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Governance plan_id boundary (@T-UC-002-boundary-plan-id-governance)
+# ═══════════════════════════════════════════════════════════════════════
+
+#: The deprecated plan_id each row sends, or None for a row that omits it.
+_PLAN_ID_GOVERNANCE_ROWS: dict[str, str | None] = {
+    "no governance agents + plan_id absent": None,
+    "no governance agents + plan_id present": "plan-2026-q1",
+}
+
+_GOVERNANCE_SKIPPED = "proceeds, governance skipped"
+
+
+@given(parsers.parse('a create_media_buy request and account governance state matching "{boundary_point}"'))
+def given_plan_id_governance_request(ctx: dict, boundary_point: str) -> None:
+    """The shared create request against an account with no governance_agents binding.
+
+    The request names the env's default account, whose row is seeded without
+    ``governance_agents``; that is asserted rather than assumed, so a seed that gains a
+    binding fails here instead of grading a governed account under an ungoverned row.
+    ``plan_id`` is the pin's deprecated request field (create-media-buy-request.json @ 3.2.7).
+    """
+    assert boundary_point in _PLAN_ID_GOVERNANCE_ROWS, f"unmapped plan_id governance row {boundary_point!r}"
+    kwargs = _create_request(ctx)
+    account = ctx["env"].setup_default_account()
+    assert kwargs["account"] == {"account_id": account.account_id}, (
+        f"the request must name the default account, got {kwargs['account']!r}"
+    )
+    assert not account.governance_agents, (
+        f"account {account.account_id!r} carries governance_agents {account.governance_agents!r}; "
+        "this row is about an account with none"
+    )
+    plan_id = _PLAN_ID_GOVERNANCE_ROWS[boundary_point]
+    if plan_id is not None:
+        kwargs["plan_id"] = plan_id
+
+
+def is_governance_skipped_outcome(outcome: str) -> bool:
+    """True for the plan_id boundary's ungoverned-account outcome cell."""
+    return outcome == _GOVERNANCE_SKIPPED
+
+
+def assert_governance_skipped_outcome(ctx: dict) -> None:
+    """An account without governance_agents is processed normally: the buy is created.
+
+    governance/campaign/specification.mdx @ 3.2.7: "When `governance_agents` is absent, the
+    seller processes media buy requests normally", and "Sellers MUST NOT require governance
+    checks as a prerequisite for all accounts". A seller that refused the request -- for a
+    missing plan_id, or for carrying the deprecated one -- emits no ``media_buy_id``.
+    """
+    wire_field(ctx, "media_buy_id")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # THEN steps
 # ═══════════════════════════════════════════════════════════════════════
 
