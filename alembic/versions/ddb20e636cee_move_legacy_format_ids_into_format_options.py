@@ -27,6 +27,15 @@ legacy column is no longer read. A row with any unprojectable id (a custom creat
 format, an id the registry does not map) keeps its legacy arm, which the 3.x anyOf still
 admits, and is named in the migration's output so an operator can author its declarations.
 
+PROFILES FIRST, AND A PRODUCT SERVED BY A LEGACY PROFILE STAYS. A product linked to an
+inventory profile is served the profile's arms (``linked_format_contract``), except that a
+legacy-only profile yields to the product's own ``format_options``. So the product rows are
+not independent of the profile rows: a product whose linked profile keeps its legacy arm
+(an unprojectable id) is served that profile's ``format_ids`` today, and giving the product
+declarations of its own would switch it to serving them instead. The profiles move first,
+and every product still linked to a legacy-only profile afterwards is left as it is and
+named in the output. Its own columns are not served, so moving them preserves nothing.
+
 The stored ``format_ids`` of a moved row is cleared, as the admin edit form clears it when
 an operator authors the canonical arm: a column kept beside the declarations would be the
 "second authored catalog" canonical-formats.mdx's producer rules forbid.
@@ -44,7 +53,7 @@ Create Date: 2026-10-29 18:00:00.000000
 
 import json
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from typing import Any
 
 import sqlalchemy as sa
@@ -60,10 +69,20 @@ depends_on: str | Sequence[str] | None = None
 logger = logging.getLogger("alembic.runtime.migration")
 
 #: The two tables whose rows carry a format contract, and the columns that key a row.
+#: Profiles first: which products may move depends on where their profiles ended up.
 _TABLES: dict[str, tuple[str, ...]] = {
-    "products": ("tenant_id", "product_id"),
     "inventory_profiles": ("id",),
+    "products": ("tenant_id", "product_id"),
 }
+
+#: Products with no canonical arm, each with whether it is served by a legacy-only profile.
+#: Read AFTER the profile pass, so a profile that just moved no longer holds its products.
+_PRODUCT_ROWS = sa.text(
+    "SELECT p.tenant_id, p.product_id, p.format_ids, "
+    "(p.inventory_profile_id IS NOT NULL AND ip.format_options IS NULL) AS served_by_legacy_profile "
+    "FROM products p LEFT JOIN inventory_profiles ip ON ip.id = p.inventory_profile_id "
+    "WHERE p.format_options IS NULL"
+)
 
 #: The prefix ``adcp.canonical_formats.migrated_format_option_id`` gives every option id it
 #: mints from a legacy tuple. Only this revision writes such ids into a stored row.
@@ -72,11 +91,16 @@ _MIGRATED_PREFIX = "migrated_"
 
 def plan_canonical_moves(
     rows: Iterable[tuple[Any, Any]],
-) -> tuple[list[tuple[Any, list[dict[str, Any]]]], list[Any]]:
-    """``(rows to move with their declarations, keys of rows that cannot move)``.
+    *,
+    held: Collection[Any] = (),
+) -> tuple[list[tuple[Any, list[dict[str, Any]]]], list[Any], list[Any]]:
+    """``(rows to move with their declarations, keys that cannot move, keys held back)``.
 
     Each input row is ``(key, format_ids)`` for a row with no canonical arm. A row with no
-    legacy arm either is not a move and is left out of both lists.
+    legacy arm either is not a move and is left out of every list. *held* names the rows
+    whose contract is served from elsewhere -- a product linked to a profile that kept its
+    legacy arm -- so moving them would change what they are served; they are held back
+    whatever their ids project to.
 
     Separate from the SQL so the part that can be wrong -- which declaration each format_id
     becomes, and which rows are left alone -- is testable without a database
@@ -88,8 +112,12 @@ def plan_canonical_moves(
 
     moves: list[tuple[Any, list[dict[str, Any]]]] = []
     unmovable: list[Any] = []
+    held_back: list[Any] = []
     for key, format_ids in rows:
         if not format_ids:
+            continue
+        if key in held:
+            held_back.append(key)
             continue
         declarations: list[dict[str, Any]] = []
         for index, format_id in enumerate(format_ids):
@@ -103,7 +131,7 @@ def plan_canonical_moves(
             moves.append((key, declarations))
             continue
         unmovable.append(key)
-    return moves, unmovable
+    return moves, unmovable, held_back
 
 
 def plan_legacy_restores(rows: Iterable[tuple[Any, Any]]) -> list[tuple[Any, list[Any]]]:
@@ -134,14 +162,27 @@ def _key_params(key_columns: tuple[str, ...], key: Any) -> dict[str, Any]:
     return dict(zip(key_columns, key, strict=True))
 
 
+def _row_key(key: Any) -> str:
+    return "/".join(str(part) for part in key)
+
+
 def upgrade() -> None:
     """Move each legacy-only row's contract into ``format_options`` where it projects."""
     bind = op.get_bind()
     for table, key_columns in _TABLES.items():
-        rows = bind.execute(
-            sa.text(f"SELECT {', '.join(key_columns)}, format_ids FROM {table} WHERE format_options IS NULL")
-        ).fetchall()
-        moves, unmovable = plan_canonical_moves((tuple(row[:-1]), row[-1]) for row in rows)
+        if table == "products":
+            product_rows = bind.execute(_PRODUCT_ROWS).fetchall()
+            rows = [(tuple(row[:2]), row[2]) for row in product_rows]
+            held = {tuple(row[:2]) for row in product_rows if row[3]}
+        else:
+            rows = [
+                (tuple(row[:-1]), row[-1])
+                for row in bind.execute(
+                    sa.text(f"SELECT {', '.join(key_columns)}, format_ids FROM {table} WHERE format_options IS NULL")
+                ).fetchall()
+            ]
+            held = set()
+        moves, unmovable, held_back = plan_canonical_moves(rows, held=held)
         for key, declarations in moves:
             bind.execute(
                 sa.text(
@@ -156,7 +197,15 @@ def upgrade() -> None:
                 "projection; author their format_options by hand: %s",
                 table,
                 len(unmovable),
-                ", ".join("/".join(str(part) for part in key) for key in unmovable),
+                ", ".join(_row_key(key) for key in unmovable),
+            )
+        if held_back:
+            logger.warning(
+                "%s: %d row(s) keep their legacy format_ids because they are served by an inventory "
+                "profile that kept its legacy arm; author that profile's format_options first: %s",
+                table,
+                len(held_back),
+                ", ".join(_row_key(key) for key in held_back),
             )
 
 

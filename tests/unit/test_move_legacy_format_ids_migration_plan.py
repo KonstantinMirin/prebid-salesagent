@@ -30,9 +30,9 @@ CUSTOM = {"agent_url": "https://creatives.publisher.example", "id": "homepage_ta
 
 
 def test_a_projectable_row_moves_and_keeps_serving_the_ids_it_carried():
-    moves, unmovable = revision.plan_canonical_moves([(("t1", "p1"), [DISPLAY, VIDEO])])
+    moves, unmovable, held_back = revision.plan_canonical_moves([(("t1", "p1"), [DISPLAY, VIDEO])])
 
-    assert unmovable == []
+    assert unmovable == held_back == []
     [(key, declarations)] = moves
     assert key == ("t1", "p1")
     assert [(d["format_kind"], d["params"]) for d in declarations] == [
@@ -48,14 +48,27 @@ def test_a_projectable_row_moves_and_keeps_serving_the_ids_it_carried():
 
 
 def test_a_row_with_any_unprojectable_id_is_left_whole():
-    moves, unmovable = revision.plan_canonical_moves([(("t1", "p2"), [DISPLAY, CUSTOM])])
+    moves, unmovable, held_back = revision.plan_canonical_moves([(("t1", "p2"), [DISPLAY, CUSTOM])])
 
-    assert moves == []
+    assert moves == held_back == []
     assert unmovable == [("t1", "p2")]
 
 
+def test_a_product_served_by_a_legacy_profile_is_held_back_even_when_its_own_ids_project():
+    """Its profile's ``format_ids`` are what it is served (``linked_format_contract``), and a
+    legacy-only profile yields to a product's own declarations: moving the product would
+    switch it from the profile's formats to its own stored, never-served ones."""
+    linked, free = ("t1", "p5"), ("t1", "p6")
+
+    moves, unmovable, held_back = revision.plan_canonical_moves([(linked, [DISPLAY]), (free, [DISPLAY])], held={linked})
+
+    assert [key for key, _ in moves] == [free]
+    assert unmovable == []
+    assert held_back == [linked]
+
+
 def test_a_row_with_no_legacy_arm_is_neither_moved_nor_reported():
-    assert revision.plan_canonical_moves([(("t1", "p3"), None), (("t1", "p4"), [])]) == ([], [])
+    assert revision.plan_canonical_moves([(("t1", "p3"), None), (("t1", "p4"), [])]) == ([], [], [])
 
 
 def test_the_downgrade_restores_exactly_what_the_upgrade_moved_and_nothing_authored():
