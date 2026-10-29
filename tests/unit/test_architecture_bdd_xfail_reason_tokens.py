@@ -242,27 +242,29 @@ class TestEveryTypedReasonInTheTreeParses:
         """
         parse_xfail_reason, XfailReasonError = _parser()
         violations: list[str] = []
-        typed_seen = 0
+        scanned = 0
         for path in sorted(_BDD_DIR.rglob("*.py")):
             for lineno, reason in _xfail_reasons(path):
+                scanned += 1
                 if not reason.lstrip().startswith("cause="):
                     continue
-                typed_seen += 1
                 try:
                     parse_xfail_reason(reason)
                 except XfailReasonError as exc:
                     rel = path.relative_to(_BDD_DIR.parents[1])
                     violations.append(f"{rel}:{lineno}: {exc}")
 
-        # Floor was 3 when the guard was written. It is 2 because the third typed
-        # reason GRADUATED at the adcp 9.0.0 pin: the ref=#1721 marker on the
-        # @T-UC-003-partition-revision wrong_type row ('"7"' coerced to 7) was
-        # removed once the SDK typed `revision` strict, so the row grades live.
-        # Lower this only alongside such a removal — never to make a broken scan
-        # pass, which is the one thing the floor exists to catch.
-        assert typed_seen >= 2, (
-            f"only {typed_seen} typed xfail reasons found under tests/bdd/; the tree had 2 when this "
-            f"floor was last set, so the scan is no longer finding them and passes vacuously"
+        # The typed-reason floor was 3 when the guard was written, then 2 once the
+        # ref=#1721 wrong_type row graduated at the adcp 9.0.0 pin. It is 0 now: the
+        # last two typed reasons (ref=#1607 and ref=#1885 on the UC-003 revision
+        # CONFLICT rows) were removed in 10fe1fa1f, which closed #1607 by refusing a
+        # stale revision with CONFLICT, so those rows grade live on every transport.
+        # The non-vacuity check therefore moves to the scan itself: it must still read
+        # xfail reasons out of tests/bdd/, or a broken scan would pass with nothing
+        # found. A future typed reason is parsed above the moment it is written.
+        assert scanned > 0, (
+            "the scan found no xfail reasons at all under tests/bdd/, so it is no longer reading "
+            "the marker sites and passes vacuously"
         )
         assert not violations, "typed xfail reasons that do not parse:\n" + "\n".join(violations)
 
