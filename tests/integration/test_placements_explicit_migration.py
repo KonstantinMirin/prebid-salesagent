@@ -25,7 +25,7 @@ from tests.integration.migration_helpers import reset_to_revision, run_alembic_d
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 _REVISION = "89442a2be9e1"
-_PREVIOUS = "a34a2ff137da"
+_PREVIOUS = "69a5a533f157"
 _TENANT = "mig_placements"
 _CHECK = "ck_products_placements_explicit"
 
