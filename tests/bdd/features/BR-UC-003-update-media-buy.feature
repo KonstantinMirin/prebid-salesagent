@@ -145,9 +145,17 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy success spec
     And the response status should be "completed"
     And the response should contain affected_packages including "pkg_001"
+    When the Buyer Agent reads media buy "mb_existing" back with get_media_buys
+    Then the package "pkg_001" should report creative approvals for exactly ["inline-cr-001"]
     # POST-S1: Buyer knows inline creatives uploaded
     # POST-S2: Buyer sees affected packages
     # POST-S4: Unambiguous success
+    # LOCAL CORRECTION: the generated Thens read only the status and affected_packages, which a
+    # seller that never uploaded or assigned the inline creative answers too. The readback is
+    # the pin storyboard's: an inline creative on a package update is read back from
+    # get_media_buys media_buys[].packages[].creative_approvals[].creative_id.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/creatives
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/protocols/media-buy/scenarios/inline_creatives_without_sync.yaml
 
   @T-UC-003-alt-targeting @alt-flow @targeting @post-s1 @post-s2 @post-s4 @post-s5
   Scenario: Update targeting overlay -- replacement semantics
@@ -2088,13 +2096,23 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    And the package "pkg_001" should have creative assignments [<stored>]
 
     Examples: Boundary values
-      | boundary_point                            | mode                                              | outcome |
-      | creative_ids replaces all existing         | creative_ids=[cr_new_1, cr_new_2]                 | success |
-      | creative_assignments replaces all          | creative_assignments=[{cr_new_1, weight:70}]      | success |
-      | new creative added (not in existing)       | creative_ids=[cr_old_1, cr_old_2, cr_new_3]       | success |
-      | existing creative removed (not in new)     | creative_ids=[cr_old_1]                           | success |
+      | boundary_point                            | mode                                                       | stored                       | outcome |
+      | new set replaces all existing              | creative_assignments=[{cr_new_1}, {cr_new_2}]              | cr_new_1, cr_new_2           | success |
+      | creative_assignments replaces all          | creative_assignments=[{cr_new_1, weight:70}]               | cr_new_1:70                  | success |
+      | new creative added (not in existing)       | creative_assignments=[{cr_old_1}, {cr_old_2}, {cr_new_3}]  | cr_old_1, cr_old_2, cr_new_3 | success |
+      | existing creative removed (not in new)     | creative_assignments=[{cr_old_1}]                          | cr_old_1                     | success |
+    # LOCAL CORRECTION (mirror upstream in adcp-req), two parts:
+    # 1. Three rows sent packages[].creative_ids, which the pinned package-update.json does
+    #    not declare. Replacement goes through creative_assignments ("Replace creative
+    #    assignments for this package ... Uses replacement semantics"), so every row now uses
+    #    it; "creative_ids replaces all existing" is renamed "new set replaces all existing".
+    # 2. Every row ended in a bare success, which a seller that appended, or ignored the
+    #    array, also produced. Each row now names the assignment set the seller must store,
+    #    and the weighted row the stored weight.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/creative_assignments
 
   @T-UC-003-partition-creative-state @partition @creative_state_validation
   Scenario Outline: Creative state validation partition - <partition>
