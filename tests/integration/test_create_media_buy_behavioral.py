@@ -932,11 +932,15 @@ class TestMainFlowObligations:
         """
         from src.core.tools.media_buy_create import _validate_and_convert_format_ids
 
-        # Plain string format ID should be rejected
-        with pytest.raises(AdCPValidationError) as exc_info:
-            await _validate_and_convert_format_ids(
-                format_ids=["banner_300x250"], tenant_id="test_tenant", package_idx=0
-            )
+        # Plain string format ID should be rejected. The tenant row exists: production
+        # reaches this through the resolver, which loaded it, and the registered-agent
+        # lookup reads it (tenants.use_default_creative_agent).
+        with MediaBuyCreateEnv() as env:
+            tenant = env.ensure_tenant()
+            with pytest.raises(AdCPValidationError) as exc_info:
+                await _validate_and_convert_format_ids(
+                    format_ids=["banner_300x250"], tenant_id=tenant.tenant_id, package_idx=0
+                )
 
         assert exc_info.value.error_code == "VALIDATION_ERROR"
 
@@ -1283,11 +1287,14 @@ class TestInlineCreativeObligations:
         """
         from src.core.tools.media_buy_create import _validate_and_convert_format_ids
 
-        # Missing fields in FormatId should be rejected
-        with pytest.raises(AdCPValidationError) as exc_info:
-            await _validate_and_convert_format_ids(
-                format_ids=[{"agent_url": "", "id": ""}], tenant_id="test_tenant", package_idx=0
-            )
+        # Missing fields in FormatId should be rejected. The tenant row exists, as it does
+        # behind the resolver; the registered-agent lookup reads it.
+        with MediaBuyCreateEnv() as env:
+            tenant = env.ensure_tenant()
+            with pytest.raises(AdCPValidationError) as exc_info:
+                await _validate_and_convert_format_ids(
+                    format_ids=[{"agent_url": "", "id": ""}], tenant_id=tenant.tenant_id, package_idx=0
+                )
 
         assert exc_info.value.error_code == "VALIDATION_ERROR"
 

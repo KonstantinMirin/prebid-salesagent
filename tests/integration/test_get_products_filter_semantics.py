@@ -15,25 +15,30 @@ from src.core.schemas import (
     ListCreativeFormatsRequest,
     ListCreativeFormatsResponse,
 )
+from src.core.tenant_context import TenantContext
 from src.core.tools.creative_formats import _list_creative_formats_impl
+from tests.factories import TenantFactory
 from tests.factories.principal import PrincipalFactory
+from tests.harness._base import BareIntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 @pytest.fixture
 def identity(integration_db):
-    """ResolvedIdentity with a tenant dict for format/signal tests.
+    """ResolvedIdentity over a seeded tenant row, the caller the resolver hands on.
 
-    Uses integration_db because _list_creative_formats_impl accesses the DB
-    for adapter config (AdapterConfig table lookup). The tenant is a plain dict
-    since formats and signals don't require a Tenant row.
+    The tenant row is required: production reaches ``_list_creative_formats_impl`` only
+    through the resolver, which has loaded the tenant, and the impl reads that row
+    (``tenants.use_default_creative_agent`` decides whether the standard creative agent
+    is listed, and the adapter config is looked up by tenant). The context is derived
+    from the row through production's own constructor, so the identity cannot describe a
+    tenant the database disagrees with.
     """
-    return PrincipalFactory.make_identity(
-        principal_id="test_principal",
-        tenant_id="filter-sem-test",
-        tenant={"tenant_id": "filter-sem-test", "name": "Filter Semantics Test"},
-    )
+    with BareIntegrationEnv():
+        tenant = TenantFactory(tenant_id="filter-sem-test", name="Filter Semantics Test")
+        context = TenantContext.from_orm_model(tenant)
+    return PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="filter-sem-test", tenant=context)
 
 
 def _call_list_formats(identity: ResolvedIdentity, **kwargs) -> ListCreativeFormatsResponse:
