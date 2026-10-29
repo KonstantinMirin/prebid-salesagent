@@ -2903,8 +2903,14 @@ Feature: BR-UC-003 Update Media Buy
     # reading UC-005's sandbox outline gives the same row. (2) "sandbox present on
     # update_media_buy submitted task envelope" is removed: the submitted arm does not forbid
     # sandbox (its `not` lists only media_buy_id and warnings; additionalProperties true).
+    # The two terminal-failure rows grade the seller's own budget refusal (BUDGET_TOO_LOW on
+    # packages[0].budget, for a budget of 0 the schema admits), made after the sandbox
+    # account was resolved: "Sandbox errors are real validation errors. If a buyer sends an
+    # invalid budget using a sandbox account, return a real error". A refusal the request
+    # schema makes is answered before the account is resolved, so it cannot show either.
     # ---------- start_time package-scope boundary (start_time.yaml) ----------
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/advanced-topics/sandbox.mdx
 
     Examples: sandbox response semantics (BR-UC-003)
       | boundary                                                            | account_context    | response_shape      | outcome                              |

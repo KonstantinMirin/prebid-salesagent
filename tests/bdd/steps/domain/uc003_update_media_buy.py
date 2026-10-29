@@ -3109,6 +3109,12 @@ def then_media_buy_status_not(ctx: dict, status: str) -> None:
 #: The account phrases the sandbox outlines use -> whether the named account is a sandbox.
 _ACCOUNT_CONTEXTS: dict[str, bool] = {"a sandbox account": True, "a production account": False}
 
+#: ``(code, errors[0].field)`` of the refusal the terminal-failure shape provokes: a package
+#: budget of 0 refused by the seller's positivity rule (sandbox.mdx: "Sandbox errors are real
+#: validation errors. If a buyer sends an invalid budget using a sandbox account, return a
+#: real error").
+_TERMINAL_FAILURE_REFUSAL = ("BUDGET_TOO_LOW", "packages[0].budget")
+
 
 def _name_account(ctx: dict, *, sandbox: bool) -> None:
     """Seed an account with the given sandbox flag and make it the one the update names.
@@ -3145,12 +3151,17 @@ def given_update_response_shape(ctx: dict, shape: str, trigger: str | None = Non
     """Arrange the request and the approval path so the update answers with *shape*.
 
     synchronous success: auto-approval and a valid package budget change. terminal
-    failure: a negative package budget, which the budget rule rejects
-    (@T-UC-003-partition-budget-amount). submitted task: manual approval of a valid change.
+    failure: auto-approval and a package budget of 0, which the schema admits
+    (package-update.json budget ``minimum: 0``) and the seller's own budget rule refuses
+    with :data:`_TERMINAL_FAILURE_REFUSAL`. That refusal is made inside the update, after
+    the boundary resolved the account, so a sandbox account is in hand when the error is
+    built; the negative budget this sent before was refused by the request schema before
+    the account was resolved at all. submitted task: manual approval of a valid change.
     """
     kwargs = _ensure_update_defaults(ctx)
     if shape == "terminal failure":
-        kwargs["packages"] = [{"package_id": "pkg_001", "budget": -50.0}]
+        kwargs["packages"] = [{"package_id": "pkg_001", "budget": 0.0}]
+        given_tenant_human_review_flag(ctx, "false")
         return
     kwargs.setdefault("packages", [{"package_id": "pkg_001", "budget": _UPDATED_BUDGET}])
     if shape == "synchronous success":
@@ -3178,15 +3189,27 @@ def _assert_sandbox_flag_not_true(ctx: dict) -> None:
     )
 
 
-def _assert_real_rejection(ctx: dict) -> None:
-    """A conformant AdCP error came back, and no success member did (not a silent ok)."""
+def _assert_terminal_failure_refusal(ctx: dict) -> None:
+    """The conformant refusal the terminal-failure Given provokes: its code, on its field.
+
+    Named, not "any error": an account-resolution failure for the sandbox account is also
+    a conformant error, and it would satisfy both rows below without the sandbox account
+    ever reaching the seller's own validation.
+    """
+    code, field = _TERMINAL_FAILURE_REFUSAL
     ctx["result"].assert_wire_error_is_schema_conformant()
+    ctx["result"].assert_wire_error(code, field=field)
+
+
+def _assert_real_rejection(ctx: dict) -> None:
+    """The seller's real budget refusal came back, and no success member did (not a silent ok)."""
+    _assert_terminal_failure_refusal(ctx)
     then_response_not_contain_field(ctx, "media_buy_id")
 
 
 def _assert_sandbox_forbidden(ctx: dict) -> None:
     """The terminal-failure arm forbids sandbox (update-media-buy-response.json oneOf/1 `not`)."""
-    ctx["result"].assert_wire_error_is_schema_conformant()
+    _assert_terminal_failure_refusal(ctx)
     then_response_not_contain_field(ctx, "sandbox")
 
 
