@@ -12,9 +12,12 @@ from typing import Any
 from pytest_bdd import given, parsers, then
 
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps.domain.uc003_update_media_buy import _ensure_update_defaults, _resolve_media_buy_id
+from tests.bdd.steps.domain.uc003_update_media_buy import (
+    _ensure_update_defaults,
+    _resolve_media_buy_id,
+    ensure_product_declares_placements,
+)
 from tests.bdd.steps.generic._auth import authenticate_env_as
-from tests.factories import StoredPlacementFactory
 
 
 def _inject_privilege_error(ctx: dict) -> None:
@@ -522,15 +525,9 @@ def given_placement_invalid_for_product(ctx: dict, placement_id: str) -> None:
     assert product is not None, "No product in ctx or DB"
     # Ensure the product supports placement targeting with a known valid set, so the
     # requested placement_id exercises production's invalid-id branch
-    # (media_buy_update.py:944) rather than the no-placements branch (:958). The model
-    # column is `placements` (list of dicts with placement_id), not `placement_configs`.
-    if not product.placements:
-        product.placements = [
-            StoredPlacementFactory(placement_id="plc_a", name="Placement A"),
-            StoredPlacementFactory(placement_id="plc_b", name="Placement B"),
-        ]
-        ctx["env"]._commit_factory_data()
-        product = _get_product(ctx)
+    # (media_buy_update.py:944) rather than the no-placements branch (:958).
+    ensure_product_declares_placements(ctx, product, ["plc_a", "plc_b"])
+    product = _get_product(ctx)
     # Seed valid creatives so creative validation passes and placement validation is reached.
     _ensure_referenced_creatives_valid(ctx)
     valid_ids = {p.get("placement_id") for p in (product.placements or []) if isinstance(p, dict)}

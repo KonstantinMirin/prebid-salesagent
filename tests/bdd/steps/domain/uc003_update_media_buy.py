@@ -705,38 +705,44 @@ def given_creatives_in_valid_state(ctx: dict) -> None:
             )
 
 
+def ensure_product_declares_placements(ctx: dict, product: Any, placement_ids: list[str]) -> None:
+    """Give *product* a seller-inline placement per id in *placement_ids*, if it declares none.
+
+    A placement id is valid for a product only when the product declares that placement:
+    core/creative-assignment.json calls ``placement_ids`` "routing IDs within
+    already-purchased inventory", and core/product.json's ``placements`` is that
+    inventory ("Creative assignments route creatives only after placement inventory is
+    purchased"). A product declaring no placements offers none to route to. A product that
+    already declares some is left as it is, so the caller judges ids against what it holds.
+    """
+    from tests.factories import StoredPlacementFactory
+
+    if not product.placements:
+        product.placements = [StoredPlacementFactory(placement_id=pid) for pid in placement_ids]
+        ctx["env"]._commit_factory_data()
+
+
 @given("all placement_ids are valid for the product")
 def given_placement_ids_valid(ctx: dict) -> None:
-    """Declarative guard — verifies placement_ids are valid for the product.
+    """The product declares every placement the assignments route to.
 
-    The guaranteed_display product created by setup_update_data() does not
-    restrict placements, so any placement_id is valid. When a product has
-    explicit placement restrictions, this step verifies compatibility.
+    The harness product declares no placements, which makes every placement id invalid for
+    it, so the sentence is made true here rather than assumed.
     """
     pids = ctx.get("referenced_placement_ids")
-    assert pids is not None, "No referenced placement_ids — missing prior step"
-    assert isinstance(pids, list), f"Expected placement_ids to be a list, got {type(pids).__name__}"
-    assert len(pids) > 0, "placement_ids list is empty — step claims placements are 'valid for the product'"
-    # Step claims 'valid for the product' — product must be present to validate against
+    assert pids, "No referenced placement_ids — missing prior step"
     product = ctx.get("default_product")
     assert product is not None, (
         "No product in ctx under 'default_product' — "
         "step claims placements are 'valid for the product' but no product exists to validate against"
     )
-    # Verify product does not have restrictive placement config that would reject these.
-    # The model column is `placements` (list of dicts with placement_id); when set it
-    # restricts the valid placement ids, when None/empty all placements are allowed.
-    placements = getattr(product, "placements", None)
-    allowed = {p.get("placement_id") for p in placements if isinstance(p, dict)} if placements else None
-    if allowed is not None:
-        invalid = [p for p in pids if p not in allowed]
-        assert not invalid, (
-            f"Placement IDs {invalid} are not in product's allowed placements {allowed} — "
-            "step claims 'all placement_ids are valid for the product'"
-        )
-    # When product has no placements restriction, all placements are
-    # valid by definition — this is correct AdCP semantics (no restriction = all allowed).
-    # Log which path was taken for debugging.
+    ensure_product_declares_placements(ctx, product, pids)
+    allowed = {p.get("placement_id") for p in product.placements}
+    invalid = [p for p in pids if p not in allowed]
+    assert not invalid, (
+        f"Placement IDs {invalid} are not in product's placements {allowed} — "
+        "step claims 'all placement_ids are valid for the product'"
+    )
 
 
 @given("the package update includes inline creatives with valid content")

@@ -125,10 +125,17 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy success spec
     And the response status should be "completed"
     And the response should contain affected_packages including "pkg_001"
+    And the package "pkg_001" should have creative assignments [cr_001, cr_002]
     # POST-S1: Buyer knows creatives updated
     # POST-S2: Buyer sees affected packages
     # POST-S4: Unambiguous success
     # POST-S5: Request completed
+    # "all placement_ids are valid for the product" now makes the product declare plc_a and
+    # plc_b: placement_ids are "routing IDs within already-purchased inventory", and a
+    # product declaring no placements has none to route to. The last Then reads the stored
+    # assignment set, which is what "replacement semantics" names.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-assignment.json pointer=/properties/placement_ids
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/creative_assignments
 
   @T-UC-003-alt-creatives-inline @alt-flow @creatives-inline @post-s1 @post-s2 @post-s4
   Scenario: Upload inline creatives and assign to package
