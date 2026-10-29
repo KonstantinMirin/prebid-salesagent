@@ -16,6 +16,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
 from adcp.server.helpers import MEDIA_BUY_STATE_MACHINE, is_terminal_status
+from adcp.types import CreativeAssignment as LibraryCreativeAssignment
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
 
@@ -240,6 +241,13 @@ def _affected_package(
     change, tracked as its own item; a bare ``config.get(...)`` into a typed field here
     would turn one malformed historical row into a failed update.
 
+    ``creative_assignments`` and ``pricing_option_id`` ARE carried, as the
+    pending_creatives_to_start storyboard grades them (``assign_creative_to_package``,
+    field_contains ``affected_packages[*]`` @ 3.2.7). The assignments are read from the
+    stored rows, so the inline ``creatives``, ``creative_ids`` and ``creative_assignments``
+    branches report the package's creative set the same way, whichever wrote it; the
+    pricing option is the one create recorded from the validated request.
+
     ``targeting_overlay`` is NOT carried either, and that reason is a type boundary rather
     than an oversight: a package update's overlay is the INPUT sibling (``TargetingInput``)
     while the readback field takes ``Targeting``, and the two are siblings with neither a
@@ -259,6 +267,11 @@ def _affected_package(
     config = (stored.package_config or {}) if stored is not None else {}
     stored_budget = float(stored.budget) if stored is not None and stored.budget is not None else None
     stored_bid_price = float(stored.bid_price) if stored is not None and stored.bid_price is not None else None
+    assert uow.assignments is not None
+    assignments = [
+        LibraryCreativeAssignment(creative_id=row.creative_id, weight=row.weight, placement_ids=row.placement_ids)
+        for row in uow.assignments.get_by_media_buy_and_package(media_buy_id, package_id)
+    ]
     return AffectedPackage(
         package_id=package_id,
         paused=bool(config.get("paused", False)) if changes.paused is None else changes.paused,
@@ -268,6 +281,8 @@ def _affected_package(
         # THIS session, so the row already answers with what this update applied.
         pacing=stored.pacing if stored is not None else None,
         product_id=config.get("product_id"),
+        pricing_option_id=config.get("pricing_option_id"),
+        creative_assignments=assignments or None,
         # Written by create_media_buy from the validated request and by the catalogs branch
         # below, both from the pinned core/catalog.json model, so the stored document has
         # one shape -- not a blob some past client left behind.

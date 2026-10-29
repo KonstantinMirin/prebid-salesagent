@@ -3496,6 +3496,7 @@ async def _create_media_buy_impl(
                         # created package is not paused", which made the ask unrecoverable.
                         "paused": bool(req_pkg.paused),
                         "product_id": req_pkg.product_id,
+                        "pricing_option_id": req_pkg.pricing_option_id,
                         "budget": budget_value,
                         "targeting_overlay": req_pkg.targeting_overlay,
                         "creative_ids": _get_creative_ids(req_pkg),
@@ -4193,6 +4194,10 @@ async def _create_media_buy_impl(
                         "package_id": resp_package_id,
                         "name": getattr(resp_package, "name", None),  # Include package name from adapter response
                         "product_id": getattr(resp_package, "product_id", None),
+                        # The option the buyer selected, so update_media_buy's
+                        # affected_packages can report it (core/package.json
+                        # pricing_option_id); the adapter's package does not carry it.
+                        "pricing_option_id": request_pkg.pricing_option_id if request_pkg else None,
                         "budget": getattr(resp_package, "budget", None),
                         "targeting_overlay": getattr(resp_package, "targeting_overlay", None),
                         "creative_ids": getattr(resp_package, "creative_ids", None),
