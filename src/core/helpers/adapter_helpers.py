@@ -300,50 +300,6 @@ def adapter_served_creative_formats(tenant_id: str) -> list[Format]:
     return get_adapter_class(adapter_type).creative_formats(tenant_id)
 
 
-#: Resolved adapter type -> the AdapterConfig column backing its manual-approval
-#: requirement. Triton has no such column (not modeled), so it is absent here.
-_MANUAL_APPROVAL_COLUMNS: dict[str, str] = {
-    "google_ad_manager": "gam_manual_approval_required",
-    "kevel": "kevel_manual_approval_required",
-    "mock": "mock_manual_approval_required",
-}
-
-
-def resolve_manual_approval_signal(tenant: IdentityTenant) -> bool:
-    """Whether this tenant's configuration genuinely requires manual approval
-    on new media buys -- the same signal ``_create_media_buy_impl`` enforces
-    (media_buy_create.py), read tenant/DB-side so it works without a live
-    adapter instance (capabilities.py only holds the adapter CLASS, per INV-4 /
-    salesagent-dn2s -- ``manual_approval_required`` is an instance attribute
-    set in ``Adapter.__init__`` and does not exist on the class).
-
-    ``tenant.human_review_required`` is NOT NULL DEFAULT TRUE at the schema
-    level (a real, always-present tenant setting, not a Python-level default
-    papering over a missing key) -- reading it directly is an honest claim
-    about real enforced behavior, not an invented default (salesagent-rldj/
-    salesagent-y9ld Core Invariant). Falls back to the resolved adapter type's
-    own manual-approval DB column; that column is nullable and this reader
-    applies NO default when it is unset -- deliberately NOT the same
-    True-when-null policy ``get_adapter()``'s live adapter_config assembly
-    uses for enforcement, since that default is exactly the false-conformance
-    risk this reader must avoid (salesagent-becl.72 refine).
-    """
-    if tenant.human_review_required:
-        return True
-
-    ctx = resolve_adapter_context(tenant)
-    column = _MANUAL_APPROVAL_COLUMNS.get(ctx.adapter_type)
-    if not column:
-        return False
-
-    tenant_id = ctx.tenant_id
-
-    from src.core.database.repositories.adapter_config import read_adapter_config
-
-    row = read_adapter_config(tenant_id)
-    return bool(row and getattr(row, column, None) is True)
-
-
 def _simulating_adapter_config(config_row: DBAdapterConfig) -> dict[str, object]:
     """The configuration the SIMULATING adapter runs under.
 

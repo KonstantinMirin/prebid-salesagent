@@ -33,6 +33,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_field,
     wire_lookup,
 )
+from tests.bdd.steps.domain.uc006_sync_creatives import _CREATIVE_APPROVAL_MODES
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.harness.capabilities import DERIVE_IDENTITY, OMIT_IDENTITY, IdentityMode
 from tests.helpers import pinned_schema
@@ -573,29 +574,23 @@ def given_capability_config(ctx: dict, capability_config: str) -> None:
         ctx["env"].configure_tenant_field("account_sandbox", match.group(1) == "true")
 
 
-# ── Givens: creative_approval_mode (real config — salesagent-y9ld R7) ─────
+# ── Givens: creative_approval_mode (real config: tenant.approval_mode) ─────
 
 
 @given(parsers.parse("the tenant creative approval mode is configured as {configured}"))
 def given_creative_approval_mode(ctx: dict, configured: str) -> None:
-    """REAL config for the require_human half: tenant.human_review_required
-    (NOT NULL DEFAULT TRUE at the schema level, tests/factories/core.py's
-    TenantFactory default is False) is the tenant-side signal
-    media_buy.creative_approval_mode is designed to derive from
-    (resolve_manual_approval_signal, salesagent-y9ld). "require_human" writes
-    human_review_required=True through the real DB column production reads;
-    "omitted" writes it False (the factory default, made explicit so the row
-    is not accidentally coupled to the factory's current default). No
-    production config surface exists yet for an affirmative auto_approve
-    claim (Q2, deferred) — that row's Given is intent-only.
+    """Write the tenant's creative-review setting, ``tenant.approval_mode``.
+
+    The same column sync_creatives routes review on (``_apply_approval_mode``), which is
+    what media_buy.creative_approval_mode advertises, so this row grades the signal against
+    the setting the UC-006 approval scenarios grade the behaviour of. The cell is the stored
+    value itself: ``auto-approve``, ``require-human`` or ``ai-powered``.
     """
     configured = configured.strip()
-    _config(ctx)["creative_approval_mode"] = configured
-    if configured == "require_human":
-        ctx["env"].configure_tenant_field("human_review_required", True)
-    elif configured == "omitted":
-        ctx["env"].configure_tenant_field("human_review_required", False)
-    # "auto_approve": no production config surface yet (Q2) — intent only.
+    assert configured in _CREATIVE_APPROVAL_MODES, (
+        f"unknown tenant approval_mode {configured!r}; the column holds one of {_CREATIVE_APPROVAL_MODES}"
+    )
+    ctx["env"].configure_tenant_field("approval_mode", configured)
 
 
 # ── Givens: version negotiation ──────────────────────────────────────
