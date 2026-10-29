@@ -1749,6 +1749,22 @@ Feature: BR-UC-002 Create Media Buy
     # discriminator (an unknown kind matches no branch), and metric is a closed enum with no
     # "viewability" member. Those rows are INVALID_REQUEST.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/optimization-goal.json
+    # "optimization validation passes" grades the confirmed package: core/package.json carries
+    # optimization_goals, and packages[0].optimization_goals must hold every goal sent.
+    # CORRECTED to the pin (v3.2.7):
+    # - duplicate_priority passes: core/optimization-goal.json "This array-order tie-break makes
+    #   duplicate priorities deterministic"; tied priorities are not a refusal.
+    # - exceeds_max_goals passes: core/product.json max_optimization_goals "When absent, no limit
+    #   is declared" (the seeded product declares none), and above a declared cap "buyers ...
+    #   should expect the seller to use only the highest-priority ... goal", not a refusal.
+    # - value_target_without_value_field is VALIDATION_ERROR on the goal's event_sources: the
+    #   value_field rule ("sellers must reject these target kinds when no event source entry
+    #   includes value_field") is a business rule the schema does not express, and
+    #   enums/error-code.json VALIDATION_ERROR is "violates business rules beyond schema
+    #   validation".
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/optimization-goal.json pointer=/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/max_optimization_goals
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/VALIDATION_ERROR
 
     Examples: Valid partitions
       | partition                              | outcome                              |
@@ -1763,19 +1779,19 @@ Feature: BR-UC-002 Create Media Buy
       | goals_at_max_count                     | optimization validation passes       |
       | reach_with_target_frequency            | optimization validation passes       |
       | event_multi_source_dedup               | optimization validation passes       |
+      | duplicate_priority                     | optimization validation passes       |
+      | exceeds_max_goals                      | optimization validation passes       |
 
     Examples: Invalid partitions
       | partition                              | outcome                                          |
       | unsupported_metric                     | error UNSUPPORTED_FEATURE with suggestion          |
       | unregistered_event_source              | error INVALID_REQUEST with suggestion              |
-      | duplicate_priority                     | error INVALID_REQUEST with suggestion              |
       | unsupported_view_duration              | error INVALID_REQUEST with suggestion              |
       | unsupported_reach_unit                 | error UNSUPPORTED_FEATURE with suggestion          |
       | unsupported_attribution_window         | error UNSUPPORTED_FEATURE with suggestion          |
       | empty_array                            | error INVALID_REQUEST with suggestion              |
-      | exceeds_max_goals                      | error INVALID_REQUEST with suggestion              |
       | unsupported_target_kind                | error INVALID_REQUEST with suggestion              |
-      | value_target_without_value_field       | error INVALID_REQUEST with suggestion              |
+      | value_target_without_value_field       | error VALIDATION_ERROR on packages[0].optimization_goals[0].event_sources with suggestion |
       | metric_not_supported_by_product        | error INVALID_REQUEST with suggestion              |
       | event_not_supported_by_product         | error UNSUPPORTED_FEATURE with suggestion          |
 
@@ -1798,13 +1814,18 @@ Feature: BR-UC-002 Create Media Buy
 
     Examples: Invalid partitions
       | partition              | outcome                                      |
-      | duplicate_catalog_type | error VALIDATION_ERROR with suggestion         |
-      | multiple_duplicates    | error VALIDATION_ERROR with suggestion         |
+      | duplicate_catalog_type | error VALIDATION_ERROR on packages[0].catalogs with suggestion |
+      | multiple_duplicates    | error VALIDATION_ERROR on packages[0].catalogs with suggestion |
       | catalog_not_found      | error INVALID_REQUEST with suggestion          |
     # LOCAL CORRECTION: the two duplicate-type rows asserted INVALID_REQUEST. The pinned
     # package-request.json catalogs: "sellers MUST reject requests containing multiple catalogs
-    # of the same type with a validation_error", so the code is VALIDATION_ERROR.
+    # of the same type with a validation_error", so the code is VALIDATION_ERROR, located at
+    # the package's catalogs array (no single catalog is at fault).
+    # "catalog validation passes" grades the confirmed package: core/package.json catalogs are
+    # "Echoed from the create_media_buy request", so packages[0].catalogs must hold every
+    # catalog sent, and none when none was sent.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/catalogs
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/catalogs
 
   @T-UC-002-partition-format-id-structure @partition @format-id-structure
   Scenario Outline: Format ID structure partition validation - <partition>
@@ -2297,7 +2318,7 @@ Feature: BR-UC-002 Create Media Buy
       | optimization_goals present with 1 element (minItems boundary)           | 1 metric goal            | optimization validation passes                   |
       | optimization_goals present with 0 elements (below minItems)             | empty array              | error INVALID_REQUEST with suggestion             |
       | optimization_goals array at max_optimization_goals (cap boundary)       | at max count             | optimization validation passes                   |
-      | optimization_goals array at max_optimization_goals + 1 (above cap)      | above max count          | error INVALID_REQUEST with suggestion             |
+      | optimization_goals array at max_optimization_goals + 1 (above cap)      | above max count          | optimization validation passes                   |
       | priority = 1 (minimum valid)                                            | priority=1               | optimization validation passes                   |
       | priority = 0 (below minimum)                                            | priority=0               | error INVALID_REQUEST with suggestion             |
       | view_duration_seconds = 0.001 (just above exclusiveMinimum 0)           | vds=0.001                | optimization validation passes                   |
@@ -2311,9 +2332,23 @@ Feature: BR-UC-002 Create Media Buy
       | product has conversion_tracking + event goal submitted                  | event capable            | optimization validation passes                   |
       | product lacks conversion_tracking + event goal submitted                | no event capability      | error UNSUPPORTED_FEATURE with suggestion          |
       | target_frequency.min = 1, max = 3 (min <= max, valid)                   | freq min=1 max=3         | optimization validation passes                   |
-      | target_frequency.min = 5, max = 3 (min > max, invalid)                  | freq min=5 max=3         | error INVALID_REQUEST with suggestion             |
+      | target_frequency.min = 5, max = 3 (min > max, invalid)                  | freq min=5 max=3         | error VALIDATION_ERROR on packages[0].optimization_goals[0].target_frequency with suggestion |
       | per_ad_spend target + value_field present on event source               | roas with value_field    | optimization validation passes                   |
-      | per_ad_spend target + no value_field on any event source                | roas no value_field      | error INVALID_REQUEST with suggestion             |
+      | per_ad_spend target + no value_field on any event source                | roas no value_field      | error VALIDATION_ERROR on packages[0].optimization_goals[0].event_sources with suggestion |
+    # "optimization validation passes" grades the confirmed package: core/package.json carries
+    # optimization_goals, and packages[0].optimization_goals must hold every goal sent.
+    # CORRECTED to the pin (v3.2.7):
+    # - above cap passes: core/product.json max_optimization_goals "When absent, no limit is
+    #   declared" (the seeded product declares none), and above a declared cap "buyers ...
+    #   should expect the seller to use only the highest-priority ... goal", not a refusal.
+    # - min > max and per_ad_spend without value_field are VALIDATION_ERROR on the member at
+    #   fault: "When both min and max are present, max must be greater than or equal to min"
+    #   and "sellers must reject these target kinds when no event source entry includes
+    #   value_field" are business rules the schema does not express (enums/error-code.json
+    #   VALIDATION_ERROR: "violates business rules beyond schema validation").
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/max_optimization_goals
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/optimization-goal.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/VALIDATION_ERROR
 
   @T-UC-002-boundary-catalog-distinct-type @boundary @catalog-distinct-type
   Scenario Outline: Catalog distinct type boundary validation - <boundary_point>

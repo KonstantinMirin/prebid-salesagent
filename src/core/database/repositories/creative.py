@@ -39,6 +39,10 @@ logger = logging.getLogger(__name__)
 #: enums/creative-status.json is where the value lives.
 ARCHIVED_STATUS = CreativeStatus.archived.value
 
+#: The stored creative statuses that clear a creative to serve. ``active`` is what a
+#: creative already serving reads as, so it counts alongside ``approved``.
+CLEARED_CREATIVE_STATUSES = frozenset({"approved", "active"})
+
 
 class CreativeListResult(NamedTuple):
     """Result of a paginated creative listing query."""
@@ -565,7 +569,7 @@ class CreativeAssignmentRepository:
         creatives = CreativeRepository(self._session, self._tenant_id).admin_get_by_ids(
             [a.creative_id for a in assignments]
         )
-        return [c.creative_id for c in creatives if c.status not in ("approved", "active")]
+        return [c.creative_id for c in creatives if c.status not in CLEARED_CREATIVE_STATUSES]
 
     def get_by_package(self, package_id: str) -> list[CreativeAssignment]:
         """Get all assignments for a package within the tenant."""

@@ -1004,10 +1004,6 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
             f"Expected media_buy_id in response for '{domain}' validation pass, "
             f"got {type(resp).__name__} without media_buy_id"
         )
-    if domain == "catalog":
-        _assert_catalogs_echoed(ctx)
-    if domain == "targeting":
-        _assert_overlay_echoed(ctx)
     if outcome.endswith(" resolves to now"):
         # The row claims the literal 'asap' was resolved, which a buy id alone does not
         # show: a seller that stored the literal or any other instant answered the same.
@@ -1015,41 +1011,72 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
         from tests.bdd.steps.domain.uc002_invariants import then_start_time_resolved
 
         then_start_time_resolved(ctx)
+    if domain in _ECHOED_PACKAGE_FIELDS:
+        _assert_package_echoes_request_field(ctx, *_ECHOED_PACKAGE_FIELDS[domain])
 
 
-def _assert_catalogs_echoed(ctx: dict) -> None:
-    """Every created package carries exactly the catalogs it was sent, and none when it sent none.
+#: The package field a passing row of this validation domain claims the seller took, with
+#: its empty value. core/package.json carries all three on the confirmed package:
+#: ``catalogs`` "Echoed from the create_media_buy request", ``optimization_goals``, the goals
+#: "the seller optimizes delivery toward", and ``targeting_overlay`` (create_media_buy.mdx:
+#: "The resulting package echoes the complete effective overlay", and "Non-null additions must
+#: compile exactly or be rejected"). A media_buy_id alone passes for a seller that drops or
+#: alters the field. An array sent empty or absent must come back empty; an overlay sent
+#: empty or absent requests no dimension, so any effective overlay carries it.
+#: @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json
+_ECHOED_PACKAGE_FIELDS: dict[str, tuple[str, type[list] | type[dict]]] = {
+    "catalog": ("catalogs", list),
+    "optimization": ("optimization_goals", list),
+    "targeting": ("targeting_overlay", dict),
+}
 
-    core/package.json catalogs: "Echoed from the create_media_buy request". A media_buy_id
-    alone let a seller that ignored catalogs entirely pass every catalog row.
+
+def _echo_mismatch(sent: Any, echoed: Any, path: str) -> str | None:
+    """``None`` when *echoed* carries everything *sent* does; otherwise the first difference.
+
+    Objects compare as subsets: core/catalog.json and core/optimization-goal.json are open
+    (``additionalProperties: true``) and declare defaults a seller may emit, such as an
+    event source's ``value_factor``. Arrays compare position by position at equal length:
+    goal order is priority order, and a dropped entry is a dropped instruction.
     """
-    from tests.bdd.steps._outcome_helpers import WIRE_MISSING
+    if isinstance(sent, dict):
+        if not isinstance(echoed, dict):
+            return f"{path} is {echoed!r}, expected an object"
+        for key, value in sent.items():
+            if key not in echoed:
+                return f"{path}.{key} is missing"
+            if (mismatch := _echo_mismatch(value, echoed[key], f"{path}.{key}")) is not None:
+                return mismatch
+        return None
+    if isinstance(sent, list):
+        if not isinstance(echoed, list) or len(echoed) != len(sent):
+            return f"{path} is {echoed!r}, expected {len(sent)} entries"
+        for index, (sent_item, echoed_item) in enumerate(zip(sent, echoed, strict=True)):
+            if (mismatch := _echo_mismatch(sent_item, echoed_item, f"{path}[{index}]")) is not None:
+                return mismatch
+        return None
+    return None if sent == echoed else f"{path} is {echoed!r}, expected {sent!r}"
 
+
+def _assert_package_echoes_request_field(ctx: dict, field: str, empty: type[list] | type[dict]) -> None:
+    """Every confirmed package carries the *field* its requested package sent.
+
+    One confirmed package per requested package, each located by its product_id. What was
+    sent is compared to what was echoed by :func:`_echo_mismatch`, with an absent or null
+    value read as *empty*: an array sent empty must come back empty, and an object sent
+    empty is a subset of any echo.
+    """
     sent_packages = ctx["request_kwargs"]["packages"]
     assert len(wire_field(ctx, "packages")) == len(sent_packages), (
-        f"expected {len(sent_packages)} created package(s), the wire carried {wire_field(ctx, 'packages')!r}"
+        f"expected one confirmed package per requested package ({len(sent_packages)}), "
+        f"got {wire_field(ctx, 'packages')!r}"
     )
-    for sent in sent_packages:
-        echoed = wire_entry(ctx, "packages", product_id=sent["product_id"]).get("catalogs", WIRE_MISSING)
-        expected = sent.get("catalogs", WIRE_MISSING)
-        assert echoed == expected, f"package {sent['product_id']!r} echoed catalogs {echoed!r}, sent {expected!r}"
-
-
-def _assert_overlay_echoed(ctx: dict) -> None:
-    """Every dimension the request's overlay sent is on the answered package, as sent.
-
-    create_media_buy.mdx (targeting_overlay): "The resulting package echoes the complete
-    effective overlay", and "Non-null additions must compile exactly or be rejected". An
-    accepted create whose package drops or alters a sent dimension answered success for
-    targeting it did not apply, which is what a bare no-error check could not see.
-    """
-    sent = ctx["request_kwargs"]["packages"][0].get("targeting_overlay") or {}
-    answered = wire_entry(ctx, "packages", index=0).get("targeting_overlay") or {}
-    for dimension, value in sent.items():
-        assert answered.get(dimension) == value, (
-            f"packages[0].targeting_overlay.{dimension}: sent {value!r}, the package answered "
-            f"{answered.get(dimension)!r}"
-        )
+    for sent_package in sent_packages:
+        product_id = sent_package["product_id"]
+        sent = sent_package.get(field) or empty()
+        echoed = wire_entry(ctx, "packages", product_id=product_id).get(field) or empty()
+        mismatch = _echo_mismatch(sent, echoed, f"package {product_id!r} {field}")
+        assert mismatch is None, f"the confirmed package does not carry the {field} the buyer sent: {mismatch}"
 
 
 def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:

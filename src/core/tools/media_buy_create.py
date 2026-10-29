@@ -36,7 +36,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from rich.console import Console
 
 from src.core.database.integrity import is_constraint_violation
-from src.core.database.repositories.creative import CreativeRepository
+from src.core.database.repositories.creative import CLEARED_CREATIVE_STATUSES, CreativeRepository
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthorizationError,
@@ -1999,7 +1999,7 @@ def push_creative_to_existing_buy(
             creative = uow.creatives.admin_get_by_id(creative_id)
             if not creative:
                 return False, f"Creative {creative_id} not found"
-            if creative.status not in {"approved", "active"}:
+            if creative.status not in CLEARED_CREATIVE_STATUSES:
                 return False, f"Creative {creative_id} is not approved (status={creative.status})"
 
             if (creative.data or {}).get("platform_creative_id"):
@@ -2073,6 +2073,61 @@ def push_creative_to_existing_buy(
             exc_info=True,
         )
         return False, str(e)
+
+
+#: Event-goal target kinds that aggregate conversion value, so a goal carrying one needs a
+#: value-bearing event source (core/optimization-goal.json event_sources[].value_field).
+_VALUE_TARGET_KINDS = frozenset({"per_ad_spend", "maximize_value"})
+
+
+def _refuse_package_terms_it_cannot_honor(pkg_index: int, package: PackageRequest) -> None:
+    """Refuse a package asking for something this seller cannot honor, before anything is read.
+
+    Each rule is grounded in the pinned schema (v3.2.7) and checked on the request alone.
+    The catalogs rule ("sellers MUST reject requests containing multiple catalogs of the same
+    type") is :func:`~src.core.validation_helpers.refuse_duplicate_catalog_types`, which create
+    and update share and which runs just before this:
+
+    - ``core/optimization-goal.json`` target_frequency: "When both min and max are present,
+      max must be greater than or equal to min".
+    - ``core/optimization-goal.json`` value_field: "sellers must reject these target kinds
+      [per_ad_spend, maximize_value] when no event source entry includes value_field".
+    - ``media-buy/package-request.json`` measurement_terms: the seller "accepts (echoed on
+      confirmed package), rejects with TERMS_REJECTED, or adjusts". This seller negotiates no
+      measurement terms and declares none on its products, so it can honor no proposal;
+      the error names the first proposed term, as TERMS_REJECTED asks.
+    """
+    for goal_index, goal in enumerate(package.optimization_goals or ()):
+        goal_field = package_field_path(f"optimization_goals[{goal_index}]", pkg_index)
+        frequency = getattr(goal, "target_frequency", None)
+        if frequency is not None and frequency.min is not None and frequency.max is not None:
+            if frequency.max < frequency.min:
+                raise AdCPValidationError(
+                    field=f"{goal_field}.target_frequency",
+                    details=ValidationDetails(package_index=pkg_index, index=goal_index),
+                )
+        target = getattr(goal, "target", None)
+        event_sources = getattr(goal, "event_sources", None)
+        if (
+            event_sources is not None
+            and target is not None
+            and enum_value(target.kind) in _VALUE_TARGET_KINDS
+            and not any(source.value_field for source in event_sources)
+        ):
+            raise AdCPValidationError(
+                field=f"{goal_field}.event_sources",
+                details=ValidationDetails(package_index=pkg_index, index=goal_index),
+            )
+
+    terms = package.measurement_terms
+    proposed = None
+    if terms is not None:
+        proposed = next((name for name in type(terms).model_fields if getattr(terms, name) is not None), None)
+    if proposed is not None:
+        raise AdCPTermsRejectedError(
+            details=EntityRefDetails(package_index=pkg_index),
+            field=package_field_path(f"measurement_terms.{proposed}", pkg_index),
+        )
 
 
 def _validate_pricing_model_selection(
@@ -2830,6 +2885,7 @@ async def _create_media_buy_impl(
                 if not package.product_id:
                     raise AdCPValidationError(field=package_field_path("product_id", pkg_index))
                 refuse_duplicate_catalog_types(package.catalogs, pkg_index)
+                _refuse_package_terms_it_cannot_honor(pkg_index, package)
 
             # Check for duplicate product_ids across packages
             product_id_counts: dict[str, int] = {}
@@ -4147,20 +4203,21 @@ async def _create_media_buy_impl(
         for i, pkg_item in enumerate(response.packages):
             logger.info(f"[DEBUG] create_media_buy: Response package {i} = {pkg_item}")
 
-        # Determine initial status using centralized logic
-        # Check if creatives are assigned and approved
-        has_creatives = False
-        creatives_approved = True  # Assume approved if any exist
-
-        # Check packages for creative_ids
-        if req.packages:
-            for pkg in req.packages:
-                if _get_creative_ids(pkg):
-                    has_creatives = True
-                    # For now, assume creatives in request are not yet approved
-                    # They need to go through sync_creatives approval flow
-                    creatives_approved = False
-                    break
+        # Determine initial status using centralized logic, from the stored status of the
+        # creatives the request assigns. enums/media-buy-status.json (3.2.7) reserves
+        # pending_creatives for a buy with no creatives assigned; a buy whose assigned
+        # creatives are all cleared to serve is pending_start or active by its flight.
+        # Every id here exists: the pre-adapter gate refused any it could not load.
+        assigned_creative_ids = [cid for pkg in req.packages or [] for cid in _get_creative_ids(pkg) or []]
+        has_creatives = bool(assigned_creative_ids)
+        creatives_approved = True
+        if has_creatives:
+            with MediaBuyUoW(tenant.tenant_id) as status_uow:
+                assert status_uow.creatives is not None
+                creatives_approved = all(
+                    creative.status in CLEARED_CREATIVE_STATUSES
+                    for creative in status_uow.creatives.get_by_ids(assigned_creative_ids, principal_id)
+                )
 
         # Use centralized status determination
         now = datetime.now(UTC)
