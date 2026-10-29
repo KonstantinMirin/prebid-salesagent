@@ -555,6 +555,28 @@ def given_package_exists(ctx: dict, package_id: str) -> None:
     _register_package(ctx, package_id, new_pkg)
 
 
+@given(parsers.parse('the package "{package_id}" has stored targeting_overlay {overlay}'))
+def given_package_stored_overlay(ctx: dict, package_id: str, overlay: str) -> None:
+    """Persist *overlay* (JSON) as the package's current targeting, then prove it took.
+
+    The prior value is what lets a replacement be told apart from a seller that left the
+    package alone: an update to an empty overlay reads the same either way.
+    """
+    import json
+
+    pkg = ctx.get("existing_package")
+    assert pkg is not None and pkg.package_id == _resolve_package_id(ctx, package_id), (
+        f"package {package_id!r} is not the seeded existing package"
+    )
+    seeded = json.loads(overlay)
+    pkg.package_config = {**(pkg.package_config or {}), "targeting_overlay": seeded}
+    ctx["env"]._commit_factory_data()
+    _budget, config = _stored_package(ctx, package_id)
+    assert config.get("targeting_overlay") == seeded, (
+        f"seeding package {package_id!r} with targeting_overlay {seeded!r} did not take: {config!r}"
+    )
+
+
 @given("the updated daily spend does not exceed max_daily_package_spend")
 def given_daily_spend_ok(ctx: dict) -> None:
     """Declarative guard — verifies budgets are within daily spend limits.
@@ -1044,6 +1066,22 @@ def then_start_end_time_unchanged(ctx: dict) -> None:
     assert actual_end == original_end, f"end_time changed: expected {original_end}, got {actual_end}"
 
 
+@then("the media buy's stored start_time should be the instant the update took effect")
+def then_stored_start_is_applied_instant(ctx: dict) -> None:
+    """A start_time of "asap" is stored as the instant the update took effect.
+
+    core/start-timing.json: "asap" is "Start campaign as soon as possible", and
+    update-media-buy-response.json ``implementation_date`` is the "ISO 8601 timestamp when
+    changes take effect". Both instants come from the seller's clock, so the comparison
+    holds on e2e_rest too. The scenario seeds a start far from now, so a seller that kept
+    the prior start, or stored anything but the applied instant, falls outside the tolerance.
+    """
+    from tests.bdd.steps.domain.uc002_invariants import _assert_start_resolved_to
+
+    applied = datetime.fromisoformat(str(wire_field(ctx, "implementation_date")).replace("Z", "+00:00"))
+    _assert_start_resolved_to(_stored_existing_buy(ctx).start_time, applied, "the update's implementation_date")
+
+
 @then("the response should contain media_buy_id")
 def then_response_has_media_buy_id(ctx: dict) -> None:
     """Assert response contains media_buy_id matching the existing media buy."""
@@ -1391,6 +1429,25 @@ def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # THEN steps — creative replacement assertions
 # ═══════════════════════════════════════════════════════════════════════
+
+
+@then(parsers.parse('the package "{package_id}" should have stored targeting_overlay {dimension:w} {value}'))
+def then_package_stored_overlay_dimension(ctx: dict, package_id: str, dimension: str, value: str) -> None:
+    """The package's STORED targeting_overlay carries *value* (JSON) for *dimension*.
+
+    core/targeting-input.json: on update "a non-null value replaces that dimension".
+    ``affected_packages`` does not carry the overlay (``_affected_package`` says why), so
+    the record is read, the way ``get_media_buys`` would serve it.
+    """
+    import json
+
+    _budget, config = _stored_package(ctx, package_id)
+    overlay = config.get("targeting_overlay")
+    assert isinstance(overlay, dict), f"package {package_id!r} stores no targeting_overlay: {config!r}"
+    expected = json.loads(value)
+    assert overlay.get(dimension) == expected, (
+        f"stored targeting_overlay.{dimension} is {overlay.get(dimension)!r}, expected {expected!r}"
+    )
 
 
 @then(parsers.parse('the package "{package_id}" should have creative assignments [{expected_ids}]'))
@@ -2857,11 +2914,37 @@ def then_package_update_field_refused_by_keyword(ctx: dict, name: str, keyword: 
     the schema keyword that rejected the payload, and ``field`` MUST be ``issues[0].pointer``
     in JSONPath-lite.
     """
+    _assert_package_update_refused(ctx, [name], keyword)
+
+
+def _assert_package_update_refused(
+    ctx: dict, names: list[str], keyword: str, *, require_suggestion: bool = False
+) -> None:
+    """INVALID_REQUEST whose ``issues[]`` name each of *names* on the one package update under *keyword*.
+
+    One issue per member: ``UpdateMediaBuyRequest._refuse_forbidden_package_shapes`` raises
+    one entry per forbidden shape. ``field`` is ``issues[0].pointer``, so it is pinned only
+    when a single member is named; for several, which one is first is the pin's order.
+    """
     ctx["result"].assert_wire_error(
         "INVALID_REQUEST",
-        field=f"packages[0].{name}",
-        issues=[{"pointer": f"/packages/0/{name}", "keyword": keyword}],
+        field=f"packages[0].{names[0]}" if len(names) == 1 else None,
+        issues=[{"pointer": f"/packages/0/{name}", "keyword": keyword} for name in names],
+        require_suggestion=require_suggestion,
     )
+
+
+def _assert_refused_by_root_not(ctx: dict) -> None:
+    """Every immutable member the package update carries is refused by package-update.json's root ``not``.
+
+    The keyword is what separates this refusal from the generic one: in dev an undeclared
+    member is refused under ``additionalProperties`` with the same code, and in production
+    it is dropped and the update succeeds.
+    """
+    package = ctx["update_kwargs"]["packages"][0]
+    named = [name for name in _IMMUTABLE_PACKAGE_VALUES if name in package]
+    assert named, f"the row's package update carries no immutable member: {sorted(package)}"
+    _assert_package_update_refused(ctx, named, "not", require_suggestion=True)
 
 
 @then("the update is refused AMBIGUOUS_BIDDING_POLICY naming the package update itself")
@@ -3472,6 +3555,20 @@ def _assert_completed(ctx: dict) -> None:
     _assert_synchronous_success(ctx)
 
 
+def _assert_success_at_revision(ctx: dict, revision: int) -> None:
+    """Synchronous success that reports, and stores, the advanced *revision*.
+
+    update_media_buy.mdx: "Every mutating update increments ``revision`` and returns the new
+    value in the success response." The wire value is what the buyer hands back on its next
+    update; the stored value is what the seller will compare it against.
+    """
+    stored = _stored_existing_buy(ctx)
+    then_response_revision_value(ctx, revision)
+    assert stored.revision == revision, (
+        f"the response reports revision {revision} but the seller stored {stored.revision!r}"
+    )
+
+
 _UPDATE_OUTCOMES = {
     "accepted": _assert_synchronous_success,
     "accepted with the frequency cap stored": _assert_frequency_cap_stored,
@@ -3485,16 +3582,24 @@ _UPDATE_OUTCOMES = {
     "start_time stored as now": _assert_start_time_stored_as_now,
     "start_time stored as sent": _assert_start_time_stored_as_sent,
     "success with the stored overlay patched per dimension": _assert_overlay_patched,
+    "refused INVALID_REQUEST by the package update's root not": _assert_refused_by_root_not,
 }
+
+#: ``success at revision N``: the parametrized update outcome, graded by
+#: :func:`_assert_success_at_revision`.
+_SUCCESS_AT_REVISION = re.compile(r"success at revision (?P<revision>\d+)")
 
 
 def is_update_outcome(outcome: str) -> bool:
     """Whether *outcome* is one of the update-only outcome sentences graded here."""
-    return outcome in _UPDATE_OUTCOMES
+    return outcome in _UPDATE_OUTCOMES or _SUCCESS_AT_REVISION.fullmatch(outcome) is not None
 
 
 def assert_update_outcome(ctx: dict, outcome: str) -> None:
     """Grade an update-only outcome sentence."""
+    if (match := _SUCCESS_AT_REVISION.fullmatch(outcome)) is not None:
+        _assert_success_at_revision(ctx, int(match["revision"]))
+        return
     _UPDATE_OUTCOMES[outcome](ctx)
 
 

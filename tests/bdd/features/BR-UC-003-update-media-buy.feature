@@ -78,12 +78,21 @@ Feature: BR-UC-003 Update Media Buy
     | field        | value       |
     | media_buy_id | mb_existing |
     | start_time   | asap        |
+    And the existing media buy has start_time "2099-01-01T00:00:00Z" and end_time "2099-02-01T00:00:00Z"
     And the existing end_time is in the future
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy success spec
     And the response status should be "completed"
+    And the media buy's stored start_time should be the instant the update took effect
     # POST-S1: Buyer knows start_time updated to current UTC time
     # POST-S4: Unambiguous success
+    # LOCAL CORRECTION: POST-S1 was never checked, so a seller that dropped "asap" or stored
+    # the literal passed. The buy now starts far in the future, and the stored start must be
+    # the instant the update took effect: core/start-timing.json "asap" is "Start campaign as
+    # soon as possible", and update-media-buy-response.json implementation_date is the
+    # "ISO 8601 timestamp when changes take effect". Both instants are the seller's own clock.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/start-timing.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
 
   @T-UC-003-alt-budget @alt-flow @budget @post-s1 @post-s4 @post-s5
   Scenario: Update campaign-level budget
@@ -175,14 +184,22 @@ Feature: BR-UC-003 Update Media Buy
     | package_id        | pkg_001                              |
     | targeting_overlay | {"geo_countries": ["US", "CA"]}      |
     And the package "pkg_001" exists in the media buy
+    And the package "pkg_001" has stored targeting_overlay {"geo_countries": ["GB"]}
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy success spec
     And the response status should be "completed"
     And the response should contain affected_packages including "pkg_001"
+    And the package "pkg_001" should have stored targeting_overlay geo_countries ["US", "CA"]
     # POST-S1: Buyer knows targeting updated
     # POST-S2: Buyer sees affected packages
     # POST-S4: Unambiguous success
     # POST-S5: Request completed
+    # LOCAL CORRECTION: nothing read the overlay back, so a seller that ignored it passed.
+    # The package now starts with geo_countries ["GB"], and the stored overlay must carry
+    # the requested value in its place: core/targeting-input.json, on update "a non-null
+    # value replaces that dimension". The response cannot show it (affected_packages does
+    # not carry targeting_overlay), so the record is read.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting-input.json
 
   @T-UC-003-alt-optimization-goals @alt-flow @optimization-goals @post-s1 @post-s2 @post-s4 @post-s5
   Scenario: Update optimization goals -- replacement semantics
@@ -2755,12 +2772,19 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
     # v3.1 (revision_optimistic_concurrency.yaml): revision optional; minimum 1; mismatch -> CONFLICT
+    # LOCAL CORRECTION: the valid rows read a bare "success", which a seller ignoring revision
+    # passes identically. update_media_buy.mdx: "Every mutating update increments revision and
+    # returns the new value in the success response", and update-media-buy-response.json
+    # requires revision, "Revision number after this update". paused: true is a mutation, so
+    # a buy at 7 must report and store 8, whether or not the request carried the token.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx
 
     Examples: Valid partitions
-      | partition       | value          | outcome |
-      | absent          | <not provided> | success |
-      | matches_current | 7              | success |
+      | partition       | value          | outcome               |
+      | absent          | <not provided> | success at revision 8 |
+      | matches_current | 7              | success at revision 8 |
 
     Examples: Invalid partitions
       | partition      | value | outcome                            |
@@ -3161,19 +3185,28 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
     # BR-RULE-198 (immutable_field_guard.yaml): product_id / format_ids / pricing_option_id forbidden in package-update
+    # LOCAL CORRECTION: the outcomes could not see the guard they name. The invalid rows read
+    # a bare INVALID_REQUEST, which dev's accepted-shape strip also answers for any undeclared
+    # member (issues keyword additionalProperties), so deleting the immutable-field refusal
+    # left them green. They now require each sent member refused under keyword "not", the
+    # keyword media-buy/package-update.json rejects them with (its root not: anyOf of
+    # required), as core/error.json asks ("the validator's native keyword name"). The valid
+    # row read a bare success; it now requires the budget change to be stored.
     # ---------- BR-RULE-219: Committed Metrics Append-Only ----------
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/not
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json
 
     Examples: Valid partitions
-      | partition         | forbidden_field          | outcome |
-      | no_immutable_keys | only budget (updatable)  | success |
+      | partition         | forbidden_field          | outcome                        |
+      | no_immutable_keys | only budget (updatable)  | success with persisted records |
 
     Examples: Invalid partitions
-      | partition                       | forbidden_field                          | outcome                                  |
-      | product_id_present              | product_id                               | error "INVALID_REQUEST" with suggestion |
-      | format_ids_present              | format_ids                               | error "INVALID_REQUEST" with suggestion |
-      | pricing_option_id_present       | pricing_option_id                        | error "INVALID_REQUEST" with suggestion |
-      | multiple_immutable_keys_present | product_id and pricing_option_id         | error "INVALID_REQUEST" with suggestion |
+      | partition                       | forbidden_field                          | outcome                                                  |
+      | product_id_present              | product_id                               | refused INVALID_REQUEST by the package update's root not |
+      | format_ids_present              | format_ids                               | refused INVALID_REQUEST by the package update's root not |
+      | pricing_option_id_present       | pricing_option_id                        | refused INVALID_REQUEST by the package update's root not |
+      | multiple_immutable_keys_present | product_id and pricing_option_id         | refused INVALID_REQUEST by the package update's root not |
 
   # REMOVED at the pin: @T-UC-003-committed-metrics-append, -immutable and -noop each sent
   # "an update_media_buy request that" appends, rewrites, drops or re-submits the package's
@@ -3306,14 +3339,25 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: the rows expected "accepted". core/targeting.json describes both
+    # collection_list and collection_list_exclude as "Seller must declare support in
+    # get_adcp_capabilities", and get-adcp-capabilities-response.json's
+    # execution.targeting.collection_list reads "False or absence makes no product-level
+    # promise. Product.overlay_support is authoritative". This seller declares neither, at
+    # either level, and the same targeting.json says "A fresh create/update request MUST be
+    # applied exactly or rejected". An accepted reference was stored and never applied, so the
+    # pinned answer is UNSUPPORTED_FEATURE naming the dimension, before any mutation: the base
+    # request's budget change must not land either. With both set, collection_list is named.
     # ---------- immutable_field_guard boundaries (immutable_field_guard.yaml, BR-RULE-198) ----------
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/collection_list
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json
 
     Examples: collection_list overlay (BR-UC-002/003)
       | boundary                                              | outcome  |
-      | collection_list with valid agent_url and list_id      | accepted |
-      | collection_list_exclude with valid agent_url and list_id | accepted |
-      | both collection_list and collection_list_exclude set  | accepted |
+      | collection_list with valid agent_url and list_id      | error "UNSUPPORTED_FEATURE" on packages[0].targeting_overlay.collection_list with suggestion — no records persisted |
+      | collection_list_exclude with valid agent_url and list_id | error "UNSUPPORTED_FEATURE" on packages[0].targeting_overlay.collection_list_exclude with suggestion — no records persisted |
+      | both collection_list and collection_list_exclude set  | error "UNSUPPORTED_FEATURE" on packages[0].targeting_overlay.collection_list with suggestion — no records persisted |
 
   @T-UC-003-bva-immutable-field-guard @boundary @immutable_field_guard @schema-v3.1 @post-f2
   Scenario Outline: immutable field guard boundary - <boundary>
