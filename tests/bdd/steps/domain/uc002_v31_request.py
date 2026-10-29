@@ -200,10 +200,18 @@ def given_account_without_governance_agents(ctx: dict) -> None:
     ctx["env"]._commit_factory_data()
 
 
-@given(parsers.parse('a valid create_media_buy request with agency_estimate_number "{value}"'))
-def given_request_agency_estimate_number(ctx: dict, value: str) -> None:
-    """Carry a buy-level agency_estimate_number."""
-    _create_request(ctx)["agency_estimate_number"] = value
+@given(
+    parsers.re(
+        r'a valid create_media_buy request with (?P<field>agency_estimate_number|advertiser_industry) "(?P<value>[^"]*)"'
+    )
+)
+def given_request_buy_level_string(ctx: dict, field: str, value: str) -> None:
+    """Carry one buy-level string field of create-media-buy-request.json, as written.
+
+    The alternation names the fields this sentence may set, so an unknown field is an
+    unbound step rather than a key the request silently grows.
+    """
+    _create_request(ctx)[field] = value
 
 
 @given(parsers.parse('the request includes an artifact_webhook with delivery_mode "{mode}"'))

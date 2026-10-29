@@ -53,6 +53,7 @@ from src.core.exceptions import (
     AdCPInvalidRequestError,
     AdCPPersistedStateError,
     AdCPProductNotFoundError,
+    AdCPProposalNotFoundError,
     AdCPSalesAgentError,
     AdCPValidationError,
 )
@@ -2662,6 +2663,20 @@ async def _create_media_buy_impl(
 
     try:
         # Validate input parameters
+        # 0. Committed-proposal execution. The DTO admits proposal_id + total_budget with no
+        # packages as one of create-media-buy-request.json's three accepted shapes, and in
+        # that shape "the seller derives [packages] from the committed proposal". This
+        # seller issues no proposals (it never declares supports_proposals, whose default is
+        # false), so no proposal_id can name one it issued: enums/error-code.json
+        # PROPOSAL_NOT_FOUND is "not recognized by the seller -- ... was never issued". It
+        # is answered first, on the field the buyer set, because every check below reads
+        # the packages array, which this shape does not carry -- the product check used to
+        # answer here with a refusal pointed at `packages`, telling the buyer to send the
+        # field the shape forbids. When this seller issues proposals, this is where the
+        # proposal is resolved instead.
+        if req.proposal_id is not None:
+            raise AdCPProposalNotFoundError(field="proposal_id", details=EntityRefDetails(proposal_id=req.proposal_id))
+
         # 1. Budget validation (shared validator)
         total_budget = req.get_total_budget()
         # req.get_total_budget() sums EVERY package, so no single element is at

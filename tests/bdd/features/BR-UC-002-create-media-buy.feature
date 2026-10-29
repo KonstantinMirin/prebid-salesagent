@@ -1024,10 +1024,28 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     And the request supplies no buyer packages array
     When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy spec
-    And the product-uniqueness check should have no applicable buyer input
-    And the request should not be rejected on the product-uniqueness rule
+    Then the response is compliant with the create_media_buy error spec
+    And the operation should fail
+    And the error code should be "PROPOSAL_NOT_FOUND"
+    And the error recovery should be "correctable"
+    And the error should include "field" field with value "proposal_id"
     # BR-RULE-010 INV-3 (v3.1): uniqueness binds the buyer-supplied manual packages array, absent in proposal mode
+    # Corrected to the pin. The request is the "Committed proposal execution" shape of
+    # create-media-buy-request.json (proposal_id + total_budget, no packages), and the
+    # proposal_id names nothing this seller issued: it declares no supports_proposals
+    # (default false) and issues no proposals, so the pin's answer is PROPOSAL_NOT_FOUND --
+    # "not recognized by the seller -- ... was never issued" (enums/error-code.json).
+    # The field line is what grades INV-3. The uniqueness rule refuses on the packages
+    # array, and so does every other packages-array check; a seller that ran them against
+    # this request answered on `packages` (this one answered VALIDATION_ERROR there,
+    # asking for the field the shape forbids). Answering on proposal_id is the request
+    # being judged on what it carries. The two lines this replaces -- "the product-
+    # uniqueness check should have no applicable buyer input" and "the request should not
+    # be rejected on the product-uniqueness rule" -- asserted the same thing with nothing to
+    # read it from: no response field reports which checks ran.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/packages
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/PROPOSAL_NOT_FOUND
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/supports_proposals
     # --- BR-RULE-012: Maximum Daily Spend Cap ---
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
@@ -2967,15 +2985,29 @@ Feature: BR-UC-002 Create Media Buy
   @T-UC-002-v31-advertiser-industry-per-buy @v31 @advertiser-industry @post-s1
   Scenario: v3.1 advertiser_industry on the request targets a single industry per buy
     Given the tenant is configured for auto-approval
-    And the brand "acme.com" operates across industries ["healthcare.wellness", "cpg"]
     And a valid create_media_buy request with advertiser_industry "healthcare.wellness"
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy success spec
     And the response should succeed
     And the response status should be "completed"
-    And the seller should map advertiser_industry to its platform-native industry code
     # v3.1: a brand may operate across multiple industries; each media buy targets exactly one
+    # Corrected to the pin. Two lines are deleted because nothing in this scenario can
+    # establish or observe them:
+    # - 'the brand "acme.com" operates across industries [...]'. The request field's own
+    #   description consults the brand manifest only when advertiser_industry is OMITTED, and
+    #   then as a MAY ("When omitted, sellers may infer from the brand manifest's industries
+    #   field"). This request supplies it, so the brand's industries take no part, and this
+    #   seller reads no buyer brand.json for a Given to seed.
+    # - 'the seller should map advertiser_industry to its platform-native industry code'.
+    #   "Sellers map this to platform-native codes" describes the seller's side and carries
+    #   no MUST; no create_media_buy or get_media_buys response field reports the mapped code
+    #   (get-media-buys-response.json carries advertiser_industry only inside
+    #   accepted_proposal.commercial_terms), so no transport can observe it.
+    # What the pin does fix is that the field is single-valued (one enum value per buy) and
+    # declared on the request, so a seller must take it rather than refuse it; the success
+    # Thens above grade exactly that.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/advertiser_industry
     # --- v3.1: package paused flag ---
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 

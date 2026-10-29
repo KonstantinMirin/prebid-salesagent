@@ -195,6 +195,7 @@ class EntityRefDetails(ErrorDetails):
     media_buy_id: str | None = None
     package_id: str | None = None
     product_id: str | None = None
+    proposal_id: str | None = None
     creative_id: str | None = None
     format_id: str | None = None
     line_item_id: str | None = None
