@@ -1537,6 +1537,20 @@ def given_earlier_inline_creative(ctx: dict, package_id: str, creative_id: str) 
     _send_earlier_update(ctx, package_id, creatives=[_inline_creative_payload(creative_id, "Earlier inline creative")])
 
 
+@given(parsers.parse('an earlier update gave package "{package_id}" the targeting_overlay {overlay}'))
+def given_earlier_targeting_overlay(ctx: dict, package_id: str, overlay: str) -> None:
+    """The package's stored overlay before the graded update, put there by an update.
+
+    Recorded in ``ctx["prior_targeting_overlay"]``: an update that omits a dimension leaves it
+    as this one set it, which is what makes an absent or empty overlay row observable.
+    """
+    import json
+
+    prior = json.loads(overlay)
+    _send_earlier_update(ctx, package_id, targeting_overlay=prior)
+    ctx["prior_targeting_overlay"] = prior
+
+
 @given(parsers.parse('an earlier update assigned library creative "{creative_id}" to package "{package_id}"'))
 def given_earlier_library_assignment(ctx: dict, creative_id: str, package_id: str) -> None:
     """The package's prior creative is a library creative assigned through ``creative_assignments``."""
@@ -3366,6 +3380,28 @@ def _assert_frequency_cap_stored(ctx: dict) -> None:
     assert stored_members == sent, f"stored frequency_cap {stored!r} is not the one sent, {sent!r}"
 
 
+def _non_null_dimensions(overlay: dict[str, Any]) -> dict[str, Any]:
+    """The dimensions an overlay document sets: a null one is cleared or never set."""
+    return {name: value for name, value in overlay.items() if value is not None}
+
+
+def _assert_overlay_patched(ctx: dict) -> None:
+    """Synchronous success, and the stored overlay is the prior one patched by the sent one.
+
+    update_media_buy.mdx (Package Update Object, targeting_overlay): "Per-dimension patch ...
+    Omit the overlay or a dimension inside it to leave that dimension unchanged; provide a
+    non-null value to replace it; provide ``null`` to clear it." So every dimension the update
+    sent is stored as sent, and every other dimension is the one the earlier update stored. A
+    seller that drops the sent overlay, or replaces the whole stored one, fails here.
+    """
+    _assert_synchronous_success(ctx)
+    sent = ctx["update_kwargs"]["packages"][0].get("targeting_overlay", {})
+    expected = _non_null_dimensions({**ctx["prior_targeting_overlay"], **sent})
+    _budget, config = _stored_package(ctx, "pkg_001")
+    stored = _non_null_dimensions(config.get("targeting_overlay") or {})
+    assert stored == expected, f"stored targeting_overlay is {stored!r}, expected {expected!r}"
+
+
 def _assert_submitted(ctx: dict) -> None:
     """The submitted task envelope: status submitted, with a task_id to poll."""
     _assert_wire_field_equals(ctx, "status", "submitted")
@@ -3448,6 +3484,7 @@ _UPDATE_OUTCOMES = {
     "submitted task envelope (awaiting approval)": _assert_submitted,
     "start_time stored as now": _assert_start_time_stored_as_now,
     "start_time stored as sent": _assert_start_time_stored_as_sent,
+    "success with the stored overlay patched per dimension": _assert_overlay_patched,
 }
 
 

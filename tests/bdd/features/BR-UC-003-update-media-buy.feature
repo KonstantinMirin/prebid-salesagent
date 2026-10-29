@@ -152,9 +152,17 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy success spec
     And the response status should be "completed"
     And the response should contain affected_packages including "pkg_001"
+    When the Buyer Agent reads media buy "mb_existing" back with get_media_buys
+    Then the package "pkg_001" should report creative approvals for exactly ["inline-cr-001"]
     # POST-S1: Buyer knows inline creatives uploaded
     # POST-S2: Buyer sees affected packages
     # POST-S4: Unambiguous success
+    # LOCAL CORRECTION: the generated Thens read only the status and affected_packages, which a
+    # seller that never uploaded or assigned the inline creative answers too. The readback is
+    # the pin storyboard's: an inline creative on a package update is read back from
+    # get_media_buys media_buys[].packages[].creative_approvals[].creative_id.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/creatives
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/protocols/media-buy/scenarios/inline_creatives_without_sync.yaml
 
   @T-UC-003-alt-targeting @alt-flow @targeting @post-s1 @post-s2 @post-s4 @post-s5
   Scenario: Update targeting overlay -- replacement semantics
@@ -1309,8 +1317,12 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition       | amount | outcome |
-      | positive_amount | 100.00 | success |
+      | partition       | amount | outcome                        |
+      | positive_amount | 100.00 | success with persisted records |
+    # LOCAL CORRECTION: positive_amount asserted a bare "success", which a seller that ignored
+    # the budget answers too. package-update.json budget: "Updated hard spend cap for this
+    # package"; the row now reads the stored package budget back.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/budget
 
     Examples: Invalid partitions
       | partition       | amount | outcome                                      |
@@ -1994,21 +2006,21 @@ Feature: BR-UC-003 Update Media Buy
     And the package targeting_overlay is set to: <overlay_value>
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
+    And an earlier update gave package "pkg_001" the targeting_overlay {"geo_regions": ["US-NY"]}
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
 
     Examples: Valid partitions
       | partition                        | overlay_value                                                                     | outcome |
-      | absent_overlay                   | <not provided>                                                                    | success |
-      | valid_overlay                    | {"geo_countries": ["US", "CA"]}                                                   | success |
-      | empty_overlay                    | {}                                                                                | success |
-      | single_geo_dimension             | {"geo_countries": ["US"]}                                                         | success |
+      | absent_overlay                   | <not provided>                                                                    | success with the stored overlay patched per dimension |
+      | valid_overlay                    | {"geo_countries": ["US", "CA"]}                                                   | success with the stored overlay patched per dimension |
+      | empty_overlay                    | {}                                                                                | success with the stored overlay patched per dimension |
+      | single_geo_dimension             | {"geo_countries": ["US"]}                                                         | success with the stored overlay patched per dimension |
       | multiple_dimensions              | {"geo_countries": ["US"], "device_platform": ["iOS"]}                              | success |
-      | frequency_cap_suppress_only      | {"frequency_cap": {"suppress": {"interval": 30, "unit": "minutes"}}}              | success |
-      | frequency_cap_max_impressions_only | {"frequency_cap": {"max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}}} | success |
-      | frequency_cap_combined           | {"frequency_cap": {"suppress": {"interval": 60, "unit": "minutes"}, "max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}}} | success |
-      | keyword_targeting                | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}]}                | success |
+      | frequency_cap_suppress_only      | {"frequency_cap": {"suppress": {"interval": 30, "unit": "minutes"}}}              | success with the stored overlay patched per dimension |
+      | frequency_cap_max_impressions_only | {"frequency_cap": {"max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}}} | success with the stored overlay patched per dimension |
+      | frequency_cap_combined           | {"frequency_cap": {"suppress": {"interval": 60, "unit": "minutes"}, "max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}}} | success with the stored overlay patched per dimension |
       | proximity_travel_time            | {"geo_proximity": [{"travel_time": 30, "transport_mode": "driving"}]}             | success |
       | proximity_radius                 | {"geo_proximity": [{"radius": 10}]}                                               | success |
       | proximity_geometry               | {"geo_proximity": [{"geometry": "precomputed-poly-id"}]}                          | success |
@@ -2019,9 +2031,38 @@ Feature: BR-UC-003 Update Media Buy
       | undeclared_dimension         | {"publisher_managed_dim": ["value"]}                                                   | error "INVALID_REQUEST" with suggestion       |
       | geo_overlap                  | {"geo_countries": ["US"], "geo_countries_exclude": ["US"]}                              | error "INVALID_REQUEST" with suggestion       |
       | device_type_overlap          | {"device_type": ["mobile"], "device_type_exclude": ["mobile"]}                         | error "INVALID_REQUEST" with suggestion       |
-      | proximity_method_conflict    | {"geo_proximity": [{"travel_time": 30, "transport_mode": "driving", "radius": 10}]}    | error "INVALID_REQUEST" with suggestion       |
+      | proximity_method_conflict    | {"geo_proximity": [{"lat": 40.7128, "lng": -74.006, "travel_time": {"value": 30, "unit": "min"}, "transport_mode": "driving", "radius": {"value": 10, "unit": "km"}}]} | error "INVALID_REQUEST" with suggestion |
       | frequency_cap_missing_fields | {"frequency_cap": {"max_impressions": 3}}                                              | error "INVALID_REQUEST" with suggestion       |
       | keyword_duplicate            | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}, {"keyword": "shoes", "match_type": "broad"}]} | error "INVALID_REQUEST" with suggestion |
+      | keyword_targeting            | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}]}                     | error "UNSUPPORTED_FEATURE" on packages[0].targeting_overlay.keyword_targets with suggestion |
+      | stored_geo_overlap           | {"geo_regions_exclude": ["US-NY"]}                                                     | error "INVALID_REQUEST" with suggestion       |
+    # stored_geo_overlap: the sent overlay alone has no overlap, but it patches the package's
+    # effective targeting, which already holds geo_regions ["US-NY"] from the earlier update.
+    # core/targeting.json geo_regions_exclude: "values also present in geo_regions are
+    # invalid", so the patched result is refused rather than stored.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/geo_regions_exclude
+    # LOCAL CORRECTION, three parts.
+    # (1) The valid rows asserted a bare "success", which a seller that dropped the overlay
+    # answers too. An update's overlay is a per-dimension patch (update_media_buy.mdx, Package
+    # Update Object: "Omit the overlay or a dimension inside it to leave that dimension
+    # unchanged; provide a non-null value to replace it"), so the package first holds a
+    # geo_regions value from an earlier update and each row reads back the stored overlay: the
+    # sent dimensions as sent, geo_regions kept. That is what makes absent_overlay and
+    # empty_overlay observable at all.
+    # (2) keyword_targeting expected acceptance. core/targeting.json keyword_targets: "Seller
+    # must declare support in get_adcp_capabilities", and get-adcp-capabilities-response.json
+    # keyword_targets: "Presence indicates support for targeting_overlay.keyword_targets";
+    # this seller declares none, so the pinned answer is UNSUPPORTED_FEATURE on the dimension
+    # ("A fresh create/update request MUST be applied exactly or rejected").
+    # (3) proximity_method_conflict sent travel_time and radius as bare numbers, a shape
+    # targeting.json refuses whatever the conflict rule, so the row passed without it. It now
+    # sends a pin-shaped entry ({value, unit} objects from lat/lng) that breaks only the
+    # geo_proximity item oneOf (one method per entry).
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx section="Package Update Object"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/targeting_overlay
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/keyword_targets
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/geo_proximity/items/oneOf
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json
 
   @T-UC-003-boundary-targeting-overlay @boundary @targeting_overlay
   Scenario Outline: Targeting overlay boundary validation - <boundary_point>
@@ -2034,15 +2075,16 @@ Feature: BR-UC-003 Update Media Buy
     And the package targeting_overlay is set to: <overlay_value>
     And the package "pkg_001" exists in the media buy
     And the tenant is configured for auto-approval
+    And an earlier update gave package "pkg_001" the targeting_overlay {"geo_regions": ["US-NY"]}
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
 
     Examples: Boundary values
       | boundary_point                               | overlay_value                                                                          | outcome                                  |
-      | absent overlay                               | <not provided>                                                                         | success                                  |
-      | empty {} overlay                             | {}                                                                                     | success                                  |
-      | valid known fields                           | {"geo_countries": ["US"]}                                                              | success                                  |
+      | absent overlay                               | <not provided>                                                                         | success with the stored overlay patched per dimension |
+      | empty {} overlay                             | {}                                                                                     | success with the stored overlay patched per dimension |
+      | valid known fields                           | {"geo_countries": ["US"]}                                                              | success with the stored overlay patched per dimension |
       | unknown field name                           | {"nonexistent_field": ["value"]}                                                       | error "INVALID_REQUEST" with suggestion  |
       | undeclared dimension                         | {"publisher_managed_dim": ["value"]}                                                   | error "INVALID_REQUEST" with suggestion  |
       | geo include/exclude overlap                  | {"geo_countries": ["US"], "geo_countries_exclude": ["US"]}                              | error "INVALID_REQUEST" with suggestion  |
@@ -2050,12 +2092,20 @@ Feature: BR-UC-003 Update Media Buy
       | geo_proximity with travel_time only          | {"geo_proximity": [{"travel_time": 30, "transport_mode": "driving"}]}                  | success                                  |
       | geo_proximity with radius only               | {"geo_proximity": [{"radius": 10}]}                                                   | success                                  |
       | geo_proximity with geometry only             | {"geo_proximity": [{"geometry": "precomputed-poly-id"}]}                               | success                                  |
-      | geo_proximity with travel_time AND radius    | {"geo_proximity": [{"travel_time": 30, "transport_mode": "driving", "radius": 10}]}   | error "INVALID_REQUEST" with suggestion  |
-      | frequency_cap suppress only                  | {"frequency_cap": {"suppress": {"interval": 30, "unit": "minutes"}}}                  | success                                  |
-      | frequency_cap max_impressions with per+window | {"frequency_cap": {"max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}}} | success               |
+      | geo_proximity with travel_time AND radius    | {"geo_proximity": [{"lat": 40.7128, "lng": -74.006, "travel_time": {"value": 30, "unit": "min"}, "transport_mode": "driving", "radius": {"value": 10, "unit": "km"}}]} | error "INVALID_REQUEST" with suggestion |
+      | frequency_cap suppress only                  | {"frequency_cap": {"suppress": {"interval": 30, "unit": "minutes"}}}                  | success with the stored overlay patched per dimension |
+      | frequency_cap max_impressions with per+window | {"frequency_cap": {"max_impressions": 3, "per": "devices", "window": {"interval": 1, "unit": "days"}}} | success with the stored overlay patched per dimension |
       | frequency_cap max_impressions without per    | {"frequency_cap": {"max_impressions": 3}}                                              | error "INVALID_REQUEST" with suggestion  |
-      | keyword_targets with unique tuples           | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}]}                     | success                                  |
+      | keyword_targets with unique tuples           | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}]}                     | error "UNSUPPORTED_FEATURE" on packages[0].targeting_overlay.keyword_targets with suggestion |
       | keyword_targets with duplicate (keyword, match_type) | {"keyword_targets": [{"keyword": "shoes", "match_type": "broad"}, {"keyword": "shoes", "match_type": "broad"}]} | error "INVALID_REQUEST" with suggestion |
+    # LOCAL CORRECTION, for the reasons the partition outline above records: the success rows
+    # read back the stored overlay patched per dimension over an earlier geo_regions value;
+    # "keyword_targets with unique tuples" is refused UNSUPPORTED_FEATURE by a seller that
+    # declares no keyword targeting; and "geo_proximity with travel_time AND radius" sends a
+    # pin-shaped entry, so only the item oneOf refuses it.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx section="Package Update Object"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/keyword_targets
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/geo_proximity/items/oneOf
 
   @T-UC-003-partition-start-time @partition @start_time
   Scenario Outline: Start time partition validation - <partition>
@@ -2265,13 +2315,23 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    And the package "pkg_001" should have creative assignments [<stored>]
 
     Examples: Boundary values
-      | boundary_point                            | mode                                              | outcome |
-      | creative_ids replaces all existing         | creative_ids=[cr_new_1, cr_new_2]                 | success |
-      | creative_assignments replaces all          | creative_assignments=[{cr_new_1, weight:70}]      | success |
-      | new creative added (not in existing)       | creative_ids=[cr_old_1, cr_old_2, cr_new_3]       | success |
-      | existing creative removed (not in new)     | creative_ids=[cr_old_1]                           | success |
+      | boundary_point                            | mode                                                       | stored                       | outcome |
+      | new set replaces all existing              | creative_assignments=[{cr_new_1}, {cr_new_2}]              | cr_new_1, cr_new_2           | success |
+      | creative_assignments replaces all          | creative_assignments=[{cr_new_1, weight:70}]               | cr_new_1:70                  | success |
+      | new creative added (not in existing)       | creative_assignments=[{cr_old_1}, {cr_old_2}, {cr_new_3}]  | cr_old_1, cr_old_2, cr_new_3 | success |
+      | existing creative removed (not in new)     | creative_assignments=[{cr_old_1}]                          | cr_old_1                     | success |
+    # LOCAL CORRECTION (mirror upstream in adcp-req), two parts:
+    # 1. Three rows sent packages[].creative_ids, which the pinned package-update.json does
+    #    not declare. Replacement goes through creative_assignments ("Replace creative
+    #    assignments for this package ... Uses replacement semantics"), so every row now uses
+    #    it; "creative_ids replaces all existing" is renamed "new set replaces all existing".
+    # 2. Every row ended in a bare success, which a seller that appended, or ignored the
+    #    array, also produced. Each row now names the assignment set the seller must store,
+    #    and the weighted row the stored weight.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/creative_assignments
 
   @T-UC-003-partition-creative-state @partition @creative_state_validation
   Scenario Outline: Creative state validation partition - <partition>

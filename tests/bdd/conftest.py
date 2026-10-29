@@ -7456,7 +7456,11 @@ _UC003_STORYBOARD_CLIENT_TAGS = frozenset(
     {"T-UC-003-storyboard-media-buy-not-found", "T-UC-003-storyboard-not-cancellable-on-recancel"}
 )
 _UC003_INLINE_CREATIVES_READBACK_TAGS = frozenset(
-    {"T-UC-003-local-inline-creatives-replace", "T-UC-003-local-inline-creatives-keep-library"}
+    {
+        "T-UC-003-local-inline-creatives-replace",
+        "T-UC-003-local-inline-creatives-keep-library",
+        "T-UC-003-alt-creatives-inline",
+    }
 )
 
 #: UC-006 scenarios CreativeSyncEnv provably serves, keyed by SCENARIO IDENTITY.
@@ -8171,7 +8175,7 @@ ENV_ROUTES: list[EnvRoute] = [
         seed=_seed_media_buy_chain_create_dispatch,
     ),
     # ── UC-003 ──────────────────────────────────────────────────────────────
-    # The local inline-creatives scenarios: the uc003-ext seed, on the env that also routes
+    # The inline-creatives scenarios: the uc003-ext seed, on the env that also routes
     # get_media_buys, because they read the package's creatives back the way a buyer does.
     EnvRoute(
         tag="uc003-inline-creatives-readback",
