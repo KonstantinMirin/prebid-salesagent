@@ -1603,16 +1603,20 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Then the assignment is recorded with no assignment error
 
     Examples:
-      | declaration       | manifest            |
-      | fixed_300x250     | image_300x250       |
-      | fixed_300x250     | image_300x250_200kb |
-      | fixed_300x250     | image_300x250_png   |
-      | two_image_options | image_300x250       |
-      | two_image_options | image_728x90        |
-      | two_mrec_options  | image_300x250_gif   |
-      | retina_300x250    | image_600x500_2x    |
-      | retina_300x250    | image_600x500       |
-      | retina_300x250    | image_300x250       |
+      | declaration          | manifest                        |
+      | fixed_300x250        | image_300x250                   |
+      | fixed_300x250        | image_300x250_200kb             |
+      | fixed_300x250        | image_300x250_png               |
+      | two_image_options    | image_300x250                   |
+      | two_image_options    | image_728x90                    |
+      | two_mrec_options     | image_300x250_gif               |
+      | retina_300x250       | image_600x500_2x                |
+      | retina_300x250       | image_600x500                   |
+      | retina_300x250       | image_300x250                   |
+      | retina_rendition_set | image_renditions_1x_2x          |
+      | retina_rendition_set | image_renditions_1x_2x_inferred |
+      | retina_rendition_set | image_renditions_1x_1_5x_2x     |
+      | retina_300x250       | image_renditions_2x             |
 
   @T-UC-FORMAT-SATISFACTION-manifest-sync-refused @format_satisfaction_sync @requires_db
   Scenario Outline: sync_creatives refuses an assignment whose manifest fails the selected declaration - <declaration> <manifest>
@@ -1623,14 +1627,16 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     And the refusal names "<path>" stating "<stated>" where "<accepted>" is accepted
 
     Examples:
-      | declaration       | manifest            | code                               | path                              | stated | accepted |
-      | fixed_300x250     | image_728x90        | CREATIVE_SIZE_MISMATCH             | assets.image_main.width           | 728    | 300      |
-      | fixed_300x250     | image_300x250_500kb | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main.file_size_bytes | 512000 | 200      |
-      | fixed_300x250     | image_300x250_gif   | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main.format          | gif    | jpg, png |
-      | fixed_300x250     | image_main_as_text  | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main.asset_type      | text   | image    |
-      | two_image_options | image_160x600       | CREATIVE_SIZE_MISMATCH             | assets.image_main.width           | 160    | 300      |
-      | plain_300x250     | image_600x500_2x    | CREATIVE_SIZE_MISMATCH             | assets.image_main.pixel_ratio     | 2      | 1        |
-      | plain_300x250     | image_600x500       | CREATIVE_SIZE_MISMATCH             | assets.image_main.width           | 600    | 300      |
+      | declaration          | manifest                  | code                               | path                              | stated | accepted |
+      | fixed_300x250        | image_728x90              | CREATIVE_SIZE_MISMATCH             | assets.image_main.width           | 728    | 300      |
+      | fixed_300x250        | image_300x250_500kb       | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main.file_size_bytes | 512000 | 200      |
+      | fixed_300x250        | image_300x250_gif         | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main.format          | gif    | jpg, png |
+      | fixed_300x250        | image_main_as_text        | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main.asset_type      | text   | image    |
+      | two_image_options    | image_160x600             | CREATIVE_SIZE_MISMATCH             | assets.image_main.width           | 160    | 300      |
+      | plain_300x250        | image_600x500_2x          | CREATIVE_SIZE_MISMATCH             | assets.image_main.pixel_ratio     | 2      | 1        |
+      | plain_300x250        | image_600x500             | CREATIVE_SIZE_MISMATCH             | assets.image_main.width           | 600    | 300      |
+      | retina_300x250       | image_450x375_1_5x        | CREATIVE_SIZE_MISMATCH             | assets.image_main.pixel_ratio     | 1.5    | 1, 2     |
+      | retina_rendition_set | image_renditions_1x_1x_2x | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main[1].pixel_ratio  | 1      | 1, 2     |
 
     # THE PAIRS. Against fixed_300x250 (image 300x250, max_file_size_kb 200, image_formats
     # jpg/png): 728x90 against 300x250 is the creative half of formats.mdx's fifth rule; 500
@@ -1654,8 +1660,46 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # A density outside the accepted set is an intrinsic size the declaration does not
     # accept, so it is CREATIVE_SIZE_MISMATCH. The 300x250 row above is the control that a
     # [1, 2] declaration still takes a standard rendition.
+    #
+    # [1, 2] IS A SET OF TWO DENSITIES, not the interval between them: the 450x375 image at
+    # 1.5x is refused by retina_300x250, which accepts the 300x250 at 1x and the 600x500 at 2x
+    # above. A seller reading a two-number list as a range accepts it.
+    #
+    # A RENDITION SET IS GRADED RENDITION BY RENDITION. retina_rendition_set is the pinned
+    # acme_retina_mrec declaration: image_main accepts 1x, 1.5x and 2x and requires the 1x and
+    # the 2x. The duplicate row sends the 1x twice beside the 2x and is refused at the second
+    # copy, image_main[1]: "exactly one matching image rendition for each required ratio".
+    # Its accept rows above send each required rendition once -- the ratios stated, or left
+    # to inference from 300x250 and 600x500 -- and once more with the optional 1.5x, which
+    # "Other accepted ratios remain optional" permits.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image.json pointer=/properties/pixel_ratios
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/image-asset.json pointer=/properties/pixel_ratio
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/_base.json pointer=/properties/slots/items/properties/required_pixel_ratios
+    # @source repo=adcp ref=v3.2.7 path=static/examples/products/canonical/acme_retina_mrec.json
+
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-rendition-missing @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives refuses an assignment whose rendition set lacks a required pixel ratio
+    Given a packaged product declaring canonical format options "retina_rendition_set"
+    And the buyer syncs a canonical "image" creative carrying the "image_renditions_2x" manifest
+    When the Buyer Agent assigns it to that package
+    Then the creative is refused CREATIVE_VALIDATION_FAILED_GENERIC
+    And the refusal names "assets.image_main.pixel_ratio" missing where "1" is accepted
+
+    # THE REQUIRED RATIO, NOT THE ACCEPTED SET, DEMANDS THE RENDITION. formats/canonical/
+    # image.json pixel_ratios: "This is an acceptance set, not a requirement to submit every
+    # rendition: one image_main asset satisfying any listed ratio is sufficient unless the
+    # effective image_main slot declares required_pixel_ratios". So the same retina-only
+    # set is accepted by retina_300x250 in the outline above, which accepts 2x and requires
+    # nothing, and refused here, where the slot requires 1x and 2x. The accept row with the
+    # same declaration is image_renditions_1x_2x, which differs only in also sending the 1x.
+    #
+    # THE CODE IS THE GENERIC ONE. CREATIVE_SIZE_MISMATCH is "The submitted creative
+    # dimensions do not match any size accepted by the selected packages" (enums/error-code.json),
+    # and the 600x500 at 2x matches an accepted size; what fails is the set's coverage, which
+    # no specific code names.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/_base.json pointer=/properties/slots/items/properties/required_pixel_ratios
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
+    # @source repo=adcp ref=v3.2.7 path=static/test-vectors/canonical-image-pixel-ratio.json
 
   @T-UC-FORMAT-SATISFACTION-manifest-sync-file-size-unstated @format_satisfaction_sync @requires_db
   Scenario: sync_creatives refuses an assignment whose manifest is silent about a capped file size

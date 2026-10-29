@@ -599,7 +599,10 @@ def _constraint_unsatisfied(key: str, bound: Any, claim: Any, must_state: frozen
     spec:
 
     * ``max_*`` / ``min_*`` are BOUNDS, and a claim satisfies one by being inside it.
-    * ``*_range`` over two numbers is a RANGE, graded by :func:`_range_unsatisfied`.
+    * ``*_range`` over two numbers is a RANGE, graded by :func:`_range_unsatisfied`. By the
+      NAME as well as the shape: a set of two numbers is still a set -- ``pixel_ratios:
+      [1, 2]`` "accepts both standard and Retina renditions" (formats/canonical/image.json),
+      not every density between them.
     * any other NUMBER must be EQUAL -- ``formats.mdx``: "Exact dimensions and durations
       must match".
     * any LIST is an allowed SET, and a claim's values must be a subset.
@@ -619,7 +622,7 @@ def _constraint_unsatisfied(key: str, bound: Any, claim: Any, must_state: frozen
         return _is_number(claim) and claim > bound
     if _is_number(bound) and key.startswith("min_"):
         return _is_number(claim) and claim < bound
-    if (window := _numeric_range(bound)) is not None:
+    if key.endswith("_range") and (window := _numeric_range(bound)) is not None:
         return _range_unsatisfied(claim, *window)
     if _is_number(bound):
         return not _is_number(claim) or claim != bound
@@ -882,7 +885,7 @@ def _candidate_ratios(asset: Mapping[str, Any], declared: Mapping[str, Any]) -> 
     if "pixel_ratios" not in dict(_ASSET_FACTS[str(asset.get("asset_type"))]) or "pixel_ratios" not in declared:
         return (1,)
     stated = _plain(asset.get("pixel_ratio"))
-    return (stated,) if _is_number(stated) else tuple(declared["pixel_ratios"])
+    return (stated,) if _is_number(stated) else (tuple(declared["pixel_ratios"]) or (1,))
 
 
 def _primary_media_slot(slots: Sequence[Mapping[str, Any]]) -> str | None:
@@ -916,22 +919,94 @@ def _manifest_shortfalls(declaration: LibraryFormatDeclaration, manifest: Mappin
     A main slot the manifest leaves empty is reported once, as the missing slot, and its
     facts are not graded.
 
-    An absent ``pixel_ratios`` is ``[1]``: "Absence means ``[1]`` for backward compatibility"
-    (``formats/canonical/image.json``). The asset is graded at each candidate ratio
-    (:func:`_candidate_ratios`) and the fewest shortfalls are reported, which is none when
-    any candidate satisfies.
+    The accepted densities are the slot's (:func:`_accepted_ratios`), and each asset is graded
+    at each candidate ratio (:func:`_candidate_ratios`) with the fewest shortfalls reported,
+    which is none when any candidate satisfies.
+
+    A main slot holding an ARRAY is a rendition set, and every rendition is graded on its own,
+    its path indexed (``assets.image_main[1].width``) so two renditions failing the same member
+    are two problems. ``formats/canonical/_base.json`` ``required_pixel_ratios``: "the manifest
+    slot value MUST be an array containing exactly one matching image rendition for each
+    required ratio" -- graded on the ratio each rendition was graded at
+    (:func:`_coverage_shortfalls`).
     """
     declared = dict(_declared_params(declaration))
-    if "pixel_ratios" in declared and declared["pixel_ratios"] is None:
-        declared["pixel_ratios"] = [1]
     slots = tuple(slot for slot in declared.get("slots") or () if isinstance(slot, Mapping))
     shortfalls = _manifest_slot_shortfalls(slots, manifest)
     primary = _primary_media_slot(slots)
-    asset = manifest.get(primary) if primary is not None else None
-    if primary is None or not isinstance(asset, Mapping) or str(asset.get("asset_type")) not in _ASSET_FACTS:
+    value = manifest.get(primary) if primary is not None else None
+    renditions = [
+        (f"{primary}[{index}]" if isinstance(value, list) else str(primary), item)
+        for index, item in enumerate(value if isinstance(value, list) else [value])
+        if isinstance(item, Mapping) and str(item.get("asset_type")) in _ASSET_FACTS
+    ]
+    if not renditions:
         return shortfalls
-    graded = (_asset_shortfalls(primary, asset, declared, ratio) for ratio in _candidate_ratios(asset, declared))
-    return [*shortfalls, *min(graded, key=len)]
+    slot = next(slot for slot in slots if slot.get("asset_group_id") == primary)
+    if "pixel_ratios" in declared:
+        declared["pixel_ratios"] = _accepted_ratios(declared["pixel_ratios"], slot.get("pixel_ratios"))
+    graded = [(path, *_graded_rendition(path, asset, declared)) for path, asset in renditions]
+    shortfalls.extend(shortfall for _path, _ratio, failed in graded for shortfall in failed)
+    shortfalls.extend(_coverage_shortfalls(str(primary), slot.get("required_pixel_ratios"), graded))
+    return shortfalls
+
+
+def _accepted_ratios(declared: Any, slot: Any) -> list[Any]:
+    """The pixel ratios an image slot accepts: its own set narrowed by the declaration's.
+
+    ``formats/canonical/image.json`` ``pixel_ratios``: "Absence means ``[1]`` for backward
+    compatibility". ``formats/canonical/_base.json`` slot ``pixel_ratios``: "When the image
+    canonical also declares top-level ``params.pixel_ratios``, the effective set is the
+    intersection" -- so a declaration silent about density and a slot stating ``[1, 2]``
+    accepts both, and the ``[1]`` default applies only where neither states a set.
+    """
+    if slot is None:
+        return list(declared) if declared is not None else [1]
+    return [ratio for ratio in slot if declared is None or ratio in declared]
+
+
+def _graded_rendition(
+    path: str, asset: Mapping[str, Any], declared: Mapping[str, Any]
+) -> tuple[float, list[ManifestShortfall]]:
+    """One asset graded at its best candidate ratio: that ratio, and what it fails there."""
+    graded = [(ratio, _asset_shortfalls(path, asset, declared, ratio)) for ratio in _candidate_ratios(asset, declared)]
+    return min(graded, key=lambda pair: len(pair[1]))
+
+
+def _coverage_shortfalls(
+    slot: str, required: Any, graded: Sequence[tuple[str, float, list[ManifestShortfall]]]
+) -> list[ManifestShortfall]:
+    """What a rendition set fails of the slot's ``required_pixel_ratios``, as values.
+
+    ``formats/canonical/_base.json``: "exactly one matching image rendition for each required
+    ratio. Other accepted ratios remain optional", and "SDKs enforce intersection, subset,
+    coverage, and duplicate-ratio rules". A required ratio no rendition was graded at is
+    MISSING, reported at ``assets.<slot>.pixel_ratio`` with nothing stated and that ratio
+    accepted; a ratio two renditions were graded at is a DUPLICATE, reported at the second
+    one with the required set accepted. A rendition failing its own size is reported by its
+    own shortfall and still counts here, so a wrong-sized 2x is a size problem and not also
+    a missing 2x. None of these is ``CREATIVE_SIZE_MISMATCH``: every submitted rendition may
+    match an accepted size and the set still be incomplete, so the constraint is not one of
+    :data:`_DIMENSION_CONSTRAINTS`.
+    """
+    if not required:
+        return []
+    seen: list[float] = []
+    shortfalls: list[ManifestShortfall] = []
+    for path, ratio, _failed in graded:
+        if ratio in seen:
+            shortfalls.append(
+                ManifestShortfall(
+                    f"assets.{path}.pixel_ratio", "required_pixel_ratios", _shown(ratio), _shown_all(required)
+                )
+            )
+        seen.append(ratio)
+    missing = [
+        ManifestShortfall(f"assets.{slot}.pixel_ratio", "required_pixel_ratios", None, (_shown(ratio),))
+        for ratio in required
+        if ratio not in seen
+    ]
+    return [*missing, *shortfalls]
 
 
 def _asset_shortfalls(
