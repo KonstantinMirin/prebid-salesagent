@@ -371,12 +371,17 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
-    And the error code should be "INVALID_REQUEST"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error identifies duplicate catalog types
     # POST-F3: Suggestion advises using distinct catalog types
+    # CORRECTED to the pin: the code was INVALID_REQUEST. package-request.json catalogs:
+    # "sellers MUST reject requests containing multiple catalogs of the same type with a
+    # validation_error", so the code is VALIDATION_ERROR (the title keeps its old wording so
+    # the test id is unchanged).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/catalogs
 
   @T-UC-026-ext-g-product @extension @ext-g @error @post-f1 @post-f2 @post-f3 @invariant @BR-RULE-198
   Scenario: Update attempts to change product_id -- INVALID_REQUEST (INV-1 violated)
