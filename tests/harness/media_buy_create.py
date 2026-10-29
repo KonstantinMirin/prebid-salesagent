@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import datetime
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -204,6 +205,10 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
         kwargs.setdefault("tenant_id", mint(f"mbcreate{suffix}"))
         kwargs.setdefault("principal_id", mint(f"agent{suffix}"))
         super().__init__(**kwargs)
+        # The buy-level deadline the fake ad server reports on every order it creates.
+        # None is what a real ad server that sets no deadline answers; see
+        # ``report_creative_deadline``.
+        self._reported_creative_deadline: datetime | None = None
 
     def setup_media_buy_data(self) -> tuple:
         """Create the full dependency chain needed for create_media_buy.
@@ -438,6 +443,7 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
             return AdapterCreateResult(
                 media_buy_id=mint(f"mb_{uuid.uuid4().hex[:8]}"),
                 packages=[ResponsePackage(package_id=pkg.package_id, paused=pkg.paused) for pkg in media_packages],
+                creative_deadline=self._reported_creative_deadline,
             )
 
         mock_adapter.create_media_buy.side_effect = _adapter_create_response
@@ -553,6 +559,24 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
             assets = call.args[1] if len(call.args) > 1 else call.kwargs.get("assets")
             uploaded.extend(assets or [])
         return uploaded
+
+    def report_creative_deadline(self, deadline: datetime) -> None:
+        """Make the ad server report *deadline* as the creative_deadline of every order it creates.
+
+        ``AdapterCreateResult.creative_deadline`` is the buy-level deadline an adapter hands
+        back from ``create_media_buy``, and the create tool persists it on the
+        ``media_buys.creative_deadline`` column on both approval paths. The ad server is a
+        system this repo does not own, so its answer is the one thing a scenario may fake.
+
+        WHO READS IT: the adapter mock in THIS process. That is every create on the
+        in-process transports, and on every transport the manual-approval execution the
+        operator step runs (``run_approval`` calls ``execute_approved_media_buy`` here,
+        with the env's adapter patch in force). A create that reaches the ad server inside
+        the e2e_rest container is served by ``MockAdServer``, which reports no deadline, so
+        a scenario reading this value off an AUTO-approved create on e2e_rest would need a
+        live-stack realization this method does not have.
+        """
+        self._reported_creative_deadline = deadline
 
     @realize_e2e(_adapter_create_receipts_on_the_live_stack)
     def adapter_create_calls(self) -> int:

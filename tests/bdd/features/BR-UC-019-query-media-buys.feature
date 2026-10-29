@@ -1800,6 +1800,33 @@ Feature: BR-UC-019 Query Media Buys
     # check_buy_status: post-create get_media_buys must resolve the freshly-created buy synchronously
     # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/index.yaml phase=create_buy step=check_buy_status
 
+  @T-UC-019-manual-approval-keeps-creative-deadline @hand-edited @post-create-poll @creative_deadline @schema-v3.1
+  Scenario: a manually approved buy reports the creative_deadline its ad server set
+    Given the tenant requires manual approval
+    And the ad server reports creative_deadline "2026-12-01T17:00:00Z" on the orders it creates
+    And the buyer's create_media_buy request was parked for a human decision
+    And the publisher approved the parked buy
+    When the Buyer Agent calls get_media_buys for the approved buy
+    Then the response is compliant with the get_media_buys spec
+    And the approved buy's creative_deadline should equal "2026-12-01T17:00:00Z"
+    # HAND-EDITED: authored locally, not rendered from adcp-req.
+    #
+    # get-media-buys-response.json declares an optional buy-level creative_deadline
+    # ("ISO 8601 timestamp for creative upload deadline"), and create-media-buy-response.json
+    # carries the deadline the seller sets when it creates the order. Under manual approval
+    # the create parks the buy without calling the ad server; the order is created by the
+    # operator's approval (execute_approved_media_buy), so that is where the ad server's
+    # deadline has to be kept. The other creative_deadline scenarios in this file seed the
+    # column directly and cannot see a path that drops it.
+    #
+    # The ad server is the one patched system. The create crosses the scenario's transport,
+    # the approval runs the production approval call (the admin routes' call, which has no
+    # transport of its own), and the read crosses the transport again. On e2e_rest the
+    # approval runs in the test process against the live server's database, so the read is
+    # served by the deployed server from the row the approval wrote.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/get-media-buys-response.json pointer=/properties/media_buys/items/properties/creative_deadline
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-response.json pointer=/oneOf/0/properties/creative_deadline
+
   @T-UC-019-confirmed-at-null-survives-exclude-none @hand-edited @BR-RULE-150 @schema-v3.1
   Scenario Outline: A buy that was never confirmed still carries confirmed_at as null
     Given the principal "buyer-001" owns media buy "mb-001" with persisted status "<persisted>"

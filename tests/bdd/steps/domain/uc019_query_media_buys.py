@@ -18,6 +18,7 @@ from pytest_bdd import given, parsers, then, when
 from src.core.schemas._base import GetMediaBuysRequest
 from tests.bdd.steps._outcome_helpers import (
     WIRE_MISSING,
+    parked_media_buy,
     payload_or_none,
     require_payload,
     wire_dict,
@@ -3022,11 +3023,20 @@ def given_captured_media_buy_id_from_create(ctx: dict) -> None:
     the create response in ctx, the When's query would early-return, and the Then
     steps would grade the WRONG document.
     """
-    kwargs = build_create_request_kwargs(ctx, po_number="PO-UC019-POST-CREATE-POLL")
-    dispatch_request(ctx, **kwargs)
-
-    assert ctx.get("error") is None, f"create_media_buy failed, so nothing was captured: {ctx.get('error')!r}"
+    _dispatch_create(ctx, po_number="PO-UC019-POST-CREATE-POLL")
     ctx["created_media_buy_id"] = wire_field(ctx, "media_buy_id")
+
+
+def _dispatch_create(ctx: dict, *, po_number: str) -> None:
+    """Send a REAL create_media_buy through the scenario's transport and require it accepted.
+
+    The one create dispatch for the @post-create-poll scenarios, which differ only in what
+    they read off the accepted create. The assertion is not optional: without it a refused
+    create leaves its envelope in ctx and the later get_media_buys grades the wrong document.
+    """
+    kwargs = build_create_request_kwargs(ctx, po_number=po_number)
+    dispatch_request(ctx, **kwargs)
+    assert ctx.get("error") is None, f"create_media_buy was refused, so nothing was created: {ctx.get('error')!r}"
 
 
 @when("the Buyer Agent calls get_media_buys with that media_buy_id under the same account")
@@ -3573,6 +3583,77 @@ def given_package_carries_creative_deadline(ctx: dict, pkg_id: str, timestamp: s
 def given_package_carries_no_creative_deadline(ctx: dict, pkg_id: str) -> None:
     """Remove any creative_deadline key from the package's package_config."""
     _set_package_config(ctx, pkg_id, {}, drop=("creative_deadline",))
+
+
+# ── creative_deadline through the operator's approval ───────────────
+#
+# The Givens above write the column. The steps below reach it the way production does: the
+# ad server reports a deadline when it creates the order, the create tool stores it, and
+# get_media_buys reads it back. Under manual approval the ad server is first called by the
+# operator's approval (execute_approved_media_buy), not by the create, so this is the path
+# where a dropped deadline would otherwise go unseen. The ad server is the one patched
+# system; the create, the approval and the read run production code.
+
+
+@given(parsers.parse('the ad server reports creative_deadline "{timestamp}" on the orders it creates'))
+def given_ad_server_reports_creative_deadline(ctx: dict, timestamp: str) -> None:
+    """Make the ad server hand back *timestamp* as the buy-level creative_deadline.
+
+    create-media-buy-response.json (adcp v3.2.7) carries the deadline the seller sets when
+    it creates the order; this is the adapter's half of that, ``AdapterCreateResult``.
+    """
+    ctx["env"].report_creative_deadline(_parse_iso8601(timestamp))
+
+
+@given("the buyer's create_media_buy request was parked for a human decision")
+def given_create_parked_for_approval(ctx: dict) -> None:
+    """Send the create and require it parked: the submitted envelope AND a pending_approval row.
+
+    The parked check is the format-satisfaction feature's own, reused so the two features
+    hold "parked" to one definition.
+    """
+    from tests.bdd.steps.domain.uc_format_satisfaction import then_buy_is_parked
+
+    _dispatch_create(ctx, po_number="PO-UC019-MANUAL-APPROVAL")
+    then_buy_is_parked(ctx)
+
+
+@given("the publisher approved the parked buy")
+def given_publisher_approved_parked_buy(ctx: dict) -> None:
+    """Run the operator's approval for real and require that it executed the order.
+
+    The same call the admin approval routes make (``run_approval``), through the step the
+    format-satisfaction feature already uses. An approval that failed would leave the buy
+    with no deadline for a reason that has nothing to do with keeping one, so the outcome
+    is checked here rather than left for the Then to misreport.
+    """
+    from src.core.tools.media_buy_create import ApprovalOutcome
+    from tests.bdd.steps.domain.uc_format_satisfaction import when_publisher_approves
+
+    when_publisher_approves(ctx)
+    approval = ctx["approval_result"]
+    assert approval.outcome is ApprovalOutcome.EXECUTED, (
+        f"the approval did not execute the order: outcome={approval.outcome!r}, error={approval.error_msg!r}"
+    )
+
+
+@when("the Buyer Agent calls get_media_buys for the approved buy")
+def when_query_approved_buy(ctx: dict) -> None:
+    """Query get_media_buys by the approved buy's id, on the scenario's transport.
+
+    The id comes from the stored row because the submitted envelope the buyer got carries
+    none (``parked_media_buy``); a buyer learns it when the task completes.
+    """
+    _dispatch_query(ctx, req=GetMediaBuysRequest(media_buy_ids=[parked_media_buy(ctx).media_buy_id]))
+
+
+@then(parsers.parse('the approved buy\'s creative_deadline should equal "{timestamp}"'))
+def then_approved_buy_creative_deadline_equals(ctx: dict, timestamp: str) -> None:
+    """The approved buy carries the ad server's deadline on the wire, as the same instant."""
+    media_buy_id = parked_media_buy(ctx).media_buy_id
+    _assert_wire_creative_deadline(
+        _wire_media_buy(ctx, media_buy_id), timestamp, f"approved media buy {media_buy_id!r}"
+    )
 
 
 @then(parsers.parse('the package "{pkg_id}" creative_deadline should equal "{timestamp}"'))
