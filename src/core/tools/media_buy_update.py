@@ -39,7 +39,6 @@ from src.core.exceptions import (
     AdCPContextNotFoundError,
     AdCPCreativeNotFoundError,
     AdCPGoneError,
-    AdCPInvalidRequestError,
     AdCPNotCancellableError,
     AdCPValidationError,
 )
@@ -94,9 +93,9 @@ from src.core.tools.financial_validation import (
 from src.core.utils import utc_flight_start
 from src.core.validation_helpers import package_field_path, refuse_duplicate_catalog_types
 from src.services.targeting_capabilities import (
-    collect_targeting_violations,
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
+    refuse_invalid_package_overlays,
     validate_property_targeting_allowed,
 )
 
@@ -847,19 +846,9 @@ def _update_media_buy_impl(
                 # Run the same per-package targeting validators the create path runs, so a buyer
                 # can't bypass unknown-field rejection, managed-only dimension checks, or
                 # same-value geo inclusion/exclusion overlap by sending changes through update.
-                overlay_violations: dict[str, object] = {}
-                for pkg_update in req.packages:
-                    if pkg_update.targeting_overlay is None:
-                        continue
-                    overlay_violations.update(collect_targeting_violations(pkg_update.targeting_overlay))
-                if overlay_violations:
-                    # Canonical code per the generated storyboard (UC-002 @ext-f and UC-003
-                    # @*-targeting-overlay both grade targeting validation as INVALID_REQUEST);
-                    # converges with the create path (#1417).
-                    raise AdCPInvalidRequestError(
-                        details=ValidationDetails(**overlay_violations),
-                        field="targeting_overlay",
-                    )
+                # INVALID_REQUEST per the generated storyboard (UC-002 @ext-f and UC-003
+                # @*-targeting-overlay); the one check create runs too (#1417).
+                refuse_invalid_package_overlays([pkg_update.targeting_overlay for pkg_update in req.packages])
 
                 property_targeting_violations: list[str] = []
                 for pkg_update in req.packages:

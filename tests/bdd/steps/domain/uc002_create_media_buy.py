@@ -19,7 +19,13 @@ from unittest.mock import ANY
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session as _db_session
-from tests.bdd.steps._outcome_helpers import _get_response_field, payload_or_none, require_payload, wire_field
+from tests.bdd.steps._outcome_helpers import (
+    _get_response_field,
+    payload_or_none,
+    require_payload,
+    wire_entry,
+    wire_field,
+)
 from tests.bdd.steps.domain.uc002_task_query import assert_task_query_outcome, is_task_query_outcome
 from tests.bdd.steps.domain.uc002_v31_request import (
     assert_governance_skipped_outcome,
@@ -1000,6 +1006,8 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
         )
     if domain == "catalog":
         _assert_catalogs_echoed(ctx)
+    if domain == "targeting":
+        _assert_overlay_echoed(ctx)
     if outcome.endswith(" resolves to now"):
         # The row claims the literal 'asap' was resolved, which a buy id alone does not
         # show: a seller that stored the literal or any other instant answered the same.
@@ -1015,7 +1023,7 @@ def _assert_catalogs_echoed(ctx: dict) -> None:
     core/package.json catalogs: "Echoed from the create_media_buy request". A media_buy_id
     alone let a seller that ignored catalogs entirely pass every catalog row.
     """
-    from tests.bdd.steps._outcome_helpers import WIRE_MISSING, wire_entry
+    from tests.bdd.steps._outcome_helpers import WIRE_MISSING
 
     sent_packages = ctx["request_kwargs"]["packages"]
     assert len(wire_field(ctx, "packages")) == len(sent_packages), (
@@ -1025,6 +1033,23 @@ def _assert_catalogs_echoed(ctx: dict) -> None:
         echoed = wire_entry(ctx, "packages", product_id=sent["product_id"]).get("catalogs", WIRE_MISSING)
         expected = sent.get("catalogs", WIRE_MISSING)
         assert echoed == expected, f"package {sent['product_id']!r} echoed catalogs {echoed!r}, sent {expected!r}"
+
+
+def _assert_overlay_echoed(ctx: dict) -> None:
+    """Every dimension the request's overlay sent is on the answered package, as sent.
+
+    create_media_buy.mdx (targeting_overlay): "The resulting package echoes the complete
+    effective overlay", and "Non-null additions must compile exactly or be rejected". An
+    accepted create whose package drops or alters a sent dimension answered success for
+    targeting it did not apply, which is what a bare no-error check could not see.
+    """
+    sent = ctx["request_kwargs"]["packages"][0].get("targeting_overlay") or {}
+    answered = wire_entry(ctx, "packages", index=0).get("targeting_overlay") or {}
+    for dimension, value in sent.items():
+        assert answered.get(dimension) == value, (
+            f"packages[0].targeting_overlay.{dimension}: sent {value!r}, the package answered "
+            f"{answered.get(dimension)!r}"
+        )
 
 
 def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:
@@ -1090,35 +1115,46 @@ def _assert_workflow_outcome(ctx: dict, outcome: str) -> None:
 
 
 def _assert_persistence_outcome(ctx: dict, outcome: str) -> None:
-    """Assert BR-RULE-020's persistence timing on the wire AND in the seller's records.
+    """Assert BR-RULE-020 persistence on the wire, the seller's record and the ad server's receipt.
 
-    - 'all records persisted after adapter success': the ad server took exactly this buy
-      and the seller stored it with the packages the wire names
-    - 'records persisted in pending state': the submitted arm (no media_buy_id by pin),
-      with the buy stored awaiting approval, one package per requested package, and the
-      ad server not yet handed anything
-    - 'no records persisted after adapter failure': the ad server's SERVICE_UNAVAILABLE
-      (``AdCPAdapterError``, the fault the Given injects) on the wire, and no buy stored
+    The same three readings the BR-RULE-020 invariant scenarios grade, composed from their
+    steps (``uc002_invariants``) so a persistence-timing row and an invariant cannot disagree:
+
+    - 'all records persisted after adapter success': the synchronous success for the requested
+      packages, the ad server handed exactly this buy, and the seller holding it -- the caller's,
+      with the answered packages;
+    - 'records persisted in pending state': the submitted task (no media_buy_id by pin), the buy
+      stored ``pending_approval`` with one package per requested package, and the ad server never
+      reached;
+    - 'no records persisted after adapter failure': the ad server's outage on the wire
+      (SERVICE_UNAVAILABLE, the code the Given injects) and no media buy or package stored.
     """
     from tests.bdd.steps.domain.uc002_invariants import (
         then_adapter_executed,
+        then_manual_approval,
+        then_media_buy_created,
+        then_media_buy_persisted,
+        then_no_packages_persisted,
         then_package_records_persisted,
         then_parked,
     )
-    from tests.bdd.steps.generic.then_media_buy import then_no_media_buy_persisted
+    from tests.bdd.steps.generic.then_success import then_no_media_buy_record_persisted
 
     if outcome == "no records persisted after adapter failure":
         ctx["result"].assert_wire_error("SERVICE_UNAVAILABLE")
-        then_no_media_buy_persisted(ctx)
+        then_no_media_buy_record_persisted(ctx)
+        then_no_packages_persisted(ctx)
         return
 
     assert "error" not in ctx, f"Expected '{outcome}' but got error: {ctx.get('error')}"
     if outcome == "records persisted in pending state":
-        _assert_submitted_arm(ctx, outcome)
+        then_manual_approval(ctx)
         then_parked(ctx)
         then_package_records_persisted(ctx)
         return
+    then_media_buy_created(ctx)
     then_adapter_executed(ctx)
+    then_media_buy_persisted(ctx)
 
 
 @lru_cache(maxsize=1)

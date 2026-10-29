@@ -25,14 +25,16 @@ it answers the question the next reader would otherwise measure. salesagent-lh23
 the per-dimension table and the apply-exactly-or-reject decision it needs.
 """
 
+from collections import Counter
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPInvalidRequestError, AdCPValidationError
 from src.core.schemas import AnyTargeting, Error
-from src.core.validation_helpers import PACKAGES_FIELD
+from src.core.validation_helpers import PACKAGES_FIELD, package_field_path
 
 if TYPE_CHECKING:
     from src.core.database.models import Product
@@ -250,6 +252,7 @@ def collect_targeting_violations(targeting: AnyTargeting) -> dict[str, object]:
 
         geo_overlaps              {include, exclude, values} per conflicting field pair,
                                   plus `system` for metro/postal pairs
+        keyword_duplicates        {keyword, match_type} per pair keyword_targets repeats
 
     Empty mapping means the overlay is clean, so the caller can branch on truthiness.
 
@@ -271,8 +274,67 @@ def collect_targeting_violations(targeting: AnyTargeting) -> dict[str, object]:
     """
     candidates: dict[str, object] = {
         "geo_overlaps": geo_overlap_conflicts(targeting),
+        "keyword_duplicates": keyword_duplicate_pairs(targeting),
     }
     return {key: value for key, value in candidates.items() if value}
+
+
+def keyword_duplicate_pairs(targeting: AnyTargeting) -> list[dict[str, str]]:
+    """The (keyword, match_type) pairs ``keyword_targets`` carries more than once.
+
+    core/targeting.json keyword_targets: "Each keyword is identified by the tuple (keyword,
+    match_type) ... Sellers SHOULD reject duplicate (keyword, match_type) pairs within a single
+    request." A shape rule, so it is checked before :func:`raise_if_undeclared_overlay_dimension`
+    asks whether this seller applies keywords at all.
+    """
+    pairs = Counter((target.keyword, enum_value(target.match_type)) for target in targeting.keyword_targets or ())
+    return [{"keyword": keyword, "match_type": match_type} for (keyword, match_type), n in pairs.items() if n > 1]
+
+
+#: Overlay dimensions this seller refuses wherever they are sent. Each one's pinned description
+#: (core/targeting.json) says "Seller must declare support in get_adcp_capabilities"; each is
+#: declared there by an object of its own under media_buy.execution.targeting
+#: (protocol/get-adcp-capabilities-response.json); this seller's capabilities builder emits none
+#: of the three (src/services/seller_capabilities.py builds geo_countries, geo_regions,
+#: geo_metros and geo_postal_areas only); and no adapter under src/adapters reads them. Accepting
+#: one answers success for targeting nothing applies, which the same file's "A fresh
+#: create/update request MUST be applied exactly or rejected" forbids.
+#:
+#: A deliberate hand list with a known ceiling: when an adapter learns to apply one of these and
+#: the builder declares it (#1857), the refusal must consult that declaration instead.
+UNDECLARED_OVERLAY_DIMENSIONS: tuple[str, ...] = ("geo_proximity", "keyword_targets", "negative_keywords")
+
+
+def raise_if_undeclared_overlay_dimension(targeting: AnyTargeting, package_index: int) -> None:
+    """Refuse an overlay carrying a dimension this seller does not declare (UNSUPPORTED_FEATURE).
+
+    The one refusal for both tools that accept an overlay, so create and update cannot answer
+    the same targeting differently. ``field`` names the dimension on the package that sent it.
+    """
+    for dimension in UNDECLARED_OVERLAY_DIMENSIONS:
+        if getattr(targeting, dimension) is not None:
+            raise AdCPCapabilityNotSupportedError(
+                details=CapabilityRefusalDetails(capability=dimension, package_index=package_index),
+                field=package_field_path(f"targeting_overlay.{dimension}", package_index),
+            )
+
+
+def refuse_invalid_package_overlays(overlays: Sequence[AnyTargeting | None]) -> None:
+    """Refuse the packages' overlays, in package order: request faults first, then capability gaps.
+
+    THE one overlay check for create_media_buy and update_media_buy, so the two tools answer
+    the same overlay with the same code. ``overlays[i]`` is package ``i``'s overlay (``None``
+    when it sent none). Every overlay is checked for a request fault before any is asked
+    whether this seller applies what it names, so a request fault outranks a capability gap.
+    The first package with a fault is the one refused, with that package's violations.
+    """
+    sent = [(index, overlay) for index, overlay in enumerate(overlays) if overlay is not None]
+    for _, overlay in sent:
+        violations = collect_targeting_violations(overlay)
+        if violations:
+            raise AdCPInvalidRequestError(details=ValidationDetails(**violations), field="targeting_overlay")
+    for index, overlay in sent:
+        raise_if_undeclared_overlay_dimension(overlay, index)
 
 
 def geo_overlap_conflicts(targeting: AnyTargeting) -> list[dict[str, object]]:

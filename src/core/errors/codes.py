@@ -414,6 +414,9 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
         ErrorCode.PROVENANCE_EMBEDDED_MISSING: 422,
         ErrorCode.PRODUCT_UNAVAILABLE: 422,
         ErrorCode.UNSUPPORTED_FEATURE: 422,
+        # Correctable per the pin ("adjust the proposed terms and retry"): the proposal is
+        # well-formed and refused on its merits against what the product offers.
+        ErrorCode.TERMS_REJECTED: 422,
         # Same band and the same reasoning as NOT_CANCELLABLE above: absent from this map
         # it fell to the 500 default, which the 5xx band below defines as "the buyer cannot
         # fix it" -- and the pin classifies this one correctable, with a suggestion the

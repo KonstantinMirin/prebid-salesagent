@@ -98,6 +98,7 @@ from adcp.types.domains.core.error import Source as LibraryErrorSource
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from adcp.types.domains.core.format_option_ref import FormatOptionReference as LibraryFormatOptionReference
 from adcp.types.domains.core.package_format_snapshot import PackageFormatSnapshot as LibraryPackageFormatSnapshot
+from adcp.types.domains.core.targeting_input import GeoProximityItem as LibraryGeoProximityItem
 from adcp.types.domains.core.version_envelope import AdcpVersionEnvelope
 from adcp.types.domains.enums.creative_approval_status import (
     # Aliased to OUR name for this concept, not to the library's. Two reasons, both
@@ -2565,13 +2566,53 @@ class Targeting(PinnedTargeting, _InternalTargetingDimensions):
     """
 
 
+class GeoProximityItem(LibraryGeoProximityItem):
+    """One ``core/targeting.json`` geo_proximity entry, with the item ``oneOf`` the SDK drops.
+
+    The pinned item is exactly one proximity method: travel time from a point (with a transport
+    mode), a radius from a point, or a pre-computed geometry, each arm forbidding the other two.
+    The generated parent makes every member optional, so an entry carrying two methods was
+    accepted, stored and echoed back as targeting no ad server can apply. The arms are read from
+    the pin (:func:`~src.core.schemas._pinned_fields.geo_proximity_one_of_arms`), not restated.
+
+    ``mode="before"`` and keyed on PRESENCE, as JSON Schema's ``required`` is, for the reasons
+    ``CreativeAssetRequest`` records for its format-identity ``oneOf``; the keyword the buyer
+    reads in ``issues[]`` is ``oneOf`` (see ``SELLER_RAISED_KEYWORDS``). Request side only: a
+    stored readback is not refused for a shape it was accepted in.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _exactly_one_method(cls, data: Any) -> Any:
+        from src.core.schemas._pinned_fields import geo_proximity_one_of_arms
+
+        if isinstance(data, Mapping):
+            present = set(data)
+        elif isinstance(data, BaseModel):
+            present = set(data.model_fields_set)
+        else:
+            return data
+        matched = [
+            required
+            for required, forbidden in geo_proximity_one_of_arms()
+            if required <= present and not forbidden & present
+        ]
+        if len(matched) != 1:
+            raise PydanticCustomError("oneOf", "provide exactly one of travel_time, radius or geometry")
+        return data
+
+
 class PinnedTargetingInput(TargetingOverlayInput):
-    """``core/targeting_input.json`` exactly, with its ``frequency_cap`` built as the local class,
-    for the reasons :class:`PinnedTargeting` records. :class:`TargetingInput` adds this seller's
-    internal dimensions; a package added by an update (:class:`PinnedPackageRequest`) takes this
-    one, which advertises and accepts the pinned overlay and nothing more."""
+    """``core/targeting_input.json`` exactly, with its ``frequency_cap`` and ``geo_proximity`` items
+    built as the local classes, for the reasons :class:`PinnedTargeting` and
+    :class:`GeoProximityItem` record. :class:`TargetingInput` adds this seller's internal
+    dimensions; a package added by an update (:class:`PinnedPackageRequest`) takes this one, which
+    advertises and accepts the pinned overlay and nothing more."""
 
     frequency_cap: FrequencyCapSlot | None = narrowed_from(TargetingOverlayInput, "frequency_cap")
+    geo_proximity: list[Annotated[LibraryGeoProximityItem, as_local(GeoProximityItem)]] | None = narrowed_from(
+        TargetingOverlayInput, "geo_proximity"
+    )
 
 
 class TargetingInput(PinnedTargetingInput, _InternalTargetingDimensions):

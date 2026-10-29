@@ -660,6 +660,9 @@ class ValidationDetails(EntityRefDetails, ValueRejectionDetails, ProblemsDetails
     # break, not a cleanup. (A `managed_only_dimensions` sibling went with the
     # non-spec field it reported, salesagent-3cs7o.22.)
     geo_overlaps: list[dict[str, Any]] | None = None
+    # The sibling key for the keyword rule: each (keyword, match_type) pair the overlay's
+    # keyword_targets repeats, as values.
+    keyword_duplicates: list[dict[str, str]] | None = None
 
 
 class TimeWindowDetails(ValidationDetails):

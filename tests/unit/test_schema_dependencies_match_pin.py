@@ -194,6 +194,7 @@ _SAMPLES: dict[str, dict[str, Any]] = {
     "MediaBuyFrequencyCap": _FREQUENCY_CAP,
     "PinnedTargeting": {"frequency_cap": _FREQUENCY_CAP},
     "PinnedTargetingInput": {"frequency_cap": _FREQUENCY_CAP},
+    "GeoProximityItem": {"lat": 40.7128, "lng": -74.006, "radius": {"value": 5, "unit": "km"}},
     "ProductFilters": {"format_ids": [_FORMAT_ID]},
     "CreativeFilters": {"format_ids": [_FORMAT_ID]},
     "ProductMediaBuySupportRequirements": {"frequency_cap": True},

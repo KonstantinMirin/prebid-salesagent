@@ -55,6 +55,7 @@ from src.core.exceptions import (
     AdCPProductNotFoundError,
     AdCPProposalNotFoundError,
     AdCPSalesAgentError,
+    AdCPTermsRejectedError,
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
@@ -143,9 +144,9 @@ from src.core.webhooks.registration import accept_push_notification_config
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.targeting_capabilities import (
-    collect_targeting_violations,
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
+    refuse_invalid_package_overlays,
     validate_property_targeting_allowed,
 )
 
@@ -178,16 +179,60 @@ def _advertised_reporting_frequencies(products: Sequence[Any]) -> set[str]:
     missing-product check, which runs first precisely so this cannot be the error a buyer
     sees.
     """
+    per_product = [
+        {str(f) for f in _served_reporting_capability(product, "available_reporting_frequencies")}
+        for product in products
+    ]
+    return set.intersection(*per_product) if per_product else set()
+
+
+def _served_reporting_capability(product: Any, name: str) -> list[Any]:
+    """One list of *product*'s ``reporting_capabilities``, as ``get_products`` serves it.
+
+    The stored document's value, or -- for a row that stores NULL -- the default
+    :func:`~src.core.product_conversion.default_reporting_capabilities` serves it with. A refusal
+    graded against anything else would name a different set from the one the buyer was shown.
+    """
     from src.core.product_conversion import default_reporting_capabilities
 
-    per_product: list[set[str]] = []
-    for product in products:
-        stored = getattr(product, "reporting_capabilities", None) or {}
-        advertised = stored.get("available_reporting_frequencies") or [
-            str(f) for f in default_reporting_capabilities().available_reporting_frequencies
-        ]
-        per_product.append({str(f) for f in advertised})
-    return set.intersection(*per_product) if per_product else set()
+    stored = getattr(product, "reporting_capabilities", None)
+    return list((stored.get(name) if stored else getattr(default_reporting_capabilities(), name)) or ())
+
+
+def _refuse_committed_metrics_beyond_product(index: int, package: PackageRequest, product: Any) -> None:
+    """Refuse a proposed ``committed_metrics`` entry the package's product does not offer.
+
+    media-buy/package-request.json ``committed_metrics``: "each ``scope: standard`` entry's
+    ``metric_id`` MUST be in the product's ``available_metrics``, and each ``scope: vendor``
+    entry's ``(vendor, metric_id)`` MUST appear in the product's ``vendor_metrics`` -- sellers
+    SHOULD reject with ``TERMS_REJECTED`` and reference the offending entry when the proposal
+    exceeds product capability." A vendor metric is identified by
+    ``(vendor.domain, vendor.brand_id, metric_id)``, the tuple the pin names canonical.
+    """
+    standard = sorted(enum_value(m) for m in _served_reporting_capability(product, "available_metrics"))
+    vendor = {
+        (m["vendor"]["domain"], m["vendor"].get("brand_id"), m["metric_id"])
+        for m in _served_reporting_capability(product, "vendor_metrics")
+    }
+    for position, entry in enumerate(package.committed_metrics or ()):
+        metric_id = enum_value(entry.metric_id)
+        if entry.scope == "standard":
+            if metric_id in standard:
+                continue
+            accepted: list[str] | None = standard
+        else:
+            if (entry.vendor.domain, enum_value(entry.vendor.brand_id), metric_id) in vendor:
+                continue
+            accepted = None
+        raise AdCPTermsRejectedError(
+            details=CapabilityRefusalDetails(
+                capability="committed_metrics",
+                product_id=package.product_id,
+                rejected_value=metric_id,
+                accepted_values=accepted,
+            ),
+            field=package_field_path(f"committed_metrics[{position}]", index),
+        )
 
 
 def _get_creative_ids(package: AdcpPackageRequest | PackageRequest | Package | MediaPackage) -> list[str] | None:
@@ -2906,6 +2951,10 @@ async def _create_media_buy_impl(
                             field="reporting_webhook.reporting_frequency",
                         )
 
+            for index, package in enumerate(req.packages or []):
+                if package.product_id in product_map:
+                    _refuse_committed_metrics_beyond_product(index, package, product_map[package.product_id])
+
             # Resolve legacy pricing_option_id values to actual product pricing_option_ids
             # This happens when using the legacy product_ids parameter (auto-converted to packages)
             if req.packages:
@@ -3177,16 +3226,8 @@ async def _create_media_buy_impl(
                         budget_limit=Decimal(str(currency_limit.max_daily_package_spend)),
                     )
 
-        # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)
-        if req.packages:
-            for pkg in req.packages:
-                if pkg.targeting_overlay is not None:
-                    violations = collect_targeting_violations(pkg.targeting_overlay)
-                    if violations:
-                        raise AdCPInvalidRequestError(
-                            details=ValidationDetails(**violations),
-                            field="targeting_overlay",
-                        )
+        # targeting_overlay is at package level per AdCP spec.
+        refuse_invalid_package_overlays([pkg.targeting_overlay for pkg in req.packages or []])
 
     except (AdCPSalesAgentError, ValueError, PermissionError) as e:
         # Audit-update then re-raise via the shared helper so this early-validation

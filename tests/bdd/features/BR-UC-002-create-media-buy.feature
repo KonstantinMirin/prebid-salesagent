@@ -1619,10 +1619,6 @@ Feature: BR-UC-002 Create Media Buy
       | frequency_cap_suppress_only        | targeting validation passes     |
       | frequency_cap_max_impressions_only | targeting validation passes     |
       | frequency_cap_combined             | targeting validation passes     |
-      | keyword_targeting                  | targeting validation passes     |
-      | proximity_travel_time              | targeting validation passes     |
-      | proximity_radius                   | targeting validation passes     |
-      | proximity_geometry                 | targeting validation passes     |
 
     Examples: Invalid partitions
       | partition                          | outcome                                      |
@@ -1630,9 +1626,26 @@ Feature: BR-UC-002 Create Media Buy
       | undeclared_dimension               | error INVALID_REQUEST with suggestion          |
       | geo_overlap                        | error INVALID_REQUEST with suggestion          |
       | device_type_overlap                | error INVALID_REQUEST with suggestion          |
-      | proximity_method_conflict          | error INVALID_REQUEST with suggestion          |
+      | proximity_method_conflict          | error INVALID_REQUEST on packages[0].targeting_overlay.geo_proximity[0] with suggestion |
       | frequency_cap_missing_fields       | error INVALID_REQUEST with suggestion          |
       | keyword_duplicate                  | error INVALID_REQUEST with suggestion          |
+      | keyword_targeting                  | error UNSUPPORTED_FEATURE on packages[0].targeting_overlay.keyword_targets with suggestion |
+      | proximity_travel_time              | error UNSUPPORTED_FEATURE on packages[0].targeting_overlay.geo_proximity with suggestion   |
+      | proximity_radius                   | error UNSUPPORTED_FEATURE on packages[0].targeting_overlay.geo_proximity with suggestion   |
+      | proximity_geometry                 | error UNSUPPORTED_FEATURE on packages[0].targeting_overlay.geo_proximity with suggestion   |
+    # CORRECTED against the pin: keyword_targeting and the three proximity_* rows expected
+    # acceptance. core/targeting.json says of keyword_targets and geo_proximity "Seller must
+    # declare support in get_adcp_capabilities", and this seller declares neither
+    # (media_buy.execution.targeting carries geo_countries, geo_regions, geo_metros and
+    # geo_postal_areas only), so a create carrying one is refused UNSUPPORTED_FEATURE: the same
+    # file's "A fresh create/update request MUST be applied exactly or rejected", and
+    # create_media_buy.mdx "Non-null additions must compile exactly or be rejected". A request
+    # fault is refused first: proximity_method_conflict breaks the geo_proximity item oneOf
+    # (INVALID_REQUEST at the entry), keyword_duplicate the "SHOULD reject duplicate (keyword,
+    # match_type) pairs" rule.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
 
   @T-UC-002-partition-creative-asset @partition @creative-asset
   Scenario Outline: Creative asset partition validation - <partition>
@@ -2172,15 +2185,21 @@ Feature: BR-UC-002 Create Media Buy
       | undeclared dimension (key_value_pairs)            | key_value_pairs       | error INVALID_REQUEST with suggestion          |
       | geo include/exclude overlap                       | US in both lists      | error INVALID_REQUEST with suggestion          |
       | device_type include/exclude overlap               | mobile in both        | error INVALID_REQUEST with suggestion          |
-      | geo_proximity with travel_time only               | travel_time=30m       | targeting validation passes                  |
-      | geo_proximity with radius only                    | radius=5km            | targeting validation passes                  |
-      | geo_proximity with geometry only                  | geometry=polygon      | targeting validation passes                  |
-      | geo_proximity with travel_time AND radius         | travel+radius         | error INVALID_REQUEST with suggestion          |
+      | geo_proximity with travel_time only               | travel_time=30m       | error UNSUPPORTED_FEATURE on packages[0].targeting_overlay.geo_proximity with suggestion   |
+      | geo_proximity with radius only                    | radius=5km            | error UNSUPPORTED_FEATURE on packages[0].targeting_overlay.geo_proximity with suggestion   |
+      | geo_proximity with geometry only                  | geometry=polygon      | error UNSUPPORTED_FEATURE on packages[0].targeting_overlay.geo_proximity with suggestion   |
+      | geo_proximity with travel_time AND radius         | travel+radius         | error INVALID_REQUEST on packages[0].targeting_overlay.geo_proximity[0] with suggestion   |
       | frequency_cap suppress only                       | suppress=24h          | targeting validation passes                  |
       | frequency_cap max_impressions with per+window     | max=3 per=1 win=24h   | targeting validation passes                  |
       | frequency_cap max_impressions without per         | max=3 no-per          | error INVALID_REQUEST with suggestion          |
-      | keyword_targets with unique tuples                | kw=shoes exact        | targeting validation passes                  |
+      | keyword_targets with unique tuples                | kw=shoes exact        | error UNSUPPORTED_FEATURE on packages[0].targeting_overlay.keyword_targets with suggestion |
       | keyword_targets with duplicate (keyword, match_type) | kw=shoes exact x2 | error INVALID_REQUEST with suggestion          |
+    # CORRECTED against the pin, for the reason the partition outline above records: a
+    # single-method geo_proximity entry and a keyword_targets list are refused
+    # UNSUPPORTED_FEATURE by a seller that declares neither dimension, after the request-fault
+    # rows (two proximity methods in one entry, a repeated keyword pair) are refused
+    # INVALID_REQUEST.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json
 
   @T-UC-002-boundary-creative-asset @boundary @creative-asset
   Scenario Outline: Creative asset boundary validation - <boundary_point>
