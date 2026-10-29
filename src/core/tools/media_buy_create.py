@@ -3581,13 +3581,13 @@ async def _create_media_buy_impl(
                     # equality check selects the right config branch (str(enum) would
                     # yield 'DeliveryType.guaranteed' and silently mis-route — PR1399).
                     delivery_type_str = enum_value(schema_product.delivery_type) or "non_guaranteed"
-                    # Extract format IDs as strings for config generation
-                    formats_list: list[str] | None = None
-                    if schema_product.format_ids:
-                        formats_list = [fmt.id for fmt in schema_product.format_ids]
+                    # The references themselves, not their ids: the seeder keeps the width
+                    # and height a stored entry carries and derives them from the id only
+                    # when it carries none, so ``display_image`` sized 970x250 seeds 970x250
+                    # rather than the 300x250 fallback (salesagent-rlirf).
                     schema_product.implementation_config = gam_validator.generate_default_config(
                         delivery_type=delivery_type_str,
-                        formats=formats_list,
+                        formats=schema_product.format_ids,
                         format_options=schema_product.format_options,
                     )
 
