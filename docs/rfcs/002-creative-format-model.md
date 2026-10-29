@@ -735,8 +735,9 @@ The table is the 2026-10-29 re-grade of tree `1b5c6880b`, which replaces the 202
 Each row was graded against the pinned spec (v3.2.7, adcp 9.3.0) and the code, and the transport
 column reads the per-nodeid outcomes of box run `innet_291026_0257`, which ran that commit on a
 clean tree. "yes" means every clause the seller implements is asserted by a scenario whose steps
-read values off the wire and that passed on a2a, mcp, rest and e2e_rest; "partly" means the built
-clauses are graded that way and the gaps in the bead are not. Each bead carries the obligation's
+read values off the wire and that passed on a2a, mcp, rest and e2e_rest; "partly" means some
+clauses are graded that way and the gaps in the bead name the clauses that are not, whether
+unbuilt or built with no scenario. Each bead carries the obligation's
 pin text, code evidence, scenarios and gaps, and `docs/audits/creative-rfc-status.html` lists the
 evidence nodeids and keeps the 2026-10-28 grade under each obligation.
 
@@ -745,16 +746,16 @@ evidence nodeids and keeps the 2026-10-28 grade under each obligation.
 | S1 | Move each product's creative contract into format_options[] | partial | partly | `salesagent-ol033.20.1` |
 | S2 | A canonical-only product is servable: the product root anyOf admits format_options without format_ids | implemented | yes | `salesagent-ol033.20.2` |
 | S3 | Publish reusable publisher options in /.well-known/adagents.json and reference them by {publisher_domain, format_option_id} | partial | no | `salesagent-ol033.20.3` |
-| S4 | Return the applicable options from get_products | implemented | yes | `salesagent-ol033.20.4` |
+| S4 | Return the applicable options from get_products | implemented | partly | `salesagent-ol033.20.4` |
 | S5 | Stop advertising list_creative_formats as a required sales task — it is deprecated for sales agents | partial | no | `salesagent-ol033.20.5` |
 | F1 | Canonical compatibility is directional and exact — exact dimensions/durations match; a requested range must be contained, overlap insufficient; required slots present with compatible asset types; an exact publisher claim matches both halves | implemented | yes | `salesagent-ol033.20.6` |
 | F2 | Equal format_kind alone does not prove compatibility | implemented | yes | `salesagent-ol033.20.7` |
 | F3 | For a multi-placement product the selected format set must cover every placement; reject or refine, never silently remove inventory | partial | partly | `salesagent-ol033.20.8` |
 | F4 | The compatibility projection must be DERIVED from canonical data and must not become a second authored catalog | partial | partly | `salesagent-ol033.20.9` |
-| P1 | Honour the canonical product filters filters.format_kinds and filters.format_option_refs | implemented | yes | `salesagent-ol033.20.10` |
+| P1 | Honour the canonical product filters filters.format_kinds and filters.format_option_refs | implemented | partly | `salesagent-ol033.20.10` |
 | P2 | Honour package-level canonical selectors format_kind / format_option_refs on create_media_buy and update_media_buy | implemented | yes | `salesagent-ol033.20.11` |
 | M1 | Manifest identity is format_kind plus optional format_option_ref; new manifests use the canonical branch | implemented | yes | `salesagent-ol033.20.12` |
-| M2 | format_option_ref is required when the target product carries multiple format_options sharing a format_kind | implemented | yes | `salesagent-ol033.20.13` |
+| M2 | format_option_ref is required when the target product carries multiple format_options sharing a format_kind | partial | partly | `salesagent-ol033.20.13` |
 | M3 | Validate the manifest against the selected declaration : resolve the ref, confirm required slots, validate each asset's type and technical constraints, check fixed dimensions/durations/codecs/file sizes, reject uncovered selections without relaxing the target | partial | partly | `salesagent-ol033.20.14` |
 | M4 | A manifest must not mix format_id and format_kind (root oneOf, each arm with a not) | implemented | yes | `salesagent-ol033.20.15` |
 | M5 | Preserve format_kind and format_option_ref through preview, sync, library and delivery paths | implemented | yes | `salesagent-ol033.20.16` |
@@ -772,19 +773,24 @@ evidence nodeids and keeps the 2026-10-28 grade under each obligation.
 | L3 | Retain and echo the buyer's own format_id verbatim on the legacy arm | implemented | yes | `salesagent-ol033.20.25` |
 | L4 | Do not author new template/parameterized format_id values; normalize legacy ones immediately and match on the canonical shape | partial | partly | `salesagent-ol033.20.26` |
 | V1 | The seller's accepted format_kind vocabulary is the seller's, not the library's | no longer an obligation | — | — |
-| V2 | Refuse a format_kind absent from the target product's format_options[] (the per-product closed set — a rule PR #1415 is at pains to say did not move to the seller, and is still enforced by validate_format_kind_in_options / FormatKindNotInClosedSetError) | implemented | yes | `salesagent-ol033.20.27` |
+| V2 | Refuse a format_kind absent from the target product's format_options[] (the per-product closed set — a rule PR #1415 is at pains to say did not move to the seller, and is still enforced by validate_format_kind_in_options / FormatKindNotInClosedSetError) | implemented | partly | `salesagent-ol033.20.27` |
 
-Totals: 15 implemented, 9 partial, 1 absent (M6), 5 not applicable, and V1 is no longer an
+Totals: 14 implemented, 10 partial, 1 absent (M6), 5 not applicable, and V1 is no longer an
 obligation at the pin. C4, G1 and G2 are creative-agent obligations. C1 and C3 are not applicable
 by the owner's decision of 2026-10-29: this seller does not claim the creative protocol, and the
 pinned capabilities response carries the creative block only when creative is in
-`supported_protocols`. Fourteen obligations are graded "yes", nine "partly", and three (S3, S5,
-M6) are not graded.
+`supported_protocols`. Ten obligations are graded "yes", twelve "partly", and three (S3, S5,
+M6) are not graded. S4, P1 and V2 are built, but a clause of each has no scenario: S4 is graded
+only for products with one option, P1 only for one filter value and a product-scoped ref, and V2's
+closed-set refusal only on products that also carry `format_ids`.
 
 E1 is met by construction: a canonical product's `format_ids` is derived from its declarations'
-`v1_format_ref`, so the reference-axis divergence the advisory reports cannot occur. M2 follows
-`creative-manifests.mdx` § Validation step 1 on the seller side: a ref-less manifest that only one
-same-kind declaration accepts is assigned to it, and one that fits several is refused.
+`v1_format_ref`, so the reference-axis divergence the advisory reports cannot occur. M2 is
+partial: a ref-less manifest that fits several same-kind declarations is refused, but one that
+fits only one of them is assigned to it. `core/creative-asset.json` and
+`core/creative-manifest.json` (`format_option_ref`) and the normative routing rule in
+`canonical-formats.mdx` require the ref whenever the target product has two or more declarations
+of the kind, so that case should be refused with `CREATIVE_VALIDATION_FAILED_GENERIC` too.
 
 The largest remaining gaps, by the re-grade:
 
@@ -805,6 +811,8 @@ The largest remaining gaps, by the re-grade:
 - **Legacy-key matching on three readers (L4) and resolution steps 4–5 (L2).** The get_products
   and list_creatives `format_ids` filters, and sync_creatives' check against the creative agent's
   deprecated catalogue, still match on the legacy key.
+- **A ref-less manifest on a product with several declarations of its kind (M2).** It is
+  accepted when its assets fit one of them; the pin requires the ref there.
 - **Publishing options in adagents.json (S3)** and **representation_selection (M6)** are unbuilt.
 
 Creative format identity underpins creative, media buy, packages and delivery, so a change to
