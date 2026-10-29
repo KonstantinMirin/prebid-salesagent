@@ -1063,26 +1063,46 @@ def _assert_workflow_outcome(ctx: dict, outcome: str) -> None:
 
 
 def _assert_persistence_outcome(ctx: dict, outcome: str) -> None:
-    """Assert persistence matches the expected behavior.
+    """Assert BR-RULE-020 persistence on the wire, the seller's record and the ad server's receipt.
 
-    - 'all records persisted after adapter success': the success arm's media_buy_id names a
-      media buy the seller holds (read back through the harness)
-    - 'records persisted in pending state': the submitted arm (no media_buy_id by pin)
-    - 'no records persisted after adapter failure': the refusal crossed the wire
+    The same three readings the BR-RULE-020 invariant scenarios grade, composed from their
+    steps (``uc002_invariants``) so a persistence-timing row and an invariant cannot disagree:
+
+    - 'all records persisted after adapter success': the synchronous success for the requested
+      packages, the ad server handed exactly this buy, and the seller holding it -- the caller's,
+      with the answered packages;
+    - 'records persisted in pending state': the submitted task (no media_buy_id by pin), the buy
+      stored ``pending_approval`` with one package per requested package, and the ad server never
+      reached;
+    - 'no records persisted after adapter failure': the ad server's outage on the wire
+      (SERVICE_UNAVAILABLE, the code the Given injects) and no media buy or package stored.
     """
+    from tests.bdd.steps.domain.uc002_invariants import (
+        then_adapter_executed,
+        then_manual_approval,
+        then_media_buy_created,
+        then_media_buy_persisted,
+        then_no_packages_persisted,
+        then_package_records_persisted,
+        then_parked,
+    )
+    from tests.bdd.steps.generic.then_success import then_no_media_buy_record_persisted
+
     if outcome == "no records persisted after adapter failure":
-        assert "error" in ctx, f"Expected error for '{outcome}' but no error in ctx"
-        ctx["result"].error_envelope()
+        ctx["result"].assert_wire_error("SERVICE_UNAVAILABLE")
+        then_no_media_buy_record_persisted(ctx)
+        then_no_packages_persisted(ctx)
         return
 
     assert "error" not in ctx, f"Expected '{outcome}' but got error: {ctx.get('error')}"
     if outcome == "records persisted in pending state":
-        _assert_submitted_arm(ctx, outcome)
+        then_manual_approval(ctx)
+        then_parked(ctx)
+        then_package_records_persisted(ctx)
         return
-    from tests.bdd.steps._outcome_helpers import assert_media_buy_created
-
-    media_buy_id = wire_field(ctx, "media_buy_id")
-    assert assert_media_buy_created(ctx, media_buy_id) is not None, f"Media buy {media_buy_id!r} not persisted"
+    then_media_buy_created(ctx)
+    then_adapter_executed(ctx)
+    then_media_buy_persisted(ctx)
 
 
 @lru_cache(maxsize=1)

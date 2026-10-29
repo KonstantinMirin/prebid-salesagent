@@ -663,8 +663,12 @@ def is_e2e(ctx: dict) -> bool:
 def assert_media_buy_created(ctx: dict, media_buy_id: str | None = None) -> object:
     """Verify media buy exists in DB through the harness.
 
-    Returns the MediaBuy ORM instance for further assertions.
+    Returns the MediaBuy ORM instance for further assertions. Read through ``env.get_one``,
+    which every harness env carries, scoped to the env's tenant: the ``env.get_media_buy`` this
+    used to call is declared by no env, so every caller died on an AttributeError.
     """
+    from src.core.database.models import MediaBuy
+
     env = ctx["env"]
 
     if media_buy_id is None:
@@ -674,7 +678,8 @@ def assert_media_buy_created(ctx: dict, media_buy_id: str | None = None) -> obje
 
     assert media_buy_id is not None, "No media_buy_id available to verify creation"
 
-    mb = env.get_media_buy(media_buy_id)
+    mb = env.get_one(MediaBuy, media_buy_id=media_buy_id, tenant_id=env.tenant_id)
+    assert mb is not None, f"the create answered {media_buy_id!r} but the seller stored no such media buy"
     return mb
 
 
