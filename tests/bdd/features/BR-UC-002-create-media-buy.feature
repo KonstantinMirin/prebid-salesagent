@@ -3320,13 +3320,27 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # CORRECTED against the pin. The three "governance agents configured" rows keyed the
+    # seller's governance gate on plan_id: absent -> INVALID_REQUEST, unresolvable ->
+    # PLAN_NOT_FOUND, resolvable -> proceeds. At the pin the seller never reads plan_id.
+    # create-media-buy-request.json plan_id: "DEPRECATED on seller-facing requests. New
+    # buyers send the approved governance_context on the protocol envelope; the seller
+    # forwards that opaque context and does not need the plan identifier."
+    # governance/campaign/specification.mdx: "The service does not need the buyer's
+    # `plan_id` ... A request without a token, with a token that fails verification, or with
+    # a token issued for a different audience or phase MUST be rejected with
+    # `PERMISSION_DENIED`." PLAN_NOT_FOUND is the governance agent's answer to sync_plans /
+    # check_governance, not the seller's. The governed-account gate (governance_context
+    # verification and the seller's check_governance call) is graded by BR-UC-030, so those
+    # rows are deleted here rather than restated.
+    # The two rows kept are the pin's: "When `governance_agents` is absent, the seller
+    # processes media buy requests normally", and "Sellers MUST NOT require governance
+    # checks as a prerequisite for all accounts" -- with or without the deprecated plan_id.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/plan_id
+    # @source repo=adcp ref=v3.2.7 path=docs/governance/campaign/specification.mdx
 
     Examples: Boundary values
       | boundary_point                                                  | outcome                               |
-      | governance agents configured + plan_id present + plan resolves  | proceeds past governance gate         |
-      | governance agents configured + plan_id absent                   | error INVALID_REQUEST with suggestion |
-      | governance agents configured + plan_id present + plan not found  | error PLAN_NOT_FOUND with suggestion  |
       | no governance agents + plan_id absent                           | proceeds, governance skipped          |
       | no governance agents + plan_id present                          | proceeds, governance skipped          |
 

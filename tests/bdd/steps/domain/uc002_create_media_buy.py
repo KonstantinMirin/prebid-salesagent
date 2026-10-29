@@ -21,7 +21,12 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps._harness_db import db_session as _db_session
 from tests.bdd.steps._outcome_helpers import _get_response_field, payload_or_none, require_payload, wire_field
 from tests.bdd.steps.domain.uc002_task_query import assert_task_query_outcome, is_task_query_outcome
-from tests.bdd.steps.domain.uc002_v31_request import assert_sandbox_outcome, is_sandbox_outcome
+from tests.bdd.steps.domain.uc002_v31_request import (
+    assert_governance_skipped_outcome,
+    assert_sandbox_outcome,
+    is_governance_skipped_outcome,
+    is_sandbox_outcome,
+)
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 from tests.bdd.steps.generic._create_request import build_create_request_kwargs, pricing_option_id
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
@@ -803,6 +808,8 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
         _assert_account_resolution_succeeds(ctx)
     elif is_sandbox_outcome(outcome):
         assert_sandbox_outcome(ctx, outcome)
+    elif is_governance_skipped_outcome(outcome):
+        assert_governance_skipped_outcome(ctx)
     elif outcome.startswith("error"):
         _assert_error_outcome(ctx, outcome)
         if outcome.endswith("no records persisted"):
