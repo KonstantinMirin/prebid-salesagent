@@ -41,7 +41,7 @@ from src.core.exceptions import (
     AdCPNotCancellableError,
     AdCPValidationError,
 )
-from src.core.format_satisfaction import FormatRefusal, FormatSatisfaction, creative_refusal, creative_satisfies
+from src.core.format_satisfaction import FormatSatisfaction, creative_refusal, creative_satisfies
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
 
@@ -536,9 +536,10 @@ def _validate_creatives_for_assignment(
         verdict = creative_satisfies(creative, contract)
         if verdict:
             continue
-        if verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED:
-            # A canonical refusal -- the closed set (UNSUPPORTED_FEATURE) or a manifest that
-            # fails its declaration (a creative code) -- is raised on the first one: the
+        if verdict.creative_coded:
+            # A canonical refusal -- the closed set (UNSUPPORTED_FEATURE) or a manifest, or a
+            # legacy reference's parameters, failing what it selects (a creative code) -- is
+            # raised on the first one: the
             # recovery is to pick a format inside the closed set or fix the creative, and
             # collecting it beside the legacy problems would answer the buyer one code for
             # two conditions.

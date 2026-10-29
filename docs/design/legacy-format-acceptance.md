@@ -112,14 +112,15 @@ copied by name, so a creative synced with a pixel ratio came back as a different
 the buyer sent". Two independent implementations, one hand-written list each, the same field
 missing from both.
 
-Disposition, now implemented: `_pixel_ratio_unsatisfied` compares the field beside the SDK call
-and refuses a mismatch AND silence; the accepted names come from `_FORMAT_ID_PARAMETERS` rather
-than a fourth list. Filing upstream is still open, and is outward-facing.
+Disposition: closed upstream. The pinned SDK (`adcp==9.3.0`) compares all four fields, and
+reads an omitted `pixel_ratio` on a sized reference as the 1x variant, as `core/format-id.json`
+says ("Omit for the backward-compatible 1x variant"). The local supplement that compared the
+field beside the SDK call (`_pixel_ratio_unsatisfied`) is deleted, and the deprecated lane's
+acceptance is `format_is_supported` alone. It also stops refusing a silent claim against a
+product fixing 1x, which the supplement did and the field's text does not.
 
-Both failing rows are graded — `@T-UC-FORMAT-SATISFACTION-sync-density-mismatched` and
-`-sync-density-silent`. They exist because removing the supplement reddened NOTHING when it was
-first written: the clause was correct per the pin and unfalsifiable by the suite, which is this
-document's own subject one field over.
+Both failing rows stay graded — `@T-UC-FORMAT-SATISFACTION-sync-density-mismatched` and
+`-sync-density-silent` — and now grade the SDK's comparison.
 
 ## What stays ours, and why
 
@@ -200,10 +201,14 @@ design did not predict, recorded because each changed the work:
 - **The wire-level accept, which this document left derived.** Measured on all three
   in-process transports before the fix: `status=completed`, `assigned_to=['pkg_001']`,
   `assignment_errors=None`. A 300x250 product created an assignment for a 728x90 creative.
-- **The refusal is `VALIDATION_ERROR`, not `UNSUPPORTED_FEATURE`.** `canonical_refusal`
-  asserts it is never called for `LEGACY_NOT_ACCEPTED`, because the deprecated lane raises
-  `AdCPValidationError` at its own site. The first draft of the scenarios asserted the
-  canonical lane's code against the deprecated lane's refusal.
+- **The refusal is `CREATIVE_SIZE_MISMATCH`, the code the canonical lane gives the same
+  condition.** When the product takes the creative's template at other parameters,
+  `_legacy_shortfalls` reports each parameter that fails (`format_id.width`,
+  `format_id.pixel_ratio`, ...) and `creative_refusal` codes them as it codes a manifest's:
+  a size or density is `CREATIVE_SIZE_MISMATCH`, anything else
+  `CREATIVE_VALIDATION_FAILED_GENERIC`. A format the product does not take at all is still
+  `VALIDATION_ERROR`, raised by the assignment sites themselves, and lenient
+  `sync_creatives` still skips both.
 - **The refusal has to NAME the size.** A template-key accepted set could only ever render
   `<agent>/display_image` — the same string whether the product restricts to 300x250 or to
   nothing — so `_reference_display` renders the identity plus its parameters, and the Then

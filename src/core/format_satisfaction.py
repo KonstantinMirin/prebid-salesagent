@@ -85,7 +85,7 @@ from enum import Enum, StrEnum
 from functools import lru_cache
 from typing import Any, get_args
 
-from adcp.canonical_formats import upgrade_legacy_format_id
+from adcp.canonical_formats import formats_are_equivalent, upgrade_legacy_format_id
 from adcp.canonical_formats.format_options import FormatKindNotInClosedSetError
 from adcp.canonical_formats.projection import project_legacy_format_id
 from adcp.types import ErrorCode
@@ -184,9 +184,11 @@ _RESOLUTION_FAILURES: frozenset[FormatRefusal] = frozenset(
 #: by the selected packages" (enums/error-code.json). Any other failure is not about size.
 #: ``pixel_ratios`` is among them: a density the declaration does not accept is an intrinsic
 #: size it does not accept -- "an accepted asset's intrinsic width is ``width x pixel_ratio``"
-#: (formats/canonical/image.json).
+#: (formats/canonical/image.json). ``pixel_ratio`` is the same axis on a deprecated reference:
+#: core/format-id.json's ``{width: 300, height: 250, pixel_ratio: 2}`` "identifies a 300x250
+#: logical render supplied by a 600x500 image".
 _DIMENSION_CONSTRAINTS: frozenset[str] = frozenset(
-    {"width", "height", "min_width", "max_width", "min_height", "max_height", "sizes", "pixel_ratios"}
+    {"width", "height", "min_width", "max_width", "min_height", "max_height", "sizes", "pixel_ratios", "pixel_ratio"}
 )
 
 
@@ -253,10 +255,24 @@ class FormatSatisfaction:
     #: from ``refusal`` at the call site: the route knows its own provenance, and a mapping
     #: would be a second place that has to agree about which refusal came from which arm.
     field: str | None = None
-    #: What a creative's MANIFEST failed, one entry per constraint, when the refusal is
-    #: :attr:`FormatRefusal.MANIFEST_NOT_SATISFIED`. ``compare=False`` for the reason
-    #: ``selection`` gives: it is the verdict's evidence, not its identity.
+    #: What a creative failed, one entry per constraint: its MANIFEST when the refusal is
+    #: :attr:`FormatRefusal.MANIFEST_NOT_SATISFIED`, or the parameters of its deprecated
+    #: reference when the refusal is :attr:`FormatRefusal.LEGACY_NOT_ACCEPTED` and the product
+    #: takes the reference's template (:func:`_legacy_shortfalls`). ``compare=False`` for the
+    #: reason ``selection`` gives: it is the verdict's evidence, not its identity.
     shortfalls: tuple[ManifestShortfall, ...] = dataclass_field(default=(), compare=False)
+
+    @property
+    def creative_coded(self) -> bool:
+        """Whether a creative gate answers this refusal through :func:`creative_refusal`.
+
+        Every refusal but one: a deprecated reference whose TEMPLATE the product does not take
+        at all, which the creative assignment sites answer ``VALIDATION_ERROR`` themselves (and
+        the lenient assignment mode skips). A deprecated reference the product does take, at
+        other parameters, carries its shortfalls and gets the creative code the canonical lane
+        gives the same condition.
+        """
+        return self.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED or bool(self.shortfalls)
 
     @property
     def declaration(self) -> LibraryFormatDeclaration | None:
@@ -1529,8 +1545,10 @@ def _legacy_lane(
     reimplemented: it upgrades BOTH sides first -- which is the clause's "legacy named
     formats MUST be normalized to canonical declarations before comparison" -- then requires
     the claim to match every parameter the product fixed, while a parameter the product
-    leaves open permits anything. ``pixel_ratio`` is compared HERE because the SDK's field
-    loop names only three of the four; see :func:`_pixel_ratio_unsatisfied`.
+    leaves open permits anything. All four of ``core/format-id.json``'s parameters, the
+    density included: an omitted ``pixel_ratio`` on a sized reference is "the
+    backward-compatible 1x variant", so a product fixing 2x refuses a claim that states 1x
+    and one that states nothing, and a product fixing 1x accepts the silent one.
 
     ``identity.assertion`` is the input even though it is declared ``compare=False``. That
     flag means a reference is never compared BY RAW SPELLING -- the same agent respelled is
@@ -1567,11 +1585,7 @@ def _legacy_lane(
             return _SATISFIED
         return _kind_route(identity.kind, [d for d in projected if d is not None], params)
     accepted = tuple(sorted(_reference_display(reference) for reference in legacy_references))
-    accepting = [
-        index
-        for index, reference in enumerate(legacy_references)
-        if format_accepted_by(claimed, reference) and not _pixel_ratio_unsatisfied(claimed, reference)
-    ]
+    accepting = [index for index, reference in enumerate(legacy_references) if format_accepted_by(claimed, reference)]
     if accepting:
         # Satisfied whether or not an accepting entry projected: the deprecated arm accepts
         # the reference. What it SELECTS is the projections, which a co-present route's
@@ -1590,29 +1604,46 @@ def _legacy_lane(
         rejected_value=rejected,
         accepted_values=accepted,
         summary=(f"format {rejected!r} is not one this product accepts ({', '.join(accepted)})"),
+        # The first entry naming the claim's template, as the canonical lane reports the first
+        # candidate's shortfalls; none when no entry does.
+        shortfalls=next(
+            (found for reference in legacy_references if (found := _legacy_shortfalls(claimed, reference))), ()
+        ),
     )
 
 
-def _pixel_ratio_unsatisfied(claimed: LibraryFormatId, supported: LibraryFormatId) -> bool:
-    """Whether the product fixes a ``pixel_ratio`` the claim does not match.
+def _legacy_shortfalls(claimed: LibraryFormatId, supported: LibraryFormatId) -> tuple[ManifestShortfall, ...]:
+    """Which parameters of *claimed* fail *supported*, when both name the same template.
 
-    The one parameter ``format_is_supported`` does not read. Its field loop is the literal
-    ``("width", "height", "duration_ms")`` while ``core/format-id.json`` declares a fourth,
-    and calls it "**Required** intrinsic-pixel density for a parameterized visual format" --
-    so a product requiring a 2x asset accepts a 1x one. Measured on the pin
-    (9.0.0b3+sa.8qela.bf0228b68): against a product fixing ``pixel_ratio=2``, a claim
-    stating 2, a claim stating 1, and a claim stating nothing all answered True. The field is
-    not merely unenforced on silence; it is never read, so a CONTRADICTING value passes too
-    and both cases are refused here.
+    Empty when the two name different templates (agent and id, after both are canonically
+    addressed and upgraded): that is a format the product does not take at all, not a
+    creative of the right format at the wrong parameters.
 
-    The same omission shape this repo already fixed in itself: ``_FORMAT_ID_PARAMETERS``
-    exists because three of the four were once copied by name. Two independent
-    implementations, one hand-written list each, the same field missing from both. This
-    supplement goes away when the SDK reads the field; it is deliberately a parameter check
-    beside the call rather than a reimplementation of the call.
+    Each parameter is asked of the SDK on its own. The probe is *supported* with that one
+    parameter replaced by the claim's, so ``format_accepted_by`` answers for exactly that
+    field, with the SDK's own reading of an omitted ``pixel_ratio`` -- and an omitted
+    ``pixel_ratio`` is reported as nothing stated, which is what the buyer sent. The one
+    accepted value the product does not state is the density: core/format-id.json, "Omit for
+    the backward-compatible 1x variant".
     """
-    required = supported.pixel_ratio
-    return required is not None and claimed.pixel_ratio != required
+    from src.core.format_resolver import canonically_addressed, format_accepted_by
+    from src.core.schemas._base import _FORMAT_ID_PARAMETERS
+
+    claim = upgrade_legacy_format_id(canonically_addressed(claimed))
+    product = upgrade_legacy_format_id(canonically_addressed(supported))
+    template = dict.fromkeys(_FORMAT_ID_PARAMETERS)
+    if not formats_are_equivalent(claim.model_copy(update=template), product.model_copy(update=template)):
+        return ()
+    return tuple(
+        ManifestShortfall(
+            field=f"format_id.{name}",
+            constraint=name,
+            rejected_value=None if (stated := getattr(claim, name)) is None else _shown(stated),
+            accepted_values=(_shown(1 if (fixed := getattr(product, name)) is None else fixed),),
+        )
+        for name in sorted(_FORMAT_ID_PARAMETERS)
+        if not format_accepted_by(product.model_copy(update={name: getattr(claim, name)}), product)
+    )
 
 
 def _reference_display(reference: LibraryFormatId) -> str:
@@ -2320,9 +2351,10 @@ def canonical_refusal(
     :attr:`FormatRefusal.LEGACY_NOT_ACCEPTED` reaches this from ONE site: the package
     selector gate, where ``media-buy/package-request.json``'s "Format selector contract
     (normative)" codes every lane's unsatisfied route ``UNSUPPORTED_FEATURE``. The creative
-    assignment sites still answer that refusal ``VALIDATION_ERROR`` by their own
-    condition, because the selector contract governs a package's selector and not a
-    creative's identity; whether their code converges too is a separate decision.
+    assignment sites answer it through :func:`creative_refusal` when it carries shortfalls
+    (a size or density the product does not take) and ``VALIDATION_ERROR`` themselves when
+    it does not (:attr:`FormatSatisfaction.creative_coded`), because the selector contract
+    governs a package's selector and not a creative's identity.
 
     ``entity`` names which thing the refusal is about (``creative_id``, ``product_id``,
     ``package_id``), passed through to :class:`CapabilityRefusalDetails`, which inherits
@@ -2360,7 +2392,9 @@ def creative_refusal(
     A selection outside the product's closed set, or an option ref it does not publish, is
     :func:`canonical_refusal`'s ``UNSUPPORTED_FEATURE``: "Reject unknown or uncovered
     selections" (creative-manifests.mdx § Validation step 5). A manifest that does not
-    satisfy the declaration it selected takes a creative code from the pinned enum:
+    satisfy the declaration it selected, or a deprecated reference that names a template the
+    product takes at parameters it does not (:func:`_legacy_shortfalls`), takes a creative
+    code from the pinned enum:
 
     * ``CREATIVE_SIZE_MISMATCH`` when every shortfall is a dimension -- "The submitted
       creative dimensions do not match any size accepted by the selected packages";
@@ -2373,7 +2407,7 @@ def creative_refusal(
     ``problems[]`` carries each shortfall as values -- the manifest path, what the asset
     states, what the declaration accepts -- under the code it is an instance of.
     """
-    if verdict.refusal not in _MANIFEST_REFUSALS:
+    if verdict.refusal not in _MANIFEST_REFUSALS and not verdict.shortfalls:
         return canonical_refusal(verdict, field=field, creative_id=creative_id, **entity)
     sized = bool(verdict.shortfalls) and all(shortfall.dimensional for shortfall in verdict.shortfalls)
     details = CreativeManifestDetails(

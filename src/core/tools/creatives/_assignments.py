@@ -266,18 +266,23 @@ def _process_assignments(
                                 )
                                 assignment_errors_by_creative[creative_id][package_id] = error_msg
 
-                                if verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED:
-                                    # A canonical refusal -- the closed set, or a manifest that
-                                    # does not satisfy the declaration it selects -- is raised
-                                    # in BOTH validation modes: lenient means "skip a creative
-                                    # this product will not take", and the pin says a seller
-                                    # must "not silently relax the target contract", so there
-                                    # is no partial assignment to fall back to. The legacy
-                                    # lane below keeps its lenient skip, which scenarios grade.
-                                    raise creative_refusal(verdict, creative_id=creative_id, package_id=package_id)
-                                if validation_mode == "strict":
-                                    # Reverses #1417, which routed this to CREATIVE_REJECTED: adcp
-                                    # 3.1.1's enum reserves that for "Creative failed content policy
+                                # A canonical refusal -- the closed set, or a manifest that
+                                # does not satisfy the declaration it selects -- is raised in
+                                # BOTH validation modes: lenient means "skip a creative this
+                                # product will not take", and the pin says a seller must "not
+                                # silently relax the target contract", so there is no partial
+                                # assignment to fall back to. The legacy lane keeps its
+                                # lenient skip, which scenarios grade, whichever code strict
+                                # mode would give it.
+                                if (
+                                    validation_mode == "strict"
+                                    or verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED
+                                ):
+                                    if verdict.creative_coded:
+                                        raise creative_refusal(verdict, creative_id=creative_id, package_id=package_id)
+                                    # A legacy format the product does not take at all. Reverses
+                                    # #1417, which routed this to CREATIVE_REJECTED: adcp 3.1.1's
+                                    # enum reserves that for "Creative failed content policy
                                     # review". Converged with the create and update paths.
                                     raise AdCPValidationError(
                                         # The verdict's accepted set, joined: the pin-canonical
@@ -285,11 +290,10 @@ def _process_assignments(
                                         # carried the whole supported list as its single entry.
                                         details=ValidationDetails(accepted_values=[", ".join(verdict.accepted_values)]),
                                     )
-                                else:
-                                    logger.warning(
-                                        log_safe(f"Creative format mismatch during assignment, skipping: {error_msg}")
-                                    )
-                                    continue
+                                logger.warning(
+                                    log_safe(f"Creative format mismatch during assignment, skipping: {error_msg}")
+                                )
+                                continue
 
                     # actual_package_id is always set when media_buy_id is set (guard above)
                     assert actual_package_id is not None

@@ -112,7 +112,9 @@ class CreativeFormatsEnv(PeerCreativeAgentMixin, IntegrationEnv):
         testing-mode ``ReferenceFormatsRegistry``. The standard creative agent stays
         federated: these scenarios locate the peer's formats by the agent_url it published.
         """
-        self.configure_peer_agent(self.serve_peer_catalog(new_peer_key(), {"formats": payload}))
+        self.configure_peer_agent(
+            self.serve_peer_catalog(new_peer_key(), {"formats": payload}), owner="set_peer_format_payload"
+        )
 
     def served_registry_formats(self) -> list[Any]:
         """The formats the seller's creative agents serve this scenario, on every transport.

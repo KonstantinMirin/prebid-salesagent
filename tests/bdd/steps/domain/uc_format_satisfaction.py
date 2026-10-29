@@ -1182,10 +1182,9 @@ def _seed_legacy_sized_sync_chain(ctx: dict, width: int, height: int, *, agent_u
 def given_sync_legacy_density_product(ctx: dict, width: int, height: int, pixel_ratio: int) -> None:
     """The same legacy-only product, additionally fixing the asset DENSITY it requires.
 
-    ``pixel_ratio`` is the fourth parameterizing field and the one the SDK's comparison does
-    not read, so this row is what makes ``_pixel_ratio_unsatisfied`` falsifiable. Without it
-    that clause is in exactly the position the dimensions were in before this change: correct
-    per the pin, and unfalsifiable by the suite -- removing it reddened nothing (measured).
+    ``pixel_ratio`` is the fourth parameterizing field, and the one an earlier SDK's
+    comparison did not read. This row is what keeps the density comparison falsifiable: with
+    no product fixing a density, a comparison that ignored the field would pass every row.
 
     The pin requires the match and requires the dimensions alongside it:
     ``core/format-id.json`` calls the field "**Required** intrinsic-pixel density for a
@@ -1445,6 +1444,9 @@ def _sync_legacy_claim(ctx: dict, format_id: str, **parameters: int) -> None:
             format_id=resolvable_format_ref(format_id, **parameters),
         )
     ]
+    # The creative a refusal names, as the canonical claim records it: a legacy reference the
+    # product takes at other parameters is refused with the creative's own code.
+    ctx["manifest_creative_id"] = _SYNC_CREATIVE_ID
 
 
 @given(
@@ -1999,9 +2001,11 @@ def then_refused_legacy_not_accepted(ctx: dict, width: int, height: int) -> None
     """The DEPRECATED lane's refusal, and the dimensions have to be in it.
 
     A DIFFERENT CODE from the canonical sibling, and that is production's documented
-    decision rather than this scenario's preference: the creative ASSIGNMENT sites skip
-    ``canonical_refusal`` for ``LEGACY_NOT_ACCEPTED`` and raise ``AdCPValidationError``
-    themselves -- "violates business rules beyond schema validation". (A package's own
+    decision rather than this scenario's preference: for a legacy format the product does
+    not take at all (``FormatSatisfaction.creative_coded`` is false), the creative
+    ASSIGNMENT sites raise ``AdCPValidationError`` themselves -- "violates business rules
+    beyond schema validation". A format the product takes at another size gets the creative
+    code instead, graded by ``the creative is refused {code}``. (A package's own
     format selector is a different site, coded UNSUPPORTED_FEATURE by
     ``media-buy/package-request.json``'s selector contract.) A row asserting UNSUPPORTED_FEATURE here would be asserting the canonical
     lane's code against the deprecated lane's refusal, which is the mistake this Then was

@@ -6,6 +6,7 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 from adcp.canonical_formats import upgrade_legacy_format_id
+from adcp.canonical_formats.compat_helpers import FormatIdInput
 from pydantic import ValidationError
 
 from src.core.format_satisfaction import product_declarations
@@ -237,7 +238,7 @@ class GAMProductConfigService:
     @staticmethod
     def generate_default_config(
         delivery_type: str,
-        formats: Sequence[dict[str, Any] | str] | None = None,
+        formats: Sequence[FormatIdInput] | None = None,
         *,
         format_options: Any = None,
     ) -> dict[str, Any]:
@@ -246,7 +247,10 @@ class GAMProductConfigService:
         Args:
             delivery_type: "guaranteed" or "non_guaranteed"
             formats: the product's deprecated ``format_ids`` arm, as the stored entries
-                (``{agent_url, id, width?, height?, duration_ms?}``) or as bare id strings.
+                (``{agent_url, id, width?, height?, duration_ms?}``), as the validated
+                references a converted product carries, or as bare id strings. Pass the
+                references whenever there are any: a bare id drops the width and height an
+                entry stores, and an id like ``display_image`` encodes none to derive.
             format_options: the product's canonical ``format_options`` arm, as the stored
                 documents or as the pinned union's validated arms. ``Any`` for the reason
                 ``format_satisfaction.product_declarations`` states: this is reached from an
