@@ -86,21 +86,19 @@ _CEILINGS: dict[str, int] = {
     # a list. The UC-002 and UC-003 catch-alls (385 and 381) drained to zero: their rows
     # lost their xfail_reason, and what fails is named per scenario in the BDD conftest's
     # _UC002_UC003_LEDGER (measure_innet_291026_1202).
-    # 21 at integrate/wave1 a3687d971.
-    "uc010-not-wired": 21,
+    # 21 at integrate/wave1 a3687d971; 18 after wave 6 deleted the
+    # T-UC-010-degradation-creative outline and wired T-UC-010-local-inline-creative-management.
+    "uc010-not-wired": 18,
     # Per-tag UC-010 dormancy rows, generated from `_UC010_PARKED_TAGS`. Their reasons
     # cite issues and `test_architecture_uc010_dormancy_citations` grades the citation;
     # only the size was uncounted.
     "uc010-dormant-T-UC-010-v31-identity-key-origins": 4,
     "uc010-dormant-T-UC-010-v31-governance-aware": 2,
-    "uc010-dormant-T-UC-010-v31-creative-multiplicity": 1,
     "uc010-dormant-T-UC-010-v31-vendor-metric-optimization": 1,
     "uc010-dormant-T-UC-010-v31-creative-specs": 1,
     "uc010-dormant-T-UC-010-v31-identity-compromise-notification": 1,
     "uc010-dormant-T-UC-010-v31-content-standards-block": 1,
     "uc010-dormant-T-UC-010-v31-identity-brand-json-url": 1,
-    "uc010-dormant-T-UC-010-v31-creative-extended": 1,
-    "uc010-dormant-T-UC-010-v31-creative-agentic-flags": 1,
 }
 
 #: The population floor. A derivation that matches nothing is silently green, and that is

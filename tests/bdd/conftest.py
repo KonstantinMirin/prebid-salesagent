@@ -499,8 +499,10 @@ _XFAIL_TAGS: dict[str, str] = {
     # priorities against the success branch and a created buy (core/optimization-goal.json
     # resolves ties by array order); -6 grades INVALID_REQUEST, correctable and a suggestion
     # on the wire for an empty optimization_goals array (minItems 1).
-    # FIXME: UC-002 error code mismatch — Pydantic VALIDATION_ERROR vs spec INVALID_REQUEST
-    "T-UC-002-inv-087-7": "per_ad_spend without value_field: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
+    # Graduated: T-UC-002-inv-087-7 (strict XPASS on a2a, mcp, rest and e2e_rest in
+    # innet_291026_2041). The scenario names VALIDATION_ERROR for per_ad_spend without
+    # value_field, the code production answers: optimization-goal.json value_field says
+    # sellers must reject the target kind, a rule the schema does not encode.
     # Graduated: T-UC-005-inv-049-8-holds, together with the -violated and -nofield rows
     # that used to sit in _UC005_PARTIAL_TAGS below. The disclosure_positions filter IS
     # implemented now -- src/core/tools/creative_formats.py applies AND semantics
@@ -743,9 +745,6 @@ _XFAIL_TAGS: dict[str, str] = {
     # Removed stale xfails: T-UC-002-partition-optimization-goals, T-UC-002-boundary-optimization-goals
     # Valid rows now pass; invalid rows xfail via _assert_error_outcome _SPEC_PRODUCTION_CODE_MAP.
     # Removed: T-UC-003-partition-optimization-goals, T-UC-003-boundary-optimization-goals, T-UC-003-alt-optimization-goals
-    # NOTE: principal-ownership error code gap — spec expects ACCOUNT_NOT_FOUND,
-    # production raises AdCPAuthorizationError (PERMISSION_DENIED, )
-    # — see T-UC-003-ext-c below
     # RESOLVED: UpdateMediaBuySuccess status="submitted" now handled
     # by then_response_status (empty affected_packages = approval pending).
     # Removed T-UC-003-alt-manual xfail — tests pass with the fix.
@@ -794,12 +793,10 @@ _XFAIL_TAGS: dict[str, str] = {
     # auto-provisioning + the sandbox echo land. BR-RULE-209 INV-8.
     "T-UC-002-sandbox-natural-key": "natural-key sandbox auto-provisioning + sandbox echo not implemented "
     "in create_media_buy (ACCOUNT_NOT_FOUND without prior provisioning) — spec-production gap",
-    # FIXME: inline creative upload not persisted in create_media_buy
-    # process_and_upload_package_creatives → _sync_creatives_impl should persist
-    # creatives to DB, but the Then step "upload creatives to creative library" fails
-    # because no Creative rows exist after creation. Gap was previously masked by
-    # inline pytest.xfail() in the step body — moved to scenario-level here.
-    "T-UC-002-alt-creatives": "inline creative upload not persisted in create_media_buy — spec-production gap",
+    # Graduated: T-UC-002-alt-creatives. The inline creatives and their assignment rows were
+    # persisted all along; the failing Then was packages[0].creative_assignments on the
+    # create response. c0085b9df reports each created package's assignments from the rows
+    # written (core/package.json creative_assignments), on all four transports.
     # RESOLVED: T-UC-004-webhook-hmac — no longer xfailed on any transport as of
     # salesagent-n78j0.13. The sentence that stood here ("Then steps are pending (no-op),
     # test passes trivially") was TRUE WHEN WRITTEN and has been false since #1291 C1 /
@@ -887,11 +884,10 @@ _XFAIL_TAGS: dict[str, str] = {
     # Wired non-dormant + strengthened: steps execute and grade the
     # spec-pinned shape, then fail on the unemitted/hard-coded block (strict xfail on all transports).
     "T-UC-010-v31-compliance-testing": "compliance_testing block not emitted by the capabilities builder; no comply_test_controller surface — #1724",
-    # Re-cited #1592 -> #1724 (a recorded gap batch B3). The OLD reason ("hard-coded,
-    # not derived from tenant config") is now FALSE: specialisms ARE declaration-driven
-    # and registry-validated. The scenario stays xfailed for a different, permanent
-    # reason — it claims postures this deployment does not back.
-    "T-UC-010-v31-specialisms": "scenario claims unbacked postures the STRICT policy forbids declaring: `creative-generative` (no generative creative implemented) and the `creative` protocol (bundle required_tools unimplemented) — #1724",
+    # Graduated: T-UC-010-v31-specialisms. The scenario was corrected to the claims this
+    # seller backs (sales-non-guaranteed under media_buy, signal-owned under signals): the
+    # pinned specialisms description says "Only list specialisms your agent actually
+    # implements", so the creative-generative claim it used to make was not owed.
     # Ledger SHRINK (a recorded gap batch B5): T-UC-010-v31-advisory-errors removed —
     # the capabilities builder now emits top-level advisory errors[] for genuinely
     # faulted discovery lookups (except-path only), so the gap the row recorded is closed.
@@ -904,7 +900,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # Wired non-dormant + strengthened: steps execute and grade the
     # spec-pinned shape, then fail on the missing block (strict xfail on all transports).
     "T-UC-010-conversion-caps": "media_buy.conversion_tracking not emitted by the capabilities builder — #1855",
-    "T-UC-010-creative-caps": "creative section not emitted — production advertises only the media_buy protocol — #1724",
+    # Graduated: T-UC-010-creative-caps. Rewritten as a seller that does not claim the
+    # creative protocol: it grades "creative" absent from supported_protocols and the
+    # creative section absent from the wire, which is the pin's answer for this seller.
     # Graduated (a recorded gap R2): CHANNEL_MAPPING now includes sponsored_intelligence,
     # the 20th canonical channel. T-UC-010-channel-all-canonical removed.
     # Wired non-dormant + strengthened: each scenario executes and grades the
@@ -2294,7 +2292,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # inv-049-4-holds, inv-049-5-holds, inv-049-6-holds, inv-049-7-holds,
         # inv-049-7-violated and dim-boundary. All eleven XPASSED on e2e_rest in box run
         # innet_291026_0257 and passed on a2a, mcp and rest in the same run. The twelfth,
-        # inv-049-2-holds, stays routed below. The set's reason ("set_registry_formats has
+        # inv-049-2-holds, graduated later (see below). The set's reason ("set_registry_formats has
         # no sidecar mock") stopped being true when the format Givens began seeding through
         # CreativeFormatsEnv.set_registry_formats -> seed_own_creative_agent: the tenant's
         # own peer creative agent (the compose stack's capture service on e2e) serves
@@ -2306,19 +2304,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # inv-049-2-violated's "no error should be raised" now require a successful
         # response on the wire, so a refusal can no longer satisfy them.
         #
-        # E2E_REST: T-UC-005-inv-049-2-holds is not graduated yet. The scenario that
-        # XPASSED in innet_291026_0257 varied only the id, so a seller matching format_ids
-        # on id alone passed it. It now also seeds "foreign-leaderboard" under the same id
-        # from another agent, which grades the (agent_url, id) pair identity of
-        # core/format-id.json @ 3.2.7. No e2e_rest run has graded that scenario yet; remove
-        # this route once a bdd-in-network run shows it passing on all four transports.
-        if is_e2e_rest and "T-UC-005-inv-049-2-holds" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="E2E: pair-identity Given added after innet_291026_0257; not yet graded on e2e_rest",
-                    strict=False,
-                )
-            )
+        # Graduated: T-UC-005-inv-049-2-holds on e2e_rest. The scenario seeds
+        # "foreign-leaderboard" under the same id from another agent, which grades the
+        # (agent_url, id) pair identity of core/format-id.json @ 3.2.7; it passed on a2a, mcp
+        # and rest and XPASSED on e2e_rest in innet_291026_2041, the route's exit condition.
 
         # FIXME(#1291, #2098): E2E_REST — these Thens observe env.mock['post'],
         # the in-process local origin, or CircuitBreaker state, none of which is
@@ -2698,7 +2687,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # no longer drops it), and the unknown-principal ownership check
             # (AdCPAuthorizationError) carries a "verify your x-adcp-auth token" suggestion.
             # T-UC-003-ext-a / -ext-a-unknown pass on a2a/mcp/rest.
-            "T-UC-003-ext-c": "production returns PERMISSION_DENIED (AdCPAuthorizationError), spec expects ACCOUNT_NOT_FOUND",
+            # Graduated: T-UC-003-ext-c (xpassed on a2a, mcp, rest and e2e_rest in
+            # innet_291026_2041). The scenario expects MEDIA_BUY_NOT_FOUND for a buy another
+            # principal owns, per L1/security.mdx @ 3.2.7 (the body MUST NOT distinguish
+            # unauthorized from not found), which production answers.
             # Graduated: T-UC-003-ext-d, T-UC-003-ext-d-negative (production now returns BUDGET_TOO_LOW)
             # Production doesn't validate these cases at all
             # Graduated in wave 5 (integrate/wave1 a3687d971): T-UC-003-ext-e and
@@ -4716,22 +4708,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # the graduation to read the persisted package_config as well as the response
             # -- the record get_media_buys serves the field from -- so an echo cannot
             # satisfy it. Fire-probed: restoring the hardcoded literal turns it red.
-            # NOT graduated although it xpassed on all four transports (innet_291026_0008):
-            # the xpass was vacuous. "the old catalog cat-1 should not be present" says
-            # nothing unless cat-1 was on the package, and the Given only recorded the claim,
-            # so the package was created with no catalogs and a merging seller passed. The
-            # Given now creates the package WITH cat-1. That alone does not make it grade:
-            # create does not persist catalogs into package_config (media_buy_create.py
-            # builds the document with no catalogs key), so the update has no stored list to
-            # replace or merge into, and the snapshot reads back only what the update wrote.
-            # It grades replacement once create stores the catalogs core/package.json says
-            # it echoes.
-            # XPASSED again on all four transports in innet_291026_0257, still vacuous for
-            # the same reason, so still not graduated. Create now records the request's
-            # catalogs in package_config (both arms of media_buy_create.py), so the update
-            # replaces a stored cat-1 and a merging seller would report both. Graduates on
-            # the first box run of that change that shows it passing on every transport.
-            "T-UC-026-inv-201-1",
+            # Graduated: T-UC-026-inv-201-1 (xpassed on a2a, mcp, rest and e2e_rest in
+            # innet_291026_2041). Create records the request's catalogs in package_config on
+            # both arms of media_buy_create.py, and 7685a2908 made the scenario read the
+            # created package's stored catalogs back before the update and compare the
+            # replaced list by exact (type, catalog_id) pair, so a seller that echoes
+            # catalogs without storing them, or merges instead of replacing, fails it.
             "T-UC-026-inv-201-2",
             "T-UC-026-inv-201-3",
             "T-UC-026-inv-201-4",
@@ -4975,18 +4957,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     ),
                 )
             ),
-            # Replacement semantics: only the targeting_overlay rows fail. The catalogs
-            # and scalar-patch rows of the same outlines pass.
-            (
-                "T-UC-026-boundary-replacement",
-                {"targeting_overlay replacement (full swap)"},
-                "targeting_overlay is not replaced wholesale on update",
-            ),
-            (
-                "T-UC-026-partition-replacement",
-                {"replace_targeting_overlay"},
-                "targeting_overlay is not replaced wholesale on update",
-            ),
+            # Retired: the targeting_overlay replacement rows. 2bab7f2d3 removed them from
+            # both outlines because they contradicted the pin (an undeclared `audiences`
+            # dimension, and a "full swap" where the pin makes the overlay a per-dimension
+            # patch); @T-UC-003-alt-targeting grades the replacement on a declared dimension.
             # budget=0 rejected with BUDGET_TOO_LOW — spec says 0 is valid
             (
                 "T-UC-026-partition-required-fields",
@@ -5044,8 +5018,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "pricing_option validation returns 'validation_error' instead of AdCP 'INVALID_REQUEST' / "
                 "max_bid pricing requires bid_price / last-entry pricing_option rejects valid id — spec-production gap",
             ),
-            # Replacement: creative_assignments/optimization_goals on every transport, plus
-            # the REST "existing values preserved" rows, which are routed for their own
+            # Replacement: the REST "existing values preserved" rows, which are routed for their own
             # reason (_UC026_PRESERVATION_UNGRADED). Their a2a, mcp and e2e_rest siblings run
             # unrouted; the Given now seeds catalogs and create persists them, so all four
             # rows grade preservation (see the note above _UC026_SHAPE_ROW_ANSWERED_UNSUPPORTED).
@@ -5062,21 +5035,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # -> 37 passed / 0 failed / 18 xfailed / 8 xpassed, the four new xpasses being
             # exactly the REST siblings of the four rows that went green.
             #
-            # "creative_assignments" and "optimization_goals" STAY, and for different
-            # reasons: optimization_goals is a declared field this seller still cannot
-            # apply (it is now REFUSED with UNSUPPORTED_FEATURE rather than dropped —
-            # salesagent-14ffd), and the creative_assignments rows ask for an assignment
-            # to a creative the Given never creates.
-            (
-                "T-UC-026-partition-replacement",
-                {"creative_assignments", "optimization_goals"},
-                "creative_assignments/optimization_goals replacement not implemented on any transport",
-            ),
-            (
-                "T-UC-026-boundary-replacement",
-                {"creative_assignments", "optimization_goals"},
-                "creative_assignments/optimization_goals replacement not implemented on any transport",
-            ),
+            # Retired: the creative_assignments and optimization_goals rows. 2bab7f2d3
+            # removed them from both outlines because each contradicted the pin (a goal with
+            # no `kind`; an assignment to a creative never put in the library); the
+            # @T-UC-003-*-optimization-goals and @T-UC-003-*-creative-replacement outlines
+            # grade both replacements.
             ("T-UC-026-partition-replacement", {"[rest-omit_array_fields"}, _UC026_PRESERVATION_UNGRADED),
             ("T-UC-026-boundary-replacement", {"[rest-all array fields omitted"}, _UC026_PRESERVATION_UNGRADED),
         ]
@@ -5392,8 +5355,6 @@ _UC010_DORMANT_TRACKING: dict[str, str] = {
     # media_buy presence-object sections. #1855's body enumerates these by name, including
     # media_buy.content_standards -- which the old blanket citation got right by accident
     # and a naive #1855 -> #1291 swap would have got wrong.
-    "T-UC-010-v31-creative-multiplicity": "#1855",
-    "T-UC-010-v31-creative-agentic-flags": "#1855",
     "T-UC-010-v31-governance-aware": "#1855",
     "T-UC-010-v31-vendor-metric-optimization": "#1855",
     "T-UC-010-v31-content-standards-block": "#1855",
@@ -5401,7 +5362,6 @@ _UC010_DORMANT_TRACKING: dict[str, str] = {
     # adapter creative_specs and generative creative; conftest already cites it in-file for
     # the specialism tags.
     "T-UC-010-v31-creative-specs": "#1724",
-    "T-UC-010-v31-creative-extended": "#1724",
 }
 
 
@@ -5503,12 +5463,14 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-v31-measurement-accreditations",
             # Batch 13 — locally-added declaration-backing graders.
             # These grade validate_backing()'s rejection rules, which the generated
-            # specialisms scenario cannot: it declares creative-generative + the
-            # creative protocol, both unbacked, so it stays xfailed against #1724.
+            # specialisms scenario cannot: it declares only the claims this seller backs.
+            # local-inline-creative-management grades the inline_creative_management
+            # declaration against the create and update paths that honor it.
             "T-UC-010-local-backed-specialism",
             "T-UC-010-local-unbacked-specialism",
             "T-UC-010-local-orphaned-specialism",
             "T-UC-010-local-unbacked-protocol",
+            "T-UC-010-local-inline-creative-management",
             # Batch 14 — account.sandbox boundary outline (#1721 M4). Was dormant
             # (no bound Given for "the tenant account is configured for
             # {boundary_point}"), citing #1855 (generic wiring) instead of the
