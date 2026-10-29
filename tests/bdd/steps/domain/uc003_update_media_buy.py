@@ -2218,6 +2218,12 @@ def given_request_includes_fields(ctx: dict, update_fields: str) -> None:
     - '1 package with budget and targeting'
     - 'packages with all updatable fields'
     - 'no updatable fields in request'
+
+    Every package budget is :data:`_UPDATED_BUDGET`, never the 5000 the Background seeds,
+    so "success with persisted records" can tell a written budget from an untouched row.
+    The all-fields request pauses the buy (``paused: true``): the Background's buy is
+    ``active``, where update_media_buy.mdx maps ``paused: false`` to ``resume``, an action
+    that state does not offer. Its flight moves to dates still ahead of the clock.
     """
     kwargs = _ensure_update_defaults(ctx)
     stripped = update_fields.strip()
@@ -2228,27 +2234,28 @@ def given_request_includes_fields(ctx: dict, update_fields: str) -> None:
         kwargs.clear()
         kwargs["media_buy_id"] = mid
     elif "budget update only" in stripped:
-        kwargs["packages"] = [{"package_id": "pkg_001", "budget": 5000.0}]
+        kwargs["packages"] = [{"package_id": "pkg_001", "budget": _UPDATED_BUDGET}]
     elif "budget and targeting" in stripped:
         kwargs["packages"] = [
             {
                 "package_id": "pkg_001",
-                "budget": 5000.0,
+                "budget": _UPDATED_BUDGET,
                 "targeting_overlay": {"geo_countries": ["US"]},
             }
         ]
     elif "all updatable fields" in stripped:
+        clock = ctx["env"].clock
         kwargs["packages"] = [
             {
                 "package_id": "pkg_001",
-                "budget": 5000.0,
+                "budget": _UPDATED_BUDGET,
                 "targeting_overlay": {"geo_countries": ["US"]},
                 "paused": False,
             }
         ]
-        kwargs["paused"] = False
-        kwargs["start_time"] = "2026-05-01T00:00:00Z"
-        kwargs["end_time"] = "2026-07-01T00:00:00Z"
+        kwargs["paused"] = True
+        kwargs["start_time"] = clock.future_iso(1)
+        kwargs["end_time"] = clock.future_iso(60)
     else:
         raise ValueError(f"Unknown update_fields pattern: {stripped}")
 
@@ -3251,11 +3258,37 @@ def _assert_synchronous_success(ctx: dict) -> None:
 
 
 def _assert_persisted_success(ctx: dict) -> None:
-    """Synchronous success, and the requested package budget is what the seller stored."""
+    """Synchronous success, and the requested package budget is what the seller stored.
+
+    When the package update also carried a ``targeting_overlay``, every dimension it sent
+    must be stored with the value sent: a seller that applied the budget and dropped the
+    overlay answered the same success.
+    """
     _assert_synchronous_success(ctx)
-    stored, _config = _stored_package(ctx, "pkg_001")
+    stored, config = _stored_package(ctx, "pkg_001")
     assert stored is not None and float(stored) == _requested_budget(ctx), (
         f"update succeeded but the stored budget is {stored!r}, not the requested {_requested_budget(ctx)}"
+    )
+    sent_overlay = ctx["update_kwargs"]["packages"][0].get("targeting_overlay")
+    if sent_overlay is not None:
+        stored_overlay = config.get("targeting_overlay") or {}
+        unapplied = {dim: value for dim, value in sent_overlay.items() if stored_overlay.get(dim) != value}
+        assert not unapplied, (
+            f"update succeeded but the stored targeting_overlay {stored_overlay!r} does not hold {unapplied!r}"
+        )
+
+
+def _assert_accepted_unmodified(ctx: dict) -> None:
+    """Synchronous success that reports no package modified.
+
+    For a request carrying no updatable field: the pinned request requires none, and
+    update-media-buy-response.json lists in ``affected_packages`` only "each modified
+    package", so the array is absent or empty.
+    """
+    _assert_synchronous_success(ctx)
+    affected = wire_lookup(ctx, "affected_packages")
+    assert affected is WIRE_MISSING or affected == [], (
+        f"an update that changes nothing reported modified packages: {affected!r}"
     )
 
 
@@ -3267,6 +3300,7 @@ def _assert_submitted(ctx: dict) -> None:
 
 _UPDATE_OUTCOMES = {
     "accepted": _assert_synchronous_success,
+    "accepted with no package modified": _assert_accepted_unmodified,
     "success with persisted records": _assert_persisted_success,
     "success with pending status": _assert_submitted,
     "submitted task envelope (awaiting approval)": _assert_submitted,

@@ -2167,14 +2167,24 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
 
-    Examples: Valid partitions
-      | partition            | update_fields                          | outcome |
-      | single_field_update  | 1 package with budget update only      | success |
-      | multi_field_update   | 1 package with budget and targeting    | success |
+    # LOCAL CORRECTION, two kinds. (1) The valid rows asserted bare "success", which a seller
+    # that dropped the update also earns; they now read the stored package back ("success
+    # with persisted records": the requested budget, and every targeting dimension sent).
+    # (2) empty_update expected INVALID_REQUEST, which the pin does not require: the request
+    # schema's required list is idempotency_key, account and media_buy_id, with no anyOf or
+    # minProperties over the updatable fields. A request carrying none is accepted, and
+    # modifies no package ("affected_packages ... for each modified package").
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json pointer=/required
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json pointer=/oneOf/0/properties/affected_packages
 
-    Examples: Invalid partitions
-      | partition     | update_fields                    | outcome                                 |
-      | empty_update  | no updatable fields in request   | error "INVALID_REQUEST" with suggestion    |
+    Examples: Valid partitions
+      | partition            | update_fields                          | outcome                        |
+      | single_field_update  | 1 package with budget update only      | success with persisted records |
+      | multi_field_update   | 1 package with budget and targeting    | success with persisted records |
+
+    Examples: A request carrying no updatable field
+      | partition     | update_fields                    | outcome                           |
+      | empty_update  | no updatable fields in request   | accepted with no package modified |
 
   @T-UC-003-boundary-adapter-dispatch @boundary @adapter_dispatch
   Scenario Outline: Adapter dispatch boundary validation - <boundary_point>
@@ -2188,11 +2198,21 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
 
+    # LOCAL CORRECTION, for the reasons @T-UC-003-partition-adapter-dispatch states: the
+    # success rows read the stored package back, and the zero-field row is accepted
+    # without a package modified. The all-fields request pauses the active buy rather than
+    # resuming it: the action table maps paused false to resume, which an active buy does
+    # not offer, and maps paused true to pause, which it does. One request carrying the
+    # pause with the package and flight changes is one atomic mutation, so every change in
+    # it is applied.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx (Action vocabulary and field mapping; Compatibility transaction boundary)
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/media-buys/lifecycle.mdx (Discovering valid actions at runtime)
+
     Examples: Boundary values
-      | boundary_point                              | update_config                          | outcome                                 |
-      | request with exactly one updatable field    | 1 package with budget update only      | success                                 |
-      | request with all updatable fields           | packages with all updatable fields     | success                                 |
-      | request with zero updatable fields          | no updatable fields in request         | error "INVALID_REQUEST" with suggestion    |
+      | boundary_point                              | update_config                          | outcome                           |
+      | request with exactly one updatable field    | 1 package with budget update only      | success with persisted records    |
+      | request with all updatable fields           | packages with all updatable fields     | success with persisted records    |
+      | request with zero updatable fields          | no updatable fields in request         | accepted with no package modified |
 
   @T-UC-003-partition-persistence-timing @partition @persistence_timing
   Scenario Outline: Persistence timing partition validation - <partition>
