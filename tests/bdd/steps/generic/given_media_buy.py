@@ -172,6 +172,16 @@ def _sync_adapter_approval_to_db(ctx: dict, *, manual_approval_required: bool) -
     set_adapter_test_behavior(env, tenant.tenant_id, manual_approval_required=manual_approval_required)
 
 
+def _set_tenant_human_review(ctx: dict, *, required: bool) -> None:
+    """Write the tenant's human_review_required column and the identity the in-process call reads."""
+    tenant = ctx["tenant"]
+    env = ctx["env"]
+    tenant.human_review_required = required
+    env._commit_factory_data()
+    # Also update the tenant overrides the call_impl identity is built from.
+    env._tenant_overrides["human_review_required"] = required
+
+
 def _seed_auto_approval(ctx: dict, *, sync_adapter: bool = True) -> None:
     """Force the auto-approval create path for the scenario's tenant.
 
@@ -186,14 +196,9 @@ def _seed_auto_approval(ctx: dict, *, sync_adapter: bool = True) -> None:
 
     No-op when the scenario has no tenant yet.
     """
-    tenant = ctx.get("tenant")
-    if tenant is None:
+    if ctx.get("tenant") is None:
         return
-    env = ctx["env"]
-    tenant.human_review_required = False
-    env._commit_factory_data()
-    # Also update the tenant overrides the call_impl identity is built from.
-    env._tenant_overrides["human_review_required"] = False
+    _set_tenant_human_review(ctx, required=False)
     if sync_adapter:
         _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
 
@@ -230,7 +235,12 @@ def _sync_adapter_error_to_db(
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _configure_adapter_manual_approval(env: Any, *, required: bool) -> None:
+#: The operations a real adapter puts behind approval when its config names none
+#: (``AdServerAdapter.__init__``'s ``manual_approval_operations`` default, src/adapters/base.py).
+_REAL_ADAPTER_APPROVAL_OPERATIONS = frozenset({"create_media_buy", "update_media_buy", "add_creative_assets"})
+
+
+def _configure_adapter_manual_approval(env: Any, *, required: bool, operations: frozenset[str] | None = None) -> None:
     """Set manual-approval config on EVERY adapter mock the env exposes.
 
     MediaBuyCreateEnv patches the create-module adapter as ``env.mock['adapter']``;
@@ -238,8 +248,13 @@ def _configure_adapter_manual_approval(env: Any, *, required: bool) -> None:
     ``env.mock['update_adapter']``. The production create/update manual-approval
     gate reads ``manual_approval_required`` + ``'<op>' in manual_approval_operations``
     from its OWN module's adapter, so both must be configured (guarded on presence).
+
+    ``operations`` defaults to the two media-buy operations when ``required`` and to none
+    otherwise. A Given that wants the adapter to act as a real one with its flag off passes
+    :data:`_REAL_ADAPTER_APPROVAL_OPERATIONS`.
     """
-    operations = {"create_media_buy", "update_media_buy"} if required else []
+    if operations is None:
+        operations = frozenset({"create_media_buy", "update_media_buy"}) if required else frozenset()
     for name in ("adapter", "update_adapter"):
         if name not in env.mock:
             continue
@@ -263,21 +278,36 @@ def given_tenant_auto_approval(ctx: dict) -> None:
     _seed_auto_approval(ctx)
 
 
+@given("tenant human_review_required is true")
+def given_tenant_review_only(ctx: dict) -> None:
+    """The TENANT requires review, and the adapter does not.
+
+    The sentence names one input, so it sets one: ``tenant.human_review_required``. The
+    adapter is left as a real adapter with its own flag off -- ``manual_approval_required``
+    false, and the operations a real adapter gates by default -- on the in-process mocks and
+    on the live server's AdapterConfig alike. Approval then follows the tenant column alone,
+    so a seller that ignored it would complete the buy. (``given_tenant_manual_approval``
+    also raises the adapter's flag, which update_media_buy scenarios rely on.)
+    """
+    assert ctx.get("tenant") is not None, (
+        "No tenant in ctx — step claims 'tenant human_review_required is true' but no tenant exists to configure"
+    )
+    _set_tenant_human_review(ctx, required=True)
+    _configure_adapter_manual_approval(ctx["env"], required=False, operations=_REAL_ADAPTER_APPROVAL_OPERATIONS)
+    _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
+
+
 @given("the tenant is configured for manual approval")
 @given("the tenant requires manual approval")
 @given(parsers.parse('the tenant has "human_review_required" set to true'))
-@given("tenant human_review_required is true")
 @given("approval path is manual")
 def given_tenant_manual_approval(ctx: dict) -> None:
     """Configure tenant for manual approval."""
-    tenant = ctx.get("tenant")
-    assert tenant is not None, (
+    assert ctx.get("tenant") is not None, (
         "No tenant in ctx — step claims 'tenant is configured for manual approval' but no tenant exists to configure"
     )
-    tenant.human_review_required = True
+    _set_tenant_human_review(ctx, required=True)
     env = ctx["env"]
-    env._commit_factory_data()
-    env._tenant_overrides["human_review_required"] = True
     # Production code checks: manual_approval_required AND
     # "<op>" in adapter.manual_approval_operations. The mock adapter defaults to
     # manual_approval_operations=[], so configure every adapter mock (create +
