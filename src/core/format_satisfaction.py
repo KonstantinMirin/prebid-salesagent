@@ -1661,11 +1661,18 @@ class PlacementLayer:
     for which this seller has no resolver on the buy path. The pin is explicit that such a
     layer is not "unconstrained": "an unresolved publisher placement or format-option
     reference MUST fail closed" (``core/product.json``).
+
+    ``references`` is the placement's deprecated ``format_ids`` when it narrows through that
+    arm alone, and empty otherwise. ``declarations`` is then their SDK projection, which is
+    what a selector and a canonical creative are compared with; a creative asserting a legacy
+    reference is compared with the references themselves on the deprecated lane, as the
+    product's own arm compares it (:func:`creatives_uncovered`).
     """
 
     placement_id: str
     declarations: tuple[LibraryFormatDeclaration, ...] | None
     resolved: bool = True
+    references: tuple[LibraryFormatId, ...] = ()
 
 
 def included_placement_layers(placements: Iterable[Any] | None) -> tuple[PlacementLayer, ...]:
@@ -1681,8 +1688,10 @@ def included_placement_layers(placements: Iterable[Any] | None) -> tuple[Placeme
     A placement that states neither inline ``format_options`` nor the deprecated
     ``format_ids`` is an UNCONSTRAINED layer (``declarations`` None): "An omitted optional
     layer is unconstrained", so it accepts every product declaration. A placement whose
-    declarations are all unparseable, or all unprojectable, keeps an EMPTY layer, which covers
-    nothing, so it fails closed rather than widening to the product set.
+    declarations are all unparseable, or all unprojectable, keeps an EMPTY layer, which no
+    selector and no canonical creative covers, so it fails closed rather than widening to the
+    product set. A legacy creative is still compared with the references on the deprecated
+    lane (``references``), as the product's own arm compares it.
 
     THE DEPRECATED ARM NARROWS TOO. ``core/placement.json`` ``format_ids``: "When present on a
     product placement, this field narrows the product-level ``format_ids`` contract and MUST
@@ -1699,6 +1708,8 @@ def included_placement_layers(placements: Iterable[Any] | None) -> tuple[Placeme
     closed". So it refuses every package that selects a format until a resolver exists.
     Products this seller authors carry ``seller_inline`` placements, which are unaffected.
     """
+    from src.core.format_resolver import product_format_references
+
     layers = []
     for placement in placements or []:
         if not isinstance(placement, Mapping) or placement.get("mode") != LibraryPlacementMode.included:
@@ -1709,13 +1720,14 @@ def included_placement_layers(placements: Iterable[Any] | None) -> tuple[Placeme
         elif placement.get("format_options") is not None:
             layers.append(PlacementLayer(placement_id, product_declarations(placement["format_options"])))
         elif placement.get("format_ids") is not None:
-            layers.append(PlacementLayer(placement_id, _placement_projection(placement["format_ids"])))
+            references = product_format_references(placement["format_ids"])
+            layers.append(PlacementLayer(placement_id, _placement_projection(references), references=references))
         else:
             layers.append(PlacementLayer(placement_id, declarations=None))
     return tuple(layers)
 
 
-def _placement_projection(format_ids: Iterable[Any]) -> tuple[LibraryFormatDeclaration, ...]:
+def _placement_projection(references: Iterable[LibraryFormatId]) -> tuple[LibraryFormatDeclaration, ...]:
     """A placement's deprecated ``format_ids``, projected by the SDK, as an id-less layer.
 
     Each entry goes through :func:`_projected_declaration`, which fails closed: an entry the
@@ -1726,11 +1738,9 @@ def _placement_projection(format_ids: Iterable[Any]) -> tuple[LibraryFormatDecla
     declarations by ``core/product.json``'s third rule, "declarations with the same
     format_kind whose narrower parameters satisfy the broader declaration".
     """
-    from src.core.format_resolver import product_format_references
-
     return tuple(
         projected.model_copy(update={"format_option_id": None})
-        for reference in product_format_references(format_ids)
+        for reference in references
         if (projected := _projected_declaration(reference)) is not None
     )
 
@@ -1868,6 +1878,40 @@ class _PlacementContract:
     format_ids: tuple[()] = ()
 
 
+def _fills(
+    creative: Any, layer: PlacementLayer, effective: _PlacementContract, contract: Any, *, legacy_lane: bool
+) -> bool:
+    """Whether *creative* satisfies the effective set of the included placement *layer*.
+
+    Every branch asks :func:`creative_satisfies`, the one creative validator; they differ in
+    the contract that stands for the placement's set.
+
+    * An UNCONSTRAINED layer is the product's own contract. ``core/product.json``
+      ``format_options``: "An omitted optional layer is unconstrained", so the intersection is
+      layer (1) alone and the creative is asked exactly what the product gate asks it. Grading
+      it against :class:`_PlacementContract` instead lost every deprecated entry the SDK
+      cannot project -- an entry naming a tenant's own creative agent, or an unmapped id --
+      and refused a creative the product accepts.
+    * A layer narrowing through the deprecated ``format_ids`` on the DEPRECATED lane, asked of
+      a creative asserting a legacy reference, is the product's contract AND the placement's
+      references (``core/placement.json``: the field "narrows the product-level format_ids
+      contract"), each compared as the product's own arm is compared (:func:`_legacy_lane`).
+      The projection would again drop what the SDK cannot map.
+    * Otherwise the placement's effective declarations, which a canonical creative's
+      manifest is graded against. An empty set admits nothing, so it fails closed.
+    """
+    from src.core.format_resolver import NamedFormats
+    from src.core.schemas import CreativeFormatIdentity
+
+    if layer.declarations is None:
+        return bool(creative_satisfies(creative, contract))
+    if legacy_lane and layer.references and CreativeFormatIdentity.from_row(creative).assertion is not None:
+        return bool(creative_satisfies(creative, contract)) and bool(
+            creative_satisfies(creative, NamedFormats(format_ids=layer.references))
+        )
+    return bool(effective.format_options) and bool(creative_satisfies(creative, effective))
+
+
 def creatives_uncovered(
     creatives: Sequence[tuple[Any, Collection[str] | None]], product: Any
 ) -> FormatSatisfaction | None:
@@ -1890,7 +1934,7 @@ def creatives_uncovered(
 
     A creative covers a placement when it is routed there and satisfies the placement's
     effective set, asked of :func:`creative_satisfies` -- the one creative validator, manifest
-    included -- against that set (:class:`_PlacementContract`). Graded against the EFFECTIVE
+    included -- against the contract that stands for that set (:func:`_fills`). Graded against the EFFECTIVE
     declaration rather than the product declaration the creative selected, because a product
     option may be broader than the placement: a 300x250 creative satisfies an unsized image
     option and still does not fill a placement narrowing it to 728x90.
@@ -1923,8 +1967,9 @@ def creatives_uncovered(
         return unresolved
     for layer, pairs in _placement_sets(bound.placements, bound.declarations):
         effective = _PlacementContract(tuple(admitted for _, admitted in pairs))
-        if effective.format_options and any(
-            (routed is None or layer.placement_id in routed) and creative_satisfies(creative, effective)
+        if any(
+            (routed is None or layer.placement_id in routed)
+            and _fills(creative, layer, effective, contract, legacy_lane=not bound.published)
             for creative, routed in creatives
         ):
             continue

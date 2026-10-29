@@ -751,6 +751,39 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # on its own -- the product publishes no canonical declaration to hold it to a size --
     # and it fits neither placement, so the first included placement is the one reported.
 
+  # ── Coverage on a legacy-only product the SDK cannot project ──────────────────────────
+  #
+  # core/product.json format_options at the pin: "An omitted optional layer is
+  # unconstrained". An included placement that narrows nothing therefore admits exactly what
+  # the product admits, and a legacy-only product admits what its deprecated arm accepts,
+  # whether or not the SDK can project that arm. The product here sells
+  # display_300x250_image_2x and display_728x90_image_2x, two ids the pinned agent serves and
+  # the SDK projects to nothing. A coverage rule built from the projection alone has an empty
+  # set for every placement and refuses every creative the product accepts.
+  #
+  # The deprecated arm narrows by reference: core/placement.json format_ids "narrows the
+  # product-level format_ids contract". A creative claiming a reference is compared with the
+  # placement's references the way the product's own arm compares it.
+  #
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/format_ids/description
+
+  @T-UC-FORMAT-SATISFACTION-unprojectable-placements-creatives-covered @format_satisfaction @requires_db
+  Scenario Outline: creatives a legacy-only product accepts cover its placements that narrow nothing - <placements>
+    Given the seller publishes only deprecated formats the SDK cannot project across placements "<placements>"
+    And the buyer assigns canonical "image" creatives carrying the "image_300x250" manifests
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+    Examples:
+      | placements |
+      | none       |
+      | unnarrowed |
+
+    # `none` is the control: the same product and creative with no included placement. A
+    # seller grading an unconstrained placement against the projection refuses `unnarrowed`
+    # CREATIVE_VALIDATION_FAILED_GENERIC and accepts `none`.
+
   @T-UC-FORMAT-SATISFACTION-update-creatives-covered @format_satisfaction @requires_db
   Scenario Outline: update_media_buy accepts creative assignments that cover every included placement - <routing>
     Given the seller declares canonical format options "two_image_options" across placements "split"
@@ -800,6 +833,34 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # The pair differs only in the stored placements. The refusal is raised whatever the
     # validation mode: lenient skips a creative the product will not take, and here every
     # creative is one the product takes -- what fails is the package's set.
+
+  @T-UC-FORMAT-SATISFACTION-sync-unprojectable-placements-covered @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives accepts a deprecated creative the SDK cannot project on placements that admit it - <placements>
+    Given a packaged product selling only deprecated formats the SDK cannot project across placements "<placements>"
+    And the buyer syncs a creative identified by format_id "display_300x250_image_2x"
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+    Examples:
+      | placements         |
+      | none               |
+      | unnarrowed         |
+      | unprojectable_mrec |
+
+  @T-UC-FORMAT-SATISFACTION-sync-unprojectable-placements-uncovered @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives refuses a deprecated creative the SDK cannot project that leaves a placement uncovered
+    Given a packaged product selling only deprecated formats the SDK cannot project across placements "unprojectable_split"
+    And the buyer syncs a creative identified by format_id "display_300x250_image_2x"
+    When the Buyer Agent assigns it to that package
+    Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "assignments" for leaving placement "satisfaction_leaderboard_slot" uncovered
+
+    # The rule of the create-path outline above, asked of a creative CLAIMING a deprecated
+    # reference, which reaches the seller only through sync. unprojectable_mrec narrows to the
+    # creative's own reference; unprojectable_split adds a placement narrowing to the 728x90
+    # one, which the creative does not fill, and the refusal names that placement. A seller
+    # grading the placements through the projection refuses the unnarrowed and
+    # unprojectable_mrec rows and names satisfaction_mrec_slot in the refusal; one that
+    # ignored a narrowing it cannot project accepts the refusal row. `none` is the control.
 
   # ── The CREATIVE side of the same function ────────────────────────────────────────────
   #

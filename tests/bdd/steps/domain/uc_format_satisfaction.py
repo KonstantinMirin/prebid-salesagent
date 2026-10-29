@@ -391,6 +391,17 @@ def _legacy_placement(placement_id: str, *accepted: dict[str, Any]) -> dict[str,
     return placement
 
 
+#: Two deprecated references the pinned agent SERVES and the SDK cannot PROJECT. Both are in
+#: the committed capture, which declares ``canonical.kind = image`` for each, so a creative
+#: claiming one clears ``resolvable_format_ref`` and the sync's write gate; and
+#: ``project_legacy_format_id`` projects neither, so a gate that grades a legacy-only product
+#: through the projection alone sees an empty set. Measured against the capture with that
+#: function: 21 of its 71 ids do not project, these two among them. A reference naming a tenant's own creative
+#: agent fails the projection the same way, but no transport here serves such an agent.
+_UNPROJECTABLE_MREC = {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250_image_2x"}
+_UNPROJECTABLE_LEADERBOARD = {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_728x90_image_2x"}
+
+
 #: What the seller STORES in ``placements``, per name, for the coverage scenarios. Every
 #: row but ``narrowed_inline`` is stored beside ``two_image_options``, and the rows differ
 #: only in which option each placement accepts and whether it is included.
@@ -495,7 +506,24 @@ _PLACEMENTS: dict[str, list[dict[str, Any]]] = {
         _legacy_placement("satisfaction_mrec_slot", _LEGACY_MREC),
         _legacy_placement("satisfaction_leaderboard_slot", _LEGACY_LEADERBOARD),
     ],
+    # Stored beside the legacy-only product of the two UNPROJECTABLE references: one included
+    # placement narrowing to the 300x250 one, and ``legacy_split`` spelled in those references.
+    "unprojectable_mrec": [_legacy_placement("satisfaction_mrec_slot", _UNPROJECTABLE_MREC)],
+    "unprojectable_split": [
+        _legacy_placement("satisfaction_mrec_slot", _UNPROJECTABLE_MREC),
+        _legacy_placement("satisfaction_leaderboard_slot", _UNPROJECTABLE_LEADERBOARD),
+    ],
 }
+
+#: The placements name for a product that stores none, the control for every coverage row:
+#: with no included placement there is no layer to cover.
+_NO_PLACEMENTS = "none"
+
+
+def _stored_placements(name: str) -> list[dict[str, Any]] | None:
+    """The :data:`_PLACEMENTS` row *name* names, or None for :data:`_NO_PLACEMENTS`."""
+    return None if name == _NO_PLACEMENTS else _PLACEMENTS[name]
+
 
 #: What the buyer SENDS on its package, per selector name. The members are
 #: ``media-buy/package-request.json``'s three format selectors.
@@ -954,6 +982,27 @@ def given_legacy_only_product_across_placements(ctx: dict, placements: str) -> N
     )
 
 
+@given(
+    parsers.parse(
+        'the seller publishes only deprecated formats the SDK cannot project across placements "{placements}"'
+    )
+)
+def given_unprojectable_product_across_placements(ctx: dict, placements: str) -> None:
+    """Store a LEGACY-ONLY product selling the two unprojectable references, with placements.
+
+    The product accepts what its deprecated arm accepts whatever the SDK can project, so an
+    included placement narrowing nothing must admit the same creatives (``core/product.json``:
+    "An omitted optional layer is unconstrained"). ``none`` stores no placements.
+    """
+    _store_product(
+        ctx,
+        f"satisfaction_legacy_unprojectable_{placements}",
+        format_ids=[_UNPROJECTABLE_MREC, _UNPROJECTABLE_LEADERBOARD],
+        format_options=None,
+        placements=_stored_placements(placements),
+    )
+
+
 @given(parsers.parse('the seller declares a canonical format option "{declaration}" and no format_ids'))
 def given_canonical_only_declaration(ctx: dict, declaration: str) -> None:
     """Store a CANONICAL-ONLY product -- the declaration, and no deprecated arm at all.
@@ -1228,6 +1277,26 @@ def given_sync_product_across_placements(ctx: dict, placements: str, declaration
         format_options=_DECLARATIONS[declaration],
         format_ids=list(_LEGACY_ARM),
         placements=_PLACEMENTS[placements],
+    )
+
+
+@given(
+    parsers.parse(
+        'a packaged product selling only deprecated formats the SDK cannot project across placements "{placements}"'
+    )
+)
+def given_sync_unprojectable_product_across_placements(ctx: dict, placements: str) -> None:
+    """The sync chain over the legacy-only product of the two unprojectable references.
+
+    The assignment path's twin of :func:`given_unprojectable_product_across_placements`: a
+    creative CLAIMING a deprecated reference reaches the seller only through sync, so the
+    rows grading how a placement's deprecated ``format_ids`` narrow such a creative live here.
+    """
+    _seed_sync_chain(
+        ctx,
+        format_options=None,
+        format_ids=[_UNPROJECTABLE_MREC, _UNPROJECTABLE_LEADERBOARD],
+        placements=_stored_placements(placements),
     )
 
 
