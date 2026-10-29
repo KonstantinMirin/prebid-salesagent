@@ -104,8 +104,6 @@ _CEILINGS: dict[str, int] = {
     "uc010-dormant-T-UC-010-v31-identity-brand-json-url": 1,
     "uc010-dormant-T-UC-010-v31-creative-extended": 1,
     "uc010-dormant-T-UC-010-v31-creative-agentic-flags": 1,
-    # One named scenario, tracked in #1652.
-    "uc002-inv-015-6": 1,
 }
 
 #: The population floor. A derivation that matches nothing is silently green, and that is
