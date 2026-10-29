@@ -541,6 +541,28 @@ def given_package_exists(ctx: dict, package_id: str) -> None:
     _register_package(ctx, package_id, new_pkg)
 
 
+@given(parsers.parse('the package "{package_id}" has stored targeting_overlay {overlay}'))
+def given_package_stored_overlay(ctx: dict, package_id: str, overlay: str) -> None:
+    """Persist *overlay* (JSON) as the package's current targeting, then prove it took.
+
+    The prior value is what lets a replacement be told apart from a seller that left the
+    package alone: an update to an empty overlay reads the same either way.
+    """
+    import json
+
+    pkg = ctx.get("existing_package")
+    assert pkg is not None and pkg.package_id == _resolve_package_id(ctx, package_id), (
+        f"package {package_id!r} is not the seeded existing package"
+    )
+    seeded = json.loads(overlay)
+    pkg.package_config = {**(pkg.package_config or {}), "targeting_overlay": seeded}
+    ctx["env"]._commit_factory_data()
+    _budget, config = _stored_package(ctx, package_id)
+    assert config.get("targeting_overlay") == seeded, (
+        f"seeding package {package_id!r} with targeting_overlay {seeded!r} did not take: {config!r}"
+    )
+
+
 @given("the updated daily spend does not exceed max_daily_package_spend")
 def given_daily_spend_ok(ctx: dict) -> None:
     """Declarative guard — verifies budgets are within daily spend limits.
@@ -1379,6 +1401,25 @@ def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # THEN steps — creative replacement assertions
 # ═══════════════════════════════════════════════════════════════════════
+
+
+@then(parsers.parse('the package "{package_id}" should have stored targeting_overlay {dimension:w} {value}'))
+def then_package_stored_overlay_dimension(ctx: dict, package_id: str, dimension: str, value: str) -> None:
+    """The package's STORED targeting_overlay carries *value* (JSON) for *dimension*.
+
+    core/targeting-input.json: on update "a non-null value replaces that dimension".
+    ``affected_packages`` does not carry the overlay (``_affected_package`` says why), so
+    the record is read, the way ``get_media_buys`` would serve it.
+    """
+    import json
+
+    _budget, config = _stored_package(ctx, package_id)
+    overlay = config.get("targeting_overlay")
+    assert isinstance(overlay, dict), f"package {package_id!r} stores no targeting_overlay: {config!r}"
+    expected = json.loads(value)
+    assert overlay.get(dimension) == expected, (
+        f"stored targeting_overlay.{dimension} is {overlay.get(dimension)!r}, expected {expected!r}"
+    )
 
 
 @then(parsers.parse('the package "{package_id}" should have creative assignments [{expected_ids}]'))

@@ -169,14 +169,22 @@ Feature: BR-UC-003 Update Media Buy
     | package_id        | pkg_001                              |
     | targeting_overlay | {"geo_countries": ["US", "CA"]}      |
     And the package "pkg_001" exists in the media buy
+    And the package "pkg_001" has stored targeting_overlay {"geo_countries": ["GB"]}
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy success spec
     And the response status should be "completed"
     And the response should contain affected_packages including "pkg_001"
+    And the package "pkg_001" should have stored targeting_overlay geo_countries ["US", "CA"]
     # POST-S1: Buyer knows targeting updated
     # POST-S2: Buyer sees affected packages
     # POST-S4: Unambiguous success
     # POST-S5: Request completed
+    # LOCAL CORRECTION: nothing read the overlay back, so a seller that ignored it passed.
+    # The package now starts with geo_countries ["GB"], and the stored overlay must carry
+    # the requested value in its place: core/targeting-input.json, on update "a non-null
+    # value replaces that dimension". The response cannot show it (affected_packages does
+    # not carry targeting_overlay), so the record is read.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting-input.json
 
   @T-UC-003-alt-optimization-goals @alt-flow @optimization-goals @post-s1 @post-s2 @post-s4 @post-s5
   Scenario: Update optimization goals -- replacement semantics
