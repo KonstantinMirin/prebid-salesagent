@@ -1938,7 +1938,7 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-partition-end-time @partition @end_time
   Scenario Outline: End time partition validation - <partition>
-    Given the existing media buy has start_time "2026-04-01T00:00:00Z"
+    Given the existing media buy has start_time "2099-04-01T00:00:00Z"
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
@@ -1946,15 +1946,25 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
+    # LOCAL CORRECTION: the invalid rows said `error with suggestion`, which names no code
+    # and accepted any refusal, so a seller refusing for a reason other than the inverted
+    # window passed them. They now name the code and the field. The pinned
+    # create_media_buy.mdx "Flight date validation" says "Out-of-range or inverted dates
+    # SHOULD return an INVALID_REQUEST error"; the pinned update page states no other code
+    # for the same rule, and @T-UC-003-ext-e / -ext-e-equal grade INVALID_REQUEST already.
+    # The dates moved from 2026 to 2099: a window in the past let a refusal of a past
+    # end_time stand in for the inversion this outline grades.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
 
     Examples: Valid partitions
       | partition          | end_value                | outcome |
-      | after_start_time   | 2026-06-30T23:59:59Z     | success |
+      | after_start_time   | 2099-06-30T23:59:59Z     | success |
 
     Examples: Invalid partitions
-      | partition          | end_value                | outcome                  |
-      | equal_to_start     | 2026-04-01T00:00:00Z     | error with suggestion    |
-      | before_start       | 2026-03-15T00:00:00Z     | error with suggestion    |
+      | partition          | end_value                | outcome                                         |
+      | equal_to_start     | 2099-04-01T00:00:00Z     | error "INVALID_REQUEST" on end_time with suggestion |
+      | before_start       | 2099-03-15T00:00:00Z     | error "INVALID_REQUEST" on end_time with suggestion |
 
   @T-UC-003-boundary-end-time @boundary @end_time
   Scenario Outline: End time boundary validation - <boundary_point>
