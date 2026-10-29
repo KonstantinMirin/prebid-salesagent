@@ -976,7 +976,11 @@ def given_buyer_owns_pkg_max_bid(ctx: dict, pkg_id: str) -> None:
     _own_pkg_with_metadata(ctx, pkg_id, max_bid=True)
 
 
-@given(parsers.parse('the Buyer owns a media buy with a package "{pkg_id}" having catalogs {catalogs}'))
+# The argument is a JSON list, so the pattern requires one: a bare ``{catalogs}`` also matched
+# "having catalogs and optimization_goals" and pytest-bdd picked this step for that line.
+@given(
+    parsers.re(r'the Buyer owns a media buy with a package "(?P<pkg_id>[^"]+)" having catalogs (?P<catalogs>\[.*\])')
+)
 def given_buyer_owns_pkg_with_catalogs(ctx: dict, pkg_id: str, catalogs: str) -> None:
     """Create a media buy whose package is CREATED with *catalogs*, not merely said to have them.
 
