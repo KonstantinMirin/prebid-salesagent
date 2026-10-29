@@ -111,7 +111,7 @@ from src.core.exceptions import (
     AdCPCreativeSizeMismatchError,
     AdCPCreativeValidationFailedError,
 )
-from src.core.schemas import FormatOptionIdentity, FormatSelector
+from src.core.schemas import Format, FormatOptionIdentity, FormatSelector
 
 logger = logging.getLogger(__name__)
 
@@ -1760,6 +1760,7 @@ def selector_routes(
     format_option_refs: Sequence[LibraryFormatOptionReference] | None,
     params: Mapping[str, Any] | None,
     format_ids: Sequence[LibraryFormatId] | None,
+    catalogue: Sequence[Format],
 ) -> tuple[FormatRoute, ...]:
     """Every route a PACKAGE's format selector names, as separate routes.
 
@@ -1788,8 +1789,16 @@ def selector_routes(
     reference leaves ``kind`` as ``None`` rather than guessing, exactly as
     ``creative_identity_of`` does for a creative. The legacy route is then refused against a
     canonical product (``LEGACY_UNPROJECTABLE``) instead of read as "no claim".
+
+    WITH THE SERVED DECLARATION, read from *catalogue* (``seller_format_catalogue``), as the
+    creative write reads it. Without it the registry's step 2 -- the v1 format's own
+    ``canonical`` -- and step 4 -- its structural shape -- had nothing to read on this route,
+    so 42 of the 71 formats the reference agent serves (``audio_standard_30s`` among them)
+    were refused LEGACY_UNPROJECTABLE on a package while ``sync_creatives`` accepted the same
+    id (salesagent-ol033.20.24). One catalogue lookup, one projection: the two paths cannot
+    answer differently about one reference.
     """
-    from src.core.format_resolver import canonical_kind_for
+    from src.core.format_resolver import canonical_kind_for, find_format
 
     routes: list[FormatRoute] = []
     # Distinct loop names for the two arms, deliberately: one ``reference`` reused across
@@ -1808,7 +1817,7 @@ def selector_routes(
     for legacy_ref in format_ids or []:
         kind: str | None = None
         try:
-            kind = canonical_kind_for(legacy_ref)
+            kind = canonical_kind_for(legacy_ref, spec=find_format(catalogue, legacy_ref))
         except ValueError:
             logger.debug(
                 "No canonical projection for package selector %r; the reference is its only identity", legacy_ref

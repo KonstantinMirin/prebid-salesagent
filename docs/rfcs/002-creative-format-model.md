@@ -108,8 +108,11 @@ The asymmetry between the branches carries the argument for the proposed directi
   yields a family, which is what a `format_kind` is.
 - **Canonical does not resolve to legacy.** The registry is "authoritative for v1 → v2
   projection only", and SDKs "MUST NOT synthesize a v1 `format_id` from the registry by
-  inverting structural matches." All seven registry entries published at 3.1 are
-  pure-structural, so nothing inverts even on a best-effort basis. Four kinds
+  inverting structural matches." At 3.2.7 (registry 1.5.2) 38 of the 45 entries are
+  non-wildcarded literal globs, and the registry permits a non-normative best-effort
+  inversion of those literals that "downstream consumers MUST NOT depend on". This seller
+  does not take that permission: it emits a legacy reference only where the seller asserted
+  one (`v1_format_ref`) or a buyer's stored creative carries one. Four kinds
   (`image_carousel`, `sponsored_placement`, `responsive_creative`, and `agent_placement`) carry
   `v1_translatable: false`, and the schema calls that unreachability structural.
 

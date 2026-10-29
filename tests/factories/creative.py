@@ -77,8 +77,9 @@ def served_format_spec(agent_url: str, format_id: str) -> Format | None:
 
     IT EXISTS BECAUSE A SEEDED CREATIVE AND A SYNCED ONE MUST AGREE. The sync path
     resolves ``identity_spec = find_format(all_formats, creative.format_id)``
-    (``src/core/tools/creatives/_processing.py``), which is what makes step 1 of the
-    normative projection order -- the format's own ``canonical`` declaration -- reachable.
+    (``src/core/tools/creatives/_processing.py``), which is what makes steps 2 and 4 of the
+    registry's normative projection order -- the format's own ``canonical`` declaration and
+    the structural match against its asset types -- reachable.
     Measured on the pinned capture: 64 of the 71 formats declare ``canonical.kind``, while
     only 22 are matched by a registry glob. So a factory that consulted no catalog could
     seed 22 of the 71 and REFUSED the other 49, including every video, audio, html5 and
@@ -86,9 +87,11 @@ def served_format_spec(agent_url: str, format_id: str) -> Format | None:
 
     Safe to apply by default, measured rather than assumed: of the 71 captured formats, 22
     resolve by BOTH routes and all 22 agree (``canonical_kind_for(id)`` ==
-    ``canonical_kind_for(id, spec=fmt)``), 42 resolve only with the spec, and 7 resolve by
-    neither. So supplying the spec cannot change a kind a seeded row already had -- it can
-    only turn a refusal into the kind the agent declares.
+    ``canonical_kind_for(id, spec=fmt)``), 42 resolve only with the spec through its
+    ``canonical``, and the 7 card formats that declare none resolve only with the spec,
+    through the registry's structural ``url`` entry (``display_tag``). So supplying the spec
+    cannot change a kind a seeded row already had -- it can only turn a refusal into the
+    kind the normative order gives.
 
     None for an id no catalog carries, which keeps the gate real: ``gen_banner`` and
     ``broadstreet_display`` are still refused unless a caller passes the declaration whose

@@ -126,8 +126,14 @@ class PeerCreativeAgentMixin(EgressHatchMixin):
         routes by that URL and a URL naming the standard agent is answered from the
         reference capture instead. Without it, the entries are served verbatim
         (:func:`~tests.helpers.peer_creative_agent.catalog_entry`).
+
+        The peer also answers ``preview_creative`` with the pinned single preview, as
+        :meth:`host_reference_format`'s agent does: a seller previews every static creative
+        synced in a format whose agent it dials, so a catalog that could resolve a creative
+        and not preview it would refuse every accepted sync as ``no_previews``.
         """
         key = new_peer_key()
+        self.serve_peer_tool(key, PEER_PREVIEW_TOOL, single_preview_document(key))
         agent_url = self.peer_url(key) if rehome else None
         return self.serve_peer_catalog(key, {"formats": [catalog_entry(fmt, agent_url) for fmt in formats]})
 

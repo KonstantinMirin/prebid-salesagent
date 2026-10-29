@@ -449,11 +449,11 @@ def incoming_identity_of(creative: CreativeAsset, all_formats: list[Any]) -> Cre
     The create path, the update path and the review record all need it, and each used to
     compute it (or, the review record, to read the deprecated ``format_id`` instead).
 
-    The SPEC is passed, and that is the whole of why format_kind used to be NULL. The
-    resolver's own docstring: passing it "is what makes the agent's own explicit projection
-    (step 1) reachable; without it only the registry glob (step 3) is consulted". Measured
-    against the pinned capture of 71 formats -- 15 project from the glob route alone, 64 with
-    the spec -- so a bare call stored NULL for 56 of the formats the agent actually serves.
+    The SPEC is passed, and that is the whole of why format_kind used to be NULL. Passing it
+    is what makes the registry's steps 2 (the agent's own ``canonical``) and 4 (the
+    structural match) reachable; without it only the glob (step 3) answers. Measured
+    against the pinned capture of 71 formats -- 22 project without the spec, all 71 with it
+    -- so a bare call refused most of the formats the agent actually serves.
 
     ``find_format`` is pure (no HTTP, no DB) and ``all_formats`` is pre-fetched outside the
     transaction, so resolving it costs nothing and adds no call inside the savepoint. A
