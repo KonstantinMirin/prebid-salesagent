@@ -1041,7 +1041,10 @@ def add_product(tenant_id):
                                 "error",
                             )
                             return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+                        # The relationship too, so ``Product.format_contract`` reads the profile
+                        # before the row is flushed.
                         product_kwargs["inventory_profile_id"] = profile_id
+                        product_kwargs["inventory_profile"] = profile
                     except (ValueError, TypeError):
                         flash("Invalid inventory profile ID", "error")
                         return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
@@ -1317,6 +1320,15 @@ def add_product(tenant_id):
                 # Create product with correct fields matching the Product model
                 product = Product(**product_kwargs)
                 db_session.add(product)
+                # The contract the product is SERVED, whichever arm supplies it: a linked
+                # profile announces its declarations on the product's behalf, and those were
+                # checked against the catalog when the profile was authored, not since.
+                try:
+                    PublisherCatalog.of(tenant).refuse_unresolved(product.format_contract.format_options)
+                except ValueError as e:
+                    db_session.rollback()
+                    flash(str(e), "error")
+                    return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
                 db_session.flush()  # Flush to get product ID before creating pricing options
 
                 # Create pricing options (already parsed above)
@@ -1475,13 +1487,17 @@ def edit_product(tenant_id, product_id):
                             return redirect(
                                 url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
                             )
+                        # The relationship too, so ``Product.format_contract`` reads the new link
+                        # before the row is flushed.
                         product.inventory_profile_id = profile_id
+                        product.inventory_profile = profile
                     except (ValueError, TypeError):
                         flash("Invalid inventory profile ID", "error")
                         return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
                 else:
                     # No profile selected - clear inventory profile association
                     product.inventory_profile_id = None
+                    product.inventory_profile = None
 
                 # Apply the canonical arm (validated above, outside the session).
                 #
@@ -1499,9 +1515,11 @@ def edit_product(tenant_id, product_id):
 
                     attributes.flag_modified(product, "format_options")
 
-                # The anyOf, now that both arms carry their post-edit values.
+                # The anyOf, and the served contract's own-namespace options, now that both arms
+                # and the profile link carry their post-edit values.
                 try:
                     _refuse_a_product_with_no_format_arm(product.format_ids, product.format_options)
+                    PublisherCatalog.of(tenant).refuse_unresolved(product.format_contract.format_options)
                 except ValueError as e:
                     flash(str(e), "error")
                     return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))

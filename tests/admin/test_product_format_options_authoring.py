@@ -34,7 +34,13 @@ from sqlalchemy import select
 
 from src.core.database.models import Product, Tenant
 from src.core.product_conversion import convert_product_model_to_schema
-from tests.factories import AuthorizedPropertyFactory, ProductFactory, PropertyTagFactory, TenantFactory
+from tests.factories import (
+    AuthorizedPropertyFactory,
+    InventoryProfileFactory,
+    ProductFactory,
+    PropertyTagFactory,
+    TenantFactory,
+)
 from tests.helpers.admin_session import admin_auth_session, admin_test_app
 
 pytestmark = [pytest.mark.admin, pytest.mark.requires_db]
@@ -495,3 +501,56 @@ def test_withdrawing_an_option_a_product_names_is_refused(operator, seller, fact
 
     assert b"products still reference it" in response.data
     assert _stored_catalog(factory_session, tenant.tenant_id) == [CATALOG_OPTION]
+
+
+@pytest.mark.parametrize(
+    ("catalog", "accepted"),
+    [([CATALOG_OPTION], True), (None, False)],
+    ids=["catalog_declares_it", "catalog_withdrew_it"],
+)
+@pytest.mark.parametrize("route", ["create", "edit"])
+def test_linking_a_profile_whose_own_option_the_catalog_withdrew_is_refused(
+    operator, seller, factory_session, route, catalog, accepted
+):
+    """A linked profile announces its declarations on the product's behalf, so the link is checked.
+
+    The profile was authored while the catalog declared the option; the catalog then withdrew
+    it, which nothing refused because no product was linked. Linking a product now would serve
+    an own-namespace option the seller's adagents.json formats[] no longer declares. The
+    product's own arm is product-local, so only the profile's arm can decide the outcome.
+    """
+    tenant, tag_selection = seller
+    tenant.publisher_format_options = catalog
+    profile = InventoryProfileFactory(
+        tenant=tenant,
+        format_ids=None,
+        format_options=[{**CATALOG_OPTION, "publisher_domain": tenant.primary_domain}],
+    )
+    if route == "edit":
+        ProductFactory(tenant=tenant, product_id="links_profile", format_ids=None, format_options=[IMAGE_DECLARATION])
+    factory_session.commit()
+
+    if route == "create":
+        response = operator.post(
+            f"/tenant/{tenant.tenant_id}/products/add",
+            data=_create_form(
+                tag_selection,
+                product_id="links_profile",
+                format_options=json.dumps([IMAGE_DECLARATION]),
+                inventory_profile_id=str(profile.id),
+            ),
+            follow_redirects=True,
+        )
+    else:
+        response = operator.post(
+            f"/tenant/{tenant.tenant_id}/products/links_profile/edit",
+            data=_edit_form(inventory_profile_id=str(profile.id)),
+            follow_redirects=True,
+        )
+
+    row = _stored(factory_session, tenant.tenant_id, "links_profile")
+    if accepted:
+        assert row is not None and row.inventory_profile_id == profile.id, response.data[:2000]
+    else:
+        assert b"publisher format catalog does not declare" in response.data
+        assert row is None if route == "create" else row.inventory_profile_id is None

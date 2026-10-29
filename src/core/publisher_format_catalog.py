@@ -21,9 +21,12 @@ answer that only for the namespace it owns -- a declaration whose ``publisher_do
 publisher domain. Another publisher's catalog is resolved by the buyer, which the pin makes the
 fail-closed party (``core/product.json`` ``format_options``; ``core/placement.json``
 ``format_options``: "buyers MUST also resolve ..."). An own-namespace reference that the catalog
-does not declare is refused where it is AUTHORED (the product and inventory-profile forms) and
-where the catalog is EDITED (withdrawing an option a product still names), so a stored product
-cannot announce a publisher option its own publisher file does not carry.
+does not declare is refused where it is AUTHORED (the product and inventory-profile forms), where
+a product's SERVED contract changes (the product forms check ``Product.format_contract`` after the
+profile link is set, so linking a profile whose options the catalog has since withdrawn, or
+unlinking one so the product's own stored arm is served again, is refused), and where the catalog
+is EDITED (withdrawing an option a product is served). So a stored product cannot announce a
+publisher option its own publisher file does not carry.
 """
 
 from __future__ import annotations
