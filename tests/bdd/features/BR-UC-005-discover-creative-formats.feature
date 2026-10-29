@@ -1247,9 +1247,10 @@ Feature: BR-UC-005 Discover Creative Formats
     # a member the scenario does not grade.
     # vast_tracker / daast_tracker are manifest-payload discriminators in
     # asset-types/index.json — NOT valid filter inputs.
-    # STILL DORMANT: the reference catalog the live e2e stack serves carries a format for 8
-    # of these 16 members (no daast, markdown, css, webhook, brief, catalog, zip or
-    # published_post), so half the rows cannot be realized over e2e_rest.
+    # The Given seeds exactly one format carrying the row's asset type, served by the
+    # seller's own peer creative agent on every transport (CreativeFormatsEnv
+    # .set_registry_formats), so every member is realized over e2e_rest too -- not only the
+    # 8 the reference catalog happens to carry.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json pointer=/properties/asset_types
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/asset-content-type.json
 
@@ -1301,11 +1302,9 @@ Feature: BR-UC-005 Discover Creative Formats
     And the same entry should expose "max_file_size_kb" with value 2048 under "requirements"
     And the same entry should not expose "max_file_size_kb" outside "requirements"
     # v3.1: registry mandates payload-vs-requirements separation
-    # STILL DORMANT, deliberately: no format in the reference catalog the live e2e stack
-    # serves declares an image cap the pin names, so this Given cannot be realized over
-    # e2e_rest, and a Given realized in process only is not wired. It unblocks with a way
-    # for the live server to serve a seeded format (see the UC-005 e2e catalog note in
-    # tests/bdd/conftest.py's _UC005_E2E_FIXTURE_INJECTION_TAGS).
+    # The Given seeds the capped format through the seller's own peer creative agent, so it
+    # is realized on every transport, e2e_rest included; the reference catalog declares no
+    # image cap the pin names, which is why it is seeded rather than drawn from there.
     # Corrected against the pin. The cap is max_file_size_kb, the member
     # core/requirements/image-asset-requirements.json declares (there is no max_file_size,
     # and no MB unit), so the 2 MB cap reads as the 2048 KB the buyer sees. And `required`

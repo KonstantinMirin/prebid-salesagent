@@ -30,7 +30,11 @@ from typing import Any, get_args
 
 import factory
 from adcp.types import FormatAssetUnion, RepeatableAssetGroup, Responsive
-from adcp.types.domains.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
+from adcp.types.domains.core.format import (  # TODO: no stable alias in adcp.types
+    Dimensions,
+    DisclosureCapability,
+    Renders,
+)
 from pydantic import BaseModel
 
 from src.core.creative_agent_registry import PUBLIC_DEFAULT_AGENT_URL
@@ -115,8 +119,12 @@ ASSET_TYPES = frozenset(_ASSET_CLASS_MAP)
 GROUP_ASSET_TYPES = frozenset(_GROUP_ASSET_CLASS_MAP)
 
 
-def make_asset(asset_type: str, asset_id: str | None = None) -> FormatAssetUnion:
+def make_asset(asset_type: str, asset_id: str | None = None, **fields: Any) -> FormatAssetUnion:
     """Create a typed asset object from an asset type string.
+
+    *fields* are further members of the asset slot the pinned class declares -- e.g.
+    ``requirements=ImageAssetRequirements(max_file_size_kb=2048)`` -- validated by that
+    class like the two this function always sets.
 
     Refuses an asset type it cannot build. This used to resolve the class with
     ``.get(asset_type, ImageFormatAsset)``, so a Given asking for a video, audio
@@ -139,7 +147,19 @@ def make_asset(asset_type: str, asset_id: str | None = None) -> FormatAssetUnion
             "generation gap; if not, the scenario is asking for an asset that does not "
             "exist at this spec version."
         ) from None
-    return cls(asset_id=asset_id or f"{asset_type}_asset", required=True)
+    return cls(asset_id=asset_id or f"{asset_type}_asset", required=True, **fields)
+
+
+def make_disclosure_capabilities(*entries: tuple[str, list[str]]) -> list[DisclosureCapability]:
+    """``disclosure_capabilities`` entries, one per ``(position, persistence modes)`` pair.
+
+    ``core/format.json`` requires both members of an entry ("required": ["position",
+    "persistence"], persistence ``minItems: 1``), which the pinned class enforces, and says
+    "Each position MUST appear at most once", which this enforces.
+    """
+    positions = [position for position, _ in entries]
+    assert len(positions) == len(set(positions)), f"a disclosure position may appear once, got {positions}"
+    return [DisclosureCapability(position=position, persistence=modes) for position, modes in entries]
 
 
 def _find_inner_asset_class(asset_type: str) -> type[BaseModel]:
@@ -397,11 +417,18 @@ def asset_types_of(fmt: Any) -> set[str]:
     The asset_types filter matches both (``list-creative-formats-request.json``: "Filter
     to formats that include these asset types"), so a format carrying a type only inside a
     group still includes it.
+
+    *fmt* is a ``Format`` or the JSON object a buyer received for one: a Then grading the
+    wire reads the same members off the serialized body with the same walk.
     """
+
+    def member(obj: Any, name: str) -> Any:
+        return obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
+
     types: set[str] = set()
-    for slot in getattr(fmt, "assets", None) or []:
-        for asset in (slot, *(getattr(slot, "assets", None) or [])):
-            asset_type = getattr(asset, "asset_type", None)
+    for slot in member(fmt, "assets") or []:
+        for asset in (slot, *(member(slot, "assets") or [])):
+            asset_type = member(asset, "asset_type")
             if asset_type is not None:
                 types.add(str(getattr(asset_type, "value", asset_type)))
     return types
