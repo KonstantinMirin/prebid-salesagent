@@ -75,6 +75,8 @@ class PeerCreativeAgentMixin(EgressHatchMixin):
     _peer_agent_row: Any = None
     #: The URL that row names: where the seller dials its peer, and what it refers buyers to.
     _peer_agent_url: str | None = None
+    #: Which configuration owns that row: the ``owner`` its first configuration named.
+    _peer_agent_owner: str | None = None
     #: The key :meth:`host_reference_format` serves its agent under, once it has one.
     _hosted_key: str | None = None
     #: The catalog entries that agent publishes, by format id.
@@ -144,19 +146,33 @@ class PeerCreativeAgentMixin(EgressHatchMixin):
         which is the point of serving it for real.
         """
         url = self.publish_formats(formats, rehome=rehome)
-        self.configure_peer_agent(url, use_default_creative_agent=False)
+        self.configure_peer_agent(url, owner="seed_own_creative_agent", use_default_creative_agent=False)
         return url
 
-    def configure_peer_agent(self, agent_url: str, **tenant_columns: Any) -> None:
+    def configure_peer_agent(self, agent_url: str, *, owner: str, **tenant_columns: Any) -> None:
         """The tenant's one peer creative agent is *agent_url* -- one row, both worlds.
 
         The row is created on the first call and re-pointed after, so a scenario never
         configures two peers by re-seeding. *tenant_columns* go through ``ensure_tenant``,
         which applies them to the tenant row the test or the e2e auto-seed already created
         and seeds nothing else: this configures the seller, not a buyer.
+
+        ONE CONFIGURATION OWNS THE ROW. *owner* names the configuration the call belongs
+        to, and only that owner may re-point the row: a re-seed of the same configuration
+        supersedes it by design (a catalog Given re-serves the whole grown catalog under a
+        fresh key). A DIFFERENT owner is refused, because the tenant has one peer row and
+        the two would otherwise leave whichever ran last -- a seeded catalog with the
+        standard agent turned off, or a hosted reference format with it federated -- and
+        silently lose the other's formats (salesagent-ol033.20.30.4).
         """
         from tests.factories import CreativeAgentFactory
 
+        if self._peer_agent_owner not in (None, owner):
+            raise ValueError(
+                f"the tenant's one peer creative agent is already configured by "
+                f"{self._peer_agent_owner}; {owner} would re-point it at {agent_url} and "
+                f"discard that configuration's catalog. A scenario uses one of them."
+            )
         tenant = self.ensure_tenant(**tenant_columns)
         if self._peer_agent_row is None:
             self._peer_agent_row = CreativeAgentFactory(tenant=tenant, agent_url=agent_url, name="Peer Creative Agent")
@@ -164,6 +180,7 @@ class PeerCreativeAgentMixin(EgressHatchMixin):
             self._peer_agent_row.agent_url = agent_url
         self._commit_factory_data()
         self._peer_agent_url = agent_url
+        self._peer_agent_owner = owner
 
     def peer_agent_url(self) -> str:
         """The URL of the tenant's peer creative agent, as its ``creative_agents`` row names it."""
@@ -186,7 +203,7 @@ class PeerCreativeAgentMixin(EgressHatchMixin):
         if self._hosted_key is None:
             key = new_peer_key()
             self.serve_peer_tool(key, PEER_PREVIEW_TOOL, single_preview_document(key))
-            self.configure_peer_agent(self.peer_url(key))
+            self.configure_peer_agent(self.peer_url(key), owner="host_reference_format")
             self._hosted_key, self._hosted_formats = key, {}
         assert self._hosted_formats is not None
         if format_id not in self._hosted_formats:
