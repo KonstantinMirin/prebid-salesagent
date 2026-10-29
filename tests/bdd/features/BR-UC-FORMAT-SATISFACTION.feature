@@ -827,6 +827,58 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # for every placement, which "MUST lie in the intersection of every selected placement's
     # effective set" -- and split's two placements share nothing.
 
+  # ── Coverage after an INLINE replacement on update_media_buy ──────────────────────────
+  #
+  # package-update.json creatives: "Replace this package's inline creative assets", and
+  # update_media_buy.mdx scopes that array to the inline bodies alone, so the library
+  # creatives assigned through creative_ids / creative_assignments stay. The replaced bodies
+  # are dropped AFTER the new ones are synced, so a set that covered every included
+  # placement while both were assigned can stop covering one once the old bodies go. The
+  # rule of the section above applies to the set the replacement leaves: core/product.json
+  # format_options "the selected creative set MUST cover every included placement;
+  # uncovered inventory MUST be rejected or refined, never silently omitted".
+  #
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/creatives/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
+  # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx
+
+  @T-UC-FORMAT-SATISFACTION-update-inline-creatives-covered @format_satisfaction @requires_db
+  Scenario Outline: update_media_buy accepts an inline replacement that leaves every included placement covered - <inline> <library> -> <uploaded>
+    Given the seller declares canonical format options "two_image_options" across placements "split"
+    And the buyer already holds a media buy for that product
+    And the package already carries inline canonical "image" creatives carrying the "<inline>" manifests
+    And the package already carries library canonical "image" creatives carrying the "<library>" manifests
+    When the Buyer Agent replaces the package's inline creatives through update_media_buy with canonical "image" creatives carrying the "<uploaded>" manifests
+    Then the update is accepted
+
+    Examples:
+      | inline                     | library       | uploaded                   |
+      | image_300x250,image_728x90 | image_160x600 | image_300x250,image_728x90 |
+      | image_300x250              | image_728x90  | image_300x250              |
+
+  @T-UC-FORMAT-SATISFACTION-update-inline-creatives-uncovered @format_satisfaction @requires_db
+  Scenario Outline: update_media_buy refuses an inline replacement that leaves an included placement uncovered - <uploaded>
+    Given the seller declares canonical format options "two_image_options" across placements "split"
+    And the buyer already holds a media buy for that product
+    And the package already carries inline canonical "image" creatives carrying the "image_300x250,image_728x90" manifests
+    And the package already carries library canonical "image" creatives carrying the "image_160x600" manifests
+    When the Buyer Agent replaces the package's inline creatives through update_media_buy with canonical "image" creatives carrying the "<uploaded>" manifests
+    Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "packages[0].creatives" for leaving placement "<placement>" uncovered
+
+    Examples:
+      | uploaded      | placement                     |
+      | image_300x250 | satisfaction_leaderboard_slot |
+      | image_728x90  | satisfaction_mrec_slot        |
+
+    # Every uploaded creative is one the product takes, and the new set together with the
+    # held bodies covers both placements, so a seller that asks coverage only before the drop
+    # accepts both rows. The first accept row uploads both sizes and differs from the refusal
+    # rows only in what it uploads. The second holds the 728x90 as a LIBRARY creative, which
+    # the inline replacement keeps, so the same upload as the first refusal row is accepted;
+    # a seller that dropped library creatives with the inline ones refuses it. The library
+    # image_160x600 fits neither placement, so it covers nothing in any row: a seller that
+    # counted a held creative as covering without grading it accepts the refusal rows.
+
   @T-UC-FORMAT-SATISFACTION-sync-creatives-covered @format_satisfaction_sync @requires_db
   Scenario: sync_creatives accepts an assignment whose creative covers every included placement
     Given a packaged product whose placements "shared" narrow canonical format options "two_image_options"

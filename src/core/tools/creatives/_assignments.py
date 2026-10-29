@@ -101,8 +101,9 @@ def require_package_covered(
     the creatives already assigned and the ones the request added or kept, each with the
     ``placement_ids`` its assignment routes it to
     (:func:`~src.core.format_satisfaction.require_covered`). Shared by ``sync_creatives``
-    assignments and ``update_media_buy``'s two replace-the-package's-creatives branches, which
-    is every gate that changes an existing package's creatives. The caller's unit of work rolls
+    assignments and ``update_media_buy``'s three replace-the-package's-creatives branches
+    (``creative_ids``, ``creative_assignments`` and the inline ``creatives``), which is every
+    gate that changes an existing package's creatives. The caller's unit of work rolls
     back on the raise. No product means no format restriction, as at every creative gate.
     """
     if product is None:
