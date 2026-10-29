@@ -40,9 +40,15 @@ already decided to move it.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from src.core.database.models import PersistedMediaBuyStatus
+from src.core.schemas.creative import CreativeStatusEnum
 from src.core.utils.flight_time import utc_flight_end, utc_flight_start
+
+if TYPE_CHECKING:
+    from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
+    from src.core.database.repositories.media_buy import MediaBuyRepository
 
 
 def _aware(value: datetime | None) -> datetime | None:
@@ -100,3 +106,44 @@ def resolve_flight_window_status(
     if not creatives_approved:
         return PersistedMediaBuyStatus.PENDING_CREATIVES
     return PersistedMediaBuyStatus.ACTIVE
+
+
+def advance_past_pending_creatives(
+    media_buys: MediaBuyRepository,
+    assignments: CreativeAssignmentRepository,
+    creatives: CreativeRepository,
+    media_buy_id: str,
+    principal_id: str,
+) -> None:
+    """Move a committed ``pending_creatives`` buy on once every package has an approved creative.
+
+    specification.mdx (v3.2.7) § Media Buy State Transitions draws
+    ``pending_creatives ──▶ pending_start ──▶ active``, and § Transaction boundaries says a
+    buy without sufficient approved coverage "remains ``pending_creatives`` until the buyer
+    supplies a correction or replacement" -- so once the buyer has supplied it, it does not
+    remain. The pending_creatives_to_start storyboard grades this on the update that assigns
+    the creative (step assign_creative_to_package); its narrative says the same of
+    sync_creatives attaching the assets. Both assignment writers call this after their writes.
+
+    Only a COMMITTED buy (``confirmed_at`` set) moves. A ``pending_creatives`` buy held on
+    creative review never reached the ad server
+    (``MediaBuyRepository._stamp_confirmation_if_needed``), and a status change cannot put it
+    there. The status it moves to is the flight window's (``resolve_flight_window_status``), so
+    a future flight reads ``pending_start`` and one already open reads ``active``.
+    """
+    buy = media_buys.get_by_id_or_raise(media_buy_id)
+    if buy.status != PersistedMediaBuyStatus.PENDING_CREATIVES or buy.confirmed_at is None:
+        return
+    rows = assignments.get_by_media_buy(media_buy_id)
+    approved = {
+        creative.creative_id
+        for creative in creatives.get_by_ids(sorted({row.creative_id for row in rows}), principal_id)
+        if creative.status == CreativeStatusEnum.approved.value
+    }
+    covered = {row.package_id for row in rows if row.creative_id in approved}
+    package_ids = {package.package_id for package in media_buys.get_packages(media_buy_id)}
+    if not package_ids or not package_ids <= covered:
+        return
+    target = resolve_flight_window_status(buy, now=datetime.now(UTC), creatives_approved=True)
+    if target is not None and target != buy.status:
+        media_buys.update_status(media_buy_id, target)

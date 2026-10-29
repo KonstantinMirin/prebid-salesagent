@@ -20,6 +20,7 @@ from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
 
 from src.core.tools._media_buy_status import UNSUPPORTED_ACTIONS, seller_valid_actions
+from src.core.tools._media_buy_transitions import advance_past_pending_creatives
 from src.core.tools.media_buy_list import _compute_status
 
 if TYPE_CHECKING:
@@ -1590,6 +1591,13 @@ def _update_media_buy_impl(
                         f"start_time={update_values.get('start_time')}, end_time={update_values.get('end_time')}"
                     )
                     logger.warning("GAM sync NOT implemented - GAM still has old dates")
+
+            # After every write above, so the coverage and the flight window it reads are
+            # this update's result, and before the response reads the status back.
+            assert uow.assignments is not None and uow.creatives is not None
+            advance_past_pending_creatives(
+                uow.media_buys, uow.assignments, uow.creatives, req.media_buy_id or "", principal_id
+            )
 
             # Create ObjectWorkflowMapping to link media buy update to workflow step
             # This enables webhook delivery when the update completes
