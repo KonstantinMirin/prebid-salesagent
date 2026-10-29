@@ -2882,11 +2882,37 @@ def then_package_update_field_refused_by_keyword(ctx: dict, name: str, keyword: 
     the schema keyword that rejected the payload, and ``field`` MUST be ``issues[0].pointer``
     in JSONPath-lite.
     """
+    _assert_package_update_refused(ctx, [name], keyword)
+
+
+def _assert_package_update_refused(
+    ctx: dict, names: list[str], keyword: str, *, require_suggestion: bool = False
+) -> None:
+    """INVALID_REQUEST whose ``issues[]`` name each of *names* on the one package update under *keyword*.
+
+    One issue per member: ``UpdateMediaBuyRequest._refuse_forbidden_package_shapes`` raises
+    one entry per forbidden shape. ``field`` is ``issues[0].pointer``, so it is pinned only
+    when a single member is named; for several, which one is first is the pin's order.
+    """
     ctx["result"].assert_wire_error(
         "INVALID_REQUEST",
-        field=f"packages[0].{name}",
-        issues=[{"pointer": f"/packages/0/{name}", "keyword": keyword}],
+        field=f"packages[0].{names[0]}" if len(names) == 1 else None,
+        issues=[{"pointer": f"/packages/0/{name}", "keyword": keyword} for name in names],
+        require_suggestion=require_suggestion,
     )
+
+
+def _assert_refused_by_root_not(ctx: dict) -> None:
+    """Every immutable member the package update carries is refused by package-update.json's root ``not``.
+
+    The keyword is what separates this refusal from the generic one: in dev an undeclared
+    member is refused under ``additionalProperties`` with the same code, and in production
+    it is dropped and the update succeeds.
+    """
+    package = ctx["update_kwargs"]["packages"][0]
+    named = [name for name in _IMMUTABLE_PACKAGE_VALUES if name in package]
+    assert named, f"the row's package update carries no immutable member: {sorted(package)}"
+    _assert_package_update_refused(ctx, named, "not", require_suggestion=True)
 
 
 @then("the update is refused AMBIGUOUS_BIDDING_POLICY naming the package update itself")
@@ -3341,6 +3367,7 @@ _UPDATE_OUTCOMES = {
     "success with persisted records": _assert_persisted_success,
     "success with pending status": _assert_submitted,
     "submitted task envelope (awaiting approval)": _assert_submitted,
+    "refused INVALID_REQUEST by the package update's root not": _assert_refused_by_root_not,
 }
 
 #: ``success at revision N``: the parametrized update outcome, graded by

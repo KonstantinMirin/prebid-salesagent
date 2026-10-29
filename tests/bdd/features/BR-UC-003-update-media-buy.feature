@@ -2840,19 +2840,28 @@ Feature: BR-UC-003 Update Media Buy
     Then the response is compliant with the update_media_buy spec
     And the result should be <outcome>
     # BR-RULE-198 (immutable_field_guard.yaml): product_id / format_ids / pricing_option_id forbidden in package-update
+    # LOCAL CORRECTION: the outcomes could not see the guard they name. The invalid rows read
+    # a bare INVALID_REQUEST, which dev's accepted-shape strip also answers for any undeclared
+    # member (issues keyword additionalProperties), so deleting the immutable-field refusal
+    # left them green. They now require each sent member refused under keyword "not", the
+    # keyword media-buy/package-update.json rejects them with (its root not: anyOf of
+    # required), as core/error.json asks ("the validator's native keyword name"). The valid
+    # row read a bare success; it now requires the budget change to be stored.
     # ---------- BR-RULE-219: Committed Metrics Append-Only ----------
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-request.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/not
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json
 
     Examples: Valid partitions
-      | partition         | forbidden_field          | outcome |
-      | no_immutable_keys | only budget (updatable)  | success |
+      | partition         | forbidden_field          | outcome                        |
+      | no_immutable_keys | only budget (updatable)  | success with persisted records |
 
     Examples: Invalid partitions
-      | partition                       | forbidden_field                          | outcome                                  |
-      | product_id_present              | product_id                               | error "INVALID_REQUEST" with suggestion |
-      | format_ids_present              | format_ids                               | error "INVALID_REQUEST" with suggestion |
-      | pricing_option_id_present       | pricing_option_id                        | error "INVALID_REQUEST" with suggestion |
-      | multiple_immutable_keys_present | product_id and pricing_option_id         | error "INVALID_REQUEST" with suggestion |
+      | partition                       | forbidden_field                          | outcome                                                  |
+      | product_id_present              | product_id                               | refused INVALID_REQUEST by the package update's root not |
+      | format_ids_present              | format_ids                               | refused INVALID_REQUEST by the package update's root not |
+      | pricing_option_id_present       | pricing_option_id                        | refused INVALID_REQUEST by the package update's root not |
+      | multiple_immutable_keys_present | product_id and pricing_option_id         | refused INVALID_REQUEST by the package update's root not |
 
   # REMOVED at the pin: @T-UC-003-committed-metrics-append, -immutable and -noop each sent
   # "an update_media_buy request that" appends, rewrites, drops or re-submits the package's
