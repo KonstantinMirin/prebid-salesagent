@@ -1110,6 +1110,29 @@ def given_sync_mixed_identity_creative(ctx: dict, format_id: str, kind: str) -> 
     ctx["creatives"] = [_mixed_identity_creative(format_id, kind)]
 
 
+@given(parsers.parse('the buyer syncs a creative identified by canonical kind "{kind}" beside a null format_id'))
+def given_sync_kind_beside_null_format_id(ctx: dict, kind: str) -> None:
+    """The canonical claim with the legacy key PRESENT and null, as a dict on the wire.
+
+    A dict and not a model, because a model dumped for the wire drops the null (an unset
+    optional member is absent on a buyer's wire) and would send the legal canonical item.
+    """
+    from src.core.errors.codes import ErrorCode
+    from tests.factories.malformed import malformed
+    from tests.factories.request import CreativeAssetRequestFactory
+
+    ctx["creatives"] = [
+        malformed(
+            "explicit_none",
+            "format_kind beside format_id: null. core/creative-asset.json's root oneOf arms each pair a "
+            "required with a not-required, and required counts a present key whatever its value, so the "
+            "item names both identifiers and matches neither arm.",
+            CreativeAssetRequestFactory.payload(creative_id=_SYNC_CREATIVE_ID, format_id=None, format_kind=kind),
+            obligation=ErrorCode.INVALID_REQUEST,
+        )
+    ]
+
+
 @given(
     parsers.parse(
         'the buyer\'s package uploads a creative identified by both format_id "{format_id}" and canonical kind "{kind}"'

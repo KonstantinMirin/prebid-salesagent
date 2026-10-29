@@ -104,6 +104,10 @@ def _asset(**overrides: Any) -> CreativeAssetRequest:
         "format_kind": "image",
         **_BLOB_VALUES,
     }
+    # A ``format_id`` override REPLACES the canonical arm rather than sitting beside it: the
+    # item's oneOf counts a present key, null included, so ``format_kind: None`` is not absent.
+    if "format_id" in overrides:
+        del payload["format_kind"]
     payload.update(overrides)
     return CreativeAssetRequest.model_validate(payload)
 
@@ -173,7 +177,7 @@ def test_the_retained_format_id_assertion_round_trips_through_its_two_columns() 
     ``agent_url`` first.
     """
     assertion = LibraryFormatId.model_validate({"agent_url": "https://agent.test", "id": "display_300x250"})
-    obj = _asset(format_id=assertion, format_kind=None)
+    obj = _asset(format_id=assertion)
     row = _written(obj, CreativeFormatIdentity.of_legacy(assertion, kind="image"))
 
     assert row.legacy_format_id == assertion.model_dump(exclude_none=True)

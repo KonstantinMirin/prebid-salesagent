@@ -1330,13 +1330,19 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
     def _wire_value(cls, value: Any) -> Any:
         """Convert a Pydantic model (or a list of them) to its wire dict form.
 
-        Anything else passes through unchanged. Conversion only: no key
-        filtering, no ``exclude_none`` — the REST seat's existing semantics.
+        Anything else passes through unchanged, so a dict a scenario authored -- including
+        one that sends an explicit null on purpose -- reaches the wire exactly as written.
+
+        ``exclude_none`` for a MODEL, because an unset optional field is ABSENT on a buyer's
+        wire, not null. The two are different documents at the pin: core/creative-asset.json's
+        root oneOf counts a present key whatever its value, so dumping a canonical creative
+        model with ``format_id: null`` beside ``format_kind`` would name both identifiers and
+        be refused -- a request no buyer sent.
         """
         if isinstance(value, list):
             return [cls._wire_value(item) for item in value]
         if hasattr(value, "model_dump"):
-            return value.model_dump(mode="json")
+            return value.model_dump(mode="json", exclude_none=True)
         return value
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:

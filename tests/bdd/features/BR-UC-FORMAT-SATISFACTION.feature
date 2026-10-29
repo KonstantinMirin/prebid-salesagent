@@ -1235,6 +1235,21 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Then the buyer is refused INVALID_REQUEST
     And the response error issues include keyword oneOf for field creatives.0
 
+  @T-UC-FORMAT-SATISFACTION-manifest-null-legacy-sync @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives refuses a creative naming format_kind beside a null format_id
+    Given the buyer syncs a creative identified by canonical kind "image" beside a null format_id
+    When the Buyer Agent syncs it into the library
+    Then the buyer is refused INVALID_REQUEST
+    And the response error issues include keyword oneOf for field creatives.0
+
+    # REQUIRED COUNTS PRESENCE. core/creative-asset.json's root oneOf arms are
+    # {required: [format_id], not: {required: [format_kind]}} and its mirror, and JSON
+    # Schema's `required` is met by a present key whatever its value -- so a null format_id
+    # still names the legacy identifier, and beside format_kind the item matches neither arm.
+    # The row above sends both identifiers valued; this one differs in the legacy value
+    # being null, which a seller counting `is not None` accepted.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-asset.json pointer=/oneOf
+
   @T-UC-FORMAT-SATISFACTION-manifest-mixed-create @format_satisfaction @requires_db
   Scenario: create_media_buy refuses an uploaded creative naming both format_id and format_kind
     Given the seller declares a canonical format option "fixed_300x250"

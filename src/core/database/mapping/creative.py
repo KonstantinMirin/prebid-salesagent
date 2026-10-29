@@ -228,12 +228,19 @@ class CreativeMapper(RowMapper[CreativeAssetRequest, CreativeRow]):
         """
         identity = CreativeFormatIdentity.from_row(row)
         document = row.data or {}
+        # The ONE arm present, the other ABSENT rather than null: the item's oneOf counts a
+        # present key whatever its value, so handing the unused arm as ``None`` would name
+        # both identifiers and be refused.
+        arm: dict[str, Any] = (
+            {"format_id": identity.assertion}
+            if identity.assertion is not None
+            else {"format_kind": identity.wire_format_kind}
+        )
         return CreativeAssetRequest.model_validate(
             {
                 "creative_id": row.creative_id,
                 "name": row.name,
-                "format_id": identity.assertion,
-                "format_kind": identity.wire_format_kind,
+                **arm,
                 "format_option_ref": row.format_option_ref,
                 "status": row.status,
                 **{name: document[name] for name in self.blob_fields if name in document},
