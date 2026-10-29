@@ -201,10 +201,14 @@ design did not predict, recorded because each changed the work:
 - **The wire-level accept, which this document left derived.** Measured on all three
   in-process transports before the fix: `status=completed`, `assigned_to=['pkg_001']`,
   `assignment_errors=None`. A 300x250 product created an assignment for a 728x90 creative.
-- **The refusal is `VALIDATION_ERROR`, not `UNSUPPORTED_FEATURE`.** `canonical_refusal`
-  asserts it is never called for `LEGACY_NOT_ACCEPTED`, because the deprecated lane raises
-  `AdCPValidationError` at its own site. The first draft of the scenarios asserted the
-  canonical lane's code against the deprecated lane's refusal.
+- **The refusal is `CREATIVE_SIZE_MISMATCH`, the code the canonical lane gives the same
+  condition.** When the product takes the creative's template at other parameters,
+  `_legacy_shortfalls` reports each parameter that fails (`format_id.width`,
+  `format_id.pixel_ratio`, ...) and `creative_refusal` codes them as it codes a manifest's:
+  a size or density is `CREATIVE_SIZE_MISMATCH`, anything else
+  `CREATIVE_VALIDATION_FAILED_GENERIC`. A format the product does not take at all is still
+  `VALIDATION_ERROR`, raised by the assignment sites themselves, and lenient
+  `sync_creatives` still skips both.
 - **The refusal has to NAME the size.** A template-key accepted set could only ever render
   `<agent>/display_image` — the same string whether the product restricts to 300x250 or to
   nothing — so `_reference_display` renders the identity plus its parameters, and the Then

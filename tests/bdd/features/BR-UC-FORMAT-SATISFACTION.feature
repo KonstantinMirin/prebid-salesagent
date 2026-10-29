@@ -900,7 +900,9 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     Given a packaged product selling only a deprecated format sized 300x250
     And the buyer syncs a creative identified by format_id "display_image" sized 728x90
     When the Buyer Agent assigns it to that package
-    Then the buyer is refused VALIDATION_ERROR naming the 300x250 it accepts
+    Then the creative is refused CREATIVE_SIZE_MISMATCH
+    And the refusal names "format_id.width" stating "728" where "300" is accepted
+    And the refusal names "format_id.height" stating "90" where "250" is accepted
 
     # THE PAIR IS ONE INSTRUMENT and neither row works alone: the accept row alone is
     # satisfied by a seller that takes everything, which is the defect, and the refuse row
@@ -918,20 +920,30 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # A TEMPLATE id carrying parameters, because a name-encoded one cannot express this:
     # upgrade_legacy_format_id rewrites the parameters from the name, so
     # display_300x250_image sized 728x90 becomes display_image at 300x250 and matches.
+    #
+    # THE CODE is the one the canonical lane gives the same condition (the fixed_300x250 /
+    # image_728x90 row of @T-UC-FORMAT-SATISFACTION-manifest-sync-refused).
+    # enums/error-code.json, CREATIVE_SIZE_MISMATCH: "The submitted creative dimensions do
+    # not match any size accepted by the selected packages". The product takes the
+    # creative's format, display_image, at another size. A format it does not take at all
+    # is still VALIDATION_ERROR (@T-UC-FORMAT-SATISFACTION-sync-other-agent-path).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/CREATIVE_SIZE_MISMATCH
 
   @T-UC-FORMAT-SATISFACTION-sync-density-mismatched @format_satisfaction_sync @requires_db
   Scenario: a creative at the wrong asset density is refused
     Given a packaged product selling only a deprecated format sized 300x250 at 2x density
     And the buyer syncs a creative identified by format_id "display_image" sized 300x250 at 1x density
     When the Buyer Agent assigns it to that package
-    Then the buyer is refused VALIDATION_ERROR naming the 300x250 it accepts
+    Then the creative is refused CREATIVE_SIZE_MISMATCH
+    And the refusal names "format_id.pixel_ratio" stating "1" where "2" is accepted
 
   @T-UC-FORMAT-SATISFACTION-sync-density-silent @format_satisfaction_sync @requires_db
   Scenario: a creative silent about asset density is refused by a product that fixes one
     Given a packaged product selling only a deprecated format sized 300x250 at 2x density
     And the buyer syncs a creative identified by format_id "display_image" sized 300x250
     When the Buyer Agent assigns it to that package
-    Then the buyer is refused VALIDATION_ERROR naming the 300x250 it accepts
+    Then the creative is refused CREATIVE_SIZE_MISMATCH
+    And the refusal names "format_id.pixel_ratio" missing where "2" is accepted
 
     # THE FOURTH PARAMETER, and it needs BOTH rows because the two ways to fail it are
     # different: a creative CONTRADICTING the density, and a creative SILENT about it. The
@@ -944,6 +956,13 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # format_is_supported reads the field that way and answers both rows; an earlier SDK
     # compared only ("width", "height", "duration_ms") and accepted both, which is what these
     # rows were written to catch.
+    #
+    # A density is a size here, as on the canonical lane (the plain_300x250 /
+    # image_600x500_2x row of @T-UC-FORMAT-SATISFACTION-manifest-sync-refused is
+    # CREATIVE_SIZE_MISMATCH too): core/format-id.json's {width: 300, height: 250,
+    # pixel_ratio: 2} "identifies a 300x250 logical render supplied by a 600x500 image", so
+    # a 1x creative is a 300x250 image where the product takes a 600x500 one.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json pointer=/properties/pixel_ratio
 
     # wrong_publisher_domain is the second half of formats.mdx's fourth rule. It carries
     # the SAME format_option_id the product publishes under a DIFFERENT publisher_domain,

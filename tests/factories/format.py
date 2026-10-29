@@ -284,8 +284,8 @@ def resolvable_format_ref(format_id: str, **parameters: int) -> dict[str, Any]:
 
     The accepted names come from production's own ``_FORMAT_ID_PARAMETERS``, which derives them
     off the pinned model. Two hand-written lists of these fields have each already dropped
-    ``pixel_ratio`` -- that constant exists because of the first, and the SDK's
-    ``format_is_supported`` still compares only three of the four. Importing it rather than
+    ``pixel_ratio`` -- that constant exists because of the first, and an earlier SDK's
+    ``format_is_supported`` compared only three of the four. Importing it rather than
     re-deriving is what keeps this from being the third chance to omit one.
 
     Catalog membership is a property of the ID ALONE, so parameters do not widen or narrow the

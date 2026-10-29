@@ -1444,6 +1444,9 @@ def _sync_legacy_claim(ctx: dict, format_id: str, **parameters: int) -> None:
             format_id=resolvable_format_ref(format_id, **parameters),
         )
     ]
+    # The creative a refusal names, as the canonical claim records it: a legacy reference the
+    # product takes at other parameters is refused with the creative's own code.
+    ctx["manifest_creative_id"] = _SYNC_CREATIVE_ID
 
 
 @given(
@@ -1998,9 +2001,11 @@ def then_refused_legacy_not_accepted(ctx: dict, width: int, height: int) -> None
     """The DEPRECATED lane's refusal, and the dimensions have to be in it.
 
     A DIFFERENT CODE from the canonical sibling, and that is production's documented
-    decision rather than this scenario's preference: the creative ASSIGNMENT sites skip
-    ``canonical_refusal`` for ``LEGACY_NOT_ACCEPTED`` and raise ``AdCPValidationError``
-    themselves -- "violates business rules beyond schema validation". (A package's own
+    decision rather than this scenario's preference: for a legacy format the product does
+    not take at all (``FormatSatisfaction.creative_coded`` is false), the creative
+    ASSIGNMENT sites raise ``AdCPValidationError`` themselves -- "violates business rules
+    beyond schema validation". A format the product takes at another size gets the creative
+    code instead, graded by ``the creative is refused {code}``. (A package's own
     format selector is a different site, coded UNSUPPORTED_FEATURE by
     ``media-buy/package-request.json``'s selector contract.) A row asserting UNSUPPORTED_FEATURE here would be asserting the canonical
     lane's code against the deprecated lane's refusal, which is the mistake this Then was

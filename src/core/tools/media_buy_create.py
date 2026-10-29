@@ -683,22 +683,22 @@ def _validate_creatives_before_adapter_call(
     # family that fails at the baseline too). So the inversion is silent today. The missing
     # scenario — one creative that is both terminal-state and outside its product's set — is
     # filed; until it exists, this paragraph is the only thing standing in the way.
-    from src.core.format_satisfaction import FormatRefusal, creative_refusal
+    from src.core.format_satisfaction import creative_refusal
 
     for product_id, cid, verdict in creative_verdicts:
         if verdict:
             continue
-        if verdict.refusal is FormatRefusal.LEGACY_NOT_ACCEPTED:
-            # The deprecated lane, unchanged: collected with the other per-creative
-            # business-rule problems and answered VALIDATION_ERROR below, which is
-            # what @T-UC-002-ext-p grades.
+        if not verdict.creative_coded:
+            # A legacy format the product does not take at all: collected with the other
+            # per-creative business-rule problems and answered VALIDATION_ERROR below,
+            # which is what @T-UC-002-ext-p grades.
             validation_errors.append(f"Creative {cid}: {verdict.summary} (product {product_id})")
             continue
         # A CANONICAL refusal is not a business-rule problem to collect -- the
         # product published a closed set and this creative is outside it, which the
-        # pin codes UNSUPPORTED_FEATURE, or its manifest fails the declaration it
-        # selects, which the pin codes CREATIVE_SIZE_MISMATCH or
-        # CREATIVE_VALIDATION_FAILED_GENERIC. Raised rather than appended because the
+        # pin codes UNSUPPORTED_FEATURE, or its manifest (or its legacy reference's
+        # parameters) fails what it selects, which the pin codes CREATIVE_SIZE_MISMATCH
+        # or CREATIVE_VALIDATION_FAILED_GENERIC. Raised rather than appended because the
         # code differs: folding it into ``reasons`` would answer the buyer
         # VALIDATION_ERROR for a condition with its own recovery.
         raise creative_refusal(verdict, field=PACKAGES_FIELD, creative_id=cid, product_id=product_id)
@@ -4231,7 +4231,7 @@ async def _create_media_buy_impl(
                     # typed to take a legacy ``FormatId`` -- so this site had to skip a
                     # creative with no retained assertion, while the update and assignment
                     # sites refused one. One function, one answer.
-                    from src.core.format_satisfaction import FormatRefusal, creative_refusal, creative_satisfies
+                    from src.core.format_satisfaction import creative_refusal, creative_satisfies
 
                     for package in req.packages:
                         pkg_cids = _get_creative_ids(package)
@@ -4265,7 +4265,7 @@ async def _create_media_buy_impl(
                                             ctx_manager.update_workflow_step(
                                                 step.step_id, status="failed", error_message=verdict.summary
                                             )
-                                            if verdict.refusal is not FormatRefusal.LEGACY_NOT_ACCEPTED:
+                                            if verdict.creative_coded:
                                                 raise creative_refusal(
                                                     verdict,
                                                     field=PACKAGES_FIELD,
