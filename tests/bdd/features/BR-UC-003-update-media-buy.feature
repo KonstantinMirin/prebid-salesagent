@@ -1224,13 +1224,17 @@ Feature: BR-UC-003 Update Media Buy
       | partition                  | status               | outcome |
       | status_pending_activation  | pending_activation   | success |
       | status_active              | active               | success |
+      | paused_budget_change       | paused               | accepted |
 
     Examples: Invalid partitions
       | partition              | status     | outcome                                      |
-      | paused_packages_locked | paused     | error "INVALID_STATE" with suggestion        |
       | terminal_rejected      | rejected   | error "INVALID_STATE" with suggestion        |
       | terminal_canceled    | canceled   | error "INVALID_STATE" with suggestion        |
       | terminal_completed   | completed  | error "INVALID_STATE" with suggestion        |
+    # LOCAL CORRECTION (mirror upstream in adcp-req): paused_packages_locked asserted
+    # INVALID_STATE for a package update that changes only the budget. It is now the valid
+    # paused_budget_change row, for the reason given on @T-UC-003-boundary-media-buy-status.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/media-buy-valid-action.json pointer=/enumMetadata/update_budget
 
   @T-UC-003-boundary-media-buy-status @boundary @media_buy_status
   Scenario Outline: Media buy status boundary validation - <boundary_point>
@@ -1252,10 +1256,18 @@ Feature: BR-UC-003 Update Media Buy
       | boundary_point                            | status               | outcome                                  |
       | pending_activation (non-terminal, updatable) | pending_activation | success                                  |
       | active (non-terminal, updatable)          | active               | success                                  |
-      | paused (packages locked, budget/dates ok) | paused               | error "INVALID_STATE" with suggestion    |
+      | paused (packages locked, budget/dates ok) | paused               | accepted                                 |
       | rejected (terminal, update blocked)       | rejected             | error "INVALID_STATE" with suggestion   |
       | canceled (terminal, update blocked)       | canceled             | error "INVALID_STATE" with suggestion   |
       | completed (terminal, update blocked)      | completed            | error "INVALID_STATE" with suggestion   |
+    # LOCAL CORRECTION (mirror upstream in adcp-req): the paused row asserted INVALID_STATE
+    # for a request whose only change is packages[].budget, against its own label ("budget/
+    # dates ok"). The pin maps packages[].budget to the budget actions (the normative action
+    # table; media-buy-valid-action.json lists it in update_budget's update_fields), a paused
+    # buy here advertises update_budget, and a seller rejects only an action it does not
+    # advertise, with ACTION_NOT_ALLOWED. INVALID_STATE is the code for a terminal buy.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/update_media_buy.mdx section="Action vocabulary and field mapping"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/media-buy-valid-action.json pointer=/enumMetadata/update_budget
 
   @T-UC-003-partition-budget-amount @partition @budget_amount
   Scenario Outline: Budget amount partition validation - <partition>

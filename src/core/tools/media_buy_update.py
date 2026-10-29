@@ -403,6 +403,13 @@ def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
 
     Returned names align with ``MEDIA_BUY_STATE_MACHINE`` keys so they can
     be intersected against ``seller_valid_actions(current_status)``.
+
+    A package entry's ``budget`` maps to ``update_budget`` alone: the pinned
+    ``enums/media-buy-valid-action.json`` lists ``packages[].budget`` among
+    ``update_budget``'s ``update_fields``, and update_media_buy.mdx's normative action
+    table maps it to the budget actions only. So an entry that changes nothing but its
+    budget does not also ask for ``update_packages``, which a paused buy does not offer
+    while it does offer ``update_budget``.
     """
     actions: list[str] = []
     if req.new_packages:
@@ -415,7 +422,7 @@ def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
         actions.append("update_budget")
     if req.start_time is not None or req.end_time is not None:
         actions.append("update_dates")
-    if req.packages:
+    if req.packages and any(pkg.model_fields_set - {"package_id", "budget"} for pkg in req.packages):
         actions.append("update_packages")
     return actions
 
