@@ -162,6 +162,56 @@ _SLACK_CREATIVE_ID_FIELD = re.compile(r"\*Creative ID:\*\n`([^`]+)`")
 _AI_REVIEW_WAIT_SECONDS = 30.0
 _AI_REVIEW_POLL_SECONDS = 0.25
 
+#: How often the e2e notification observer asks the capture service whether the held
+#: Slack delivery has arrived. Short: the server is blocked on it for as long as this
+#: takes, up to the service's ``HOLD_MAX_SECONDS``.
+_HELD_DELIVERY_POLL_SECONDS = 0.05
+
+
+def _observe_at_the_held_slack_delivery(self: CreativeSyncEnv) -> None:
+    """The e2e leg of :meth:`CreativeSyncEnv.observe_effects_at_notification`.
+
+    In process the observer runs inside ``_send_creative_notifications``. Over e2e_rest
+    that function runs in the server, so the observation is taken where its effect
+    lands instead: the tenant's Slack webhook is pointed at a fresh capture-service key
+    whose next delivery is HELD, and a thread in this process waits for that delivery
+    to arrive, reads what an independent connection to the server's database sees
+    while the server is still blocked on the send, then releases it. The read is the
+    same one the in-process observer takes (:meth:`_record_visibility_at_notification`),
+    taken while the notification is in flight rather than at its entry -- nothing the
+    sync writes runs between the two.
+
+    No delivery means no observation, and the Thens refuse a missing one; the thread
+    stops at teardown either way.
+    """
+    import threading
+
+    from tests.e2e import _webhook_capture
+
+    key, received = _webhook_capture.register_capture_key()
+    self.configure_tenant_field("slack_webhook_url", _webhook_capture.delivery_url_for(key))
+    _webhook_capture.hold_next_delivery(key)
+    stop = threading.Event()
+
+    def _observe() -> None:
+        try:
+            while not stop.is_set():
+                if received:
+                    self._record_visibility_at_notification()
+                    return
+                stop.wait(_HELD_DELIVERY_POLL_SECONDS)
+        finally:
+            _webhook_capture.release_held_delivery(key)
+
+    observer = threading.Thread(target=_observe, name=f"slack-hold-{key}", daemon=True)
+    observer.start()
+
+    def _stop_observing() -> None:
+        stop.set()
+        observer.join()
+
+    self._guard("slack_hold_observer", _stop_observing)
+
 
 def _slack_creative_ids(payload: Any) -> list[str]:
     """Creative ids named in one Slack delivery payload's Block Kit fields."""
@@ -832,25 +882,23 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
                 error=data.get("ai_review_error"),
             )
 
-    @realize_e2e(
-        e2e_unsupported(
-            "the notification observer is a side_effect installed on an in-process mock of "
-            "_send_creative_notifications. Under e2e_rest the sync runs in the Docker server "
-            "process, where that mock does not exist and the real notifier answers -- nothing "
-            "would ever be recorded and the ordering assertions would read None. Observing it "
-            "e2e needs effect capture at the server (a notification sink the test can poll), "
-            "which is its own build"
-        )
-    )
+    @realize_e2e(_observe_at_the_held_slack_delivery)
     def observe_effects_at_notification(self) -> None:
         """Install the Slack-notification observer for this scenario.
 
         Ordering between an escaping effect and the writes it refers to is only
         observable AT the effect: after the request both are done and every
         ordering looks alike. The observer records what a separate connection
-        could see the moment ``_send_creative_notifications`` was entered.
+        could see the moment ``_send_creative_notifications`` was entered; over
+        e2e_rest, while the server's Slack delivery is held in flight
+        (:func:`_observe_at_the_held_slack_delivery`).
         """
         self.mock["send_notifications"].side_effect = self._observe_at_notification
+
+    def _record_visibility_at_notification(self) -> None:
+        """What an independent connection sees committed now: the workflow rows and the assignments."""
+        self.workflow_rows_at_notification = self._committed_workflow_rows(tenant_id=self._tenant_id)
+        self.assignment_count_at_notification = self._committed_assignment_count(tenant_id=self._tenant_id)
 
     def _observe_at_notification(self, *args: Any, **kwargs: Any) -> None:
         """Record DB visibility at the notification, then let the notification run.
@@ -869,8 +917,7 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
         """
         from src.core.tools.creatives._workflow import _send_creative_notifications
 
-        self.workflow_rows_at_notification = self._committed_workflow_rows(tenant_id=self._tenant_id)
-        self.assignment_count_at_notification = self._committed_assignment_count(tenant_id=self._tenant_id)
+        self._record_visibility_at_notification()
         _send_creative_notifications(*args, **kwargs)
 
     def committed_sync_effects(self) -> CommittedSyncEffects:

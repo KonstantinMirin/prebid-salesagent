@@ -66,6 +66,7 @@ import httpx
 from tests.e2e.webhook_capture_service import (
     decode_body,
     header_value,
+    hold_path,
     peer_control_path,
     peer_path,
     tool_calls,
@@ -304,6 +305,22 @@ def program_rejections(key: str, *, status: int, count: int) -> None:
     how a caller spells "healthy again".
     """
     _readback_json(_readback_base_url(), "POST", f"/control/{key}", body={"status": status, "count": count})
+
+
+def hold_next_delivery(key: str) -> None:
+    """Hold the next delivery to ``key`` unanswered until :func:`release_held_delivery`.
+
+    The delivery is recorded on arrival, so :class:`ReceivedView` shows it while its
+    sender is still blocked on the answer; the service answers anyway after
+    ``HOLD_MAX_SECONDS``. Control-plane, so on the readback port like
+    :func:`program_rejections`.
+    """
+    _readback_json(_readback_base_url(), "POST", hold_path(key))
+
+
+def release_held_delivery(key: str) -> None:
+    """Answer the delivery held on ``key`` (or disarm a hold no delivery has taken yet)."""
+    _readback_json(_readback_base_url(), "DELETE", hold_path(key))
 
 
 def peer_agent_url(key: str) -> str:
