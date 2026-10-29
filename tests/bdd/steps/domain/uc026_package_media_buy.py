@@ -1800,6 +1800,30 @@ def then_package_omits_unrequested_format_ids(ctx: dict) -> None:
     )
 
 
+@then(parsers.parse("the package's format_ids_to_provide lists the product's formats {format_ids}"))
+def then_package_formats_to_provide_are_product_formats(ctx: dict, format_ids: str) -> None:
+    """Assert the omitted-format_ids default is applied: the package must provide every product format.
+
+    ``media-buy/package-request.json`` @ 3.2.7: "If omitted and no canonical selector is
+    present, all formats supported by the product are active." ``format_ids`` is not where
+    the seller reports that (it echoes only what the request carried), so the default is
+    read off ``format_ids_to_provide``, the legacy projection of the package's to-provide
+    checklist. Compared for set equality on the wire entry dict, so a seller that applied
+    no default (field absent), or narrowed or widened it, fails.
+    """
+    package = wire_entry(ctx, "packages", index=0)
+    provided = package.get("format_ids_to_provide")
+    assert provided, (
+        "the request omitted format_ids, so every product format is active and must be listed "
+        f"in format_ids_to_provide; the package carries {provided!r}"
+    )
+    expected = set(json.loads(format_ids))
+    actual = {_extract_format_id(f) for f in provided}
+    assert actual == expected, (
+        f"format_ids_to_provide lists {sorted(actual)}, expected the product's {sorted(expected)}"
+    )
+
+
 @then("the package should contain paused as false")
 def then_package_not_paused(ctx: dict) -> None:
     """Assert package paused field is explicitly False."""

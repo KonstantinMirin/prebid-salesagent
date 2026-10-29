@@ -573,7 +573,14 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy success spec
     And the package carries no format_ids, since the request carried none
+    And the package's format_ids_to_provide lists the product's formats ["banner-300x250", "banner-728x90"]
     # BR-RULE-197 INV-3: format_ids omitted defaults to all product formats.
+    # The default is graded where the seller reports it: "If omitted and no canonical
+    # selector is present, all formats supported by the product are active", and
+    # format_ids_to_provide is the legacy projection of the package's to-provide checklist
+    # (POST-S5). A seller that applied no default would list nothing there.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_ids/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/format_ids_to_provide/description
     # The default is applied, not echoed. The response package's format_ids are "Legacy
     # named-format IDs supplied for this package on create_media_buy", and "Omitted means
     # the request did not carry legacy format_ids". Echoing the product's formats here

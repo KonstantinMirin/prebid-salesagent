@@ -4525,21 +4525,26 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             #   is not told which field violated the const. The refusal is right and the
             #   field pointer is wrong.
             "T-UC-026-alt-cancel-irreversible",
-            # Graduated: T-UC-026-ext-e and T-UC-026-inv-197-3 (innet_291026_0008, all four
-            # transports xpass).
-            #   ext-e: production answers UNSUPPORTED_FEATURE since c0e130f1b, the code
+            # Graduated: T-UC-026-ext-e (innet_291026_0008, all four transports xpass).
+            #   Production answers UNSUPPORTED_FEATURE since c0e130f1b, the code
             #   media-buy/package-request.json @ 3.2.7 ("Format selector contract
             #   (normative)") gives "a single resolved route that does not satisfy the
             #   product"; _resolve_package_selectors raises canonical_refusal with
             #   field=packages[0].format_ids. The scenario's POST-F2 ("Error identifies
             #   unsupported format_ids") was ungraded, so the graduation added `the error
             #   field should contain "format_ids"`.
-            #   inv-197-3: production applies the omitted-format_ids default without
-            #   echoing it, and core/package.json @ 3.2.7 says "Omitted means the request
-            #   did not carry legacy format_ids"; the Then reads the wire entry dict, so the
-            #   absence cannot pass on a response that dropped the package. The default's
-            #   APPLICATION is graded by T-UC-026-main-required-fields' format_ids_to_provide
-            #   line, which is still routed above.
+            # NOT graduated although it xpassed on all four transports (innet_291026_0008):
+            # the xpass was vacuous. Its only Then checked that format_ids is not echoed,
+            # which a seller applying no default also passes, so INV-3 ("format_ids omitted
+            # defaults to all product formats") was graded by nothing. The scenario now reads
+            # the default off format_ids_to_provide, and is expected to fail there: a request
+            # naming no selector records no snapshot (_package_format_snapshots), so
+            # _legacy_formats_to_provide falls back to the request's absent format_ids and
+            # the field is None. That is the failure T-UC-026-main-required-fields measured
+            # on all four transports in innet_291026_0008 ("Package format_ids_to_provide
+            # is None") through the same code path; this scenario's own failure is traced,
+            # not yet measured on a box run.
+            "T-UC-026-inv-197-3",
             # HARNESS gap, not a production one, and the distinction is the point. The
             # scenario opens "the Buyer owns a media buy with a package that has already
             # SETTLED", and nothing reaches that state: settlement is billing-side, no
