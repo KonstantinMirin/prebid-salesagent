@@ -599,7 +599,10 @@ def _constraint_unsatisfied(key: str, bound: Any, claim: Any, must_state: frozen
     spec:
 
     * ``max_*`` / ``min_*`` are BOUNDS, and a claim satisfies one by being inside it.
-    * ``*_range`` over two numbers is a RANGE, graded by :func:`_range_unsatisfied`.
+    * ``*_range`` over two numbers is a RANGE, graded by :func:`_range_unsatisfied`. By the
+      NAME as well as the shape: a set of two numbers is still a set -- ``pixel_ratios:
+      [1, 2]`` "accepts both standard and Retina renditions" (formats/canonical/image.json),
+      not every density between them.
     * any other NUMBER must be EQUAL -- ``formats.mdx``: "Exact dimensions and durations
       must match".
     * any LIST is an allowed SET, and a claim's values must be a subset.
@@ -619,7 +622,7 @@ def _constraint_unsatisfied(key: str, bound: Any, claim: Any, must_state: frozen
         return _is_number(claim) and claim > bound
     if _is_number(bound) and key.startswith("min_"):
         return _is_number(claim) and claim < bound
-    if (window := _numeric_range(bound)) is not None:
+    if key.endswith("_range") and (window := _numeric_range(bound)) is not None:
         return _range_unsatisfied(claim, *window)
     if _is_number(bound):
         return not _is_number(claim) or claim != bound
