@@ -1661,6 +1661,11 @@ Feature: BR-UC-006 Sync Creative Assets
     # fields. This is the cross-tenant trust boundary.
     # provenance_truth_of_claim: verifier contradicts buyer claim; details bounded to audit-safe allowlist
     # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/provenance_truth_of_claim.yaml phase=reject_contradicted_claim step=sync_creatives_contradicted
+    # NOT IMPLEMENTED, deliberately: provenance verification is deferred feature work,
+    # tracked at https://github.com/prebid/salesagent/issues/1074 (accepted_verifiers on the
+    # creative policy, the outbound get_creative_features call, the
+    # PROVENANCE_CLAIM_CONTRADICTED refusal and its details class, and a verifier the e2e
+    # stack can reach). It stays expected-to-fail until that lands.
 
   # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
     # Gated upstream by the `creative` PROTOCOL, which AdCP 3.2 split creatives into and which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
