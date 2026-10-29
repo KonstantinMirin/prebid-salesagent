@@ -116,9 +116,8 @@ elif [ "$MODE" = "ci" ]; then
     # single-sourced in scripts/creative-agent-stack.sh. Idempotent (reuses a
     # healthy stack across runs); torn down with the Docker stack on EXIT.
     ./scripts/creative-agent-stack.sh up
-    # CREATIVE_AGENT_URL, CREATIVE_AGENT_ORIGIN, ADCP_OUTBOUND_ALLOW_PRIVATE and
-    # SSL_CERT_FILE, from the one recipe the stack prints -- the same one the
-    # test_creative_agent_live refusal hands a person running it by hand.
+    # CREATIVE_AGENT_URL, CREATIVE_AGENT_ORIGIN and SSL_CERT_FILE, from the one
+    # recipe the stack prints.
     eval "$(./scripts/creative-agent-stack.sh env)"
 
     # ─── Outbound egress escape hatch — TEST PATH ONLY (#1589, salesagent-e6h0) ──
@@ -150,8 +149,9 @@ elif [ "$MODE" = "ci" ]; then
     # BDD refusal scenarios). An ambient private-range hatch there would make
     # the seam accept exactly the addresses it exists to reject.
     #
-    # Literal "true" — the seam compares the lowercased string. Both exports
-    # come from `creative-agent-stack.sh env` above.
+    # Literal "true" — the seam compares the lowercased string. This setting is
+    # being deleted (salesagent-0o5xs): the origins get resolvable hosts instead.
+    export ADCP_OUTBOUND_ALLOW_PRIVATE="true"
 
     trap './scripts/creative-agent-stack.sh down 2>/dev/null || true; ./scripts/test-stack.sh down 2>/dev/null || true' EXIT
 
