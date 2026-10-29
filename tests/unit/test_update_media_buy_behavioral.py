@@ -1677,9 +1677,13 @@ class TestUC003UpdateTargetingOverlay:
             assert exit_args[0] is AdCPValidationError, msg
             assert isinstance(exit_args[1], AdCPValidationError)
 
-    def test_collection_list_update_skips_property_targeting_check(self):
-        """Update with only collection_list does not trigger the property_list-specific
-        property_targeting_allowed check — that gate is property_list-only.
+    def test_collection_list_update_is_refused_as_undeclared(self):
+        """Update with only collection_list is refused UNSUPPORTED_FEATURE, before any write.
+
+        core/targeting.json (v3.2.7): collection_list needs declared support, and "A fresh
+        create/update request MUST be applied exactly or rejected". This seller declares no
+        collection-list support, so the property_list-only property_targeting_allowed gate
+        is never what answers: the capability refusal is.
 
         Covers: UC-003-MAIN-14
         """
@@ -1704,11 +1708,12 @@ class TestUC003UpdateTargetingOverlay:
                     }
                 ],
             )
-            result = _update_media_buy_impl(req=req, identity=identity)
+            with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
+                _update_media_buy_impl(req=req, identity=identity)
 
-            # Targeting persisted; no property_list rejection
-            assert isinstance(result, UpdateMediaBuySuccess)
-            assert mock_pkg.package_config["targeting_overlay"] is not None
+            assert exc_info.value.error_code == "UNSUPPORTED_FEATURE"
+            assert exc_info.value.field == "packages[0].targeting_overlay.collection_list"
+            assert "targeting_overlay" not in mock_pkg.package_config
 
     def test_property_list_update_replaces_existing_not_merge(self):
         """Update with a NEW property_list.list_id replaces the prior one (not merged).

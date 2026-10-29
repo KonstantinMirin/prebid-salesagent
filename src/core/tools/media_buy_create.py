@@ -144,6 +144,7 @@ from src.services.targeting_capabilities import (
     collect_targeting_violations,
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
+    refuse_undeclared_overlay_dimensions,
     validate_property_targeting_allowed,
 )
 
@@ -3160,6 +3161,7 @@ async def _create_media_buy_impl(
                         budget_limit=Decimal(str(currency_limit.max_daily_package_spend)),
                     )
 
+        refuse_undeclared_overlay_dimensions(req.packages)
         # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)
         if req.packages:
             for pkg in req.packages:

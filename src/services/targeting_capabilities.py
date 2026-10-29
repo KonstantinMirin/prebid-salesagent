@@ -30,11 +30,13 @@ from typing import TYPE_CHECKING, Any
 from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPValidationError
 from src.core.schemas import AnyTargeting, Error
-from src.core.validation_helpers import PACKAGES_FIELD
+from src.core.validation_helpers import PACKAGES_FIELD, package_field_path
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from src.core.database.models import Product
 
 
@@ -60,6 +62,35 @@ def supports_property_list_filtering(adapter: object | type | None) -> bool:
     return bool(getattr(adapter_class, "supports_property_list_filtering", False))
 
 
+#: Overlay dimensions that ``core/targeting.json`` says need declared support ("Seller must
+#: declare support in get_adcp_capabilities") and that this seller neither declares nor
+#: applies. ``get_adcp_capabilities`` sets no ``media_buy.execution.targeting.collection_list``
+#: or ``collection_list_exclude`` flag, no product carries ``overlay_support``, and no adapter
+#: or tool reads either field. Ceiling: when an adapter applies a collection list, that
+#: adapter declares it and this tuple becomes a read of the declaration.
+UNDECLARED_OVERLAY_DIMENSIONS: tuple[str, ...] = ("collection_list", "collection_list_exclude")
+
+
+def refuse_undeclared_overlay_dimensions(packages: "Sequence[Any] | None") -> None:
+    """Refuse a package overlay that names a dimension this seller does not declare.
+
+    ``core/targeting.json``: "A fresh create/update request MUST be applied exactly or
+    rejected". Accepting the reference and dropping it is the one answer that sentence
+    excludes. Shared by create_media_buy and update_media_buy, and raised before either
+    opens a unit of work, so nothing is persisted.
+    """
+    for index, package in enumerate(packages or ()):
+        overlay = package.targeting_overlay
+        if overlay is None:
+            continue
+        for name in UNDECLARED_OVERLAY_DIMENSIONS:
+            if getattr(overlay, name) is not None:
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(capability=name),
+                    field=package_field_path(f"targeting_overlay.{name}", index),
+                )
+
+
 # ─── property_list targeting helpers ────────────────────────────────────
 #
 # Spec scope: these helpers only handle ``property_list``. The AdCP.0
@@ -70,8 +101,8 @@ def supports_property_list_filtering(adapter: object | type | None) -> bool:
 # only — declared in ``get_adcp_capabilities`` per
 # ``core/targeting.json:collection_list``: "Seller must declare support in
 # get_adcp_capabilities." There is no per-product flag for collection_list,
-# so the asymmetry below is spec-defined, not an oversight. Collection-list
-# capability infrastructure lands separately.
+# so the asymmetry below is spec-defined, not an oversight. This seller declares
+# neither, so :func:`refuse_undeclared_overlay_dimensions` refuses both.
 
 
 def build_property_list_unsupported_advisories(

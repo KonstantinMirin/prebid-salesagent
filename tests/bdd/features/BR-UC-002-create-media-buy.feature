@@ -3371,12 +3371,20 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy spec
     And the result should be <outcome>
+    # Corrected to the pin. The rows said "targeting validation passes", but both dimensions
+    # say "Seller must declare support in get_adcp_capabilities", and this seller declares
+    # neither (no media_buy.execution.targeting.collection_list / collection_list_exclude, no
+    # Product.overlay_support). core/targeting.json: "A fresh create/update request MUST be
+    # applied exactly or rejected", so an undeclared dimension is refused UNSUPPORTED_FEATURE,
+    # never accepted and dropped.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/targeting.json pointer=/properties/collection_list
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/execution/properties/targeting/properties/collection_list
 
     Examples: Boundary values
-      | boundary_point                                            | outcome                      |
-      | collection_list with valid agent_url and list_id          | targeting validation passes  |
-      | collection_list_exclude with valid agent_url and list_id  | targeting validation passes  |
-      | both collection_list and collection_list_exclude set      | targeting validation passes  |
+      | boundary_point                                           | outcome                                                                                            |
+      | collection_list with valid agent_url and list_id         | error UNSUPPORTED_FEATURE on packages[0].targeting_overlay.collection_list with suggestion         |
+      | collection_list_exclude with valid agent_url and list_id | error UNSUPPORTED_FEATURE on packages[0].targeting_overlay.collection_list_exclude with suggestion |
+      | both collection_list and collection_list_exclude set     | error UNSUPPORTED_FEATURE with suggestion                                                          |
 
   @T-UC-002-storyboard-async-submitted-envelope-task-id-roundtrip @schema-v3.1 @v3-1 @submitted-envelope @async @task-id-roundtrip
   Scenario: Async submitted envelope -- task_id matches deterministic value registered via comply_test_controller

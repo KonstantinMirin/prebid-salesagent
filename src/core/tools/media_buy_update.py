@@ -95,6 +95,7 @@ from src.services.targeting_capabilities import (
     collect_targeting_violations,
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
+    refuse_undeclared_overlay_dimensions,
     validate_property_targeting_allowed,
 )
 
@@ -715,6 +716,7 @@ def _update_media_buy_impl(
     # puts this rejection "before any mutation", so no transaction may be open when it fires.
     _refuse_ambiguous_bidding(req)
     _refuse_unapplied_package_fields(req)
+    refuse_undeclared_overlay_dimensions(req.packages)
     _refuse_unsupported_actions(req)
 
     # ── Workflow-step bookkeeping fence ──────────────────────────────────
