@@ -60,7 +60,7 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value                    |
     | media_buy_id | mb_existing              |
-    | end_time     | 2026-06-30T23:59:59.000Z |
+    | end_time     | 2099-06-30T23:59:59.000Z |
     And the new end_time is after the existing start_time
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy success spec

@@ -463,15 +463,6 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: UC-003 main/alt-timing — production doesn't populate these fields
     # Steps have hard assertions now; xfail at scenario level until production catches up.
     "T-UC-003-main": "implementation_date, budget, sandbox not populated in update response — spec-production gap",
-    # The reason this entry used to carry ("implementation_date not populated") was never
-    # what failed: with the uc003-not-wired catch-all lifted (measure_innet_291026_1202) the
-    # Given 'the new end_time is after the existing start_time' raises on all four transports,
-    # because the scenario's fixed end_time 2026-06-30 is now earlier than the start_time the
-    # seed gives the buy. Nothing is dispatched, so the Thens are not reached.
-    "T-UC-003-alt-timing": (
-        "test-wiring: the fixed end_time 2026-06-30 is earlier than the seeded buy's start_time, "
-        "so the Given refuses before dispatch; the implementation_date Then is never reached"
-    ),
     # FIXME: UC-003 pause — sandbox flag not populated in update response
     "T-UC-003-alt-pause": "sandbox not populated in pause response — spec-production gap",
     # FIXME: UC-003 optimization_goals — affected_packages empty in response
