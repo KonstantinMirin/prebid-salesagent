@@ -94,12 +94,13 @@ def _stored_buy(ctx: dict, media_buy_id: str) -> SimpleNamespace:
     with MediaBuyUoW(_tenant_id(ctx)) as uow:
         assert uow.media_buys is not None and uow.assignments is not None
         buy = uow.media_buys.get_by_id(media_buy_id)
-        assert buy is not None, f"the create answered {media_buy_id!r} but the seller stored no such buy"
+        assert buy is not None, f"the seller stored no media buy {media_buy_id!r}"
         return SimpleNamespace(
             status=buy.status,
             principal_id=buy.principal_id,
             start_time=buy.start_time,
             created_at=buy.created_at,
+            updated_at=buy.updated_at,
             package_ids=sorted(p.package_id for p in uow.media_buys.get_packages(media_buy_id)),
             assigned=sorted((a.creative_id, a.package_id) for a in uow.assignments.get_by_media_buy(media_buy_id)),
         )
@@ -135,6 +136,15 @@ def _requested_creative_ids(ctx: dict) -> list[str]:
 
 def _as_utc(moment: datetime) -> datetime:
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
+
+
+def _assert_start_resolved_to(start: datetime | None, reference: datetime, what: str) -> None:
+    """An ``asap`` start resolved to *reference*, the instant the seller took *what*."""
+    assert start is not None, f"the seller stored no start_time for {what}"
+    drift = abs((_as_utc(start) - _as_utc(reference)).total_seconds())
+    assert drift <= _ASAP_TOLERANCE_SECONDS, (
+        f"start_time {start} is {drift:.0f}s from {what} at {reference}; 'asap' resolves to that instant"
+    )
 
 
 def _assert_created(ctx: dict) -> list[dict[str, Any]]:
@@ -396,11 +406,7 @@ def then_response_carries_assignments(ctx: dict) -> None:
 def then_start_time_resolved(ctx: dict) -> None:
     """The stored flight start is the moment the seller took the buy, not a literal."""
     stored = _stored_buy(ctx, _created_buy_id(ctx))
-    assert stored.start_time is not None, "the seller stored no start_time for an 'asap' buy"
-    drift = abs((_as_utc(stored.start_time) - _as_utc(stored.created_at)).total_seconds())
-    assert drift <= _ASAP_TOLERANCE_SECONDS, (
-        f"stored start_time {stored.start_time} is {drift:.0f}s from the buy's creation {stored.created_at}"
-    )
+    _assert_start_resolved_to(stored.start_time, stored.created_at, "the buy's creation")
 
 
 @then("the campaign should be immediately activating")
@@ -423,9 +429,8 @@ def then_packages_carry_resolved_start(ctx: dict) -> None:
     for index, package in enumerate(wire_field(ctx, "packages")):
         start = package.get("start_time")
         assert isinstance(start, str) and start != "asap", f"packages[{index}].start_time is {start!r}"
-        resolved = _as_utc(datetime.fromisoformat(start.replace("Z", "+00:00")))
-        drift = abs((resolved - _as_utc(stored.created_at)).total_seconds())
-        assert drift <= _ASAP_TOLERANCE_SECONDS, f"packages[{index}].start_time {start} is {drift:.0f}s from creation"
+        resolved = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        _assert_start_resolved_to(resolved, stored.created_at, f"the buy's creation (packages[{index}])")
 
 
 @then("the approval path should be manual")

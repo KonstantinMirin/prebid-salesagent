@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
@@ -3257,44 +3258,36 @@ def _assert_submitted(ctx: dict) -> None:
     then_response_contains_task_id(ctx)
 
 
-def _stored_start_time(ctx: dict) -> tuple[datetime, datetime]:
-    """Synchronous success, then ``(start_time, updated_at)`` of the stored buy, in UTC.
+def _stored_existing_buy(ctx: dict) -> SimpleNamespace:
+    """Synchronous success, then the seller's record of the existing buy.
 
     Read through ``MediaBuyUoW`` (the live server's database on e2e_rest), because the
-    claim is what the seller RECORDED. ``updated_at`` is the instant the update wrote the
-    row, on the seller's own clock, which is what an applied ``asap`` is measured against.
+    claim is what the seller RECORDED.
     """
-    from src.core.database.repositories.uow import MediaBuyUoW
-    from tests.bdd.steps.domain.uc002_invariants import _as_utc
+    from tests.bdd.steps.domain.uc002_invariants import _stored_buy
 
     _assert_synchronous_success(ctx)
-    media_buy_id = _existing_media_buy(ctx).media_buy_id
-    with MediaBuyUoW(ctx["tenant"].tenant_id) as uow:
-        assert uow.media_buys is not None
-        row = uow.media_buys.get_by_id(media_buy_id)
-        assert row is not None, f"no persisted media buy {media_buy_id!r}"
-        assert row.start_time is not None, f"the seller stored no start_time on {media_buy_id!r}"
-        return _as_utc(row.start_time), _as_utc(row.updated_at)
+    return _stored_buy(ctx, _existing_media_buy(ctx).media_buy_id)
 
 
 def _assert_start_time_stored_as_now(ctx: dict) -> None:
-    """``asap`` was resolved to the instant the seller applied the update, not ignored."""
-    from tests.bdd.steps.domain.uc002_invariants import _ASAP_TOLERANCE_SECONDS
+    """``asap`` was resolved to the instant the update wrote the row (``updated_at``), not ignored."""
+    from tests.bdd.steps.domain.uc002_invariants import _assert_start_resolved_to
 
-    stored, applied = _stored_start_time(ctx)
-    drift = abs((stored - applied).total_seconds())
-    assert drift <= _ASAP_TOLERANCE_SECONDS, (
-        f"start_time 'asap' should resolve to the update's instant {applied}, but the stored "
-        f"start_time is {stored} ({drift:.0f}s away)"
-    )
+    stored = _stored_existing_buy(ctx)
+    _assert_start_resolved_to(stored.start_time, stored.updated_at, "the update")
 
 
 def _assert_start_time_stored_as_sent(ctx: dict) -> None:
     """The concrete date-time the update sent is the start_time the seller stored."""
+    from tests.bdd.steps.domain.uc002_invariants import _as_utc
+
     sent = ctx["update_kwargs"]["start_time"]
     expected = datetime.fromisoformat(sent.replace("Z", "+00:00")).astimezone(UTC)
-    stored, _applied = _stored_start_time(ctx)
-    assert stored == expected, f"the update sent start_time {sent!r}, but the seller stored {stored}"
+    stored = _stored_existing_buy(ctx).start_time
+    assert stored is not None and _as_utc(stored) == expected, (
+        f"the update sent start_time {sent!r}, but the seller stored {stored}"
+    )
 
 
 _UPDATE_OUTCOMES = {
