@@ -1425,6 +1425,63 @@ def then_old_assignments_removed(ctx: dict, old_ids: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Inline creatives on a package update (package-update.json /properties/creatives)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse('library creative "{creative_id}" is assigned to package "{package_id}"'))
+def given_library_creative_assigned(ctx: dict, creative_id: str, package_id: str) -> None:
+    """An assignment ROW for *creative_id* on the Background's package, built by factories.
+
+    A row, not a ``package_config`` entry: the assignment table is what the update's
+    replacement drops from and what ``get_media_buys`` reads ``creative_approvals`` from,
+    so a precondition written anywhere else would leave the replacement nothing to replace.
+    """
+    from tests.factories.creative import CreativeAssignmentFactory, CreativeFactory
+
+    pkg = ctx["existing_package"]
+    assert pkg.package_id == _resolve_package_id(ctx, package_id), (
+        f"package {package_id!r} is not the Background's package {pkg.package_id!r}"
+    )
+    creative = CreativeFactory(
+        creative_id=creative_id,
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        format="display_300x250_image",
+        approved=True,
+    )
+    CreativeAssignmentFactory(
+        creative=creative,
+        media_buy=ctx["existing_media_buy"],
+        package_id=pkg.package_id,
+    )
+    ctx["env"]._commit_factory_data()
+
+
+@then(parsers.parse('the package "{package_id}" should be assigned exactly the inline creatives the update sent'))
+def then_package_assigned_exactly_inline(ctx: dict, package_id: str) -> None:
+    """The seller's record of the package's assignments is the inline set, and nothing else.
+
+    package-update.json /properties/creatives: "Replace this package's inline creative
+    assets". Read through the repositories while the unit is open; the live e2e server
+    writes the database this process reads, so the read answers on every transport.
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    sent = sorted(c["creative_id"] for c in ctx["update_kwargs"]["packages"][0]["creatives"])
+    assert sent, "the update sent no inline creatives, so there is no replacement to grade"
+    with MediaBuyUoW(str(ctx["tenant"].tenant_id)) as uow:
+        assert uow.assignments is not None
+        assigned = sorted(
+            a.creative_id
+            for a in uow.assignments.get_by_media_buy_and_package(
+                ctx["existing_media_buy"].media_buy_id, _resolve_package_id(ctx, package_id)
+            )
+        )
+    assert assigned == sent, f"package {package_id!r} is assigned {assigned}, expected exactly the inline {sent}"
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — partition/boundary: idempotency_key
 # ═══════════════════════════════════════════════════════════════════════
 

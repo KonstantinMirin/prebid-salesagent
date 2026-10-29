@@ -6934,6 +6934,9 @@ ENV_ROUTES: list[EnvRoute] = [
                 or bool(m & _UC003_PACKAGE_UPDATE_NOT_TAGS)
                 or "T-UC-003-partition-creative-state" in m
                 or "T-UC-003-boundary-creative-state" in m
+                # The local inline-creatives replacement scenario: the same seed, and a
+                # factory-built assignment row its own Given adds on top of it.
+                or "T-UC-003-local-inline-creatives-replace" in m
             ),
         ),
         env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
