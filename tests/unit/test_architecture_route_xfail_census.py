@@ -81,15 +81,11 @@ from tests.unit._architecture_helpers import (
 #:
 #: Measured at integrate/sdk9-lanes b6e2554c5 by this file's own derivation.
 _CEILINGS: dict[str, int] = {
-    # The three catch-alls: `when=_uc("UC-00n", lambda m: True)`. They claim every
-    # scenario of their UC that no earlier row took, so these are the entries that can
-    # grow without anyone editing a list. 804 of the 819.
-    # 395 -> 385: twelve create-time billing combinations deleted (create_media_buy has no
-    # billing field at the pin), plus two added by corrections -- inv-080-11 became an
-    # outline over rejected and closed, and the tasks-sort-field partition gained the
-    # "domain is not a sort field" row.
-    "uc002-not-wired": 385,
-    "uc003-not-wired": 381,
+    # The catch-all: `when=_uc("UC-010", lambda m: True)`. It claims every scenario of its
+    # UC that no earlier row took, so it is the entry that can grow without anyone editing
+    # a list. The UC-002 and UC-003 catch-alls (385 and 381) drained to zero: their rows
+    # lost their xfail_reason, and what fails is named per scenario in the BDD conftest's
+    # _UC002_UC003_LEDGER (measure_innet_291026_1202).
     "uc010-not-wired": 28,
     # Per-tag UC-010 dormancy rows, generated from `_UC010_PARKED_TAGS`. Their reasons
     # cite issues and `test_architecture_uc010_dormancy_citations` grades the citation;
@@ -108,9 +104,12 @@ _CEILINGS: dict[str, int] = {
 
 #: The population floor. A derivation that matches nothing is silently green, and that is
 #: this family's failure mode -- so a census that finds almost nothing fails rather than
-#: reporting a clean pass. Deliberately far below the measured 819: this catches a BROKEN
-#: DERIVATION, it does not pin the count, which ``_CEILINGS`` does per row.
-_MIN_ROUTED_COMBINATIONS = 400
+#: reporting a clean pass. This catches a BROKEN DERIVATION, it does not pin the count,
+#: which ``_CEILINGS`` does per row. 400 -> 15 when the UC-002 and UC-003 catch-alls drained:
+#: what remains is the UC-010 catch-all and its dormancy rows (ceilings sum to 42; a static
+#: resolution of the bound features over ENV_ROUTES gives 34), so the floor sits well below
+#: that and above zero, which is the case it exists to refuse.
+_MIN_ROUTED_COMBINATIONS = 15
 
 _TRANSPORTS = ("mcp", "a2a", "rest", "e2e_rest", "e2e_mcp", "e2e_a2a", "e2e_admin")
 
