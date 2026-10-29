@@ -2948,15 +2948,29 @@ Feature: BR-UC-002 Create Media Buy
   @T-UC-002-v31-advertiser-industry-per-buy @v31 @advertiser-industry @post-s1
   Scenario: v3.1 advertiser_industry on the request targets a single industry per buy
     Given the tenant is configured for auto-approval
-    And the brand "acme.com" operates across industries ["healthcare.wellness", "cpg"]
     And a valid create_media_buy request with advertiser_industry "healthcare.wellness"
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy success spec
     And the response should succeed
     And the response status should be "completed"
-    And the seller should map advertiser_industry to its platform-native industry code
     # v3.1: a brand may operate across multiple industries; each media buy targets exactly one
+    # Corrected to the pin. Two lines are deleted because nothing in this scenario can
+    # establish or observe them:
+    # - 'the brand "acme.com" operates across industries [...]'. The request field's own
+    #   description consults the brand manifest only when advertiser_industry is OMITTED, and
+    #   then as a MAY ("When omitted, sellers may infer from the brand manifest's industries
+    #   field"). This request supplies it, so the brand's industries take no part, and this
+    #   seller reads no buyer brand.json for a Given to seed.
+    # - 'the seller should map advertiser_industry to its platform-native industry code'.
+    #   "Sellers map this to platform-native codes" describes the seller's side and carries
+    #   no MUST; no create_media_buy or get_media_buys response field reports the mapped code
+    #   (get-media-buys-response.json carries advertiser_industry only inside
+    #   accepted_proposal.commercial_terms), so no transport can observe it.
+    # What the pin does fix is that the field is single-valued (one enum value per buy) and
+    # declared on the request, so a seller must take it rather than refuse it; the success
+    # Thens above grade exactly that.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/advertiser_industry
     # --- v3.1: package paused flag ---
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
