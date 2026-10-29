@@ -1268,9 +1268,12 @@ def given_boundary_pricing_option(ctx: dict, boundary_point: str) -> None:
 # --- Update partition/boundary Given steps ---
 
 
-def _setup_update_partition(ctx: dict) -> tuple[dict, dict]:
-    """Create a media buy for update partition/boundary tests, return (update_kwargs, pkg_update)."""
-    _create_media_buy_for_update(ctx)
+def _setup_update_partition(ctx: dict, **pkg_overrides: Any) -> tuple[dict, dict]:
+    """Create a media buy for update partition/boundary tests, return (update_kwargs, pkg_update).
+
+    *pkg_overrides* go on the CREATED package, so a scenario's starting state is realized.
+    """
+    _create_media_buy_for_update(ctx, **pkg_overrides)
     update_kwargs = _ensure_update_kwargs(ctx)
     pkg_update: dict[str, Any] = {"package_id": ctx.get("existing_package_id", "pkg-001")}
     return update_kwargs, pkg_update
@@ -1571,11 +1574,7 @@ def _apply_keyword_boundary(pkg_update: dict, field_name: str, bp: str) -> None:
 
 def _paused_create_request(ctx: dict, paused: bool | None) -> None:
     """Build a create request whose one package asks for *paused* (``None`` omits it)."""
-    kwargs = _ensure_request_defaults(ctx)
-    pkg = _build_default_package(ctx)
-    if paused is not None:
-        pkg["paused"] = paused
-    kwargs["packages"] = [pkg]
+    _build_request_with_overrides(ctx, **({} if paused is None else {"paused": paused}))
     ctx["paused_request_type"] = "create"
 
 
@@ -1589,9 +1588,9 @@ def _paused_update_request(ctx: dict, *, start_paused: bool, paused: bool) -> No
     The create honours ``paused`` and stores it (T-UC-026-inv-200-2), and
     T-UC-026-alt-resume starts from exactly this state on every transport.
     """
-    _create_media_buy_for_update(ctx, paused=start_paused)
-    update_kwargs = _ensure_update_kwargs(ctx)
-    update_kwargs["packages"] = [{"package_id": ctx.get("existing_package_id", "pkg-001"), "paused": paused}]
+    update_kwargs, pkg_update = _setup_update_partition(ctx, paused=start_paused)
+    pkg_update["paused"] = paused
+    update_kwargs["packages"] = [pkg_update]
     ctx["update_kwargs"] = update_kwargs
     ctx["paused_request_type"] = "update"
 
