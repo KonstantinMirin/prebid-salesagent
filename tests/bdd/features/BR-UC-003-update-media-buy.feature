@@ -1269,8 +1269,12 @@ Feature: BR-UC-003 Update Media Buy
     And the result should be <outcome>
 
     Examples: Valid partitions
-      | partition       | amount | outcome |
-      | positive_amount | 100.00 | success |
+      | partition       | amount | outcome                        |
+      | positive_amount | 100.00 | success with persisted records |
+    # LOCAL CORRECTION: positive_amount asserted a bare "success", which a seller that ignored
+    # the budget answers too. package-update.json budget: "Updated hard spend cap for this
+    # package"; the row now reads the stored package budget back.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/budget
 
     Examples: Invalid partitions
       | partition       | amount | outcome                                      |
