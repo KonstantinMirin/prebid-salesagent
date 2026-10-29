@@ -2770,18 +2770,29 @@ Feature: BR-UC-002 Create Media Buy
       | creatives present, asap flight      | active             |
 
   @T-UC-002-v31-plan-id-required-when-governance @v31 @governance @plan-id @validation @ext-x
-  Scenario: v3.1 plan_id required when account has governance_agents configured
-    Given a create_media_buy request with the plan_id field omitted
+  Scenario: governance_context required when account has governance_agents configured
+    Given a create_media_buy request with the governance_context field omitted
     And the account "acc-001" exists and is active
     And the account has governance_agents configured
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
-    And the response should indicate a validation error
-    And the error should reference the missing "plan_id" field
-    And the error should include "suggestion" field
-    # v3.1: plan_id is required when governance_agents is non-empty on the account
-    # BR-RULE-212 INV-1: governance configured + plan_id absent -> INVALID_REQUEST (correctable)
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+    And the error code should be "PERMISSION_DENIED"
+    And the response should indicate a correctable failure
+    # LOCAL CORRECTION: this scenario required plan_id and answered INVALID_REQUEST naming
+    # "plan_id". At the pin plan_id is "DEPRECATED on seller-facing requests ... the seller
+    # forwards that opaque context and does not need the plan identifier", and the request
+    # field governance applies through is governance_context: "Required when governance
+    # applies to the resolved account". The campaign-governance spec (Seller enforcement):
+    # "A service receiving a governed commitment MUST require a valid, in-date intent-phase
+    # governance_context token ... A request without a token ... MUST be rejected with
+    # PERMISSION_DENIED"; "a registered governance agent means the applicable commitment
+    # requires a token". enumMetadata gives PERMISSION_DENIED recovery correctable ("call
+    # check_governance to mint a valid token"). The tag keeps its old name so the routing
+    # that names it still finds it.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/governance_context
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/plan_id
+    # @source repo=adcp ref=v3.2.7 path=docs/governance/campaign/specification.mdx (Seller enforcement, L178-182)
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumMetadata/PERMISSION_DENIED
 
   @T-UC-002-v31-plan-id-resolves @v31 @governance @plan-id @ext-x @happy-path
   Scenario: v3.1 plan_id present and resolvable forwards governance plan and proceeds
@@ -2796,19 +2807,14 @@ Feature: BR-UC-002 Create Media Buy
     # BR-RULE-212 INV-2: governance configured + plan_id resolves -> proceeds
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 
-  @T-UC-002-v31-plan-id-not-found @v31 @governance @plan-id @error-details @post-f2 @post-f3 @ext-x
-  Scenario: v3.1 plan_id that does not resolve rejects with PLAN_NOT_FOUND
-    Given a create_media_buy request with plan_id "plan-missing"
-    And the account "acc-001" exists and is active
-    And the account has governance_agents configured
-    And the plan "plan-missing" does not exist or is not accessible to the account
-    When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy error spec
-    And the response should indicate a correctable failure
-    And the error code should be "PLAN_NOT_FOUND"
-    And the error should include "suggestion" field
-    # BR-RULE-212 INV-3: plan_id present but unresolvable -> PLAN_NOT_FOUND (uniform response to prevent enumeration)
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
+  # DELETED: @T-UC-002-v31-plan-id-not-found. It required create_media_buy to refuse an
+  # unresolvable plan_id with PLAN_NOT_FOUND. The pin puts no plan_id obligation on this
+  # task: plan_id is "DEPRECATED on seller-facing requests ... the seller forwards that
+  # opaque context and does not need the plan identifier. If both are present, the
+  # governance agent MUST reject a mismatch" -- the governance agent, not the seller.
+  # PLAN_NOT_FOUND is a check_governance answer; the governed-commitment refusal the seller
+  # owns is stated by @T-UC-002-v31-plan-id-required-when-governance above.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/plan_id
 
   @T-UC-002-v31-plan-id-optional-without-governance @v31 @governance @plan-id @ext-x @happy-path
   Scenario: v3.1 plan_id optional when account has no governance_agents configured
@@ -3445,22 +3451,39 @@ Feature: BR-UC-002 Create Media Buy
     # governance_denied: seller surfaces governance denial as a structured error
     # @source repo=adcp ref=v3.2.7 path=static/compliance/source/protocols/media-buy/scenarios/governance_denied_recovery.yaml
 
+  # STORYBOARD CLAIM WITHDRAWN at the pin — RESTORABLE BY DECLARING.
+    # The pinned governance_denied_recovery storyboard is gated by `requires_capability
+    # adcp.governance_enforcement.tasks` containing {task: create_media_buy, modes:
+    # [signed_context, online_execution_check]} ("Other sellers grade not_applicable").
+    # This seller declares no governance_enforcement, so the claim that an AdCP storyboard
+    # grades this scenario is FALSE at the pin, and feeding a guard a false claim is the
+    # guard grading a fiction. Declaring it restores the claim; declaring a capability is a
+    # get_adcp_capabilities behaviour change and this repo declares a posture only where
+    # the implementation backs it.
+    # Every Given, When and Then below still runs on every transport.
   @T-UC-002-storyboard-governance-denied-recovery @schema-v3.1 @v3-1 @governance @recovery
   Scenario: Governance denied recovery -- buyer shrinks the buy to within plan limits and retries successfully
     Given a previous create_media_buy attempt failed with error code "GOVERNANCE_DENIED"
-    And the buyer reduces the proposed buy to within the governance agent's spending authority
-    And the buyer obtains a new "APPROVED" decision from the governance agent
-    When the Buyer Agent sends a corrected create_media_buy with the new APPROVED governance_decision
+    And the buyer reduces the proposed buy to within the amended governance plan
+    And the buyer obtains a fresh approved intent governance_context for the corrected buy
+    When the Buyer Agent sends the corrected create_media_buy carrying that governance_context and a fresh idempotency_key
     Then the response is compliant with the create_media_buy success spec
     And the response should carry the media_buy_id
-    And the response should carry status "active" or "pending_start"
-    # governance_denied_recovery storyboard: after GOVERNANCE_DENIED, the buyer
-    # reduces the buy (typically budget or scope) to fit within the governance
-    # agent's authority, re-runs the governance check (orchestrator-side), and
-    # resubmits. The seller MUST accept the retried buy on its merits without
-    # caching the prior denial.
-    # governance_denied_recovery: corrected buy with new APPROVED decision succeeds
-    # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/inventory_list_no_match.yaml
+    # governance_denied_recovery storyboard: the prior attempt carried a valid intent
+    # token and the seller's own execution check denied it (GOVERNANCE_DENIED). The buyer
+    # shrinks the buy to fit the amended plan, obtains a fresh intent approval, and
+    # retries with a fresh idempotency_key; the seller accepts it and returns a
+    # media_buy_id. "Every create_media_buy carries an approved intent token. A request
+    # without governance_context is rejected with PERMISSION_DENIED before any governance
+    # consultation, so it cannot exercise denial or recovery."
+    # LOCAL CORRECTION: the request carried a "governance_decision" payload, which
+    # create-media-buy-request.json does not declare; the approval travels as the opaque
+    # governance_context. The Then `the response should carry status "active" or
+    # "pending_start"` is removed: the top-level status is the task status ("completed" on
+    # synchronous success), and the storyboard grades only media_buy_id on the retry.
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/protocols/media-buy/scenarios/governance_denied_recovery.yaml phase=buy_retried step=create_media_buy_retry
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/create-media-buy-request.json pointer=/properties/governance_context
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx (L1523)
 
   # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
     # Gated upstream by `requires_capability media_buy.execution.targeting.property_list`, which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
