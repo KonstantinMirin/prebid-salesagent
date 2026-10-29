@@ -886,25 +886,31 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F3: Buyer knows how to fix the issue
     # --- ext-u: Optimization Goal Validation Failure ---
 
-  @T-UC-002-ext-u @extension @ext-u
+  @T-UC-002-ext-u @extension @ext-u @error @post-f1 @post-f2 @post-f3
   Scenario: Optimization goal with unsupported metric
     Given a valid create_media_buy request
     And the account exists and is active
     But a package has optimization_goal with kind "metric" and metric "attention_score" not in supported set
     When the Buyer Agent sends the create_media_buy request
-    Then the response is compliant with the create_media_buy spec
-    And the result should be optimization validation passes
-    # CORRECTED to the pin: the scenario asserted UNSUPPORTED_FEATURE, and the @error and
-    # POST-F tags went with it. The pin names no refusal a seller owes here. core/product.json
-    # metric_optimization.supported_metrics puts the rule on the buyer ("Buyers should only
-    # request metric goals for kinds listed here"), and for attention_score, a deprecated
-    # value, it gives the seller a choice: "Sellers MAY reject the deprecated values with
-    # TERMS_REJECTED and a suggestion to use the vendor_metric kind". This seller does not
-    # take that option: it accepts the goal and confirms it on the package, which "optimization
-    # validation passes" grades (the confirmed package must carry every goal sent).
-    # UNSUPPORTED_FEATURE is not the code the pin names for this refusal in any case.
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/metric_optimization/properties/supported_metrics/description
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/optimization-goal.json
+    Then the response is compliant with the create_media_buy error spec
+    And the operation should fail
+    And the error code should be "TERMS_REJECTED"
+    And the error recovery should be "correctable"
+    And the response error field is packages[0].optimization_goals[0]
+    And the error should include "suggestion" field
+    # POST-F1: System state is unchanged on failure
+    # POST-F2: Buyer knows what failed
+    # POST-F3: Buyer knows how to fix the issue
+    # CORRECTED to the pin: the code was UNSUPPORTED_FEATURE. A metric goal MUST match the
+    # product's declared capability, and the pin names the refusal: "A package's
+    # optimization_goals[] entry MUST match a product capability —
+    # metric_optimization.supported_metrics for kind: "metric" ... Sellers reject mismatches
+    # with TERMS_REJECTED." The seeded product declares no metric_optimization, and
+    # core/product.json says its "Presence indicates the product supports optimization_goals
+    # with kind: 'metric'", so this goal matches no capability. The field names the
+    # mismatched entry. Production accepts the goal today (prebid/salesagent#2479).
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/media-buys/optimization-reporting.mdx section="Required coherence between layers"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/metric_optimization/description
 
   @T-UC-002-ext-u-event @extension @ext-u @error
   Scenario: Optimization goal with unregistered event source
@@ -1782,15 +1788,16 @@ Feature: BR-UC-002 Create Media Buy
     #   includes value_field") is a business rule the schema does not express, and
     #   enums/error-code.json VALIDATION_ERROR is "violates business rules beyond schema
     #   validation".
-    # - unsupported_metric passes: the row sends metric "attention_score", which is in the
-    #   pinned metric enum, and the pin owes no refusal for it. supported_metrics: "Buyers
-    #   should only request metric goals for kinds listed here", a rule on the buyer, and for
-    #   this deprecated value "Sellers MAY reject the deprecated values with TERMS_REJECTED".
-    #   This seller accepts and confirms the goal; UNSUPPORTED_FEATURE is not the pin's code.
-    #   The row stays under "Invalid partitions" so its test id is unchanged.
+    # - unsupported_metric is TERMS_REJECTED on packages[0].optimization_goals[0], not
+    #   UNSUPPORTED_FEATURE: "A package's optimization_goals[] entry MUST match a product
+    #   capability — metric_optimization.supported_metrics for kind: "metric" ... Sellers
+    #   reject mismatches with TERMS_REJECTED." The seeded product declares no
+    #   metric_optimization, so the attention_score goal matches no capability. Production
+    #   accepts it today (prebid/salesagent#2479).
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/optimization-goal.json pointer=/description
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/max_optimization_goals
-    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/metric_optimization/properties/supported_metrics/description
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/media-buys/optimization-reporting.mdx section="Required coherence between layers"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/metric_optimization/description
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/VALIDATION_ERROR
 
     Examples: Valid partitions
@@ -1811,7 +1818,7 @@ Feature: BR-UC-002 Create Media Buy
 
     Examples: Invalid partitions
       | partition                              | outcome                                          |
-      | unsupported_metric                     | optimization validation passes                   |
+      | unsupported_metric                     | error TERMS_REJECTED on packages[0].optimization_goals[0] with suggestion |
       | unregistered_event_source              | error INVALID_REQUEST with suggestion              |
       | unsupported_view_duration              | error INVALID_REQUEST with suggestion              |
       | unsupported_reach_unit                 | error UNSUPPORTED_FEATURE with suggestion          |

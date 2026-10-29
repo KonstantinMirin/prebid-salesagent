@@ -594,7 +594,9 @@ def given_package_optimization_unsupported_metric(ctx: dict, metric: str) -> Non
     core/optimization-goal.json requires as the discriminator, and a ``weight`` it does not
     declare. The INVALID_REQUEST that malformed goal earned was a schema refusal of the
     fixture, not an answer about the metric. No seeded product declares
-    ``metric_optimization``, so the metric is outside every supported set.
+    ``metric_optimization``, so the metric is outside every supported set and the pin owes
+    TERMS_REJECTED (optimization-reporting.mdx, "Required coherence between layers", rule 1).
+    Production accepts the goal today: prebid/salesagent#2479.
     """
     from tests.bdd.steps.generic.given_media_buy import _metric_goal, _set_optimization_goals
 
