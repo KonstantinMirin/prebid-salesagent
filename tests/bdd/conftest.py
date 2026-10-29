@@ -463,7 +463,15 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: UC-003 main/alt-timing — production doesn't populate these fields
     # Steps have hard assertions now; xfail at scenario level until production catches up.
     "T-UC-003-main": "implementation_date, budget, sandbox not populated in update response — spec-production gap",
-    "T-UC-003-alt-timing": "implementation_date not populated in update response — spec-production gap",
+    # The reason this entry used to carry ("implementation_date not populated") was never
+    # what failed: with the uc003-not-wired catch-all lifted (measure_innet_291026_1202) the
+    # Given 'the new end_time is after the existing start_time' raises on all four transports,
+    # because the scenario's fixed end_time 2026-06-30 is now earlier than the start_time the
+    # seed gives the buy. Nothing is dispatched, so the Thens are not reached.
+    "T-UC-003-alt-timing": (
+        "test-wiring: the fixed end_time 2026-06-30 is earlier than the seeded buy's start_time, "
+        "so the Given refuses before dispatch; the implementation_date Then is never reached"
+    ),
     # FIXME: UC-003 pause — sandbox flag not populated in update response
     "T-UC-003-alt-pause": "sandbox not populated in pause response — spec-production gap",
     # FIXME: UC-003 optimization_goals — affected_packages empty in response
@@ -485,9 +493,13 @@ _XFAIL_TAGS: dict[str, str] = {
     # of valid_actions[]. Not in e2e_rest_known_failures.txt.
     # FIXME: UC-002 ASAP — response doesn't expose resolved start_time
     "T-UC-002-alt-asap": "response lacks resolved start_time field — spec-production gap",
+    # Graduated: T-UC-002-inv-087-5 and T-UC-002-inv-087-6. Both entries XPASSed strictly on
+    # a2a, mcp, rest and e2e_rest in measure_innet_291026_1202, the first run in which the
+    # uc002-not-wired catch-all did not xfail them at setup. -5 grades acceptance of tied
+    # priorities against the success branch and a created buy (core/optimization-goal.json
+    # resolves ties by array order); -6 grades INVALID_REQUEST, correctable and a suggestion
+    # on the wire for an empty optimization_goals array (minItems 1).
     # FIXME: UC-002 error code mismatch — Pydantic VALIDATION_ERROR vs spec INVALID_REQUEST
-    "T-UC-002-inv-087-5": "duplicate optimization_goals priority: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
-    "T-UC-002-inv-087-6": "empty optimization_goals array: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
     "T-UC-002-inv-087-7": "per_ad_spend without value_field: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
     # Graduated: T-UC-005-inv-049-8-holds, together with the -violated and -nofield rows
     # that used to sit in _UC005_PARTIAL_TAGS below. The disclosure_positions filter IS
@@ -710,8 +722,11 @@ _XFAIL_TAGS: dict[str, str] = {
     # Production wraps adapter exceptions as AdCPAdapterError and re-raises instead of
     # returning CreateMediaBuyResult(status="failed"). Also no suggestion field on error.
     "T-UC-002-ext-j": "adapter failure raises exception, no failed result envelope or suggestion — spec-production gap",
-    "T-UC-002-inv-026-2": "INVALID_CREATIVES error lacks suggestion field",
-    "T-UC-002-inv-026-4": "INVALID_CREATIVES error lacks suggestion field",
+    # Graduated: T-UC-002-inv-026-2 and T-UC-002-inv-026-4 ("INVALID_CREATIVES error lacks
+    # suggestion field"). XPASS(strict) on a2a, mcp, rest and e2e_rest in
+    # measure_innet_291026_1202, the first run that dispatched them. Each Then pins its code
+    # on the wire (INVALID_STATE for a rejected creative, VALIDATION_ERROR for a format
+    # outside the product's set) and requires the wire suggestion.
     # Graduated (#1417/gh8p.10): the request-construction boundary now derives a
     # field-aware suggestion (suggest_validation_fix) and attaches it to the
     # AdCPValidationError, so a missing idempotency_key rejects with a non-empty
@@ -742,7 +757,14 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: proposal-based creation not implemented in production
     # proposal_id exists on adcp library CreateMediaBuyRequest but production code
     # never reads it — no proposal store, no allocation derivation, no budget distribution.
-    "T-UC-002-alt-proposal": "proposal-based creation not implemented in production — spec-production gap",
+    # The reason used to name the missing proposal store, but the measured failure in
+    # measure_innet_291026_1202 is earlier: the Given that seeds the proposal has no step
+    # definition, so the conftest's dormancy tripwire rejected the old wording.
+    "T-UC-002-alt-proposal": (
+        'dormant (test-wiring): no step definition binds \'proposal "prop-2026-001" exists and has '
+        "not expired'; create_media_buy also never reads proposal_id, which is the next thing a "
+        "wired step will meet"
+    ),
     # FIXME: pricing XOR invariant not enforced during create_media_buy
     # Schema-level validate_pricing_option() enforces XOR but _validate_pricing_model_selection()
     # works at ORM level (is_fixed + rate + price_guidance) and doesn't check for both/neither.
@@ -758,7 +780,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: sandbox mode not implemented in create_media_buy
     # CreateMediaBuyResult has no sandbox field; no sandbox suppression logic exists.
     # sandbox-production passes vacuously (sandbox absent from response by default).
-    "T-UC-002-sandbox-happy": "sandbox mode not implemented in create_media_buy — spec-production gap",
+    # Graduated: T-UC-002-sandbox-happy. XPASS(strict) on a2a, mcp, rest and e2e_rest in
+    # measure_innet_291026_1202, the first run that dispatched it: the Thens grade the success
+    # branch, status "completed", sandbox true on the wire, and no billing records.
     "T-UC-002-sandbox-validation": "sandbox mode not implemented in create_media_buy — spec-production gap",
     # FIXME(production-gap bead): natural-key sandbox resolution
     # without prior provisioning is unimplemented. _resolve_by_natural_key
@@ -1766,6 +1790,1325 @@ def parse_xfail_reason(reason: str) -> XfailReason | None:
     return XfailReason(cause=found["cause"], scope=found["scope"], ref=found["ref"])
 
 
+# ── The UC-002 / UC-003 explicit ledger ─────────────────────────────────────
+# The two catch-all routes, `uc002-not-wired` and `uc003-not-wired`, used to xfail every
+# UC-002 / UC-003 scenario no earlier ENV_ROUTES row claimed, at FIXTURE SETUP. 2397 items
+# graded nothing behind two sentences. Those routes now build their env and seed like any
+# other row, and what fails is named here instead, scenario by scenario and row by row.
+#
+# THE EVIDENCE. measure_innet_291026_1202 (tree 22bb2b72b = 1b5c6880b with the two
+# xfail_reasons lifted), both BDD suites: of the scenario functions the catch-alls held,
+# 99 passed outright, 57 failed outright, 46 were mixed and 32 stayed xfailed by markers of
+# their own. Every FAILED nodeid of that run is matched by exactly one entry of
+# _UC002_UC003_LEDGER, with the cause its first failure line shows, except where the fix
+# was made in this change instead: an existing marker that XPASSed came out, a reason the
+# dormancy tripwire rejected was corrected, and six UC-003 Examples rows that contradicted
+# the pin were corrected in place to the code production answers (each carries a LOCAL
+# CORRECTION note and an @source). 890 nodeids are ledgered.
+#
+# Graduated: 1263 of the run's 2082 passing nodeids carry no marker now and are graded as
+# they stand (measure_innet_291026_1202). Four of them are the UC-002 zero-budget boundary
+# row, whose outcome now pins the field, so its nodeid changed. The other 819 passes are in
+# _UC002_UC003_VACUOUS_PARKS, drawn from a per-scenario inspection of these passes made the
+# way .claude/rules/workflows/xpass-graduation.md describes. Also graduated: the
+# 20 nodeids whose own strict markers XPASSed (see _XFAIL_TAGS), and the 32 nodeids of rows
+# corrected in place to the code production already answers (ext-f, ext-g, and the UC-003
+# daily-cap, idempotency, negative-budget and naive-start rows).
+#
+# THE TWO LISTS. _UC002_UC003_LEDGER holds what FAILS: strict xfails, so a row that starts
+# passing reports XPASS(strict) and has to be looked at. _UC002_UC003_VACUOUS_PARKS holds what
+# PASSES but grades nothing (or grades a claim the pin contradicts): xfail(run=False), the
+# UC-010 park's shape, because a vacuous pass counted as coverage is the defect and a running
+# xfail would report it as an XPASS. No nodeid is matched by both lists, and a park on a
+# Scenario Outline names the measured rows it parks, so a ledgered row that starts passing,
+# or a row added to the outline later, runs instead of falling into a park nobody reads.
+#
+# Both lists may only SHRINK. A scenario that newly fails is not added here; it is fixed, or
+# its cause is measured and given its own entry with that cause. The entry counts, the
+# nodeids each list matches, the no-overlap rule and the outline-rows rule are pinned by
+# tests/unit/test_architecture_route_xfail_census.py.
+#
+# Reasons avoid the words the dormancy tripwire (_classify_strict_xfail_dormancy) reads as a
+# claim about production, because several entries ARE test-wiring and say so.
+
+_CATCHALL_RUN = "measure_innet_291026_1202"
+
+
+def _dormant(step: str) -> str:
+    """The reason for a scenario whose step has no definition at all."""
+    return f"dormant (test-wiring): no step definition binds {step!r}, so the scenario executes nothing"
+
+
+def _no_given_branch(given: str, value: str) -> str:
+    """The reason for an Examples value a Given step has no branch for."""
+    return f"Given gap: {given} has no branch for {value!r} (ValueError), so nothing is dispatched"
+
+
+def _no_datatable_field(field: str) -> str:
+    """The reason for a package-update datatable field the shared step does not accept."""
+    return f"step gap: the package-update datatable step does not accept {field!r}, so nothing is dispatched"
+
+
+_LEDGER_SEED_MEDIA_BUY = (
+    "harness: the Given calls env.seed_media_buy, which MediaBuyCreateEnv does not have "
+    "(AttributeError), so nothing is dispatched"
+)
+_LEDGER_GET_MEDIA_BUY = (
+    "harness: the Then calls env.get_media_buy, which MediaBuyCreateEnv does not have "
+    "(AttributeError); the create itself succeeded"
+)
+_LEDGER_TENANT_MIN_FIXTURE = (
+    "fixture: the seeded tenant's min_package_budget is 100, so 0.01 is refused BUDGET_TOO_LOW by "
+    "the seller minimum; the row needs a tenant without one"
+)
+_LEDGER_CATALOG_DUP = (
+    "production never reads package catalogs, so two catalogs of one type are accepted; "
+    "package-request.json catalogs says sellers MUST reject them with a validation_error"
+)
+_LEDGER_CATALOG_NOT_FOUND = (
+    "production accepts a catalog the seller never synced; the Given also sends it as an inline ids "
+    "filter rather than a catalog_id reference, and the pinned code for a missing reference is "
+    "REFERENCE_NOT_FOUND, so the row needs regrounding as well"
+)
+_LEDGER_CATALOG_CROSS_PKG = (
+    "Given defect: the second package copies the first, so the request repeats a product_id and is "
+    "refused VALIDATION_ERROR for that before any catalog rule applies"
+)
+_LEDGER_MIXED_CURRENCY = (
+    "production accepts packages whose pricing options use different currencies; create_media_buy.mdx "
+    "says every selected pricing option MUST declare the media-buy currency"
+)
+_LEDGER_OPT_CAPABILITY = (
+    "production does not check optimization_goals against the product's declared optimization "
+    "capability, so the goal is accepted where the row expects UNSUPPORTED_FEATURE"
+)
+_LEDGER_OPT_UNVALIDATED = (
+    "production validates optimization_goals only against the request schema, so this cross-field or "
+    "per-account rule is not enforced and the create succeeds"
+)
+_LEDGER_OPT_DUP_PRIORITY = (
+    "the row contradicts the pin: core/optimization-goal.json resolves tied priorities by array order, "
+    "so production's acceptance is correct (INV-5 holds grades it); the row needs correcting"
+)
+_LEDGER_PRODUCT_CONFIG = (
+    "Given gap: given_product_configuration has no branch for 'proposal_id, no packages' (ValueError), "
+    "so nothing is dispatched"
+)
+_LEDGER_START_2099 = (
+    "refused INVALID_REQUEST where the row expects a 2099 start to be accepted; the request's default "
+    "end_time is earlier than 2099, which reads as the cause (an inverted flight) but is not confirmed"
+)
+_LEDGER_DEVICE_OVERLAP = (
+    "production accepts a device_type that is both included and excluded, where the row expects INVALID_REQUEST"
+)
+_LEDGER_DEVICE_OVERLAP_E2E = (
+    "on e2e_rest production answers UNSUPPORTED_FEATURE for the overlapping device_type overlay, where "
+    "the row expects INVALID_REQUEST"
+)
+_LEDGER_KEYWORD_DUP = (
+    "production accepts duplicate (keyword, match_type) pairs in keyword_targets, where the row expects INVALID_REQUEST"
+)
+_LEDGER_PROXIMITY_CONFLICT = (
+    "production accepts a geo_proximity entry that carries both travel_time and radius (it echoes the "
+    "entry back), where the row expects INVALID_REQUEST"
+)
+_LEDGER_MULTI_DIM_E2E = (
+    "on e2e_rest production answers UNSUPPORTED_FEATURE for the multi-dimension overlay, which the "
+    "in-process transports accept"
+)
+_LEDGER_NFR_STATUS_SUCCESS = (
+    "the Then expects task status 'success', which is not a pinned task status; the synchronous "
+    "success answers 'completed'"
+)
+_LEDGER_CPA_SERVICE_UNAVAILABLE = (
+    "production answers SERVICE_UNAVAILABLE for a create on a CPA pricing option, where the row "
+    "expects the create to succeed"
+)
+_LEDGER_MEASUREMENT_ACCEPTED = (
+    "production creates the buy (success branch, status completed) where the scenario expects the "
+    "unworkable measurement terms to be refused"
+)
+_LEDGER_STORE_CATCHMENTS = (
+    "production accepts targeting_overlay.store_catchments from a seller with no store catalogs "
+    "(success branch), where the scenario expects a refusal"
+)
+_LEDGER_CATCHMENT_XOR = (
+    "production accepts a geo_proximity entry with both radius and geometry, which the pinned oneOf "
+    "forbids; the scenario expects a refusal"
+)
+_LEDGER_COMMITTED_METRICS = (
+    "production accepts committed_metrics naming a metric outside the product's available metrics "
+    "(success branch), where the scenario expects a refusal"
+)
+_LEDGER_PENDING_CREATIVES_STATUS = (
+    "production answers media_buy_status pending_creatives although the Given assigns an approved "
+    "creative; the row expects pending_start or active"
+)
+_LEDGER_INPROCESS_ADAPTER_MOCK = (
+    "harness: the in-process update adapter is a MagicMock that persists nothing, so the stored "
+    "budget stays 5000; e2e_rest runs the real mock adapter and passes"
+)
+_LEDGER_ALT_BUDGET = (
+    "scenario defect: the 'budget is greater than zero' Given finds no budget in update_kwargs because "
+    "no earlier Given sets one, so nothing is dispatched"
+)
+_LEDGER_CREATIVE_ASSIGNMENTS_UNSUPPORTED = (
+    "production answers UNSUPPORTED_FEATURE where the scenario expects the creative_assignments replacement to succeed"
+)
+_LEDGER_ALL_FIELDS_INVALID_STATE = (
+    "production answers INVALID_STATE for a package update that carries every updatable field, where "
+    "the row expects success"
+)
+_LEDGER_EMPTY_UPDATE = (
+    "production accepts an update that changes nothing (success, affected_packages []), where the "
+    "scenario expects a refusal; the pinned request schema does not require an updatable field, so "
+    "the expectation needs grounding first"
+)
+_LEDGER_OUTCOME_PARSER = (
+    "step gap: the outcome parser has no branch for 'success (submitted)' or 'success (completed)' "
+    "(ValueError), so the Then grades nothing"
+)
+_LEDGER_FREQ_CAP_GIVEN = (
+    "Given defect: the row's bare duration becomes the whole frequency_cap object, which the pinned "
+    "frequency-cap.json refuses (INVALID_REQUEST), so a valid suppress window never reaches the seller"
+)
+_LEDGER_KEYWORD_OPS = (
+    "production refuses every keyword and negative-keyword operation with UNSUPPORTED_FEATURE (this "
+    "seller declares no keyword overlay_support), where the row expects success"
+)
+_LEDGER_MB_IDENT_LITERAL = (
+    "Given defect: the identification Given sends the literal 'mb_existing' without resolving it to "
+    "the seeded buy's id, so production answers MEDIA_BUY_NOT_FOUND"
+)
+_LEDGER_NO_ADD_PACKAGES = (
+    "the seeded buy does not advertise add_packages in valid_actions (this seller refuses "
+    "new_packages), so the scenario stops at its own precondition"
+)
+_LEDGER_UPDATE_OPT_UNSUPPORTED = (
+    "production refuses any optimization_goals update with UNSUPPORTED_FEATURE, and the seeded product "
+    "declares no metric_optimization or conversion_tracking, where the row expects success"
+)
+_LEDGER_UPDATE_ADAPTER_MOCK = (
+    "harness: the Givens configure env.mock['adapter'] while the in-process update path calls "
+    "env.mock['update_adapter'], so the approval or failure never takes effect; e2e_rest realizes "
+    "them through AdapterConfig and passes"
+)
+_LEDGER_NO_PLACEMENTS = (
+    "fixture: the seeded product defines no placements, so production answers UNSUPPORTED_FEATURE for any placement_ids"
+)
+_LEDGER_UPDATE_PAST_START = (
+    "production accepts a past start_time on update; the pin states the past-start refusal for create "
+    "(create_media_buy.mdx 'Flight date validation'), so the row needs regrounding before a code can "
+    "be asserted"
+)
+_LEDGER_INVOICE_RECIPIENT = (
+    "production accepts an invoice_recipient the account does not authorize (BR-RULE-214 is not "
+    "implemented), where the row expects VALIDATION_ERROR"
+)
+_LEDGER_NEW_PACKAGES_UNSUPPORTED = (
+    "production refuses new_packages with UNSUPPORTED_FEATURE, so neither the duplicate-product rule "
+    "nor the accepted row is reachable"
+)
+_LEDGER_NO_SANDBOX_ON_UPDATE = (
+    "production never puts sandbox on an update_media_buy success, so 'sandbox: true' is absent for a sandbox account"
+)
+_LEDGER_STALE_REVISION = (
+    "production accepts a stale revision and answers success (#1607), where the scenario expects "
+    "CONFLICT with version details"
+)
+
+
+def _example_row(nodeid: str) -> str:
+    """The Examples-row part of a parametrized nodeid: everything after its transport.
+
+    ``…::test_x[mcp-zero_amount-0-error …]`` gives ``zero_amount-0-error …``; a nodeid with no
+    Examples row gives "". Keyed off ``_transport_of`` so the transport is derived once.
+    """
+    transport = _transport_of(nodeid)
+    head = f"[{transport}-"
+    start = nodeid.find(head) if transport else -1
+    return nodeid[start + len(head) : -1] if start >= 0 else ""
+
+
+@dataclass(frozen=True)
+class _CatchallXfail:
+    """One entry of the UC-002 / UC-003 explicit ledger or of its vacuous parks.
+
+    ``rows`` are leading Examples columns of the row (``_example_row``), matched whole: each
+    one is a row's first column, so an entry reads as the Examples line it names, and
+    ``view_duration_seconds = 0`` does not also claim ``view_duration_seconds = 0.001``. A
+    non-ASCII character is written the way the nodeid escapes it (``\\u2014``). Empty means
+    every row. ``transports`` empty means every transport.
+    """
+
+    tag: str
+    reason: str
+    rows: tuple[str, ...] = ()
+    transports: tuple[str, ...] = ()
+
+    def matches(self, marker_names: set[str], nodeid: str) -> bool:
+        if self.tag not in marker_names:
+            return False
+        if self.transports and _transport_of(nodeid) not in self.transports:
+            return False
+        row = _example_row(nodeid)
+        return not self.rows or any(row == r or row.startswith(f"{r}-") for r in self.rows)
+
+
+_X = _CatchallXfail
+
+#: What FAILED in measure_innet_291026_1202 once the catch-alls were lifted. Strict xfails.
+_UC002_UC003_LEDGER: tuple[_CatchallXfail, ...] = (
+    _X("T-UC-002-alt-manual-reject-override", _LEDGER_SEED_MEDIA_BUY),
+    _X("T-UC-002-boundary-budget-amount", _LEDGER_TENANT_MIN_FIXTURE, rows=("amount = 0.01 (minimum positive)",)),
+    _X(
+        "T-UC-002-boundary-catalog-distinct-type",
+        _LEDGER_CATALOG_CROSS_PKG,
+        rows=("Two packages each with type=product (distinct per-package, not cross-package)",),
+    ),
+    _X(
+        "T-UC-002-boundary-catalog-distinct-type",
+        _LEDGER_CATALOG_DUP,
+        rows=(
+            "2 catalogs, same type (product + product) \\u2014 first duplicate violation",
+            "3 catalogs, two share same type (product + product + store)",
+        ),
+    ),
+    _X(
+        "T-UC-002-boundary-catalog-distinct-type",
+        _LEDGER_CATALOG_NOT_FOUND,
+        rows=("catalog_id references a non-existent catalog",),
+    ),
+    _X(
+        "T-UC-002-boundary-currency-consistency",
+        _LEDGER_MIXED_CURRENCY,
+        rows=("two packages, different currencies (via pricing options)", "two packages, different currencies"),
+    ),
+    _X(
+        "T-UC-002-boundary-io-acceptance",
+        _dormant('given a proposal-based create_media_buy request matching "<>"'),
+        rows=(
+            "requires_signature false, io_acceptance absent (no gate)",
+            "requires_signature false, io_acceptance present (no-op)",
+            "requires_signature true, io_acceptance absent (gate blocks)",
+            "requires_signature true, io_acceptance present but accepted_at missing",
+            "requires_signature true, io_acceptance present but io_id missing",
+            "requires_signature true, io_acceptance present but signatory missing",
+            "requires_signature true, io_acceptance present with all required members",
+            "requires_signature true, io_acceptance present with signature_id also supplied",
+        ),
+    ),
+    _X(
+        "T-UC-002-boundary-optimization-goals",
+        _LEDGER_OPT_CAPABILITY,
+        rows=(
+            "product lacks conversion_tracking + event goal submitted",
+            "product lacks metric_optimization + metric goal submitted",
+        ),
+    ),
+    _X(
+        "T-UC-002-boundary-optimization-goals",
+        _LEDGER_OPT_UNVALIDATED,
+        rows=(
+            "optimization_goals array at max_optimization_goals + 1 (above cap)",
+            "per_ad_spend target + no value_field on any event source",
+            "target_frequency.min = 5, max = 3 (min > max, invalid)",
+        ),
+    ),
+    _X(
+        "T-UC-002-boundary-persistence-timing", _LEDGER_GET_MEDIA_BUY, rows=("adapter returns success (auto-approval)",)
+    ),
+    _X(
+        "T-UC-002-boundary-plan-id-governance",
+        _dormant('given a create_media_buy request and account governance state matching "<>"'),
+        rows=(
+            "governance agents configured + plan_id absent",
+            "governance agents configured + plan_id present + plan not found",
+            "governance agents configured + plan_id present + plan resolves",
+            "no governance agents + plan_id absent",
+            "no governance agents + plan_id present",
+        ),
+    ),
+    _X(
+        "T-UC-002-boundary-pricing-option-xor",
+        _no_given_branch("given_pricing_option_configuration", "max_bid=true"),
+        rows=("max_bid=true on bid-based auction model",),
+    ),
+    _X(
+        "T-UC-002-boundary-pricing-option-xor",
+        _no_given_branch("given_pricing_option_configuration", "neither (code rejects)"),
+        rows=("neither present, salesagent code enforcement",),
+    ),
+    _X(
+        "T-UC-002-boundary-pricing-option-xor",
+        _no_given_branch("given_pricing_option_configuration", "neither (v3.1 schema)"),
+        rows=("neither present, v3.1 schema (auction, no floor)",),
+    ),
+    _X(
+        "T-UC-002-boundary-product-uniqueness",
+        _LEDGER_PRODUCT_CONFIG,
+        rows=("proposal_id supplied, packages omitted (no buyer packages array)",),
+    ),
+    _X("T-UC-002-boundary-start-time", _LEDGER_START_2099, rows=("future ISO datetime",)),
+    _X(
+        "T-UC-002-boundary-targeting-overlay",
+        _LEDGER_DEVICE_OVERLAP,
+        rows=("device_type include/exclude overlap",),
+        transports=("a2a", "mcp", "rest"),
+    ),
+    _X(
+        "T-UC-002-boundary-targeting-overlay",
+        _LEDGER_DEVICE_OVERLAP_E2E,
+        rows=("device_type include/exclude overlap",),
+        transports=("e2e_rest",),
+    ),
+    _X(
+        "T-UC-002-boundary-targeting-overlay",
+        _LEDGER_KEYWORD_DUP,
+        rows=("keyword_targets with duplicate (keyword, match_type)",),
+    ),
+    _X(
+        "T-UC-002-boundary-targeting-overlay",
+        _LEDGER_PROXIMITY_CONFLICT,
+        rows=("geo_proximity with travel_time AND radius",),
+    ),
+    _X(
+        "T-UC-002-inv-006-5",
+        _dormant("given a package uses a bid-based auction pricing model with max_bid set to true"),
+    ),
+    _X("T-UC-002-inv-010-3", _dormant("then the product-uniqueness check should have no applicable buyer input")),
+    _X(
+        "T-UC-002-inv-214-8",
+        _dormant(
+            "given a create_media_buy request that carries an invoice_recipient overriding the account default billing entity"
+        ),
+    ),
+    _X("T-UC-002-nfr-004", _LEDGER_NFR_STATUS_SUCCESS),
+    _X(
+        "T-UC-002-partition-catalog-distinct-type",
+        _LEDGER_CATALOG_DUP,
+        rows=("duplicate_catalog_type", "multiple_duplicates"),
+    ),
+    _X("T-UC-002-partition-catalog-distinct-type", _LEDGER_CATALOG_NOT_FOUND, rows=("catalog_not_found",)),
+    _X("T-UC-002-partition-currency-consistency", _LEDGER_MIXED_CURRENCY, rows=("mixed_currencies",)),
+    _X(
+        "T-UC-002-partition-optimization-goals",
+        _LEDGER_OPT_CAPABILITY,
+        rows=(
+            "event_not_supported_by_product",
+            "unsupported_attribution_window",
+            "unsupported_metric",
+            "unsupported_reach_unit",
+        ),
+    ),
+    _X("T-UC-002-partition-optimization-goals", _LEDGER_OPT_DUP_PRIORITY, rows=("duplicate_priority",)),
+    _X(
+        "T-UC-002-partition-optimization-goals",
+        _LEDGER_OPT_UNVALIDATED,
+        rows=("exceeds_max_goals", "unregistered_event_source", "value_target_without_value_field"),
+    ),
+    _X("T-UC-002-partition-persistence-timing", _LEDGER_GET_MEDIA_BUY, rows=("auto_approve_adapter_success",)),
+    _X("T-UC-002-partition-pricing-option-xor", _LEDGER_CPA_SERVICE_UNAVAILABLE, rows=("cpa_model",)),
+    _X("T-UC-002-partition-start-time", _LEDGER_START_2099, rows=("future_iso_datetime",)),
+    _X(
+        "T-UC-002-partition-targeting-overlay",
+        _LEDGER_DEVICE_OVERLAP,
+        rows=("device_type_overlap",),
+        transports=("a2a", "mcp", "rest"),
+    ),
+    _X(
+        "T-UC-002-partition-targeting-overlay",
+        _LEDGER_DEVICE_OVERLAP_E2E,
+        rows=("device_type_overlap",),
+        transports=("e2e_rest",),
+    ),
+    _X("T-UC-002-partition-targeting-overlay", _LEDGER_KEYWORD_DUP, rows=("keyword_duplicate",)),
+    _X(
+        "T-UC-002-partition-targeting-overlay",
+        _LEDGER_MULTI_DIM_E2E,
+        rows=("multiple_dimensions",),
+        transports=("e2e_rest",),
+    ),
+    _X("T-UC-002-partition-targeting-overlay", _LEDGER_PROXIMITY_CONFLICT, rows=("proximity_method_conflict",)),
+    _X(
+        "T-UC-002-storyboard-async-submitted-envelope-task-id-roundtrip",
+        _dormant(
+            'given a comply_test_controller directive registered force_create_media_buy_arm with branch "<>" and task_id "<>"'
+        ),
+    ),
+    _X(
+        "T-UC-002-storyboard-governance-approved",
+        _dormant('given the buyer\'s governance agent has returned decision "<>" for the proposed buy'),
+    ),
+    _X(
+        "T-UC-002-storyboard-governance-denied",
+        _dormant('given the buyer\'s governance agent has returned decision "<>" with a denial reason'),
+    ),
+    _X(
+        "T-UC-002-storyboard-governance-denied-recovery",
+        _dormant('given a previous create_media_buy attempt failed with error code "<>"'),
+    ),
+    _X(
+        "T-UC-002-storyboard-governance-with-conditions",
+        _dormant('given the buyer\'s governance agent has returned decision "<>" with a non-empty conditions array'),
+    ),
+    _X(
+        "T-UC-002-storyboard-inventory-list-no-match",
+        _dormant("given the buyer references a property_list whose entries do not match any seller inventory"),
+    ),
+    _X(
+        "T-UC-002-storyboard-inventory-list-targeting-parity",
+        _dormant("given the buyer holds a property_list (agent_url, list_id) that matches seller inventory"),
+    ),
+    _X("T-UC-002-storyboard-measurement-terms-rejected", _LEDGER_MEASUREMENT_ACCEPTED),
+    _X(
+        "T-UC-002-storyboard-pending-creatives-state-transition",
+        _dormant("when the buyer syncs a creative and assigns it to the package through update_media_buy"),
+    ),
+    _X(
+        "T-UC-002-v31-advertiser-industry-per-buy",
+        _dormant('given the brand "<>" operates across industries ["<>", "<>"]'),
+    ),
+    _X(
+        "T-UC-002-v31-artifact-webhook-config",
+        _dormant("then the seller should accept the artifact_webhook configuration for governance content delivery"),
+    ),
+    _X("T-UC-002-v31-catchment-isochrone", _LEDGER_STORE_CATCHMENTS),
+    _X("T-UC-002-v31-catchment-radius", _LEDGER_STORE_CATCHMENTS),
+    _X("T-UC-002-v31-catchment-xor-violation", _LEDGER_CATCHMENT_XOR),
+    _X("T-UC-002-v31-committed-metrics-rejected", _LEDGER_COMMITTED_METRICS),
+    _X(
+        "T-UC-002-v31-committed-metrics-standard-accepted",
+        _dormant('given the request package includes committed_metrics with one entry of scope "<>"'),
+    ),
+    _X(
+        "T-UC-002-v31-error-policy-violation-details",
+        _dormant("given a create_media_buy request that violates the seller's editorial policy"),
+    ),
+    _X(
+        "T-UC-002-v31-invoice-recipient-echoed",
+        _dormant("given a valid create_media_buy request with an invoice_recipient override"),
+    ),
+    _X(
+        "T-UC-002-v31-io-acceptance-not-required",
+        _dormant('given a valid create_media_buy request with proposal_id "<>" and the io_acceptance field omitted'),
+    ),
+    _X(
+        "T-UC-002-v31-io-acceptance-provided",
+        _dormant("given the proposal's insertion_order requires_signature is true"),
+    ),
+    _X(
+        "T-UC-002-v31-io-acceptance-required",
+        _dormant("given the proposal's insertion_order requires_signature is true"),
+    ),
+    _X(
+        "T-UC-002-v31-io-acceptance-signature-id",
+        _dormant("given the proposal's insertion_order requires_signature is true"),
+    ),
+    _X("T-UC-002-v31-plan-id-not-found", _dormant('given a create_media_buy request with plan_id "<>"')),
+    _X(
+        "T-UC-002-v31-plan-id-optional-without-governance",
+        _dormant("given a valid create_media_buy request with the plan_id field omitted"),
+    ),
+    _X(
+        "T-UC-002-v31-plan-id-required-when-governance",
+        _dormant("given a create_media_buy request with the plan_id field omitted"),
+    ),
+    _X("T-UC-002-v31-plan-id-resolves", _dormant('given a valid create_media_buy request with plan_id "<>"')),
+    _X(
+        "T-UC-002-v31-planned-delivery-with-governance",
+        _dormant('given a valid create_media_buy request with plan_id "<>"'),
+    ),
+    _X("T-UC-002-v31-price-shape-on-proposal-item", _dormant('given a proposal "<>" referenced by proposal_id')),
+    _X(
+        "T-UC-002-v31-success-status-values",
+        _LEDGER_PENDING_CREATIVES_STATUS,
+        rows=("creatives present, asap flight", "creatives present, future flight"),
+    ),
+    _X("T-UC-003-adapter-success", _LEDGER_INPROCESS_ADAPTER_MOCK, transports=("a2a", "mcp", "rest")),
+    _X("T-UC-003-alt-budget", _LEDGER_ALT_BUDGET),
+    _X("T-UC-003-alt-creative-assignments", _LEDGER_CREATIVE_ASSIGNMENTS_UNSUPPORTED),
+    _X(
+        "T-UC-003-boundary-adapter-dispatch",
+        _LEDGER_ALL_FIELDS_INVALID_STATE,
+        rows=("request with all updatable fields",),
+    ),
+    _X("T-UC-003-boundary-adapter-dispatch", _LEDGER_EMPTY_UPDATE, rows=("request with zero updatable fields",)),
+    _X(
+        "T-UC-003-boundary-approval-workflow",
+        _LEDGER_OUTCOME_PARSER,
+        rows=("adapter flag true (pending)", "both flags false (auto-approve)", "tenant flag true (pending)"),
+    ),
+    _X("T-UC-003-boundary-budget-amount", _LEDGER_TENANT_MIN_FIXTURE, rows=("amount = 0.01 (minimum positive)",)),
+    _X(
+        "T-UC-003-boundary-frequency-cap-suppress",
+        _LEDGER_FREQ_CAP_GIVEN,
+        rows=(
+            "interval = 1 (boundary minimum)",
+            "unit = 'campaign'",
+            "unit = 'days'",
+            "unit = 'hours'",
+            "unit = 'minutes'",
+            "unit=campaign, interval=1",
+        ),
+    ),
+    _X(
+        "T-UC-003-boundary-keyword-targets-add",
+        _LEDGER_KEYWORD_OPS,
+        rows=(
+            "array length 1 (minimum valid)",
+            "bid_price = 0",
+            "bid_price = 0.01",
+            "keyword length 1 (single char)",
+            "keyword_targets_add WITH targeting_overlay.negative_keywords (cross-dimension)",
+            "keyword_targets_add WITHOUT targeting_overlay.keyword_targets",
+            "match_type = 'broad'",
+            "match_type = 'exact'",
+            "match_type = 'phrase'",
+        ),
+    ),
+    _X(
+        "T-UC-003-boundary-keyword-targets-remove",
+        _LEDGER_KEYWORD_OPS,
+        rows=(
+            "array length 1 (minimum valid)",
+            "keyword length 1 (single char)",
+            "keyword_targets_remove WITHOUT targeting_overlay.keyword_targets",
+            "match_type = 'broad'",
+            "match_type = 'exact'",
+            "match_type = 'phrase'",
+            "remove pair that does NOT exist in current list (no-op)",
+            "remove pair that exists in current list",
+        ),
+    ),
+    _X(
+        "T-UC-003-boundary-media-buy-identification",
+        _LEDGER_MB_IDENT_LITERAL,
+        rows=("media_buy_id only (primary path)",),
+    ),
+    _X(
+        "T-UC-003-boundary-negative-keywords-add",
+        _LEDGER_KEYWORD_OPS,
+        rows=(
+            "add pair that already exists in list (duplicate no-op)",
+            "array length 1 (minimum valid)",
+            "keyword length 1 (single char)",
+            "match_type = 'broad'",
+            "match_type = 'exact'",
+            "match_type = 'phrase'",
+            "negative_keywords_add WITH targeting_overlay.keyword_targets (cross-dimension)",
+            "negative_keywords_add WITHOUT targeting_overlay.negative_keywords",
+        ),
+    ),
+    _X(
+        "T-UC-003-boundary-negative-keywords-remove",
+        _LEDGER_KEYWORD_OPS,
+        rows=(
+            "array length 1 (minimum valid)",
+            "keyword length 1 (single char)",
+            "match_type = 'broad'",
+            "match_type = 'exact'",
+            "match_type = 'phrase'",
+            "negative_keywords_remove WITHOUT targeting_overlay.negative_keywords",
+            "remove pair that does NOT exist in current list (no-op)",
+            "remove pair that exists in current list",
+        ),
+    ),
+    _X(
+        "T-UC-003-boundary-optimization-goals",
+        _LEDGER_UPDATE_OPT_UNSUPPORTED,
+        rows=(
+            "duplicate priorities (same value on two goals)",
+            "event_sources multiple entries",
+            "event_sources single entry (boundary min)",
+            "kind = 'event'",
+            "kind = 'metric'",
+            "many goals (no maxItems)",
+            "optimization_goals present \\u2014 replaces all",
+            "priority = 1 (boundary min)",
+            "priority omitted",
+            "single goal (1 item \\u2014 boundary min)",
+            "target omitted",
+            "target.value = 0.001 (just above zero)",
+            "view_duration_seconds = 0.001 (just above zero)",
+        ),
+    ),
+    _X(
+        "T-UC-003-boundary-persistence-timing",
+        _LEDGER_UPDATE_ADAPTER_MOCK,
+        rows=(
+            "adapter returns error (auto-approval)",
+            "adapter returns success (auto-approval)",
+            "manual approval detected (pending state)",
+        ),
+        transports=("a2a", "mcp", "rest"),
+    ),
+    _X("T-UC-003-boundary-placement-id", _LEDGER_NO_PLACEMENTS, rows=("all placement IDs valid",)),
+    _X("T-UC-003-boundary-start-time", _LEDGER_UPDATE_PAST_START, rows=("past datetime",)),
+    _X(
+        "T-UC-003-bva-billing-eligibility",
+        _LEDGER_INVOICE_RECIPIENT,
+        rows=("invoice_recipient supplied = business entity not authorized for this account",),
+    ),
+    _X(
+        "T-UC-003-bva-product-uniqueness",
+        _LEDGER_NEW_PACKAGES_UNSUPPORTED,
+        rows=(
+            "update new_packages[] adds a product_id not present elsewhere",
+            "update new_packages[] contains two entries with the same product_id",
+            "update new_packages[] product_id duplicates an existing media buy package",
+        ),
+    ),
+    _X(
+        "T-UC-003-bva-sandbox-response",
+        _LEDGER_NO_SANDBOX_ON_UPDATE,
+        rows=(
+            "sandbox: true in response (sandbox account)",
+            "sandbox: true on update_media_buy synchronous success shape",
+        ),
+    ),
+    _X("T-UC-003-cancel-package", _no_datatable_field("canceled")),
+    _X("T-UC-003-empty-update", _LEDGER_EMPTY_UPDATE),
+    _X("T-UC-003-new-packages-add", _LEDGER_NO_ADD_PACKAGES),
+    _X("T-UC-003-new-packages-duplicate", _LEDGER_NO_ADD_PACKAGES),
+    _X("T-UC-003-new-packages-incomplete", _LEDGER_NO_ADD_PACKAGES),
+    _X("T-UC-003-package-start-time-asap", _no_datatable_field("start_time")),
+    _X("T-UC-003-partition-adapter-dispatch", _LEDGER_EMPTY_UPDATE, rows=("empty_update",)),
+    _X(
+        "T-UC-003-partition-approval-workflow",
+        _LEDGER_OUTCOME_PARSER,
+        rows=("auto_approve", "pending_adapter_approval", "pending_human_review"),
+    ),
+    _X(
+        "T-UC-003-partition-frequency-cap-suppress",
+        _LEDGER_FREQ_CAP_GIVEN,
+        rows=("boundary_min_interval", "campaign_full_flight", "typical_days", "typical_hours", "typical_minutes"),
+    ),
+    _X(
+        "T-UC-003-partition-keyword-targets-add",
+        _LEDGER_KEYWORD_OPS,
+        rows=(
+            "add_with_bid_price",
+            "add_without_bid_price",
+            "all_match_types",
+            "boundary_min_array",
+            "boundary_min_keyword",
+            "cross_dimension_valid",
+            "typical_add",
+            "upsert_existing",
+            "zero_bid_price",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-keyword-targets-remove",
+        _LEDGER_KEYWORD_OPS,
+        rows=(
+            "all_match_types",
+            "boundary_min_array",
+            "boundary_min_keyword",
+            "cross_dimension_valid",
+            "remove_nonexistent",
+            "typical_remove",
+        ),
+    ),
+    _X("T-UC-003-partition-media-buy-identification", _LEDGER_MB_IDENT_LITERAL, rows=("media_buy_id_only",)),
+    _X(
+        "T-UC-003-partition-negative-keywords-add",
+        _LEDGER_KEYWORD_OPS,
+        rows=(
+            "add_duplicate",
+            "all_match_types",
+            "boundary_min_array",
+            "boundary_min_keyword",
+            "cross_dimension_valid",
+            "typical_add",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-negative-keywords-remove",
+        _LEDGER_KEYWORD_OPS,
+        rows=(
+            "all_match_types",
+            "boundary_min_array",
+            "boundary_min_keyword",
+            "cross_dimension_valid",
+            "remove_nonexistent",
+            "typical_remove",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-optimization-goals",
+        _LEDGER_UPDATE_OPT_UNSUPPORTED,
+        rows=(
+            "completed_views_with_duration",
+            "event_multi_source_dedup",
+            "event_with_attribution_window",
+            "event_with_maximize_value",
+            "event_with_roas_target",
+            "goals_with_explicit_priorities",
+            "metric_with_cost_per_target",
+            "metric_with_threshold_rate",
+            "multiple_mixed_goals",
+            "reach_with_frequency",
+            "refund_event_with_negative_factor",
+            "single_event_goal",
+            "single_metric_goal",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-persistence-timing",
+        _LEDGER_UPDATE_ADAPTER_MOCK,
+        rows=("auto_approve_adapter_failure", "auto_approve_adapter_success", "manual_approval_pending"),
+        transports=("a2a", "mcp", "rest"),
+    ),
+    _X(
+        "T-UC-003-partition-placement-id", _LEDGER_NO_PLACEMENTS, rows=("all_valid_for_product", "invalid_placement_id")
+    ),
+    _X("T-UC-003-partition-start-time", _LEDGER_UPDATE_PAST_START, rows=("past_datetime",)),
+    _X("T-UC-003-storyboard-creative-fate-after-cancellation", _dormant("given a media buy has been canceled")),
+    _X("T-UC-003-v31-error-conflict-version", _LEDGER_STALE_REVISION),
+)
+
+_VACUOUS_CATALOGS = (
+    "vacuous pass: production does not read package catalogs, and 'catalog validation passes' checks "
+    "only for a media_buy_id, so the row passes with catalog handling absent"
+)
+_VACUOUS_OPT_CREATE = (
+    "vacuous pass: production does not read optimization_goals after schema validation, and "
+    "'optimization validation passes' checks only for a media_buy_id"
+)
+_VACUOUS_SORT_PROTOCOL = "vacuous pass: every seeded task has protocol media-buy, so any order is 'sorted by protocol'"
+_VACUOUS_COLLECTION_LIST = (
+    "vacuous pass: nothing reads back collection_list or collection_list_exclude, so a seller that "
+    "drops them passes; the pin also requires the seller to declare collection-list support"
+)
+_VACUOUS_TENANT_FLAG = (
+    "vacuous pass: the tenant-review Given also sets the adapter's manual_approval_required, and "
+    "production approves manually on tenant OR adapter, so the tenant flag is never isolated"
+)
+_VACUOUS_PERSISTENCE = (
+    "vacuous pass: the outcome checks only the wire envelope (the submitted arm, or any error), "
+    "never the stored records the row names"
+)
+_VACUOUS_ANY_REFUSAL = (
+    "vacuous pass: 'error with suggestion' accepts any refusal, and the seller refuses every value of "
+    "this field with UNSUPPORTED_FEATURE, so the schema rule each row names is not observed; the "
+    "remaining rows end in bare 'success'"
+)
+_VACUOUS_UPDATE_SUCCESS = (
+    "vacuous pass: bare 'success' checks only for no error, so a seller that dropped or ignored the update passes"
+)
+_VACUOUS_OVERLAY_UPDATE = (
+    "vacuous pass: 'success' never reads back the stored targeting_overlay, so a seller that drops the overlay passes"
+)
+_CONTRADICTS_UNDECLARED_OVERLAY = (
+    "contradicts the pin for this seller: core/targeting.json says a non-null overlay MUST be applied "
+    "exactly or rejected and that this dimension needs declared support, which the seller does not "
+    "declare, yet the row expects acceptance; owner decision: declare and apply it, or expect "
+    "UNSUPPORTED_FEATURE"
+)
+_VACUOUS_UPDATE_START = (
+    "vacuous pass: 'success' rows check only for no error and 'error with suggestion' accepts any "
+    "refusal, so start_time handling is not observed"
+)
+_VACUOUS_FREQ_CAP = (
+    "vacuous pass: the Given sends a bare duration as the whole frequency_cap, so the error rows pass "
+    "on an unrelated refusal, and the success rows never read back the stored cap"
+)
+
+#: What PASSES but grades nothing, or grades a claim the pin contradicts. xfail(run=False).
+_UC002_UC003_VACUOUS_PARKS: tuple[_CatchallXfail, ...] = (
+    # ── UC-002 ──
+    _X(
+        "T-UC-002-boundary-catalog-distinct-type",
+        _VACUOUS_CATALOGS,
+        rows=(
+            "0 catalogs (empty array)",
+            "0 catalogs (field absent)",
+            "1 catalog (uniqueness trivially satisfied)",
+            "13 catalogs, all 13 distinct enum values",
+            "2 catalogs, different types (product + store)",
+            "catalog_id references a synced catalog",
+        ),
+    ),
+    _X(
+        "T-UC-002-partition-catalog-distinct-type",
+        _VACUOUS_CATALOGS,
+        rows=(
+            "distinct_types",
+            "max_distinct_types",
+            "no_catalogs",
+            "single_catalog",
+        ),
+    ),
+    _X(
+        "T-UC-002-inv-080-1",
+        "vacuous pass: the request also lacks brand, dates and packages (the harness injects a default "
+        "account), so the INVALID_REQUEST it passes on is not the missing-account refusal; no Then pins "
+        "the field",
+    ),
+    _X(
+        "T-UC-002-boundary-optimization-goals",
+        _VACUOUS_OPT_CREATE,
+        rows=(
+            "kind = 'event' with event_sources field present (valid branch)",
+            "kind = 'metric' with metric field present (valid branch)",
+            "optimization_goals array at max_optimization_goals (cap boundary)",
+            "optimization_goals present with 1 element (minItems boundary)",
+            "per_ad_spend target + value_field present on event source",
+            "priority = 1 (minimum valid)",
+            "product has conversion_tracking + event goal submitted",
+            "product has metric_optimization + metric goal submitted",
+            "target.value = 0.001 (just above exclusiveMinimum 0)",
+            "target_frequency.min = 1, max = 3 (min <= max, valid)",
+            "view_duration_seconds = 0.001 (just above exclusiveMinimum 0)",
+        ),
+    ),
+    _X(
+        "T-UC-002-partition-optimization-goals",
+        _VACUOUS_OPT_CREATE,
+        rows=(
+            "event_goal_with_attribution_window",
+            "event_goal_with_roas_target",
+            "event_multi_source_dedup",
+            "goals_at_max_count",
+            "metric_completed_views_with_duration",
+            "metric_goal_with_target",
+            "metric_reach_with_unit",
+            "multiple_goals_unique_priorities",
+            "reach_with_target_frequency",
+            "single_event_goal",
+            "single_metric_goal",
+        ),
+    ),
+    _X("T-UC-002-boundary-tasks-sort-field", _VACUOUS_SORT_PROTOCOL, rows=("protocol (last enum value)",)),
+    _X("T-UC-002-partition-tasks-sort-field", _VACUOUS_SORT_PROTOCOL, rows=("protocol",)),
+    _X(
+        "T-UC-002-v31-frequency-cap-scope-package",
+        "vacuous pass: the Thens check only for success, so a seller that drops the package "
+        "frequency_cap, or stores it at the root, passes",
+    ),
+    _X(
+        "T-UC-002-boundary-targeting-collection-list",
+        _VACUOUS_COLLECTION_LIST,
+        rows=(
+            "both collection_list and collection_list_exclude set",
+            "collection_list with valid agent_url and list_id",
+            "collection_list_exclude with valid agent_url and list_id",
+        ),
+    ),
+    _X("T-UC-002-boundary-approval-workflow", _VACUOUS_TENANT_FLAG, rows=("tenant flag true (pending)",)),
+    _X("T-UC-002-partition-approval-workflow", _VACUOUS_TENANT_FLAG, rows=("pending_human_review",)),
+    _X("T-UC-002-inv-017-2", _VACUOUS_TENANT_FLAG),
+    _X(
+        "T-UC-002-boundary-persistence-timing",
+        _VACUOUS_PERSISTENCE,
+        rows=(
+            "adapter returns error (auto-approval)",
+            "manual approval detected (pending state)",
+        ),
+    ),
+    _X(
+        "T-UC-002-partition-persistence-timing",
+        _VACUOUS_PERSISTENCE,
+        rows=(
+            "auto_approve_adapter_failure",
+            "manual_approval_pending",
+        ),
+    ),
+    _X(
+        "T-UC-002-sandbox-production",
+        "contradicts the pin: the Then requires sandbox to be absent, but a production response with "
+        "sandbox false is conformant (create-media-buy-response.json, sandbox.mdx); the corrected "
+        "outline row already grades 'absent or false', so this needs that step or deleting",
+    ),
+    _X(
+        "T-UC-002-boundary-targeting-overlay",
+        _CONTRADICTS_UNDECLARED_OVERLAY,
+        rows=(
+            "geo_proximity with travel_time only",
+            "geo_proximity with radius only",
+            "geo_proximity with geometry only",
+            "keyword_targets with unique tuples",
+        ),
+    ),
+    _X(
+        "T-UC-002-partition-targeting-overlay",
+        _CONTRADICTS_UNDECLARED_OVERLAY,
+        rows=(
+            "keyword_targeting",
+            "proximity_geometry",
+            "proximity_radius",
+            "proximity_travel_time",
+        ),
+    ),
+    # On e2e_rest this row fails (ledgered above), so only the in-process passes are parked.
+    _X(
+        "T-UC-002-partition-targeting-overlay",
+        _CONTRADICTS_UNDECLARED_OVERLAY,
+        rows=("multiple_dimensions",),
+        transports=("a2a", "mcp", "rest"),
+    ),
+    # ── UC-003 ──
+    _X(
+        "T-UC-003-boundary-start-time",
+        _VACUOUS_UPDATE_START,
+        rows=(
+            "'ASAP' wrong case",
+            "absent (null)",
+            "future ISO datetime",
+            "literal 'asap'",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-start-time",
+        _VACUOUS_UPDATE_START,
+        rows=("asap_literal", "future_iso_datetime", "wrong_case_asap"),
+    ),
+    _X(
+        "T-UC-003-alt-timing-asap",
+        "vacuous pass: the Thens never read the stored start_time, so a seller that ignored start_time=asap passes",
+    ),
+    _X(
+        "T-UC-003-creative-replace",
+        "vacuous pass: the old assignments live only in package_config, not as CreativeAssignment rows, "
+        "so append and replace semantics give the same result",
+    ),
+    _X(
+        "T-UC-003-partition-media-buy-status",
+        "vacuous pass: 'pending_activation' is not a pinned status and the state gate allows every action "
+        "for it, so the row cannot detect a wrong rule",
+        rows=("status_pending_activation",),
+    ),
+    _X(
+        "T-UC-003-boundary-media-buy-status",
+        "contradicts the pin: update_media_buy.mdx resolves packages[].budget to a budget action, which a "
+        "paused buy advertises, so the pinned answer is success or ACTION_NOT_ALLOWED, not INVALID_STATE; "
+        "owner decision",
+        rows=("paused (packages locked, budget/dates ok)",),
+    ),
+    _X(
+        "T-UC-003-boundary-creative-replacement",
+        "vacuous pass: every row's outcome is bare 'success', so nothing checks the stored creative assignments",
+        rows=(
+            "creative_assignments replaces all",
+            "creative_ids replaces all existing",
+            "existing creative removed (not in new)",
+            "new creative added (not in existing)",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-creative-replacement",
+        "contradicts the pin: packages[].creative_ids is not in the pinned package-update.json "
+        "(replacement goes through creative_assignments), and every row ends in bare 'success'",
+        rows=(
+            "add_new_creative",
+            "creative_assignments_replace",
+            "creative_ids_replace",
+            "remove_existing_creative",
+        ),
+    ),
+    _X(
+        "T-UC-003-boundary-end-time",
+        "vacuous pass: the error rows accept any refusal, the dates are in the past, and the "
+        "'absent (null)' row sends an empty string",
+        rows=(
+            "absent (null)",
+            "end_time = start_time (rejected)",
+            "end_time after start_time",
+            "end_time before start_time",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-end-time",
+        "vacuous pass: 'error with suggestion' accepts any refusal, so the code and field of the "
+        "end <= start rule are not observed",
+        rows=("equal_to_start", "before_start"),
+    ),
+    _X(
+        "T-UC-003-boundary-keyword-targets-add",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "array length 0 (empty)",
+            "bid_price = -0.01",
+            "keyword length 0 (empty string)",
+            "keyword_targets_add WITH targeting_overlay.keyword_targets",
+            "match_type = 'unknown'",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-keyword-targets-add",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "conflict_with_overlay",
+            "empty_array",
+            "empty_keyword",
+            "invalid_match_type",
+            "missing_keyword",
+            "missing_match_type",
+            "negative_bid_price",
+        ),
+    ),
+    _X(
+        "T-UC-003-boundary-keyword-targets-remove",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "array length 0 (empty)",
+            "keyword length 0 (empty string)",
+            "keyword_targets_remove WITH targeting_overlay.keyword_targets",
+            "match_type = 'unknown'",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-keyword-targets-remove",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "conflict_with_overlay",
+            "empty_array",
+            "empty_keyword",
+            "invalid_match_type",
+            "missing_keyword",
+            "missing_match_type",
+        ),
+    ),
+    _X(
+        "T-UC-003-boundary-negative-keywords-add",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "array length 0 (empty)",
+            "keyword length 0 (empty string)",
+            "match_type = 'unknown'",
+            "negative_keywords_add WITH targeting_overlay.negative_keywords",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-negative-keywords-add",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "conflict_with_overlay",
+            "empty_array",
+            "empty_keyword",
+            "invalid_match_type",
+            "missing_keyword",
+            "missing_match_type",
+        ),
+    ),
+    _X(
+        "T-UC-003-boundary-negative-keywords-remove",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "array length 0 (empty)",
+            "keyword length 0 (empty string)",
+            "match_type = 'unknown'",
+            "negative_keywords_remove WITH targeting_overlay.negative_keywords",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-negative-keywords-remove",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "conflict_with_overlay",
+            "empty_array",
+            "empty_keyword",
+            "invalid_match_type",
+            "missing_keyword",
+            "missing_match_type",
+        ),
+    ),
+    _X(
+        "T-UC-003-boundary-optimization-goals",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "empty array (0 items)",
+            "event_sources empty array",
+            "kind = unknown string",
+            "kind omitted",
+            "optimization_goals omitted \\u2014 preserves existing",
+            "priority = 0",
+            "target.value = 0 (exclusive minimum)",
+            "view_duration_seconds = 0",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-optimization-goals",
+        _VACUOUS_ANY_REFUSAL,
+        rows=(
+            "empty_array",
+            "event_missing_sources",
+            "event_source_id_empty",
+            "event_sources_empty",
+            "invalid_kind",
+            "invalid_metric_enum",
+            "metric_missing_metric",
+            "missing_kind",
+            "priority_negative",
+            "priority_zero",
+            "target_value_negative",
+            "target_value_zero",
+            "view_duration_zero",
+        ),
+    ),
+    _X(
+        "T-UC-003-boundary-targeting-overlay",
+        _VACUOUS_OVERLAY_UPDATE,
+        rows=(
+            "absent overlay",
+            "empty {} overlay",
+            "valid known fields",
+            "frequency_cap suppress only",
+            "frequency_cap max_impressions with per+window",
+            "keyword_targets with unique tuples",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-targeting-overlay",
+        _VACUOUS_OVERLAY_UPDATE,
+        rows=(
+            "absent_overlay",
+            "empty_overlay",
+            "frequency_cap_combined",
+            "frequency_cap_max_impressions_only",
+            "frequency_cap_suppress_only",
+            "keyword_targeting",
+            "single_geo_dimension",
+            "valid_overlay",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-targeting-overlay",
+        "vacuous pass: the geo_proximity entry is not pin-shaped (travel_time and radius are not "
+        "{value, unit}), so it is refused whether or not the conflict rule exists",
+        rows=("proximity_method_conflict",),
+    ),
+    _X(
+        "T-UC-003-boundary-adapter-dispatch",
+        _VACUOUS_UPDATE_SUCCESS,
+        rows=("request with exactly one updatable field",),
+    ),
+    _X(
+        "T-UC-003-partition-adapter-dispatch",
+        _VACUOUS_UPDATE_SUCCESS,
+        rows=("single_field_update", "multi_field_update"),
+    ),
+    _X("T-UC-003-partition-budget-amount", _VACUOUS_UPDATE_SUCCESS, rows=("positive_amount",)),
+    _X(
+        "T-UC-003-boundary-frequency-cap-suppress",
+        _VACUOUS_FREQ_CAP,
+        rows=(
+            "all three absent (empty frequency_cap)",
+            "interval = -1 (negative)",
+            "interval = 0 (below minimum)",
+            "suppress + max_impressions both present (AND semantics)",
+            "suppress = {} (missing both fields)",
+            "suppress absent, suppress_minutes=60",
+            "suppress is string '60' (wrong type)",
+            "suppress present, suppress_minutes absent, max_impressions absent",
+            "suppress_minutes = -1 (below minimum 0)",
+            "suppress_minutes = 0 (boundary minimum)",
+            "unit = 'weeks' (unknown)",
+            "unit=campaign, interval=2",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-frequency-cap-suppress",
+        _VACUOUS_FREQ_CAP,
+        rows=(
+            "campaign_interval_not_one",
+            "deprecated_suppress_minutes",
+            "interval_negative",
+            "interval_zero",
+            "missing_interval",
+            "missing_unit",
+            "no_frequency_control",
+            "suppress_minutes_negative",
+            "suppress_minutes_zero",
+            "suppress_only",
+            "suppress_with_max_impressions",
+            "unknown_unit",
+            "wrong_type_suppress",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-revision",
+        "vacuous pass: production ignores revision, so 'success' passes with no concurrency check; the pin "
+        "requires the success to return the incremented revision",
+        rows=("absent", "matches_current"),
+    ),
+    _X(
+        "T-UC-003-bva-targeting-overlay-collection-list",
+        _VACUOUS_COLLECTION_LIST,
+        rows=(
+            "both collection_list and collection_list_exclude set",
+            "collection_list with valid agent_url and list_id",
+            "collection_list_exclude with valid agent_url and list_id",
+        ),
+    ),
+    _X(
+        "T-UC-003-sandbox-update-nonsuccess",
+        "vacuous pass: the trigger is refused at request validation, before the sandbox account is "
+        "resolved, so a failure builder that stamped sandbox would not be seen",
+        rows=("terminal failure",),
+    ),
+    _X(
+        "T-UC-003-partition-immutable-package-field",
+        "vacuous pass: in dev an undeclared package field is refused by extra='forbid' with the same "
+        "INVALID_REQUEST, so the readOnly guard is not observed",
+        rows=(
+            "format_ids_present",
+            "multiple_immutable_keys_present",
+            "no_immutable_keys",
+            "pricing_option_id_present",
+            "product_id_present",
+        ),
+    ),
+    _X(
+        "T-UC-003-partition-placement-id",
+        "vacuous pass: the product has no placements, so the 'unsupported' row passes whether or not its "
+        "fixture runs, and the success row reads nothing back",
+        rows=(
+            "no_placement_ids",
+            "product_no_placement_support",
+        ),
+    ),
+    _X(
+        "T-UC-003-bva-sandbox-response",
+        "vacuous pass: the row accepts any schema-conformant refusal, an account-resolution failure "
+        "included, and this seller never emits sandbox on update at all",
+        rows=(
+            "sandbox account with invalid budget (real validation error)",
+            "sandbox present on update_media_buy terminal-failure (errors) shape",
+        ),
+    ),
+    _X(
+        "T-UC-003-alt-targeting",
+        "vacuous pass: the Thens never read the stored targeting_overlay, so a seller that ignored it passes",
+    ),
+    _X(
+        "T-UC-003-partition-principal-ownership",
+        "contradicts the pin: L1/security.mdx forbids answering 'not yours' differently from 'not "
+        "found', so a mismatch should be MEDIA_BUY_NOT_FOUND like an absent buy; owner decision, since "
+        "the boundary outline asserts the same PERMISSION_DENIED",
+        rows=("owner_mismatch",),
+    ),
+    _X(
+        "T-UC-003-alt-creatives-inline",
+        "vacuous pass: XPASSed once the catch-all was lifted (the FK failure its old marker named is "
+        "gone), but the Thens check only status and affected_packages, never the upload or assignment",
+    ),
+)
+
+
+def _catchall_ledger_marker(marker_names: set[str], nodeid: str) -> pytest.MarkDecorator | None:
+    """The marker the UC-002 / UC-003 ledger assigns, or None. A ledger entry wins over a park."""
+    for entry in _UC002_UC003_LEDGER:
+        if entry.matches(marker_names, nodeid):
+            return pytest.mark.xfail(reason=f"{entry.reason} ({_CATCHALL_RUN})", strict=True)
+    for entry in _UC002_UC003_VACUOUS_PARKS:
+        if entry.matches(marker_names, nodeid):
+            return pytest.mark.xfail(reason=f"{entry.reason} ({_CATCHALL_RUN})", run=False, strict=True)
+    return None
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Apply xfail markers to scenarios with unimplemented production features."""
     for item in items:
@@ -2229,18 +3572,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # not-wired route already carries the honest reason. The thing to fix here is the
         # WIRING, not the marker: until UC-003's non-extension scenarios are wired, this
         # scenario and the two keyword siblings grade nothing whatever they assert.
+        # They are wired now: the catch-all's reason is gone, and measure_innet_291026_1202
+        # measured all three passing on a2a, mcp, rest and e2e_rest.
 
-        # FIXME: UC-003 inline creatives — _sync_creatives_impl
-        # FK violation: creative_assignments references creative before commit.
-        # _sync_creatives_impl uses its own UoW scope; assignment FK check fails
-        # because the creative hasn't been committed in the outer transaction yet.
-        if "T-UC-003-alt-creatives-inline" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="inline creatives: FK violation in _sync_creatives_impl assignment path (spec-production gap)",
-                    strict=True,
-                )
-            )
+        # The strict xfail that stood here for T-UC-003-alt-creatives-inline ("FK violation in
+        # _sync_creatives_impl assignment path") XPASSed on a2a, mcp, rest and e2e_rest in
+        # measure_innet_291026_1202, the first run that dispatched it. The FK failure is gone,
+        # but the pass is not graduated: its Thens read only the success branch, status
+        # "completed" and affected_packages, so nothing observes the upload or the
+        # assignment. It is parked as a vacuous pass in _UC002_UC003_VACUOUS_PARKS instead.
 
         # T-UC-003-boundary-revision is wired (see _UC003_REVISION_TAGS and the
         # uc003-manual-approval row in the routing registry below), so its steps
@@ -2359,19 +3699,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Production doesn't validate these cases at all
             "T-UC-003-ext-e": "production doesn't validate end_time < start_time on update",
             "T-UC-003-ext-e-equal": "production doesn't validate end_time == start_time on update",
-            # FIXME: stale .feature expectation, NOT a production gap.
-            # Production validates currency on update and correctly emits
-            # UNSUPPORTED_FEATURE (AdCPCapabilityNotSupportedError, media_buy_update.py:441;
-            # verified at wire on mcp/rest/a2a). The generated .feature asserts INVALID_REQUEST.
-            # UNSUPPORTED_FEATURE is the authoritative code (adcp-req BR-UC-002 impl-coverage;
-            # matches UC-002 ext-d). Graduates after upstream regen.
-            "T-UC-003-ext-f": "generated .feature asserts INVALID_REQUEST; production correctly emits UNSUPPORTED_FEATURE for unsupported currency on update — stale spec, pending upstream regen",
-            # FIXME: stale .feature expectation, NOT a production gap.
-            # Production validates the daily spend cap on update and correctly emits
-            # BUDGET_EXCEEDED (AdCPBudgetExceededError, media_buy_update.py:484;
-            # verified at wire on mcp/rest/a2a). The generated .feature asserts the
-            # pre-v3.1 BUDGET_TOO_LOW (see UC-002 ext-k). Graduates after upstream regen.
-            "T-UC-003-ext-g": "generated .feature asserts pre-v3.1 BUDGET_TOO_LOW; production validates and correctly emits BUDGET_EXCEEDED — stale spec, pending upstream regen",
+            # Graduated: T-UC-003-ext-f and T-UC-003-ext-g. Both entries named a stale .feature
+            # expectation, and measure_innet_291026_1202 measured exactly that on all four
+            # transports ("Expected INVALID_REQUEST, got UNSUPPORTED_FEATURE" and "Expected
+            # BUDGET_TOO_LOW, got BUDGET_EXCEEDED"). The scenarios are corrected in place, with
+            # @source citations to the pinned enums/error-code.json: a currency this seller does
+            # not support is UNSUPPORTED_FEATURE, and a budget above the daily cap is
+            # BUDGET_EXCEEDED, never BUDGET_TOO_LOW ("below the seller's minimum").
             # Graduated (#1417/gh8p.10): a failed creative sync no longer crashes with an
             # FK violation. _process_assignments skips assignment for un-synced creatives,
             # and update_media_buy raises a clean retryable AdCPAdapterError carrying a
@@ -2475,6 +3809,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # #1417 added disclosure_positions to the MCP list_creative_formats
         # wrapper, so MCP now accepts the
         # keyword exactly like a2a/rest and the valid examples pass on MCP too.
+
+        # The UC-002 / UC-003 explicit ledger that replaced the two not-wired catch-alls.
+        catchall_marker = _catchall_ledger_marker(marker_names, nodeid)
+        if catchall_marker is not None:
+            item.add_marker(catchall_marker)
 
         # Selective xfail for parametrized scenarios
         for tag, substrings, reason in _SELECTIVE_XFAIL:
@@ -6853,14 +8192,17 @@ ENV_ROUTES: list[EnvRoute] = [
     # its Background claims "a tenant exists with completed setup checklist", and
     # validate_setup_complete reads the rows setup_media_buy_data writes on every
     # transport. Unseeded, a box run with the xfail lifted refused 452 of these nodeids
-    # CONFIGURATION_ERROR before reaching what they grade. The xfail stays until each
-    # scenario graduates (.claude/rules/workflows/xpass-graduation.md).
+    # CONFIGURATION_ERROR before reaching what they grade.
+    #
+    # No xfail_reason any more: every scenario this row claims runs. What fails is named in
+    # _UC002_UC003_LEDGER, one entry per measured cause (measure_innet_291026_1202), and what
+    # passes without grading anything is parked in _UC002_UC003_VACUOUS_PARKS. The tag keeps
+    # its old name because the census and the docs know the row by it.
     EnvRoute(
         tag="uc002-not-wired",
         when=_uc("UC-002", lambda m: True),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
         seed=_seed_media_buy_chain_create_dispatch,
-        xfail_reason="UC-002 harness not yet wired for non-extension scenarios",
     ),
     # ── UC-003 ──────────────────────────────────────────────────────────────
     # The local inline-creatives scenarios: the uc003-ext seed, on the env that also routes
@@ -6911,17 +8253,16 @@ ENV_ROUTES: list[EnvRoute] = [
     # names -- which is the uc003-ext seed. Without it, a measurement with the xfail off
     # (measure_innet_281026_1501) failed every one of the 1524 nodes this row claims on the
     # Background's ownership Given ("No existing_media_buy in ctx"), so the row's xfail hid
-    # a missing seed rather than the per-scenario gaps it names. While xfail_reason is set,
-    # _run_env_route xfails before the env is built and the seed does not run; it is here
-    # so that dropping the reason grades each scenario on its own steps.
+    # a missing seed rather than the per-scenario gaps it names.
+    #
+    # The reason is dropped, so each scenario is graded on its own steps. What fails is named
+    # in _UC002_UC003_LEDGER and what passes vacuously in _UC002_UC003_VACUOUS_PARKS, both
+    # measured on measure_innet_291026_1202.
     EnvRoute(
         tag="uc003-not-wired",
         when=_uc("UC-003", lambda m: True),
         env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
         seed=_seed_update_with_existing_buy,
-        xfail_reason=(
-            "UC-003 harness not yet wired for non-extension scenarios (full graduation pending, PR #1567 follow-up)"
-        ),
     ),
     # ── UC-006 ──────────────────────────────────────────────────────────────
     # @request-signing scenarios (salesagent-n78j0.1.3) grade the INBOUND RFC 9421

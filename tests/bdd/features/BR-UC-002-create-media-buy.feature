@@ -922,9 +922,13 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
-    And the error code should be "INVALID_REQUEST"
+    And the error code should be "VALIDATION_ERROR"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
+    # LOCAL CORRECTION: the code line asserted INVALID_REQUEST. The pinned package-request.json
+    # catalogs: "sellers MUST reject requests containing multiple catalogs of the same type
+    # with a validation_error"; enumMetadata gives VALIDATION_ERROR recovery correctable.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/catalogs
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
@@ -1006,6 +1010,12 @@ Feature: BR-UC-002 Create Media Buy
     And the error code should be "BUDGET_TOO_LOW"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
+    And the error should include "field" field with value "packages"
+    # The field line is what makes this grade the positivity rule. The seeded tenant keeps a
+    # min_package_budget of 100, so a zero budget would still be refused BUDGET_TOO_LOW by the
+    # seller minimum if the positivity check were gone -- but that refusal names
+    # packages[0].budget, while the positivity check sums every package and names the
+    # array, as @T-UC-002-ext-a grades.
     # --- BR-RULE-013: DateTime Validity ---
 
   @T-UC-002-inv-010-3 @invariant @BR-RULE-010 @v31
@@ -1130,8 +1140,13 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the response should have an "errors" array
+    And the error code should be "PRODUCT_NOT_FOUND"
     And the response should NOT have success fields (media_buy_id, packages)
     And each error should include "suggestion" field
+    # The Given names a product the tenant does not hold. Without the code line any refusal
+    # carrying a suggestion satisfied this scenario, an unseeded tenant's CONFIGURATION_ERROR
+    # included; PRODUCT_NOT_FOUND is the refusal the Given causes, as @T-UC-002-ext-b grades.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/PRODUCT_NOT_FOUND
 
   @T-UC-002-inv-018-4 @invariant @BR-RULE-018
   Scenario: INV-4 holds -- transient error includes retry_after hint
@@ -1745,9 +1760,13 @@ Feature: BR-UC-002 Create Media Buy
 
     Examples: Invalid partitions
       | partition              | outcome                                      |
-      | duplicate_catalog_type | error INVALID_REQUEST with suggestion          |
-      | multiple_duplicates    | error INVALID_REQUEST with suggestion          |
+      | duplicate_catalog_type | error VALIDATION_ERROR with suggestion         |
+      | multiple_duplicates    | error VALIDATION_ERROR with suggestion         |
       | catalog_not_found      | error INVALID_REQUEST with suggestion          |
+    # LOCAL CORRECTION: the two duplicate-type rows asserted INVALID_REQUEST. The pinned
+    # package-request.json catalogs: "sellers MUST reject requests containing multiple catalogs
+    # of the same type with a validation_error", so the code is VALIDATION_ERROR.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/catalogs
 
   @T-UC-002-partition-format-id-structure @partition @format-id-structure
   Scenario Outline: Format ID structure partition validation - <partition>
@@ -1952,9 +1971,12 @@ Feature: BR-UC-002 Create Media Buy
 
     Examples: Boundary values
       | boundary_point                       | value | outcome                                      |
-      | amount = 0 (rejected by rule)        | 0     | error BUDGET_TOO_LOW with suggestion          |
+      | amount = 0 (rejected by rule)        | 0     | error BUDGET_TOO_LOW on packages with suggestion |
       | amount = 0.01 (minimum positive)     | 0.01  | budget validation passes                     |
       | amount negative                      | -1    | error INVALID_REQUEST on packages[0].budget with suggestion |
+    # The zero row names its field because the seeded tenant's min_package_budget (100) would
+    # also refuse 0 with BUDGET_TOO_LOW. The positivity rule this row grades sums every package
+    # and names the array; the seller-minimum refusal names packages[0].budget.
 
   @T-UC-002-boundary-pricing-option-xor @boundary @pricing-option-xor
   Scenario Outline: Pricing option XOR boundary validation - <boundary_point>
@@ -2254,12 +2276,16 @@ Feature: BR-UC-002 Create Media Buy
       | 0 catalogs (empty array)                                                     | empty array          | catalog validation passes                    |
       | 1 catalog (uniqueness trivially satisfied)                                   | 1 product            | catalog validation passes                    |
       | 2 catalogs, different types (product + store)                                | product+store        | catalog validation passes                    |
-      | 2 catalogs, same type (product + product) — first duplicate violation        | product+product      | error INVALID_REQUEST with suggestion          |
-      | 3 catalogs, two share same type (product + product + store)                  | 2prod+store          | error INVALID_REQUEST with suggestion          |
+      | 2 catalogs, same type (product + product) — first duplicate violation        | product+product      | error VALIDATION_ERROR with suggestion         |
+      | 3 catalogs, two share same type (product + product + store)                  | 2prod+store          | error VALIDATION_ERROR with suggestion         |
       | 13 catalogs, all 13 distinct enum values                                     | all 13 types         | catalog validation passes                    |
       | Two packages each with type=product (distinct per-package, not cross-package) | cross-pkg product    | catalog validation passes                    |
       | catalog_id references a synced catalog                                       | valid catalog_id     | catalog validation passes                    |
       | catalog_id references a non-existent catalog                                 | bad catalog_id       | error INVALID_REQUEST with suggestion          |
+    # LOCAL CORRECTION: the two duplicate-type rows asserted INVALID_REQUEST. The pinned
+    # package-request.json catalogs: "sellers MUST reject requests containing multiple catalogs
+    # of the same type with a validation_error", so the code is VALIDATION_ERROR.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/catalogs
 
   @T-UC-002-boundary-format-id-structure @boundary @format-id-structure
   Scenario Outline: Format ID structure boundary validation - <boundary_point>
@@ -3029,12 +3055,16 @@ Feature: BR-UC-002 Create Media Buy
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
-    And the response should indicate a terminal failure
+    And the response should indicate a correctable failure
     And the error code should be "BUDGET_TOO_LOW"
     And the error details should include minimum_budget 500
     And the error "details" object should include "currency" with value "USD"
     # v3.1: error-details/budget-too-low.json — recommended details for BUDGET_TOO_LOW
     # v3.1: recovery classification correctable — buyer adjusts and retries
+    # LOCAL CORRECTION: the recovery line asserted a terminal failure, which contradicted the
+    # comment above it and the pin: enums/error-code.json gives BUDGET_TOO_LOW "Recovery:
+    # correctable (increase budget or check capabilities.media_buy.limits)".
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/BUDGET_TOO_LOW
     # --- v3.1 wave A: IDEMPOTENCY_CONFLICT error-details routing (idempotency revision mismatch) ---
     # @source repo=adcp ref=v3.2.3 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 

@@ -81,15 +81,11 @@ from tests.unit._architecture_helpers import (
 #:
 #: Measured at integrate/sdk9-lanes b6e2554c5 by this file's own derivation.
 _CEILINGS: dict[str, int] = {
-    # The three catch-alls: `when=_uc("UC-00n", lambda m: True)`. They claim every
-    # scenario of their UC that no earlier row took, so these are the entries that can
-    # grow without anyone editing a list. 804 of the 819.
-    # 395 -> 385: twelve create-time billing combinations deleted (create_media_buy has no
-    # billing field at the pin), plus two added by corrections -- inv-080-11 became an
-    # outline over rejected and closed, and the tasks-sort-field partition gained the
-    # "domain is not a sort field" row.
-    "uc002-not-wired": 385,
-    "uc003-not-wired": 381,
+    # The catch-all: `when=_uc("UC-010", lambda m: True)`. It claims every scenario of its
+    # UC that no earlier row took, so it is the entry that can grow without anyone editing
+    # a list. The UC-002 and UC-003 catch-alls (385 and 381) drained to zero: their rows
+    # lost their xfail_reason, and what fails is named per scenario in the BDD conftest's
+    # _UC002_UC003_LEDGER (measure_innet_291026_1202).
     "uc010-not-wired": 28,
     # Per-tag UC-010 dormancy rows, generated from `_UC010_PARKED_TAGS`. Their reasons
     # cite issues and `test_architecture_uc010_dormancy_citations` grades the citation;
@@ -108,9 +104,31 @@ _CEILINGS: dict[str, int] = {
 
 #: The population floor. A derivation that matches nothing is silently green, and that is
 #: this family's failure mode -- so a census that finds almost nothing fails rather than
-#: reporting a clean pass. Deliberately far below the measured 819: this catches a BROKEN
-#: DERIVATION, it does not pin the count, which ``_CEILINGS`` does per row.
-_MIN_ROUTED_COMBINATIONS = 400
+#: reporting a clean pass. This catches a BROKEN DERIVATION, it does not pin the count,
+#: which ``_CEILINGS`` does per row. 400 -> 15 when the UC-002 and UC-003 catch-alls drained:
+#: what remains is the UC-010 catch-all and its dormancy rows (ceilings sum to 42; a static
+#: resolution of the bound features over ENV_ROUTES gives 34), so the floor sits well below
+#: that and above zero, which is the case it exists to refuse.
+_MIN_ROUTED_COMBINATIONS = 15
+
+#: The explicit lists that replaced the UC-002 and UC-003 catch-alls in the BDD conftest,
+#: each as (entries, nodeids matched). The catch-alls' 385 and 381 above were the only
+#: counter on this population; these take their place.
+#:
+#: SHRINK-ONLY, for the same reason as ``_CEILINGS``. A new entry, or a ``rows=`` widened to
+#: claim more Examples rows, raises a count and fails; graduating a row lowers it, and the
+#: ceiling is lowered in that same change.
+#:
+#: The nodeid count is over the four transports every UC-002 / UC-003 scenario runs on,
+#: rebuilt from each collected combination, so it is the same with ``BDD_E2E_ENABLED`` on
+#: or off (the nested collection drops it). Measured by resolving both lists over the bound
+#: features at the commit that named each park's rows (measure_innet_291026_1202).
+_LEDGER_CEILINGS: dict[str, tuple[int, int]] = {
+    "_UC002_UC003_LEDGER": (107, 890),
+    "_UC002_UC003_VACUOUS_PARKS": (55, 823),
+}
+
+_LEDGER_TRANSPORTS = ("a2a", "mcp", "rest", "e2e_rest")
 
 _TRANSPORTS = ("mcp", "a2a", "rest", "e2e_rest", "e2e_mcp", "e2e_a2a", "e2e_admin")
 
@@ -272,3 +290,102 @@ def test_the_census_reads_the_production_routing_call() -> None:
         "pytest.xfail(route.xfail_reason)",
     ):
         assert line in source, f"the production routing call changed shape: {line!r} is gone"
+
+
+def _with_transport(combination: str, transport: str) -> str:
+    """The inverse of :func:`_combination`: put *transport* back as the leading parameter."""
+    match = _BRACKET.search(combination)
+    if match is None:
+        return f"{combination}[{transport}]"
+    return f"{combination[: match.start()]}[{transport}-{match.group('params')}]"
+
+
+def _ledger_violations(
+    rows: tuple[dict[str, Any], ...],
+    ledger: tuple[Any, ...],
+    parks: tuple[Any, ...],
+    ceilings: dict[str, tuple[int, int]],
+) -> list[str]:
+    """Every way the UC-002 / UC-003 ledger and parks break their rules, as messages.
+
+    Three rules, resolved with the entries' own ``matches`` over the collected marker names
+    (the names ``pytest_collection_modifyitems`` matches on):
+
+    * each list stays at or under its (entries, nodeids) ceiling, and matches something;
+    * no nodeid is matched by both lists -- the ledger would win, so the park is a dormant
+      claim that swallows the row the day its ledger entry is graduated;
+    * a park that names no rows matches no Examples row, so a row added to an outline later
+      runs instead of being parked unseen.
+    """
+    names_by_combination: dict[str, set[str]] = {}
+    for row in rows:
+        names_by_combination.setdefault(_combination(row["nodeid"]), set(row["markers"]))
+    nodeids = [
+        (_with_transport(combination, transport), names)
+        for combination, names in names_by_combination.items()
+        for transport in _LEDGER_TRANSPORTS
+    ]
+    from tests.bdd.conftest import _example_row
+
+    violations: list[str] = []
+    matched: dict[str, set[str]] = {}
+    for name, entries in (("_UC002_UC003_LEDGER", ledger), ("_UC002_UC003_VACUOUS_PARKS", parks)):
+        matched[name] = set()
+        for entry in entries:
+            hits = {nodeid for nodeid, names in nodeids if entry.matches(names, nodeid)}
+            matched[name] |= hits
+            if entries is parks and not entry.rows and any(_example_row(nodeid) for nodeid in hits):
+                violations.append(f"{name}: {entry.tag} parks a Scenario Outline without naming its rows")
+        max_entries, max_nodeids = ceilings[name]
+        if len(entries) > max_entries:
+            violations.append(f"{name} grew to {len(entries)} entries (ceiling {max_entries})")
+        if len(matched[name]) > max_nodeids:
+            violations.append(f"{name} matches {len(matched[name])} nodeids (ceiling {max_nodeids})")
+        if not matched[name]:
+            violations.append(f"{name} matches no collected nodeid: the derivation is grading nothing")
+    for nodeid in sorted(matched["_UC002_UC003_LEDGER"] & matched["_UC002_UC003_VACUOUS_PARKS"]):
+        violations.append(f"{nodeid} is matched by both the ledger and a park")
+    return violations
+
+
+@pytest.mark.arch_guard
+def test_the_uc002_uc003_ledger_only_shrinks() -> None:
+    """The explicit ledger and its parks are held to their measured size and shape."""
+    from tests.bdd.conftest import _UC002_UC003_LEDGER, _UC002_UC003_VACUOUS_PARKS
+
+    violations = _ledger_violations(
+        collect_bdd_items_with_markers(), _UC002_UC003_LEDGER, _UC002_UC003_VACUOUS_PARKS, _LEDGER_CEILINGS
+    )
+    assert not violations, (
+        "the UC-002 / UC-003 ledger broke its rules. A failing scenario is fixed or measured, "
+        "not added; a park names the rows it parks; never raise a ceiling:\n  " + "\n  ".join(violations)
+    )
+
+
+@pytest.mark.arch_guard
+def test_the_ledger_rules_refuse_growth_overlap_and_a_rowless_outline_park() -> None:
+    """The rules above can return the other answer: each breach, made on purpose, is reported."""
+    from tests.bdd.conftest import _CatchallXfail
+
+    rows = (
+        {"nodeid": "t.py::test_outline[mcp-row_a-x]", "markers": ["T-A"]},
+        {"nodeid": "t.py::test_outline[mcp-row_b-y]", "markers": ["T-A"]},
+        {"nodeid": "t.py::test_plain[mcp]", "markers": ["T-B"]},
+    )
+    ledger = (_CatchallXfail("T-A", "fails", rows=("row_a",)),)
+    parks = (_CatchallXfail("T-A", "vacuous", rows=("row_b",)), _CatchallXfail("T-B", "vacuous"))
+    ceilings = {"_UC002_UC003_LEDGER": (1, 4), "_UC002_UC003_VACUOUS_PARKS": (2, 8)}
+
+    def check(led: tuple[Any, ...], prk: tuple[Any, ...]) -> list[str]:
+        return _ledger_violations(rows, led, prk, ceilings)
+
+    assert check(ledger, parks) == []
+    extra = _CatchallXfail("T-B", "fails")
+    assert any("grew to 2 entries" in v for v in check(ledger + (extra,), parks))
+    widened = (_CatchallXfail("T-A", "fails", rows=("row_a", "row_b")),)
+    assert any("matches 8 nodeids (ceiling 4)" in v for v in check(widened, parks))
+    assert any("matched by both" in v for v in check(widened, parks))
+    rowless = (_CatchallXfail("T-A", "vacuous"), parks[1])
+    assert any("without naming its rows" in v for v in check(ledger, rowless))
+    # A row name is matched whole: row_a does not also claim row_ab.
+    assert not _CatchallXfail("T-A", "x", rows=("row_a",)).matches({"T-A"}, "t.py::f[mcp-row_ab-x]")
