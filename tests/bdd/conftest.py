@@ -3662,104 +3662,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # innet_150926_0049 — the last of that run's 11 e2e failures that was a routing
         # artifact rather than a defect.
 
-        # STAYS — inspected, and the previous reason here was WRONG
-        # in every particular. It claimed the spend-fallback needs injected by_placement
-        # data that is "in-process mock state invisible to the live server", with
-        # salesagent-04im as the follow-up. In fact:
-        #   • _inject_placement_data is DEAD CODE — zero callers anywhere in tests/
-        #     (its only other mention was that comment). It never runs on ANY transport,
-        #     so it cannot be the reason e2e_rest differs.
-        #   • the follow-up id that comment cited does not resolve to any issue.
-        #   • by_placement is NOT injected at all — production SYNTHESIZES it server-side
-        #     (media_buy_delivery.py:1040-1058) whenever the adapter reports no
-        #     per-placement data, so e2e_rest receives the same rows as in-process.
-        #
-        # The real defect is that the scenario cannot grade its own obligation, on any
-        # transport. _build_placement_breakdown derives every metric from ONE weight
-        # vector (0.5, 0.3, 0.2): impressions=imp*w, spend=spd*w, clicks=imp*w*0.01.
-        # All metrics are therefore rank-identical by construction AND already emitted
-        # in descending order, so `values == sorted(values, reverse=True)` holds for
-        # every sort key regardless of what production does. Probe (in-process, all 3
-        # transports): n_placements=3, spend=[125.0, 75.0, 50.0], clicks=[25.0, 15.0,
-        # 10.0] — plc_a > plc_b > plc_c on every metric.
-        #
-        # Mutation-proved (local slice, 6 tests = 3 transports x
-        # {fallback, counter-example}):
-        #   M1 delete the spend-fallback branch entirely  -> 6 passed (GREEN)
-        #   M2 fall back to "clicks" instead of "spend"   -> 6 passed (GREEN)
-        # Deleting the exact behaviour the scenario exists to grade does not turn it
-        # red. The obligation is real and correctly stated — AdCP 3.1.1
-        # media-buy/task-reference/get_media_buy_delivery.mdx:869 "falls back to `spend`
-        # if the seller does not report the requested metric" — it is simply ungraded.
-        #
-        # STRENGTHENED 2026-10-09, and the route stays only for want of a measurement.
-        # The prescription above has been carried out: the scenario now NAMES its three
-        # placements (pl-A/B/C, spend 150/200/50, clicks 30/10/50 — not rank-correlated,
-        # so spend ranks B>A>C and clicks ranks C>A>B) and pins the resulting SEQUENCE
-        # via `the response placement breakdown should be ordered "pl-B", "pl-A",
-        # "pl-C"`, alongside the descending-ness Then it already had. The data reaches
-        # production through set_adapter_response's new `by_placement` parameter, which
-        # needs no second e2e realization: _persist_simulation_config dumps the whole
-        # AdapterGetMediaBuyDeliveryResponse into the delivery_simulation_configs row
-        # and MockAdServer._load_delivery_simulation reads it back verbatim, so the live
-        # server sorts the same numbers. _build_placement_breakdown honours
-        # raw_placements when present, so the synthesized one-weight-vector split — the
-        # thing that made every metric rank-identical — is no longer what is sorted.
-        # Mutation-proved in-process, the same two shapes that were GREEN before, each
-        # applied to _apply_breakdown_limit and reverted to a byte-identical src/ tree:
-        #   M1 delete the spend-fallback branch entirely -> 3 failed / 3 passed (RED)
-        #   M2 fall back to "clicks" instead of "spend"  -> 3 failed / 3 passed (RED)
-        # The 3 that still pass under each are the -dim-sortby-valid counter-example,
-        # which asks for a metric the seller DOES report and so never enters the branch.
-        # Note which assertion fires: with non-rank-correlated data the DESCENDING-ness
-        # Then the scenario already had goes red on its own ([50, 150, 200] under M2,
-        # [150, 200, 50] under M1). The data was the defect; the pinned ORDER is the
-        # assertion that stays honest if a future fixture happens to re-correlate.
-        # The route is NOT removed, because only a bdd-in-network run grades e2e_rest and
-        # none has been made against the strengthened assertion — graduating on the
-        # in-process result would cite the wrong measurement, the same error the UC-005
-        # third-party row refused for its own repaired assertion. GH #2059.
-        #
-        # WHAT IS UNMEASURED, named rather than left as "a measurement", because a route
-        # whose reason is only "not yet checked" is indistinguishable from one hiding a
-        # failure. Two of the four links are RULED OUT by construction and must not be
-        # cited as the risk:
-        #   - the ORDER is not a transport concern. by_placement is a JSON array in the
-        #     pinned response and _apply_breakdown_limit sorts it server-side BEFORE
-        #     serialization, so no transport can reorder it.
-        #   - the seed ROW reaching the live server is already proven over e2e_rest: the
-        #     four UC-004 delivery rows graduated 2026-09-15 ride the same
-        #     _persist_simulation_config -> delivery_simulation_configs ->
-        #     MockAdServer._load_delivery_simulation path for by_geo / by_device_type,
-        #     and mock_delivery_seed_enabled is on wherever ADCP_TESTING is.
-        # What is left is the COMPOSITION, and it is specific:
-        #   (1) no e2e_rest run has ever carried `by_placement` through that row. It is a
-        #       declared field on AdapterPackageDelivery and rides the same
-        #       model_dump(mode="json") / model_validate pair, so it should survive — but
-        #       "should" is reading, not measurement.
-        #   (2) the accumulating Given calls set_adapter_response THREE times in one
-        #       scenario, so over e2e it performs three upsert+commit cycles against the
-        #       same (tenant, media_buy) row. The repository's upsert is a read-then-
-        #       replace on that key, so the third write should win carrying all three
-        #       placements; no already-graduated e2e scenario writes that row twice, so
-        #       this is the genuinely novel step.
-        # RESIDUAL RISK, stated: strict=False means an e2e_rest FAILURE here stays hidden.
-        # run stays True so the next in-network run reports an XPASS and graduates it for
-        # free; if it instead fails, that is a harness gap in (1) or (2) and belongs at the
-        # env seam as an E2EUnsupportedSetup declaration, not here.
-        if "T-UC-004-dim-sortby-fallback" in marker_names and is_e2e_rest:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="e2e_rest: the strengthened sort_by assertion (named placements + "
-                    "pinned order) is graded for real in-process, but no in-network run has yet "
-                    "carried by_placement through the delivery_simulation_configs row, nor "
-                    "written that row three times in one scenario as the accumulating Given "
-                    "does. Order is not at risk (server-side sort, JSON array); the seed "
-                    "round-trip for this field is",
-                    strict=False,
-                    run=True,
-                )
-            )
+        # Graduated: the e2e_rest route for T-UC-004-dim-sortby-fallback, a strict=False
+        # xfail kept only because no in-network run had carried by_placement through the
+        # delivery_simulation_configs row, nor written that row three times in one
+        # scenario as the accumulating placement Given does. Box run innet_291026_0257 is
+        # that measurement: XPASS on e2e_rest, passed on a2a, mcp and rest. The scenario
+        # names three placements whose spend, impressions and clicks rank differently and
+        # pins the resulting order ("pl-B", "pl-A", "pl-C"), so only a fallback to spend
+        # satisfies it; the order Then fails loudly when no package carries by_placement.
+        # Obligation: media-buy/get-media-buy-delivery-request.json @ 3.2.7,
+        # reporting_dimensions.placement.sort_by -- "Falls back to 'spend' when the seller
+        # does not report the requested metric at this breakdown's row grain". GH #2059.
 
         # UC-004 partition scenarios: adcp 3.10 changed schema validation behavior.
         # Partition tests exercise valid/invalid value ranges per field.
