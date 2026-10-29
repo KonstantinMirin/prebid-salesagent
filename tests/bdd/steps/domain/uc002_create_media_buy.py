@@ -991,6 +991,8 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
             f"Expected media_buy_id in response for '{domain}' validation pass, "
             f"got {type(resp).__name__} without media_buy_id"
         )
+    if domain == "catalog":
+        _assert_catalogs_echoed(ctx)
     if outcome.endswith(" resolves to now"):
         # The row claims the literal 'asap' was resolved, which a buy id alone does not
         # show: a seller that stored the literal or any other instant answered the same.
@@ -998,6 +1000,24 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
         from tests.bdd.steps.domain.uc002_invariants import then_start_time_resolved
 
         then_start_time_resolved(ctx)
+
+
+def _assert_catalogs_echoed(ctx: dict) -> None:
+    """Every created package carries exactly the catalogs it was sent, and none when it sent none.
+
+    core/package.json catalogs: "Echoed from the create_media_buy request". A media_buy_id
+    alone let a seller that ignored catalogs entirely pass every catalog row.
+    """
+    from tests.bdd.steps._outcome_helpers import WIRE_MISSING, wire_entry
+
+    sent_packages = ctx["request_kwargs"]["packages"]
+    assert len(wire_field(ctx, "packages")) == len(sent_packages), (
+        f"expected {len(sent_packages)} created package(s), the wire carried {wire_field(ctx, 'packages')!r}"
+    )
+    for sent in sent_packages:
+        echoed = wire_entry(ctx, "packages", product_id=sent["product_id"]).get("catalogs", WIRE_MISSING)
+        expected = sent.get("catalogs", WIRE_MISSING)
+        assert echoed == expected, f"package {sent['product_id']!r} echoed catalogs {echoed!r}, sent {expected!r}"
 
 
 def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:

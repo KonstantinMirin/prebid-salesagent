@@ -132,6 +132,7 @@ from src.core.validation_helpers import (
     PACKAGES_FIELD,
     format_validation_error,
     package_field_path,
+    refuse_duplicate_catalog_types,
 )
 from src.core.webhook_validator import (
     reject_unsafe_webhook_registration_url,
@@ -2752,6 +2753,7 @@ async def _create_media_buy_impl(
                 # Check product_id field per AdCP spec
                 if not package.product_id:
                     raise AdCPValidationError(field=package_field_path("product_id", pkg_index))
+                refuse_duplicate_catalog_types(package.catalogs, pkg_index)
 
             # Check for duplicate product_ids across packages
             product_id_counts: dict[str, int] = {}

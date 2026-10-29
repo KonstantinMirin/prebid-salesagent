@@ -1135,7 +1135,7 @@ def given_pricing_option_configuration(ctx: dict, config: str) -> None:
     elif config in ("both_set", "fixed+floor"):
         _setup_both_pricing(ctx)
 
-    elif config in ("neither_set", "neither"):
+    elif config in ("neither_set", "neither", "neither (code rejects)"):
         _setup_neither_pricing(ctx)
 
     elif config.startswith("fixed_price="):
@@ -3221,10 +3221,9 @@ def _make_catalog(catalog_type: str, suffix: str = "") -> dict[str, Any]:
 def given_catalog_partition(ctx: dict, partition: str) -> None:
     """Set up catalogs for partition scenarios (catalog distinct type).
 
-    SPEC-PRODUCTION GAP: Production code accepts catalogs (field is in adcp
-    library PackageRequest) but never validates duplicate types or catalog_id
-    existence. Valid partitions succeed silently; invalid partitions should fail
-    but succeed instead.
+    Production refuses a package whose catalogs repeat a type (VALIDATION_ERROR). It
+    does not check catalog_id existence: the seller has no sync_catalogs, so there is
+    no synced catalog to look one up in.
     """
     partition = partition.strip()
 
@@ -3269,8 +3268,7 @@ def given_catalog_partition(ctx: dict, partition: str) -> None:
 def given_catalog_boundary(ctx: dict, config: str) -> None:
     """Set up catalogs for boundary scenarios (catalog distinct type).
 
-    SPEC-PRODUCTION GAP: same as partition — production never validates catalog
-    uniqueness or catalog_id existence.
+    Same production behavior as the partition step above.
     """
     config = config.strip()
 
@@ -3303,16 +3301,12 @@ def given_catalog_boundary(ctx: dict, config: str) -> None:
         _set_catalogs(ctx, [_make_catalog(t) for t in _CATALOG_TYPES])
 
     elif config == "cross-pkg product":
-        # Two packages, each with type=product — distinct per-package, not cross-package
-        kwargs = _ensure_request_defaults(ctx)
-        kwargs["packages"][0]["catalogs"] = [_make_catalog("product")]
-        # Duplicate the first package for a second one
-        if len(kwargs["packages"]) < 2:
-            import copy
-
-            pkg2 = copy.deepcopy(kwargs["packages"][0])
-            kwargs["packages"].append(pkg2)
-        kwargs["packages"][1]["catalogs"] = [_make_catalog("product")]
+        # Two packages, each with type=product — distinct per-package, not cross-package.
+        # Two PRODUCTS as well: a repeated product_id is refused by the uniqueness rule
+        # before any catalog rule is reached.
+        _setup_multi_product_request(ctx, [ctx["default_product"].product_id, "product_catalog_b"])
+        for package in _ensure_request_defaults(ctx)["packages"]:
+            package["catalogs"] = [_make_catalog("product")]
 
     elif config == "valid catalog_id":
         _set_catalogs(ctx, [{"type": "product", "catalog_id": "cat-synced-001", "url": "https://example.com/feed.xml"}])

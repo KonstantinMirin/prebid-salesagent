@@ -2806,6 +2806,34 @@ Feature: BR-UC-003 Update Media Buy
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/bid_price
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/AMBIGUOUS_BIDDING_POLICY
 
+  @T-UC-003-package-update-catalogs-duplicate-type @invariant @error @post-f1 @post-f2
+  Scenario: a catalogs replacement repeating a catalog type is refused and the stored catalogs are kept
+    Given the tenant is configured for auto-approval
+    And a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value                                                                                  |
+    | package_id | pkg_001                                                                                |
+    | catalogs   | [{"type": "product", "catalog_id": "cat-p1"}, {"type": "product", "catalog_id": "cat-p2"}] |
+    And the package "pkg_001" exists in the media buy
+    And an earlier update gave package "pkg_001" the catalogs [{"type": "store", "catalog_id": "cat-store"}]
+    When the Buyer Agent sends the update_media_buy request
+    Then the response contains error code VALIDATION_ERROR
+    And the response error field is packages[0].catalogs
+    And the stored catalogs of package "pkg_001" should be [{"type": "store", "catalog_id": "cat-store"}]
+    # LOCAL ADDITION. package-update.json catalogs: "the provided array replaces the current
+    # list", so the replacement becomes the package's catalogs, and core/package.json catalogs:
+    # "Each catalog MUST have a distinct type ... sellers MUST reject requests containing
+    # multiple catalogs of the same type with a validation_error". The package's array is at
+    # fault, not one entry, so the field names it. The stored catalogs are the earlier
+    # update's store catalog: the error arm of update-media-buy-response.json is "operation
+    # failed, no changes applied", and the row is the only proof the refusal came before the
+    # write.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/catalogs
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-update.json pointer=/properties/catalogs
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/update-media-buy-response.json pointer=/oneOf/1
+
   @T-UC-003-partition-immutable-package-field @partition @immutable_field_guard @schema-v3.1
   Scenario Outline: Immutable package-field guard partition validation - <partition>
     Given a valid update_media_buy request with:

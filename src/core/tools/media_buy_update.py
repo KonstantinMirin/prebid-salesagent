@@ -90,7 +90,7 @@ from src.core.tools.financial_validation import (
     validate_min_package_budget,
 )
 from src.core.utils import utc_flight_start
-from src.core.validation_helpers import package_field_path
+from src.core.validation_helpers import package_field_path, refuse_duplicate_catalog_types
 from src.services.targeting_capabilities import (
     collect_targeting_violations,
     property_list_unsupported_advisories,
@@ -1517,6 +1517,9 @@ def _update_media_buy_impl(
                     if pkg_update.catalogs is not None:
                         if not pkg_update.package_id:
                             raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
+                        # The replacement becomes the package's catalogs, which core/package.json
+                        # requires to be of distinct types -- the same refusal create makes.
+                        refuse_duplicate_catalog_types(pkg_update.catalogs, pkg_index)
                         catalog_pkg = uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
                         # Through the repository's own writer rather than a mutate +
                         # flag_modified pair: it replaces the document, bumps the buy's

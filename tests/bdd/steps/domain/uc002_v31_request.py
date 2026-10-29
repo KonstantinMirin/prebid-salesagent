@@ -276,13 +276,24 @@ def assert_sandbox_outcome(ctx: dict, outcome: str) -> None:
         assert "sandbox" not in envelope, f"the error response carries sandbox={envelope['sandbox']!r}: {envelope}"
         return
     wire_field(ctx, "media_buy_id")
-    sandbox = wire_lookup(ctx, "sandbox")
     if outcome == _SANDBOX_SUCCESS_TRUE:
+        sandbox = wire_lookup(ctx, "sandbox")
         assert sandbox is True, f"expected sandbox: true on a sandbox account's success, got {sandbox!r}"
     else:
-        assert sandbox is WIRE_MISSING or sandbox is False, (
-            f"a production account's success must not claim sandbox mode, got sandbox={sandbox!r}"
-        )
+        then_sandbox_absent_or_false(ctx)
+
+
+@then("the response sandbox field should be absent or false")
+def then_sandbox_absent_or_false(ctx: dict) -> None:
+    """A production account's response does not claim sandbox mode: ``sandbox`` absent or false.
+
+    create-media-buy-response.json describes only ``sandbox: true`` ("this response contains
+    simulated data"), so an explicit ``false`` is as conformant as an absent field.
+    """
+    sandbox = wire_lookup(ctx, "sandbox")
+    assert sandbox is WIRE_MISSING or sandbox is False, (
+        f"a production account's response must not claim sandbox mode, got sandbox={sandbox!r}"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
