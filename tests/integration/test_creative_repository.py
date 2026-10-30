@@ -258,7 +258,7 @@ class TestCreativeRepoCreate:
                 # this case (a test seeding through ``CreativeRepository.create`` rather than
                 # through ``CreativeFactory``) and runs the same v1 -> v2 projection the sync
                 # path runs, so the kind is derived rather than asserted here.
-                identity=seeded_format_identity(agent_url="https://agent.example.com", format_id="display_300x250"),
+                identity=seeded_format_identity(format_id="display_300x250"),
                 principal_id="p1",
                 data={"assets": build_assets(image_spec("banner"))},
             )
@@ -278,7 +278,7 @@ class TestCreativeRepoCreate:
             repo = CreativeRepository(session, "test_tenant")
             result = repo.create(
                 name="Auto ID",
-                identity=seeded_format_identity(agent_url="https://agent.example.com", format_id="display_300x250"),
+                identity=seeded_format_identity(format_id="display_300x250"),
                 principal_id="p1",
             )
 

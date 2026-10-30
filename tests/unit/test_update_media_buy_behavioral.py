@@ -879,9 +879,7 @@ class TestUC003UpdateCreativeIds:
             c.status = statuses[i] if statuses else "active"
             # The four stored identity columns, through the production mapping. A MagicMock
             # answers a Mock for anything unstubbed, which is not a state they can hold.
-            stamp_format_identity(
-                c, format_id=formats[i] if formats else "display_300x250", agent_url="http://test.com"
-            )
+            stamp_format_identity(c, format_id=formats[i] if formats else "display_300x250")
             creatives.append(c)
 
         # Creative existence/status via repository (shared validation helper).
@@ -1001,7 +999,7 @@ class TestUC003UpdateCreativeIds:
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "active"
-            stamp_format_identity(c1, format_id="display_300x250", agent_url="http://test.com")
+            stamp_format_identity(c1, format_id="display_300x250")
             uow.creatives.get_by_ids.side_effect = None
             uow.creatives.get_by_ids.return_value = [c1]
 
@@ -2068,7 +2066,7 @@ class TestUC003ExtJ:
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "rejected"
-            stamp_format_identity(c1, format_id="display_300x250", agent_url="http://test.com")
+            stamp_format_identity(c1, format_id="display_300x250")
             uow.creatives.get_by_ids.side_effect = None
             uow.creatives.get_by_ids.return_value = [c1]
 
@@ -2108,12 +2106,12 @@ class TestUC003ExtJ:
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "error"
-            stamp_format_identity(c1, format_id="display_300x250", agent_url="http://test.com")
+            stamp_format_identity(c1, format_id="display_300x250")
 
             c2 = MagicMock()
             c2.creative_id = "C2"
             c2.status = "rejected"
-            stamp_format_identity(c2, format_id="display_300x250", agent_url="http://test.com")
+            stamp_format_identity(c2, format_id="display_300x250")
 
             uow.creatives.get_by_ids.side_effect = None
             uow.creatives.get_by_ids.return_value = [c1, c2]

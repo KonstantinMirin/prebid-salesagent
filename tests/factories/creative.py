@@ -110,6 +110,27 @@ def served_format_spec(agent_url: str, format_id: str) -> Format | None:
     return find_format(load_reference_formats(), FormatId(agent_url=agent_url, id=format_id))
 
 
+def declared_format_spec(agent_url: str, format_id: str, kind: str = "image") -> Format:
+    """The declaration an agent OTHER than the reference one serves for *format_id*, naming *kind*.
+
+    Pass it as ``format_spec`` when a test seeds a creative at another agent on purpose.
+    The mapping registry projects an id alone only at the reference agent's origin; another
+    agent's id is that agent's own and has a canonical kind only through the declaration it
+    serves (``format_resolver.canonical_projection``). So a creative seeded at
+    ``https://other.example`` with ``display_300x250`` and no declaration is refused in the
+    factory, which is the production gate working. This states the agent's ``canonical``
+    annotation, step 1 of the registry's resolution order, and nothing else.
+    """
+    from adcp.types import CanonicalProjectionReference
+
+    from .format import FormatFactory
+
+    return FormatFactory(
+        format_id=FormatId(agent_url=agent_url, id=format_id),
+        canonical=CanonicalProjectionReference(kind=kind),
+    )
+
+
 def seeded_format_identity(
     *,
     agent_url: str = DEFAULT_CREATIVE_AGENT_URL,

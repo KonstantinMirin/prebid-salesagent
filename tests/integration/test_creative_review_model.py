@@ -64,7 +64,7 @@ def _create_test_tenant_with_creative(session, tenant_id: str, creative_id: str)
         status="pending",
         data={},
     )
-    stamp_format_identity(creative, format_id="display_300x250", agent_url="https://test-agent.example.com")
+    stamp_format_identity(creative, format_id="display_300x250")
     session.add(creative)
     session.commit()
 

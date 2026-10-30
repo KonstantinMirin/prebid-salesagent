@@ -76,6 +76,7 @@ from adcp.types import ErrorCode
 from src.core.errors.codes import CODE_TABLE
 from src.core.security.outbound_http import OutboundRequestBlocked
 from tests.factories import CreativeFactory
+from tests.factories.creative import declared_format_spec
 from tests.factories.creative_asset import CreativeAssetFactory
 from tests.factories.format import AGENT_URL, FormatFactory
 from tests.harness.creative_sync import CreativeSyncEnv
@@ -173,6 +174,9 @@ class TestACounterpartyRefusalNamesNoFabricatedLocator:
                 creative_id=creative_id,
                 format=_FORMAT_ID,
                 agent_url=local_origin.base_url,
+                # The registry projects the id alone only at the reference agent; at this
+                # origin it has a kind only through the declaration the agent serves.
+                format_spec=declared_format_spec(local_origin.base_url, _FORMAT_ID),
                 data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
             )
 
