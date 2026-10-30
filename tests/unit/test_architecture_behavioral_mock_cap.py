@@ -47,7 +47,10 @@ BEHAVIORAL_MOCK_CONSTRUCTION_CAP: dict[str, int] = {
     # 17 -> 13: the filter, sort and advisory tests deleted with their registry-only
     # ``_call_impl`` helper. They are graded by BR-UC-005 scenarios on four transports or
     # by their CreativeFormatsEnv twins in tests/integration/ (the file's docstring maps each).
-    "tests/unit/test_creative_formats_behavioral.py": 13,
+    # 13 -> 1: the referral-capability policy reads the constant instead of a mocked
+    # registry's response, the referral-warning test is deleted, and the registry-failure
+    # test keeps only the patch that injects its fault.
+    "tests/unit/test_creative_formats_behavioral.py": 1,
     "tests/unit/test_delivery_poll_behavioral.py": 1,
     # 2 -> 1: the webhook delivery path owns its connection and the retry-loop
     # test builds a real QueuedWebhook instead of mocking a config object.

@@ -38,33 +38,24 @@ database, and each grades an obligation something else already grades through pr
   tests/integration/test_creative_formats_payload_error_wire_safety.py.
 * Successful discovery carries no advisory (UC-005-EXT-C-05): @T-UC-005-inv-049-2-violated
   (a format returned and ``errors`` empty on the wire) and @T-UC-005-empty-catalog.
+
+The referral-lookup warning test is gone with no replacement, because the state it set up
+does not occur: the agent lookup failing for the ``creative_agents`` referrals after it
+succeeded for the aggregation. ``list_all_formats_with_errors`` calls the same
+``_get_tenant_agents`` first, outside any handler, so a lookup that fails takes the request
+down before the referrals are built. The referral handler itself is the silent degradation
+tracked by FIXME(#1566) and allowlisted in test_architecture_no_silent_loop_failures.py.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
+from src.core.schemas import Format, ListCreativeFormatsRequest
 from tests.factories import PrincipalFactory
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 MOCK_TENANT = {"tenant_id": "test-tenant", "name": "Test Tenant"}
-
-
-def _make_format(
-    format_id: str,
-    name: str,
-    renders: list | None = None,
-    assets: list | None = None,
-) -> Format:
-    """Helper to create a Format object with minimal boilerplate."""
-    return Format(
-        format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id=format_id),
-        name=name,
-        is_standard=True,
-        renders=renders,
-        assets=assets,
-    )
 
 
 class TestBroadstreetTemplateAssetParsing:
@@ -128,63 +119,15 @@ class TestMCPWrapperStringCoercion:
     """
 
 
-def _call_impl_raw(
-    formats: list[Format],
-    registry_side_effect: Exception | None = None,
-    errors: list | None = None,
-    agents: list | None = None,
-):
-    """Call _list_creative_formats_impl and return the full response (not just formats).
-
-    Args:
-        formats: Formats returned by healthy agents.
-        registry_side_effect: If set, get_creative_agent_registry() raises this.
-        errors: List of AdCP Error objects to include as per-agent failures.
-        agents: CreativeAgent instances returned by _get_tenant_agents (referrals).
-    """
-    from src.core.creative_agent_registry import FormatFetchResult
-    from src.core.tools.creative_formats import _list_creative_formats_impl
-
-    req = ListCreativeFormatsRequest()
-    identity = PrincipalFactory.make_public_identity(tenant=MOCK_TENANT)
-
-    if registry_side_effect:
-        with patch(
-            "src.core.creative_agent_registry.get_creative_agent_registry",
-            side_effect=registry_side_effect,
-        ):
-            with patch("src.core.tools.creative_formats.get_audit_logger") as mock_audit:
-                mock_audit.return_value = MagicMock()
-                return _list_creative_formats_impl(req, identity)
-
-    with (
-        patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,
-        patch("src.core.tools.creative_formats.get_audit_logger") as mock_audit,
-    ):
-        mock_reg = MagicMock()
-        fetch_result = FormatFetchResult(formats=list(formats), errors=errors or [])
-
-        async def mock_list_formats_with_errors(**kwargs):
-            return fetch_result
-
-        async def mock_list_formats(**kwargs):
-            return list(formats)
-
-        mock_reg.list_all_formats_with_errors = mock_list_formats_with_errors
-        mock_reg.list_all_formats = mock_list_formats
-        mock_reg._get_tenant_agents = MagicMock(return_value=agents or [])
-        mock_registry.return_value = mock_reg
-        mock_audit.return_value = MagicMock()
-
-        return _list_creative_formats_impl(req, identity)
-
-
 class TestRegistryCreationFailureRaisesServiceUnavailable:
     """UC-005-EXT-C-03: Registry creation failure raises AdCPServiceUnavailableError.
 
     Per AdCP 3.0.1 error-handling: operation-level failures (registry init) raise,
     so the boundary translator produces a two-layer envelope. Per-item advisory
     errors (partial-agent failure inside a successful discovery) stay in errors[].
+
+    Reachable without a database: the registry is created before the tenant's products
+    are read, so the refusal is decided first.
     """
 
     def test_registry_creation_failure_raises(self):
@@ -196,68 +139,18 @@ class TestRegistryCreationFailureRaisesServiceUnavailable:
         builds a spec-compliant two-layer envelope.
         """
         from src.core.exceptions import AdCPServiceUnavailableError
-
-        with pytest.raises(AdCPServiceUnavailableError) as _ei:
-            _call_impl_raw(
-                formats=[],
-                registry_side_effect=RuntimeError("Cannot connect to agent registry"),
-            )
-        # The old pattern matched the AUTHORED sentence; the sentence is the
-        # code's table entry now, so assert it exactly.
-
-
-class TestAgentReferralFailureLogsWarning:
-    """Agent referral building errors must be logged, not silently swallowed.
-
-    CLAUDE.md: No Quiet Failures pattern. If _get_tenant_agents raises,
-    creative_agents_list should remain None (non-critical) but a warning
-    must be logged so operators can diagnose the issue.
-    """
-
-    def test_referral_error_logs_warning(self, caplog):
-        """When _get_tenant_agents raises, a warning is logged (not silent pass)."""
-        import logging
-
-        from src.core.creative_agent_registry import FormatFetchResult
         from src.core.tools.creative_formats import _list_creative_formats_impl
-
-        formats = [_make_format("display_300x250", "Display 300x250")]
-        mock_reg = MagicMock()
-        mock_reg._get_tenant_agents = MagicMock(side_effect=RuntimeError("Agent DB connection refused"))
-        fetch_result = FormatFetchResult(formats=list(formats), errors=[])
-
-        async def mock_list_formats_with_errors(**kwargs):
-            return fetch_result
-
-        async def mock_list_formats(**kwargs):
-            return list(formats)
-
-        mock_reg.list_all_formats_with_errors = mock_list_formats_with_errors
-        mock_reg.list_all_formats = mock_list_formats
 
         identity = PrincipalFactory.make_public_identity(tenant=MOCK_TENANT)
 
         with (
             patch(
                 "src.core.creative_agent_registry.get_creative_agent_registry",
-                return_value=mock_reg,
+                side_effect=RuntimeError("Cannot connect to agent registry"),
             ),
-            patch(
-                "src.core.tools.creative_formats.get_audit_logger",
-                return_value=MagicMock(),
-            ),
-            caplog.at_level(logging.WARNING, logger="src.core.tools.creative_formats"),
+            pytest.raises(AdCPServiceUnavailableError),
         ):
-            _list_creative_formats_impl(
-                req=ListCreativeFormatsRequest(),
-                identity=identity,
-            )
-
-        # After fix: should log a warning about the referral failure
-        warning_msgs = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
-        assert any("referral" in msg.lower() or "agent" in msg.lower() for msg in warning_msgs), (
-            f"Expected a warning about agent referral failure, got: {warning_msgs}"
-        )
+            _list_creative_formats_impl(ListCreativeFormatsRequest(), identity)
 
 
 class TestReferralCapabilitiesAreCommitments:
@@ -268,6 +161,12 @@ class TestReferralCapabilitiesAreCommitments:
     the agent to variant-level delivery reporting via a `get_creative_delivery`
     task. This agent does not implement that task, so `delivery` must not
     appear in the referral capabilities.
+
+    The policy is anchored here, hardcoded. That every referral on the wire carries
+    exactly ``ADVERTISED_CREATIVE_AGENT_CAPABILITIES`` is graded by
+    @T-UC-005-main-referrals ("each referral should include the agent URL and supported
+    capabilities") on a2a, mcp, rest and e2e_rest, which compares each referral against the
+    constant. Driving the listing here would read the tenant's products.
     """
 
     def test_referral_capabilities_exclude_delivery_while_unimplemented(self):
@@ -277,35 +176,21 @@ class TestReferralCapabilitiesAreCommitments:
         registry, the hasattr assertion below fails, prompting re-evaluation
         of the advertised set alongside the exclusion assertion.
         """
-        from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
+        from src.core.creative_agent_registry import CreativeAgentRegistry
+        from src.core.tools.creative_formats import ADVERTISED_CREATIVE_AGENT_CAPABILITIES
 
         assert not hasattr(CreativeAgentRegistry, "get_creative_delivery"), (
             "get_creative_delivery is now implemented — re-evaluate whether "
             "`delivery` should be added back to ADVERTISED_CREATIVE_AGENT_CAPABILITIES"
         )
 
-        formats = [_make_format("display_300x250", "Display 300x250")]
-        agents = [
-            CreativeAgent(
-                agent_url=DEFAULT_AGENT_URL,
-                name="AdCP Standard Creative Agent",
-                enabled=True,
-                priority=1,
-            )
-        ]
-
-        response = _call_impl_raw(formats, agents=agents)
-
-        assert response.creative_agents, "Expected creative_agents referrals in response"
-        for referral in response.creative_agents:
-            cap_values = {c.value for c in referral.capabilities}
-            assert "delivery" not in cap_values, (
-                f"`delivery` advertised without a get_creative_delivery task "
-                f"(capabilities are commitments): {cap_values}"
-            )
-            assert cap_values == {"validation", "assembly", "preview"}, (
-                f"Advertised capabilities must be exactly the backed set, got {cap_values}"
-            )
+        cap_values = {c.value for c in ADVERTISED_CREATIVE_AGENT_CAPABILITIES}
+        assert "delivery" not in cap_values, (
+            f"`delivery` advertised without a get_creative_delivery task (capabilities are commitments): {cap_values}"
+        )
+        assert cap_values == {"validation", "assembly", "preview"}, (
+            f"Advertised capabilities must be exactly the backed set, got {cap_values}"
+        )
 
 
 class TestAgentInventedKeysNeverReachTheBuyer:
