@@ -2078,8 +2078,9 @@ Feature: A format selector must satisfy the canonical declaration the product pu
 
     # THE PAIRS. Against fixed_300x250 (image 300x250, max_file_size_kb 200, image_formats
     # jpg/png): 728x90 against 300x250 is the creative half of formats.mdx's fifth rule; 500
-    # binary KB, 200,001 bytes and 204,800 bytes against 200 KB exactly (200,000 bytes); gif against png; the image_main slot holding a text asset
-    # against holding an image (step 3, "against its declared type"). The file-size and
+    # binary KB, 200,001 bytes and 204,800 bytes against 200 KB exactly (200,000 bytes);
+    # gif against png; the image_main slot holding a text asset against holding an image
+    # (step 3, "against its declared type"). The file-size and
     # format rows are not size failures, so they take the generic code -- the code split is
     # graded, not only the refusal. Against two_image_options (300x250 and 728x90), 160x600
     # fits neither, so the refusal is its size against the first declaration's dimensions:
