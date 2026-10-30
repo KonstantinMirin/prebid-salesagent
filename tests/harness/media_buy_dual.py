@@ -246,19 +246,13 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         found -- by media_buy_id" PUT to an existing media buy and got a success. It passed
         on a2a/mcp because they carry the id in the body; only REST puts it in the path.
 
-        An update sent with NO id cannot be expressed on REST: the id is the resource path
-        (``PUT /media-buys/{media_buy_id}``, src/core/tools/registry.py), so there is no
-        request to send. Refused here rather than PUT to the seeded buy or to a literal
-        sentinel path, either of which would grade a different request.
+        An update sent with NO id has no REST request at all: the id is the resource path
+        (``PUT /media-buys/{media_buy_id}``, src/core/tools/registry.py). The rows that send
+        none are declared not applicable on rest and e2e_rest in
+        ``tests/bdd/conftest.py::_TRANSPORT_INEXPRESSIBLE_ROWS`` and never reach this method.
         """
         req = kwargs.get("req")
-        target = getattr(req, "media_buy_id", None) or kwargs.get("media_buy_id") or self._seeded_media_buy_id
-        if target is OMIT:
-            raise AssertionError(
-                "REST cannot send update_media_buy without a media_buy_id: the id is the URL path "
-                "(PUT /media-buys/{media_buy_id}), so a missing-identifier row has no REST request"
-            )
-        return target
+        return getattr(req, "media_buy_id", None) or kwargs.get("media_buy_id") or self._seeded_media_buy_id
 
     def _call_update_a2a(self, **kwargs: Any) -> DeliverResult:
         # Drive the REAL on_message_send → _dispatch_skill → to_wire → Task/Artifact
