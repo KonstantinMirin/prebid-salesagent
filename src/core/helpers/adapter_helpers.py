@@ -264,8 +264,9 @@ def adapter_served_creative_formats(tenant_id: str) -> list[Format]:
     THE ONE READ of an adapter's own catalogue, and the second half of what the seller
     serves: ``CreativeAgentRegistry`` answers for the agents it DIALS, this answers for
     the adapter that serves formats in process. Both consumers of a catalogue add both
-    halves -- ``_list_creative_formats_impl`` (discovery) and ``sync_creatives``
-    (resolution) -- so a format the seller advertises is a format a creative may name.
+    halves -- ``_list_creative_formats_impl`` (the definitions of the formats a product
+    declares) and ``sync_creatives`` (resolution) -- so a format the compatibility list
+    names is a format a creative may name.
     Building them in the discovery tool alone is what left the sync path refusing every
     adapter-format creative (salesagent-zthsk).
 

@@ -16,6 +16,7 @@ from adcp.utils.format_assets import get_format_assets
 
 # Format subclass preserved through backward-compatibility helper (PEP 695 type param below).
 from src.core.exceptions import AdCPSalesAgentError, AdCPServiceUnavailableError
+from src.core.format_resolver import FormatKey, format_identity, product_format_identities
 from src.core.helpers import enum_value
 from src.core.helpers.adapter_helpers import adapter_served_creative_formats
 
@@ -77,10 +78,21 @@ from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResp
 def _list_creative_formats_impl(
     req: ListCreativeFormatsRequest | None, identity: PublicIdentity
 ) -> ListCreativeFormatsResponse:
-    """List all available creative formats (AdCP spec endpoint).
+    """The deprecated 3.x compatibility list: the named formats this seller's products declare.
 
-    Returns formats from all registered creative agents (default + tenant-specific).
-    Uses CreativeAgentRegistry for dynamic format discovery with caching.
+    A PROJECTION OF THE PRODUCTS, never a catalogue of its own. media-buy/specification.mdx
+    § Canonical creative-format discovery: "Compatibility `list_creative_formats` responses
+    MAY be projected from canonical declarations for older 3.x peers, but MUST NOT be
+    independently authored", and creative/sales-agent-creative-capabilities.mdx §
+    Compatibility: "The projection must be derived; it must not become a second authored
+    catalog." So a format is listed when some product's served contract names it -- the
+    ``format_ids`` projection a canonical product's declarations assert through
+    ``v1_format_ref``, or the arm a legacy-only product authored (:func:`_declared_formats`)
+    -- and the entry is that format's definition as its creative agent (or the adapter that
+    serves it in process) publishes it. A format an agent publishes that no product declares
+    is not this seller's to list, and a declared reference no agent defines has no
+    definition to project, so it is omitted rather than invented.
+
     Filters on what the request declares: format_ids, name_search, asset_types,
     the dimension and responsive filters, wcag_level, disclosure_positions,
     disclosure_persistence, output_format_ids and input_format_ids, each narrowing the same list in turn so
@@ -127,16 +139,17 @@ def _list_creative_formats_impl(
         finally:
             loop.close()
 
-    # The seller's catalogue is the dialled agents' formats PLUS the ones its own
-    # ad-server adapter serves (Broadstreet acting as both sales and creative agent).
-    # Those used to be BUILT here, inline, in a 60-line block that set no ``canonical``
-    # and had two FIXME(#1566) silent-degradation handlers; the adapter declares them now
-    # and ``adapter_served_creative_formats`` is the one read of that declaration.
-    # ``sync_creatives`` composes its catalogue from the SAME two parts through the SAME
-    # reader, so the formats a buyer discovers here are exactly the formats a creative may
-    # name there -- which is what it could not do while this function was the only place
-    # they existed (salesagent-zthsk).
-    formats = [*fetch_result.formats, *adapter_served_creative_formats(tenant.tenant_id)]
+    # The DEFINITIONS come from where every format reference this seller receives is
+    # resolved: the dialled agents' formats PLUS the ones its own ad-server adapter serves
+    # in process (Broadstreet acting as both sales and creative agent), read through
+    # ``adapter_served_creative_formats`` as ``seller_format_catalogue`` reads them. Which of
+    # them are LISTED is the products' answer alone (see the docstring).
+    declared = _declared_formats(tenant.tenant_id)
+    formats = [
+        f
+        for f in [*fetch_result.formats, *adapter_served_creative_formats(tenant.tenant_id)]
+        if format_identity(f.format_id) in declared
+    ]
     agent_errors = _route_agent_failures(fetch_result, req)
 
     # Apply filters from request
@@ -434,6 +447,33 @@ def _list_creative_formats_impl(
     # Always return Pydantic model - MCP wrapper will handle serialization
     # Schema enhancement (if needed) should happen in the MCP wrapper, not here
     return response
+
+
+def _declared_formats(tenant_id: str) -> set[FormatKey]:
+    """The identities of the named formats the tenant's products declare.
+
+    Each product's served contract (``Product.format_contract``), so the set is exactly the
+    ``format_ids`` the same products carry on ``get_products``: derived from the canonical
+    declarations' ``v1_format_ref`` for a canonical product (canonical-formats.mdx §
+    Deprecated named-format compatibility projection: "Compatibility ``format_ids`` MUST be
+    derived from them"), the authored arm for a legacy-only one. Keyed on the federation
+    identity, so a reference that pins a template's parameters names the template.
+
+    KNOWN CEILING: every product of the tenant, with no principal or account scoping. The
+    pin lets a seller with one shared list ignore the request's ``account``
+    (specification.mdx § Canonical creative-format discovery); a format a hidden product
+    declares is listed to every caller. The upgrade path is the principal filter
+    ``get_products`` applies, read from the same rows.
+    """
+    from src.core.database.repositories.uow import ProductUoW
+
+    with ProductUoW(tenant_id) as uow:
+        assert uow.products is not None
+        return {
+            identity
+            for product in uow.products.list_all()
+            for identity in product_format_identities(product.format_contract.format_ids)
+        }
 
 
 def _route_agent_failures(

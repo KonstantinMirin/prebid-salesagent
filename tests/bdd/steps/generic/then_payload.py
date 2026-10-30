@@ -53,10 +53,11 @@ def _fmt_name(f: Any) -> str | None:
 def then_all_formats(ctx: dict) -> None:
     """Assert the response covers EVERY format the registry serves -- identity, not count.
 
-    "Registered" is what the env's registry serves on this transport
+    "Registered" is what the seller lists on this transport
     (``CreativeFormatsEnv.served_registry_formats``): the Given's formats on every
     transport, served by the seller's own peer creative agent with the standard agent not
-    federated, or the reference catalog when no Given named any. ``pagination.total_count``
+    federated and declared by the tenant's product, or nothing when no Given named any --
+    the list projects the seller's products. ``pagination.total_count``
     must equal that catalog's size, every returned format must be one of it, and a
     response with no further page must hold all of it.
 

@@ -1460,9 +1460,9 @@ def seller_format_catalogue(tenant_id: str) -> list[Format]:
     pseudo-URL with no host to dial -- so a catalogue built from the registry alone made
     ``find_format`` answer None for every ``broadstreet_*`` reference, which left the
     projection with no ``canonical`` declaration to read and refused the reference
-    (salesagent-zthsk). ``list_creative_formats`` composes its catalogue from the same two
-    parts, so a format this seller ADVERTISES is a format a buyer may NAME -- on a creative
-    and on a package alike.
+    (salesagent-zthsk). ``list_creative_formats`` reads its definitions from the same two
+    parts and lists only those a product declares, so a format that compatibility list
+    names is a format a buyer may NAME -- on a creative and on a package alike.
 
     Fetched once per request and outside any transaction by its callers: the registry's
     async HTTP must not run inside a database savepoint.
