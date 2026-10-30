@@ -14,14 +14,17 @@ model pick its branch on readback is what these scenarios exercise.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pytest_bdd import given, parsers, then
 
 from tests.bdd.steps._outcome_helpers import wire_advisory_errors, wire_entry
 from tests.factories import PricingOptionFactory, ProductFactory
+from tests.factories.core import seed_property_tag_selection
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.inventory_profile import InventoryProfileFactory
+from tests.helpers.admin_product_form import minimal_product_create_form
 
 #: The params a stored "image" declaration carries. Concrete values, so an announcement that
 #: substituted defaults for what the seller stored is visible rather than plausible.
@@ -102,6 +105,39 @@ def _image_declaration(*asserted_ids: str, params: dict[str, Any] | None = None)
     if asserted_ids:
         declaration["v1_format_ref"] = [_ref(format_id) for format_id in asserted_ids]
     return declaration
+
+
+def _sized_image_option(option_id: str, width: int, height: int, *asserted_ids: str) -> dict[str, Any]:
+    """A product-local "image" declaration with its own option id and size."""
+    declaration: dict[str, Any] = {
+        "format_kind": "image",
+        "format_option_id": option_id,
+        "params": {"width": width, "height": height},
+    }
+    if asserted_ids:
+        declaration["v1_format_ref"] = [_ref(format_id) for format_id in asserted_ids]
+    return declaration
+
+
+#: The declarations of the several-options scenario. Three product-local options, each with
+#: its own ``format_option_id`` and size, so no two are interchangeable on the wire. Two
+#: assert a v1 reference and the third asserts none, so the derived ``format_ids`` must take
+#: refs from more than one declaration and must skip the one that asserts nothing.
+_SEVERAL_DECLARATIONS: tuple[dict[str, Any], ...] = (
+    _sized_image_option("mrec", 300, 250, "display_300x250_image"),
+    _sized_image_option("leaderboard", 728, 90, "display_728x90_image"),
+    _sized_image_option("skyscraper", 160, 600),
+)
+
+
+def _lost_params(stored: dict[str, Any], announced: dict[str, Any]) -> dict[str, tuple[Any, Any]]:
+    """The stored params that came back changed or absent, as ``{name: (stored, announced)}``.
+
+    A SUBSET check, because the model fills a canonical shape's own defaults (slots,
+    asset_source, ...) in alongside what the seller stored. What is graded is that the
+    seller's values survived, not that nothing was added.
+    """
+    return {name: (value, announced.get(name)) for name, value in stored.items() if announced.get(name) != value}
 
 
 def _announced_product(ctx: dict) -> dict[str, Any]:
@@ -288,6 +324,47 @@ def given_canonical_only_product(ctx: dict, format_kind: str) -> None:
     )
 
 
+@given("the seller stores a canonically-authored product declaring three format options")
+def given_canonical_product_with_several_options(ctx: dict) -> None:
+    """Store a canonical-only product whose contract is three declarations, not one."""
+    _store_product(ctx, [dict(declaration) for declaration in _SEVERAL_DECLARATIONS], with_legacy_arm=False)
+
+
+@given(
+    parsers.parse(
+        'the operator creates a product through the admin product form declaring a canonical "{format_kind}" '
+        "format option"
+    )
+)
+def given_operator_authored_product(ctx: dict, format_kind: str) -> None:
+    """The seller's own authoring path writes the product, not a factory.
+
+    Every other Given here stores the row through ``ProductFactory``, so none of them can
+    say where the seller's authoring puts a product's creative contract. This one posts
+    the admin create form on the env's own transport (in process, or to the live server
+    over e2e_rest), which is the path an operator uses. The form carries only what the
+    operator chooses: a name, a price, a property tag, and the canonical declaration.
+
+    The property tag and the authorized property carrying it are factory rows because they
+    are the form's precondition, not its subject: the handler refuses a tag no authorized
+    property of that publisher carries. The status is asserted here, because the handler
+    answers a refused form by re-rendering it with 200, and a scenario whose product was
+    never created would then read an empty catalogue in its Then.
+    """
+    tenant = ctx["tenant"]
+    form = minimal_product_create_form(
+        seed_property_tag_selection(tenant, ctx["env"]),
+        product_id="operator_authored",
+        format_options=json.dumps([{"format_kind": format_kind, "params": dict(_STORED_IMAGE_PARAMS)}]),
+    )
+    ctx["stored_declaration_params"] = dict(_STORED_IMAGE_PARAMS)
+    response = ctx["env"].admin_request(tenant.tenant_id, "post", "products/add", data=form)
+    assert response.status_code == 302, (
+        f"the admin product form did not create the product (status {response.status_code}); "
+        "a refused form re-renders with 200"
+    )
+
+
 @given("the seller stores a product with no canonical format options")
 def given_product_without_declarations(ctx: dict) -> None:
     """Store a product carrying only the deprecated half, which the pin's anyOf permits."""
@@ -337,12 +414,42 @@ def then_declaration_announced(ctx: dict, format_kind: str) -> None:
     )
     params = option.get("params")
     assert params is not None, f"the announced declaration carries no params: {sorted(option)}"
-    # A SUBSET check, because the model fills a canonical shape's own defaults (slots,
-    # asset_source, ...) in alongside what the seller stored. What is graded is that the
-    # seller's values survived, not that nothing was added.
-    stored = ctx["stored_declaration_params"]
-    lost = {name: (value, params.get(name)) for name, value in stored.items() if params.get(name) != value}
+    lost = _lost_params(ctx["stored_declaration_params"], params)
     assert not lost, f"params the seller stored came back changed or absent (expected, got): {lost}"
+
+
+@then("the announced format options are exactly the three declarations the seller stored")
+def then_every_stored_declaration_announced(ctx: dict) -> None:
+    """Every stored declaration arrives, by its option id, carrying what the seller stored.
+
+    Keyed on ``format_option_id`` rather than on position: core/product.json gives
+    ``format_options`` no order, and the id is what a buyer names in
+    ``format_option_refs`` and ``packages[].format_option_refs``, so an option that arrived
+    without it could not be selected. The count is asserted first, so a dropped option and
+    an extra one both fail before the per-option comparison.
+    """
+    options = _announced_product(ctx).get("format_options")
+    assert options, "the product announced no format_options at all"
+    assert len(options) == len(_SEVERAL_DECLARATIONS), (
+        f"expected {len(_SEVERAL_DECLARATIONS)} announced format options, got {len(options)}: {options!r}"
+    )
+    announced = {option.get("format_option_id"): option for option in options}
+    expected = {declaration["format_option_id"]: declaration for declaration in _SEVERAL_DECLARATIONS}
+    assert set(announced) == set(expected), (
+        f"the announced format_option_ids are {sorted(map(str, announced))}, expected {sorted(expected)}"
+    )
+    for option_id, declaration in expected.items():
+        option = announced[option_id]
+        assert option.get("format_kind") == declaration["format_kind"], (
+            f"option {option_id!r} announced format_kind {option.get('format_kind')!r}, "
+            f"stored {declaration['format_kind']!r}"
+        )
+        lost = _lost_params(declaration["params"], option.get("params") or {})
+        assert not lost, f"option {option_id!r} lost stored params (expected, got): {lost}"
+        assert option.get("v1_format_ref") == declaration.get("v1_format_ref"), (
+            f"option {option_id!r} announced v1_format_ref {option.get('v1_format_ref')!r}, "
+            f"stored {declaration.get('v1_format_ref')!r}"
+        )
 
 
 @then(parsers.parse('the announced format option carries v1_format_ref naming "{legacy_ids}"'))
