@@ -274,6 +274,11 @@ def when_request_min_width(ctx: dict, min_w: int) -> None:
     _call(ctx, req=ListCreativeFormatsRequest(min_width=min_w))
 
 
+@when(parsers.parse("the Buyer Agent requests formats with max_width {max_w:d}"))
+def when_request_max_width(ctx: dict, max_w: int) -> None:
+    _call(ctx, req=ListCreativeFormatsRequest(max_width=max_w))
+
+
 @when(parsers.parse("the Buyer Agent requests formats with min_width {min_w:d} and max_width {max_w:d}"))
 def when_request_min_max_width(ctx: dict, min_w: int, max_w: int) -> None:
     _call(ctx, req=ListCreativeFormatsRequest(min_width=min_w, max_width=max_w))
@@ -662,6 +667,8 @@ def when_boundary_name_search(ctx: dict, boundary_point: str) -> None:
         "case-insensitive match": "case_insensitive",
         "omitted (no filter)": "omitted",
         "no match (empty result)": "no_match",
+        # Sent verbatim: an unrecognized partition is the name_search value itself.
+        "empty string (filters nothing)": "",
     }
     _partition_name_search(ctx, mapping.get(boundary_point, boundary_point))
 

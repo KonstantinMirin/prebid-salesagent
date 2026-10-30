@@ -150,6 +150,19 @@ def given_registry_format_with_asset_group(ctx: dict, name: str, type_a: str, ty
     _sync_registry(ctx)
 
 
+@given(
+    parsers.parse(
+        'the registry has format "{name}" with an individual "{asset_type}" asset'
+        ' and a repeatable asset group containing "{type_a}" and "{type_b}"'
+    )
+)
+def given_registry_format_with_asset_and_group(ctx: dict, name: str, asset_type: str, type_a: str, type_b: str) -> None:
+    """Register a format holding one individual asset beside a repeatable asset group."""
+    fmt = FormatFactory.build(name=name, assets=[make_asset(asset_type), make_asset_group(type_a, type_b)])
+    _add_format(ctx, fmt)
+    _sync_registry(ctx)
+
+
 # ── Format with render dimensions ────────────────────────────────────
 
 
