@@ -4,13 +4,12 @@ Grades work item A4 (salesagent-ol033.2.1): before this, ``format_options`` had 
 references under ``src/admin/`` and ``templates/``, so the shape AdCP 3.2 tells new
 products to author was storable, servable, and unauthorable.
 
-WHY THIS IS AN ADMIN TEST AND NOT A BDD SCENARIO. The authoring surface is a Flask form.
-The epic grades new behaviour through the four BDD transports, and none of them can reach
-this: the registry declares fourteen tools and every one is buyer-facing -- there is no
-``create_product`` or ``update_product``, because a product is seller-configured. The BDD
-harness seeds products through ``ProductFactory``, which writes the row directly and never
-posts the form. So the POST is reachable only by a Flask client, and this module is the
-grader for it.
+WHAT THIS MODULE GRADES AND THE BDD SCENARIO DOES NOT. The authoring surface is a Flask
+form, and no buyer-facing tool creates a product. One BDD scenario,
+``@T-UC-GET-PRODUCTS-format-options-operator-authored``, posts the create form with a
+canonical-only declaration on each transport and reads the result off ``get_products``.
+Everything else here -- the editors in each template, the refusals, the edit path, the
+legacy arm a create never stores -- is graded only by this module.
 
 What a BDD scenario DOES grade, and what this module therefore does not re-grade, is
 SERVING the result: ``@T-UC-GET-PRODUCTS-format-options-canonical-only`` already asserts on

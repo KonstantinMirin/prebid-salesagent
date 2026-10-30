@@ -193,6 +193,33 @@ Feature: Canonical format options a seller stores are announced to buyers on the
     # whose legacy arm was absent -- so the canonical shape was unstorable and then
     # unservable.
 
+  @T-UC-GET-PRODUCTS-format-options-operator-authored @format_option_announcement @requires_db
+  Scenario: a product the operator creates through the admin form carries its contract in format_options
+    Given the operator creates a product through the admin product form declaring a canonical "image" format option
+    When the buyer requests products
+    Then the announced format option declares format_kind "image" and params the seller stored
+    And the announced product carries no format_ids key at all
+    # canonical-formats-migration.mdx § Seller migration, step 1 (v3.2.7): "Move each
+    # product's creative contract into format_options[]". core/product.json format_ids
+    # (v3.2.7): "New products MUST author canonical format_options[] ... Do not author a new
+    # product from format_ids alone."
+    #
+    # Every other scenario here seeds its row through ProductFactory, so they grade what
+    # the seller SERVES from a row, never where the seller's own authoring PUTS the
+    # contract. This Given posts the admin product-create form, on the scenario's own
+    # transport: the in-process admin app for a2a, mcp and rest, and the live server's
+    # admin for e2e_rest, so the product the buyer discovers is the one the operator made.
+    #
+    #   * a create path that wrote format_ids and dropped the declaration fails the first
+    #     outcome, because nothing would be announced in format_options;
+    #   * a create path that synthesized a format_id from the kind fails the second, since
+    #     the declaration asserts no v1_format_ref and so projects no format_ids;
+    #   * a form that refused the canonical-only product fails in the Given, which asserts
+    #     the create redirected.
+    #
+    # The seller's other authoring paths (CREATE_SAMPLE_DATA seeding, the mock adapter's
+    # product config, inventory profiles, the setup scripts) are not graded here.
+
   @T-UC-GET-PRODUCTS-format-options-several @format_option_announcement @requires_db
   Scenario: a product declaring several format options announces every one of them
     Given the seller stores a canonically-authored product declaring three format options

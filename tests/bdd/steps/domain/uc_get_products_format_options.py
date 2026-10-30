@@ -14,12 +14,20 @@ model pick its branch on readback is what these scenarios exercise.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pytest_bdd import given, parsers, then
 
+from src.core.database.models import PropertyTag
 from tests.bdd.steps._outcome_helpers import wire_advisory_errors, wire_entry
-from tests.factories import PricingOptionFactory, ProductFactory
+from tests.factories import (
+    AuthorizedPropertyFactory,
+    PricingOptionFactory,
+    ProductFactory,
+    PropertyTagFactory,
+)
+from tests.factories.core import get_or_create
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.inventory_profile import InventoryProfileFactory
 
@@ -282,6 +290,55 @@ def given_canonical_only_product(ctx: dict, format_kind: str) -> None:
 def given_canonical_product_with_several_options(ctx: dict) -> None:
     """Store a canonical-only product whose contract is three declarations, not one."""
     _store_product(ctx, [dict(declaration) for declaration in _SEVERAL_DECLARATIONS], with_legacy_arm=False)
+
+
+@given(
+    parsers.parse(
+        'the operator creates a product through the admin product form declaring a canonical "{format_kind}" '
+        "format option"
+    )
+)
+def given_operator_authored_product(ctx: dict, format_kind: str) -> None:
+    """The seller's own authoring path writes the product, not a factory.
+
+    Every other Given here stores the row through ``ProductFactory``, so none of them can
+    say where the seller's authoring puts a product's creative contract. This one posts
+    the admin create form on the env's own transport (in process, or to the live server
+    over e2e_rest), which is the path an operator uses. The form carries only what the
+    operator chooses: a name, a price, a property tag, and the canonical declaration.
+
+    The property tag and the authorized property carrying it are factory rows because they
+    are the form's precondition, not its subject: the handler refuses a tag no authorized
+    property of that publisher carries. The status is asserted here, because the handler
+    answers a refused form by re-rendering it with 200, and a scenario whose product was
+    never created would then read an empty catalogue in its Then.
+    """
+    tenant = ctx["tenant"]
+    get_or_create(
+        ctx["env"],
+        PropertyTag,
+        {"tenant_id": tenant.tenant_id, "tag_id": "all_inventory"},
+        lambda: PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory"),
+    )
+    authorized = AuthorizedPropertyFactory(tenant=tenant, tags=["all_inventory"])
+    form = {
+        "product_id": "operator_authored",
+        "name": "Operator Authored Product",
+        "description": "Authored through the admin product form",
+        "formats": "[]",
+        "format_options": json.dumps([{"format_kind": format_kind, "params": dict(_STORED_IMAGE_PARAMS)}]),
+        "pricing_model_0": "cpm_fixed",
+        "currency_0": "USD",
+        "rate_0": "10.00",
+        "property_mode": "tags",
+        "selected_property_tags": f"{authorized.publisher_domain}:all_inventory",
+        "delivery_measurement_provider": "publisher",
+    }
+    response = ctx["env"].admin_request(tenant.tenant_id, "post", "products/add", data=form)
+    assert response.status_code == 302, (
+        f"the admin product form did not create the product (status {response.status_code}); "
+        "a refused form re-renders with 200"
+    )
 
 
 @given("the seller stores a product with no canonical format options")
