@@ -966,7 +966,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # over both caps (1 KB = 1,000 bytes) and inside the product's uncapped option, so the
     # product accepts it and only the placement does not. A seller ignoring the placement's
     # narrowing accepts it.
-    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx section="Routing rule for multi-element format_options"
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx section="Worked example — multi-format product (third-party html5 OR internal display_tag)"
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/format_options/description
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
 
@@ -2784,16 +2784,20 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # format_option_ref IS REQUIRED WHEN THE PRODUCT PUBLISHES A KIND MORE THAN ONCE.
     # canonical-formats.mdx, "Routing rule for multi-element format_options (normative)":
     # "format_option_ref is **REQUIRED** on the manifest when the target product's
-    # format_options contains two or more declarations sharing the same format_kind -- without
+    # format_options contains two or more declarations sharing the same format_kind — without
     # it, the seller can't disambiguate which option the buyer is shipping against", and
     # "**OPTIONAL** when each format_kind in the product's format_options is unique".
     # core/creative-asset.json and core/creative-manifest.json say the same of the field, and
     # sync_creatives.mdx: "Required when the target product has multiple options with the
-    # same format_kind". creative-manifests.mdx § Validation step 1, "otherwise select the
-    # unambiguous compatible format_kind declaration", is the optional case read with them:
-    # the kind alone names one declaration, which must be compatible. Fitting one of two
-    # options does not stand in for naming it, and step 5 is "do not silently relax the
-    # target contract".
+    # same format_kind". creative-manifests.mdx § Exact option routing: "When a product
+    # accepts multiple declarations of the same kind, or when the creative must target an
+    # exact publisher format, add format_option_ref". § Validation step 1, "otherwise select
+    # the unambiguous compatible format_kind declaration", is the optional case read with
+    # them: the kind alone names one declaration, which must be compatible. Fitting one of
+    # two options does not stand in for naming it, and step 5 is "do not silently relax the
+    # target contract". Step 1 read alone can be taken to count only the declarations the
+    # assets fit, which would accept every refusal row below; the normative rule counts the
+    # product's declarations, and adcontextprotocol/adcp#8625 asks for step 1 to say so.
     #
     # Each refusal row has the accept row below it differing only in the ref: each manifest
     # fits exactly one option, the 300x250 and the 728x90 one size each and the gif the gif
@@ -2808,8 +2812,12 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # reserves for a buyer-correctable creative failure no specific code names.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-asset.json pointer=/properties/format_option_ref
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-manifest.json pointer=/properties/format_option_ref
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-format-declaration.json pointer=/properties/format_option_id
     # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx section="Worked example — multi-format product (third-party html5 OR internal display_tag)"
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-manifests.mdx section="Exact option routing"
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-manifests.mdx section="Validation"
     # @source repo=adcp ref=v3.2.7 path=docs/creative/task-reference/sync_creatives.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/error-details/creative-representation-unresolved.json
 
   @T-UC-FORMAT-SATISFACTION-manifest-library-accepted @format_satisfaction_sync @requires_db
