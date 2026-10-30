@@ -617,6 +617,24 @@ Feature: BR-UC-005 Discover Creative Formats
     Then no formats from the creative agent should be returned
     And the discarded entries should be reported as "AGENT_FORMATS_DISCARDED" on "formats" with recovery "terminal"
 
+  # A configured creative agent that does not answer costs the buyer that agent's formats
+  # and nothing else: the listing is still a successful response, the format the standard
+  # creative agent publishes for the seller's product is listed, and the failure rides the
+  # response's errors[] as one advisory naming the section it degrades. AGENT_UNREACHABLE
+  # is a platform-specific code, which the pin permits ("senders MAY emit codes outside
+  # that set"); a buyer decodes it by its recovery, transient, since the agent may answer
+  # a retry. Storyboard: ungraded.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json pointer=/properties/code
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-response.json pointer=/properties/errors
+  @T-UC-005-peer-catalog-unreachable @UC-005-MAIN-MCP-01 @edge-case @hand-edited
+  Scenario: A configured creative agent that does not answer is reported, and the other agents' formats are still listed
+    Given the seller's products declare the standard creative agent's format "video_vast"
+    And a creative agent the seller configured does not answer
+    When the Buyer Agent requests the format catalog
+    Then the response is compliant with the list_creative_formats spec
+    And the formats on the wire should be exactly "VAST Video"
+    And the unreachable creative agent should be reported as "AGENT_UNREACHABLE" on "formats" with recovery "transient"
+
   # Which creative agents a seller federates is the seller's choice: the pinned response
   # requires only formats, and creative_agents is an optional referral list. A seller that
   # runs its own creative agent and turns the standard one off lists that agent's formats
