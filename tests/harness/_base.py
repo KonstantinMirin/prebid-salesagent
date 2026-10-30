@@ -2796,6 +2796,27 @@ class BaseTestEnv:
             return httpx.get(f"{self.e2e_config.base_url}{path}", headers=headers, timeout=30)
         return self.get_rest_client().get(path, headers=headers)
 
+    def list_mcp_tools(self) -> dict[str, str | None]:
+        """Each MCP tool's advertised description, by name, as a client's ``tools/list`` answers.
+
+        Like the card, ``tools/list`` is not a registry tool and so not reachable through
+        ``call_via``. It runs over FastMCP's in-memory client against the server the MCP
+        transport dispatches to, so the answer is the MCP wire's, not a read of the registry.
+        In-process only: e2e serves no MCP transport to grade.
+        """
+        assert not self.is_e2e, "list_mcp_tools() reads the in-process MCP server; e2e dispatches no MCP"
+        import asyncio
+
+        from fastmcp import Client
+
+        from src.core.main import mcp
+
+        async def _list() -> dict[str, str | None]:
+            async with Client(mcp) as client:
+                return {tool.name: tool.description for tool in await client.list_tools()}
+
+        return asyncio.run(_list())
+
     def _commit_factory_data(self) -> None:
         """Flush pending session state before calling production code.
 
