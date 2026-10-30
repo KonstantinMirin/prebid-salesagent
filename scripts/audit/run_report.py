@@ -244,6 +244,51 @@ def skips_section(run: Run, out) -> None:
         print("  no suite in this run recorded a skip", file=out)
 
 
+#: A creative-agent response the seller's HTTP client logged as 429, in a test's captured
+#: output, and the same response in the TLS front's access log.
+_AGENT_429_IN_OUTPUT = re.compile(r"/api/creative-agent/\S*\s+\"HTTP/1\.1 429")
+_AGENT_429_IN_PROXY_LOG = re.compile(r"\"POST /api/creative-agent/\S* HTTP/1\.1\" 429 ")
+
+
+def rate_limit_section(run_dir: Path, limit: int, out) -> None:
+    """Count the creative agent's 429s, and the non-passing tests that saw one.
+
+    The reference creative agent rate-limits per client IP, and behind the TLS front every
+    test process shares one IP. When the budget runs out the seller correctly answers
+    RATE_LIMITED or SERVICE_UNAVAILABLE, so the tests that hit it fail as if a scenario
+    were wrong (innet_291026_2322: ten failures across three suites, one cause). Naming
+    the 429s here lets a reader see an environment limit before chasing ten scenarios.
+    """
+    print("\nCREATIVE AGENT RATE LIMITS (an environment limit, not a scenario result)", file=out)
+    proxy = sum(
+        len(_AGENT_429_IN_PROXY_LOG.findall(log.read_text(errors="replace")))
+        for log in sorted((run_dir / "containers").glob("*tls-proxy*.log"))
+    )
+    hit: list[tuple[str, str, str]] = []
+    for report_path in sorted(run_dir.glob("*.json")):
+        if report_path.name == IDENTITY_FILE:
+            continue
+        for test in json.loads(report_path.read_text()).get("tests", []):
+            if test.get("outcome") == "passed":
+                continue
+            captured = " ".join(
+                str(test.get(phase, {}).get(stream, ""))
+                for phase in ("setup", "call", "teardown")
+                for stream in ("stdout", "stderr", "log")
+            )
+            if _AGENT_429_IN_OUTPUT.search(captured):
+                hit.append((report_path.stem, test["outcome"], test["nodeid"]))
+    if not proxy and not hit:
+        print("  none recorded", file=out)
+        return
+    print(f"  429s in the TLS front's access log: {proxy}", file=out)
+    print(f"  non-passing tests whose captured output carries one: {len(hit)}", file=out)
+    for suite, outcome, nodeid in hit[:limit]:
+        print(f"    {outcome:8} {suite}::{nodeid}", file=out)
+    if len(hit) > limit:
+        print(f"    ... {len(hit) - limit} more", file=out)
+
+
 def storyboard_section(summaries: dict[str, dict], out) -> None:
     print("\nSTORYBOARD (runner summaries)", file=out)
     if not summaries:
@@ -373,6 +418,7 @@ def report(
     print(f"  tree {describe(read(run_dir))}", file=out)
     suite_table(run, out)
     skips_section(run, out)
+    rate_limit_section(run_dir, limit, out)
     storyboard_section(run_sb, out)
     groups = failure_groups(run, run_sb)
     groups_section(groups, limit, out)

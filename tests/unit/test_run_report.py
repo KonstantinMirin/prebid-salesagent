@@ -371,3 +371,39 @@ def test_the_run_states_its_own_tree_even_with_no_baseline(tmp_path: pathlib.Pat
 
     anonymous = _write_run(tmp_path / "anon", {"unit": {"t.py::one": ("passed", "")}}, commit=None)
     assert "IDENTITY UNKNOWN" in _render(anonymous)
+
+
+def test_creative_agent_429s_are_counted_and_the_tests_that_saw_one_are_named(tmp_path) -> None:
+    """A rate-limited agent must read as an environment limit, not as scenario failures."""
+    limited = '"POST https://creative-agent.adcp.test:8443/api/creative-agent/mcp "HTTP/1.1 429 Too Many Requests"'
+    served = '"POST https://creative-agent.adcp.test:8443/api/creative-agent/mcp "HTTP/1.1 200 OK"'
+    run = tmp_path / "run"
+    _write_run(run, {})
+    (run / "integration.json").write_text(
+        json.dumps(
+            {
+                "tests": [
+                    {"nodeid": "t.py::test_limited", "outcome": "failed", "call": {"stderr": limited}},
+                    {"nodeid": "t.py::test_unrelated", "outcome": "failed", "call": {"stderr": served}},
+                    {"nodeid": "t.py::test_green", "outcome": "passed", "call": {"stderr": limited}},
+                ]
+            }
+        )
+    )
+    (run / "containers").mkdir()
+    (run / "containers" / "sa-1-tls-proxy-1.log").write_text(
+        '1.2.3.4 - - [x] "POST /api/creative-agent/mcp HTTP/1.1" 429 108 "-"\n'
+        '1.2.3.4 - - [x] "POST /api/creative-agent/mcp HTTP/1.1" 200 512 "-"\n'
+    )
+    out = io.StringIO()
+    report(run, {}, limit=5, out=out)
+    section = out.getvalue().split("CREATIVE AGENT RATE LIMITS", 1)[1].split("STORYBOARD", 1)[0]
+
+    assert "access log: 1" in section, section
+    assert "carries one: 1" in section and "integration::t.py::test_limited" in section, section
+    assert "test_unrelated" not in section and "test_green" not in section, section
+
+    quiet = _write_run(tmp_path / "quiet", {"unit": {"t.py::test_a": ("failed", "boom")}})
+    out = io.StringIO()
+    report(quiet, {}, limit=5, out=out)
+    assert "none recorded" in out.getvalue().split("CREATIVE AGENT RATE LIMITS", 1)[1].split("STORYBOARD", 1)[0]
