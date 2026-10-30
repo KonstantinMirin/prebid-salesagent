@@ -1145,7 +1145,7 @@ Feature: BR-UC-018 List Creatives
 
   @T-UC-018-format-kinds-filter-matches-the-projected-kind @schema-v3.2 @list-filter @format-kind
   Scenario: A creative synced by a legacy format_id is returned by a format_kinds filter naming the kind that reference projects to
-    Given the buyer synced a creative on legacy format_id "display_300x250" and was refused a creative on "audio_30s", which no registry pattern projects
+    Given the buyer synced a creative on legacy format_id "display_300x250" and was refused a creative on "audio_60s", which no registry pattern projects
     When the Buyer Agent sends list_creatives with filters.format_kinds ["image"]
     Then the response is compliant with the list_creatives spec
     And the creatives array should contain exactly the creative synced on "display_300x250"
@@ -1176,8 +1176,13 @@ Feature: BR-UC-018 List Creatives
     # no kind filter can return it. That is strictly more than the old pair said. It names
     # the refusal AND the absence, and a seller that quietly stored kind=NULL again would
     # fail the first half rather than passing the second by accident.
-    # `audio_30s` is still the reference, and still a REAL one: it is in the registry the
-    # A2A path validates against, and no registry pattern projects it.
+    # The refused reference is `audio_60s` at the reference agent, which passes no step of
+    # the registry's resolution order: the reference agent does not serve it (so there is no
+    # declaration whose `canonical` step 2 could read, nor a shape for step 4) and the
+    # registry's only audio glob is `audio_15s`. It used to be `audio_30s`, which stopped
+    # being unprojectable when the reference agent at the pinned release began serving it
+    # with `canonical: {kind: audio_hosted}` -- step 2 now projects it, and the write accepts.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-filters.json pointer=/properties/format_kinds property=format_kinds
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/creative/list-creatives-response.json pointer=/properties/creatives/items property=format_kind
 

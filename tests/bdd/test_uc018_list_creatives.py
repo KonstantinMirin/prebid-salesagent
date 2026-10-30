@@ -119,12 +119,10 @@ from tests.helpers.pinned_schema import validator_for
 # the A2A path round-trips format_id through a string and re-validates it against
 # known formats, so an unregistered id would be rejected on that transport.
 #
-# The audio id is ``audio_15s`` and not ``audio_30s``, which is the only audio id the
-# registry's v1 -> v2 mapping carries -- measured against the pinned
-# registries/v1-canonical-mapping.json, whose 38 globs are display_*, video_* and
-# ``audio_15s`` alone. ``audio_30s`` projects to no canonical kind and the write gate
-# refuses it, so seeding the row raised. What this precondition needs is three DIFFERENT
-# kinds (image / video_hosted / audio_hosted), which the duration does not change.
+# The audio id is ``audio_15s``, the only audio id the pinned
+# registries/v1-canonical-mapping.json names by glob, so it projects with or without the
+# agent's catalogue. What this precondition needs is three DIFFERENT kinds
+# (image / video_hosted / audio_hosted), which the duration does not change.
 _SYNCED_KINDS = ("image", "video_hosted", "audio_hosted")
 
 # Bind the UC-018 feature. Whole-feature binding via scenarios() is the repo convention
@@ -1970,8 +1968,8 @@ def given_creatives_on_legacy_ids(ctx: dict, projecting: str, unprojectable: str
     unrepresentable now — ``creatives.format_kind`` is NOT NULL and
     ``creative_identity_of`` refuses a reference with no canonical projection — so the
     assertion is on the REFUSAL, which is what fails closed today. The partition is still
-    asserted BOTH WAYS before the filter runs, so a registry change that started
-    projecting ``audio_30s`` (or stopped projecting ``display_300x250``) reddens this step
+    asserted BOTH WAYS before the filter runs, so a registry or catalogue change that started
+    projecting the refused id (or stopped projecting ``display_300x250``) reddens this step
     instead of making the scenario pass vacuously.
 
     ``AdCPCapabilityNotSupportedError`` and not a bare ``Exception``: the code the gate
