@@ -99,6 +99,18 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | fixed_300x250        | option_plus_equivalent_legacy_image |
       | two_image_options    | both_option_refs                    |
       | any_audio            | legacy_audio_standard_30s           |
+      | house_ref_300x250    | legacy_house_ref_only               |
+
+    # legacy_house_ref_only is the ONE row a package's legacy reference resolves through the
+    # seller's own v1_format_ref and nothing else. registries/v1-canonical-mapping.json (3.2.7)
+    # "Resolution order", step 1: the "Authoritative v2->v1 link" -- a declaration's
+    # v1_format_ref naming the id. The id is a house slug: no glob names it, it encodes no size
+    # for the SDK's upgrade, and no creative agent serves it, so steps 2 to 4 have nothing to
+    # read. A seller that skips step 1 finds no projection and no kind and refuses it
+    # UNSUPPORTED_FEATURE (package-request.json: "a legacy format_id that cannot be normalized
+    # through the canonical mapping path MUST be rejected"); every other legacy row here also
+    # resolves through the registry, so none of them could tell.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
 
     # legacy_audio_standard_30s is the ONE row a package's legacy reference resolves through
     # the creative agent's own declaration and nothing else. registries/v1-canonical-mapping.json
@@ -1362,14 +1374,22 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     When the Buyer Agent syncs it into the library
     Then the creative is stored carrying canonical kind "html5"
 
-  # THE ORDER BETWEEN STEPS 3 AND 4 has no row here. It differs only for a size-encoded id
-  # at the STANDARD agent's URL whose served declaration carries no canonical: the SDK's
-  # upgrade_legacy_format_id puts it under the display_image glob, and only that agent's
-  # namespace is upgraded. set_served_catalogue re-homes every format at the tenant's peer,
-  # where the raw slug matches no literal glob and the structural `url` entry answers
-  # display_tag under either order; the capture annotates every image format, so step 2
-  # answers first. Naming the standard agent on e2e_rest dials the pinned reference agent
-  # (see host_reference_format). tests/unit/test_format_resolver.py grades it instead.
+  # THE ORDER BETWEEN STEPS 3 AND 4. The publisher serves `video_30s` with a single `url`
+  # slot and no canonical. The registry's literal glob maps that id to video_hosted at
+  # duration_ms_exact 30000 (step 3), and its structural `url` entry maps the slot shape to
+  # display_tag (step 4). The literal glob carries no agent_url, so it matches the id at the
+  # tenant's peer as it would at the standard agent. Step 3 comes first, so the stored kind is
+  # video_hosted; a seller running the structural match first stores display_tag and reddens
+  # the row. The pin leaves the agent a glob applies to unstated; the SDK applies a literal
+  # glob at any agent, and this seller keeps that.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json pointer=/description
+  @T-UC-FORMAT-SATISFACTION-upsert-glob-outranks-structural @creative_library_upsert @requires_db
+  Scenario: a registry glob naming a format's id outranks the structural match on its slots
+    Given a packaged product declaring only the deprecated format_ids
+    And the seller's creative agent serves "video_30s" with assets "url" declaring no canonical kind
+    And the buyer syncs a creative identified by that served format
+    When the Buyer Agent syncs it into the library
+    Then the creative is stored carrying canonical kind "video_hosted"
 
   @T-UC-FORMAT-SATISFACTION-upsert-projectable @creative_library_upsert @requires_db
   Scenario: a creative whose format does resolve is stored with its canonical kind
@@ -1384,6 +1404,82 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # write gate: the kind actually reaches the column, which is the thing a NOT NULL
     # constraint alone would not show (a seller could satisfy NOT NULL by writing a wrong
     # kind, which is what the fire-probe for this change perturbs).
+
+  # THE AGENT'S CATALOGUE IS NOT THE SOURCE OF TRUTH. docs/creative/template-format-ids.mdx
+  # (3.2.7) § Compatibility: "Normalize them to canonical declarations immediately ... Do not
+  # ... treat a deprecated list_creative_formats response as a source of truth". The standard
+  # creative agent's catalogue does not list display_468x60_image, and the canonical mapping
+  # registry -- "authoritative for v1 -> v2 projection" -- upgrades it to display_image
+  # 468x60, kind image. So the creative is a creative in a real format and is stored with that
+  # kind; a seller asking the catalogue refuses it REFERENCE_NOT_FOUND on every row.
+  #
+  # THE SPELLINGS grade core/format-id.json's agent_url MUST ("canonicalize agent_url per the
+  # AdCP URL canonicalization rules before treating two formats as the same"): the registry's
+  # upgrade applies only in the standard agent's namespace, and docs/reference/
+  # url-canonicalization.mdx (3.2.7) makes the trailing root-label dot (step 2) and the
+  # removable dot segment (step 5) the same agent. The upper-cased host is the control: the
+  # SDK's own partial comparison already equates it, so it separates the catalogue rule from
+  # the canonicalization rule.
+  #
+  # Which agent's ids the registry projects is a SELLER CHOICE the pin leaves open: the
+  # registry's globs carry no agent_url, and this seller projects them only for references
+  # naming the standard creative agent, by origin (the owner's ruling: an agent's identity is
+  # its origin, and legacy v1 ids map to a kind only at the reference agent's origin). The
+  # mounted-path row grades that choice: the standard agent served at /mcp is the same origin,
+  # and a seller that recognized the agent by origin but handed the SDK's size upgrade the
+  # full URL (whose comparison keeps the path) found no projection and refused it.
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/template-format-ids.mdx
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json pointer=/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json pointer=/properties/agent_url/description
+  # @source repo=adcp ref=v3.2.7 path=docs/reference/url-canonicalization.mdx
+  @T-UC-FORMAT-SATISFACTION-upsert-registry-projects-unlisted @creative_library_upsert @requires_db
+  Scenario Outline: a legacy id the creative agent does not list is stored with the kind the mapping registry gives it - <variant>
+    Given a packaged product declaring only the deprecated format_ids
+    And the buyer syncs a creative identified by format_id "display_468x60_image" at the standard creative agent spelled with <variant>
+    When the Buyer Agent syncs it into the library
+    Then the creative is stored carrying canonical kind "image"
+
+    Examples:
+      | variant                   |
+      | an upper-cased host       |
+      | a trailing root-label dot |
+      | a removable dot segment   |
+      | a mounted path            |
+
+  # THE SAME RULE ON THE CREATE PATH. create_media_buy re-checks every library creative a
+  # package names before the ad server is called, and asked the agent's deprecated catalogue
+  # whether the creative's legacy id is a format. The library creative here is on
+  # display_468x60_image at the standard creative agent: the catalogue does not list it and
+  # the canonical mapping registry projects it to an image at 468x60 (template-format-ids.mdx
+  # § Compatibility: "Do not ... treat a deprecated list_creative_formats response as a source
+  # of truth"). The product sells exactly that id, so nothing but the catalogue question can
+  # refuse the buy; a seller that asks it refuses VALIDATION_ERROR with "unknown format".
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/template-format-ids.mdx
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json pointer=/description
+  @T-UC-FORMAT-SATISFACTION-create-registry-projects-unlisted @format_satisfaction @requires_db
+  Scenario: create_media_buy accepts a library creative on a legacy id the creative agent does not list
+    Given the seller publishes only the deprecated format "display_468x60_image" at the standard creative agent
+    And the buyer assigns a stored creative identified by format_id "display_468x60_image" sized 468x60 at the standard creative agent
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+  # A FORMAT IS ITS AGENT'S. core/format-id.json identifies a format by its declaring agent
+  # and its id, and requires canonicalizing agent_url before two references are treated as the
+  # same. The seller's creative agent lists a format under ANOTHER agent's URL, and the buyer
+  # names that id at the seller's agent: no format the seller's agent publishes is named, so
+  # the reference does not resolve -- REFERENCE_NOT_FOUND, enums/error-code.json's "referenced
+  # identifier ... that does not exist" -- and nothing is stored. A seller that matched the
+  # agent's catalogue on the id alone took the entry as the named format and refused the
+  # creative UNSUPPORTED_FEATURE for a projection it should never have attempted.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json pointer=/properties/agent_url/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/REFERENCE_NOT_FOUND
+  @T-UC-FORMAT-SATISFACTION-upsert-relisted-format @creative_library_upsert @requires_db
+  Scenario: a format the seller's creative agent lists under another agent's URL is not that agent's format
+    Given a packaged product declaring only the deprecated format_ids
+    And the seller's creative agent lists "publisher_relisted_banner" with assets "image" under another agent's URL
+    And the buyer syncs a creative naming that format at the seller's creative agent
+    When the Buyer Agent syncs it into the library
+    Then the creative is reported failed with REFERENCE_NOT_FOUND and nothing is stored
 
     # The OTHER half of the asymmetry, and the control for the row above: same tool, same
     # lenient mode, same "this product will not take this creative" condition -- and the
@@ -1528,6 +1624,26 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # "v2 → v1 projection MUST rely on v1_format_ref on the v2 ProductFormatDeclaration —
     # sellers assert the v1 pairing explicitly. SDKs MUST NOT synthesize a v1 format_id
     # from the registry by inverting structural matches."
+
+  # THE RESOLUTION ORDER, which a single-route row cannot show. registries/v1-canonical-mapping.json
+  # (3.2.7) "Resolution order" is normative and step 1 is "Highest priority": "if any v2
+  # ProductFormatDeclaration on the same product carries v1_format_ref pointing at this v1
+  # format_id, use that v2 declaration". Step 3 is the registry glob. The product publishes two
+  # 300x250 images, the first asserting a house id and the second asserting display_300x250_image.
+  # The package selects display_300x250_image. Step 1 selects the second declaration alone. The
+  # registry's projection (an image at 300x250) narrows to BOTH, so a seller that skipped step 1
+  # or ran the projection first selects both, records the first of the selection, and
+  # snapshots the house option. The Then reads the one snapshot on the wire and in the row, so
+  # either error fails it.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json pointer=/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/formats_to_provide
+  @T-UC-FORMAT-SATISFACTION-legacy-order-step-1-first @format_satisfaction @requires_db
+  Scenario: a legacy selector a declaration's v1_format_ref names selects that declaration, not every one its projection narrows
+    Given the seller declares a canonical format option "house_mrec_then_asserted_mrec"
+    And the buyer's package selects "legacy_display_300x250_image"
+    When the Buyer Agent sends the create_media_buy request
+    Then the package snapshots the "satisfaction_image_mrec" declaration fixed at 300x250
+    And the stored package snapshot names the same declaration
 
   @T-UC-FORMAT-SATISFACTION-snapshot-no-legacy-ref @format_satisfaction @requires_db
   Scenario: a declaration asserting no legacy reference projects to no deprecated array
@@ -1897,6 +2013,28 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     And the buyer's package selects "legacy_display_300x250"
     When the Buyer Agent sends the create_media_buy request
     Then the buyer is refused UNSUPPORTED_FEATURE naming the "format_ids" selector and the 300x250 it accepts
+
+  # THE BUYER'S SIDE OF THE SAME RULE. The two outlines above respell the agent on the
+  # PRODUCT's entry; this one respells it on the package selector. display_300x250_image
+  # reaches the fixed_300x250 declaration only through the registry's upgrade, which applies
+  # in the standard agent's namespace alone, so a seller that recognized the agent by a partial
+  # canonicalization skipped the upgrade on the root-label dot and dot-segment rows, found no
+  # projected size, and refused the package (core/format-id.json agent_url MUST;
+  # docs/reference/url-canonicalization.mdx steps 2 and 5).
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json pointer=/properties/agent_url/description
+  # @source repo=adcp ref=v3.2.7 path=docs/reference/url-canonicalization.mdx
+  @T-UC-FORMAT-SATISFACTION-respelled-selector-agent @format_satisfaction @requires_db
+  Scenario Outline: a legacy selector naming the creative agent in another spelling is normalized and accepted - <variant>
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the buyer's package selects format_id "display_300x250_image" at the creative agent's url with <variant>
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+    Examples:
+      | variant                   |
+      | an upper-cased host       |
+      | a trailing root-label dot |
+      | a removable dot segment   |
 
   # ── MANIFEST IDENTITY: which arm a creative names, and what the seller does with it ───
   #

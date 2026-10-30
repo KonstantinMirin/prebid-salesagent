@@ -32,10 +32,11 @@ from src.core.format_resolver import (
     declaration_platform_extensions,
     format_declaration_divergence,
     platform_extension_collisions,
-    product_format_identities,
     product_format_kinds,
     product_format_option_identities,
+    seller_format_catalogue,
 )
+from src.core.format_satisfaction import accepts_legacy_reference
 from src.core.helpers import enum_value
 from src.core.helpers.channel_helpers import effective_channel_names
 from src.core.resolved_identity import PublicIdentity
@@ -46,7 +47,6 @@ from src.core.schemas import (
     GetProductsResponse,
     LibraryErrorSource,
     Product,  # Extends library Product
-    format_id_identity,
 )
 from src.core.validation_helpers import safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
@@ -541,6 +541,10 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
 
     # Apply AdCP filters if provided
     if req.filters:
+        # The served catalogue a legacy reference is projected against, read once and only
+        # when the deprecated format_ids filter asks: the projection's step 2 reads a served
+        # format's own canonical annotation (registries/v1-canonical-mapping.json).
+        format_catalogue = seller_format_catalogue(tenant.tenant_id) if req.filters.format_ids else []
         filtered_products = []
         for product in products:
             # Filter by delivery_type
@@ -565,20 +569,27 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
 
             # Filter by format_ids (format_types removed in the pinned SDK)
             if req.filters.format_ids:
-                # The federation identity is the (agent_url, id) PAIR, canonicalized.
-                # core/format-id.json makes that a MUST of anyone comparing two format-id
-                # values, and core/product-filters.json binds the MUST to this filter: its
-                # `format_ids.items` is a $ref to that file, so each item is a reference
-                # object and not a bare slug. This compared BARE IDS, which matches a
-                # reference to ANOTHER agent's format against a local product that merely
-                # shares the slug -- a false positive, and the worse direction, because the
-                # buyer proceeds to buy inventory for a format this seller does not host.
-                # `format_id_identity` is the single canonical form, and
-                # `product_format_identities` is its reader for the stored column (which
-                # holds documents, and drops an unusable one with a warning).
-                # The sibling filter in creative_formats.py compares the same two sets.
-                requested_identities = {format_id_identity(fmt_id) for fmt_id in req.filters.format_ids}
-                if not (product_format_identities(product.format_ids) & requested_identities):
+                # The deprecated filter names legacy references, and a legacy reference is
+                # NORMALIZED before it is compared: docs/creative/template-format-ids.mdx
+                # § Compatibility (v3.2.7), "Normalize them to canonical declarations
+                # immediately and do all matching on the canonical shape", and
+                # core/product-format-declaration.json, "do not exact-match raw
+                # (agent_url, id) pairs once a format_id has been projected". So a product
+                # matches when it would accept a package naming the reference
+                # (`accepts_legacy_reference`), which is the create path's own answer: a
+                # filter naming display_300x250 selects a product declaring
+                # display_300x250_image, or declaring only an image fixed at 300x250. The raw
+                # pair intersection this replaced answered both with "no match".
+                #
+                # The agent still takes part in the identity, canonicalized
+                # (core/format-id.json makes that a MUST): a reference to ANOTHER agent's
+                # format never selects a product declaring the same slug under this one.
+                if not any(
+                    accepts_legacy_reference(
+                        reference, product.format_options, product.format_ids, catalogue=format_catalogue
+                    )
+                    for reference in req.filters.format_ids
+                ):
                     continue
 
             # Filter by format_kinds -- the CANONICAL half of the question the format_ids

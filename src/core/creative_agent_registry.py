@@ -53,7 +53,7 @@ from src.core.security.outbound_http import (
     is_counterparty,
     refusal_field,
 )
-from src.core.signing.canonical import origin_of
+from src.core.signing.canonical import TargetUriMalformedError, origin_of
 from src.core.utils.operator_mcp import ProbeResult, call_operator_mcp_tool, probe_failure
 
 logger = logging.getLogger(__name__)
@@ -159,14 +159,15 @@ def _get_reference_formats() -> list[Format]:
 PUBLIC_DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 
-def _agent_origin(agent_url: str) -> str | None:
+def agent_origin(agent_url: str) -> str | None:
     """The origin of *agent_url* after the spec's canonicalization: a creative agent's identity.
 
     The path is not part of an agent's identity, so ``https://x.org`` and
     ``https://x.org/api/creative-agent`` name one agent. The URL is canonicalized first
     (``canonical_agent_url``: scheme and host case, default port, userinfo), then reduced
-    to ``scheme://host[:port]``. Only operator-agent recognition
-    and the connection reroute compare this; a format reference's own identity
+    to ``scheme://host[:port]``. Operator-agent recognition, the connection reroute and
+    reference-agent recognition (``format_resolver.names_reference_agent``) compare this;
+    a format reference's own identity
     (``format_id_identity``, the cache key) keeps the canonical URL with its path.
     """
     return origin_of(canonical_agent_url(agent_url))
@@ -174,7 +175,7 @@ def _agent_origin(agent_url: str) -> str | None:
 
 def _operator_agent_origin() -> str | None:
     """The identity of the agent THIS DEPLOYMENT stands behind: CREATIVE_AGENT_ORIGIN, else the public agent."""
-    return _agent_origin(get_settings().integrations.creative_agent_origin or PUBLIC_DEFAULT_AGENT_URL)
+    return agent_origin(get_settings().integrations.creative_agent_origin or PUBLIC_DEFAULT_AGENT_URL)
 
 
 def is_operator_agent(agent_url: str) -> bool:
@@ -194,7 +195,7 @@ def is_operator_agent(agent_url: str) -> bool:
     CREATIVE_AGENT_URL is not consulted here: it is the endpoint the seller dials, not
     an identity a reference can name.
     """
-    return _agent_origin(agent_url) == _operator_agent_origin()
+    return agent_origin(agent_url) == _operator_agent_origin()
 
 
 def names_listed_agent(agent_url: str, agent_urls: Collection[str]) -> bool:
@@ -207,6 +208,21 @@ def names_listed_agent(agent_url: str, agent_urls: Collection[str]) -> bool:
     are ``<origin>/api/creative-agent``). Every other agent keeps the exact comparison.
     """
     return agent_url in agent_urls or (is_operator_agent(agent_url) and any(map(is_operator_agent, agent_urls)))
+
+
+def _lists_as(fmt: Format, agent_url: str, format_id: str) -> bool:
+    """Whether catalogue entry *fmt* is the format *format_id* of the agent at canonical *agent_url*.
+
+    An entry whose own ``agent_url`` the canonicalization refuses names no agent, so it is
+    not the one asked for.
+    """
+    if fmt.format_id.id != format_id:
+        return False
+    try:
+        declared = canonical_agent_url(fmt.format_id.agent_url)
+    except TargetUriMalformedError:
+        return False
+    return names_listed_agent(agent_url, (declared,))
 
 
 def _connection_agent_url(agent_url: str) -> str:
@@ -962,17 +978,17 @@ class CreativeAgentRegistry:
             (``media_buy_create.py``) has one in scope; wiring it is a follow-up,
             not a downgrade introduced here.
         """
-        # Find agent
         agent = CreativeAgent(agent_url=agent_url, name="Unknown", enabled=True)
         formats = await self.get_formats_for_agent(agent, provenance=provenance)
-
-        # Find matching format
-        for fmt in formats:
-            # fmt.format_id is a FormatId object with .id attribute, format_id parameter is a string
-            if fmt.format_id.id == format_id:
-                return fmt
-
-        return None
+        # The (agent_url, id) PAIR, not the id: core/format-id.json identifies a format by its
+        # declaring agent and its id, and its agent_url description makes canonicalizing before
+        # treating two references as the same a MUST (v3.2.7). Matching the id alone accepted
+        # an entry the dialled agent lists under ANOTHER agent's URL as this agent's format
+        # (salesagent-ol033.20.23). The agent half is ``names_listed_agent``'s, the rule the
+        # registration check applies: the operator agent by origin, every other one by its
+        # canonical URL.
+        requested = canonical_agent_url(agent_url)
+        return next((fmt for fmt in formats if _lists_as(fmt, requested, format_id)), None)
 
     async def preview_creative(
         self,

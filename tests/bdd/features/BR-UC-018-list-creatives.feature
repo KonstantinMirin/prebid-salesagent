@@ -1048,6 +1048,47 @@ Feature: BR-UC-018 List Creatives
     # genuinely different agent that no canonicalization makes equal and must not.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json property=agent_url
 
+  @T-UC-018-format-id-filter-matches-the-canonical-shape @schema-v3.2 @list-filter @format-id-object
+  Scenario Outline: A format_id filter returns the creative whose legacy reference normalizes to the filtered one - <filter>
+    Given the buyer's library holds creatives on legacy format_ids "<matching>" and "<other>"
+    When the Buyer Agent sends list_creatives with filters.format_ids naming "<filter>" at the standard creative agent
+    Then the response is compliant with the list_creatives spec
+    And the creatives array should contain exactly the creative synced on "<matching>"
+
+    Examples:
+      | filter          | matching              | other                |
+      | display_300x250 | display_300x250_image | display_728x90_image |
+      | video_30s       | video_pre_roll_30s    | video_15s            |
+
+    # docs/creative/template-format-ids.mdx (3.2.7) § Compatibility: legacy ids are normalized
+    # "to canonical declarations immediately and do all matching on the canonical shape", and
+    # canonical-formats.mdx § Format matching vs product satisfaction: a legacy format_id
+    # "resolves through ... the canonical mapping registry to a canonical declaration ... After
+    # that projection, implementations compare the canonical shape and parameters, not the raw
+    # (agent_url, id) pair". No stored creative spells the filter's id, so a filter comparing
+    # the raw key returns neither creative and fails the exact set; the other creative is the
+    # same canonical kind at other parameters, so a filter comparing the kind alone returns
+    # both and fails it too.
+    #
+    #   * display_300x250: the SDK's size upgrade projects it and display_300x250_image to an
+    #     image at 300x250, and display_728x90_image to an image at 728x90.
+    #   * video_30s: the SDK upgrades none of the three ids. Only the registry's projection
+    #     states their durations (video_hosted at duration_ms_exact 30000, 30000 and 15000), so
+    #     a filter reading the SDK's equivalence, which compares ids after the size upgrade,
+    #     returns nothing.
+    #
+    # The relation is EQUIVALENCE, which is the seller's choice for this filter: the pin's
+    # creative-filters.json says only "Filter legacy named-format creatives", and a creative
+    # is a format, not a product accepting one. Equivalence leaves a parameter one side does
+    # not state open, so a filter naming the display_image template returns every display
+    # image creative. Only the reference agent's ids are projected through the registry, whose
+    # namespace the registry is written in; another agent's id is compared by its canonical
+    # (agent_url, id) pair and the parameters it states.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/template-format-ids.mdx
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-filters.json pointer=/properties/format_ids
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json
+
   @T-UC-018-filter-by-format-kinds @schema-v3.2 @list-filter @format-kind
   Scenario Outline: List creatives filtered by filters.format_kinds "<wanted>" returns only the creatives of that canonical kind
     Given the buyer synced creatives on canonical format_kinds "video_hosted" and "image"

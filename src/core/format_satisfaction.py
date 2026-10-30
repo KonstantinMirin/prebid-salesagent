@@ -1531,11 +1531,11 @@ def _legacy_route(
     product resolved to the 300x250 declaration and was accepted (salesagent-t0uoo).
 
     WHEN THE REFERENCE NORMALIZES TO A KIND AND NOTHING ELSE, the kind route grades it.
-    The two directions still do not agree on coverage -- measured, ``video_640x480`` yields
-    a kind (``video_hosted``) while ``upgrade_legacy_format_id`` of it projects no params --
-    so a reference can arrive with a kind and no projected params. Grading empty params
-    against a whole declaration would refuse it on dimensions the reference never claimed,
-    so what the normalization produced (a kind) is what is graded.
+    ``display_static`` and a bare ``display_image`` project to ``image`` with no params, so
+    what the normalization produced (a kind) is what is graded. The params are the
+    projection's (:func:`_legacy_projection`), not only the SDK's size upgrade: measured,
+    ``video_640x480`` and ``video_30s`` are not upgraded at all, yet the registry states
+    640x480 and ``duration_ms_exact=30000`` for them, and they are graded on those.
 
     The mirror case USED to be ``display_300x250_image``, on the measurement that
     ``canonical_kind_for`` raised for it while the upgrade yielded 300x250. That asymmetry
@@ -1640,36 +1640,34 @@ def declaration_narrows(format_kind: Any, params: Any, reference: LibraryFormatI
 
 
 def _legacy_projection(assertion: LibraryFormatId) -> dict[str, Any]:
-    """The canonical params a legacy reference states once the registry upgrades it.
+    """The canonical params a legacy reference states once the registry projects it.
 
-    ``display_300x250_image`` upgrades to ``display_image`` + ``width=300`` + ``height=250``;
-    a broad ``display_image`` upgrades to no params at all, the v1 baseline that states
-    nothing and is narrowed by every same-kind declaration.
+    docs/creative/canonical-formats.mdx § Format matching vs product satisfaction (v3.2.7):
+    a legacy ``format_id`` resolves "through ... the canonical mapping registry to a
+    canonical declaration ... After that projection, implementations compare the canonical
+    shape and parameters". So the params are the PROJECTION's
+    (``format_resolver.canonical_projection``), not only the SDK's size upgrade:
+    ``display_300x250_image`` states ``width=300`` + ``height=250``, ``video_30s`` and
+    ``video_pre_roll_30s`` each state ``duration_ms_exact=30000``, and a broad
+    ``display_image`` or ``display_static`` states nothing and is narrowed by every
+    same-kind declaration. Reading only the upgrade left ``video_30s`` with no params, so it
+    was graded as a bare ``video_hosted`` kind and refused by a product fixing 30 seconds.
 
-    IN THE DECLARATION'S VOCABULARY. A legacy reference carries ``duration_ms``
-    (``core/format-id.json``), one fixed duration; a canonical declaration states duration
-    only as ``duration_ms_exact`` or ``duration_ms_range`` (``canonical-formats.mdx``,
-    "``duration_ms_exact`` for a fixed required duration"). Left as ``duration_ms`` the key
-    matched no declared constraint, so a 30-second legacy reference was never compared with
-    a 15-second declaration at all. As ``duration_ms_exact`` it is graded by
-    :func:`_unsatisfied_params`, which also applies the exact-inside-range rule.
+    IN THE DECLARATION'S VOCABULARY: a reference's one fixed ``duration_ms`` is graded as
+    ``duration_ms_exact``, which :func:`_unsatisfied_params` also holds inside a declared
+    range. Empty when the registry fails closed for the reference; the route then refuses
+    it or grades the kind it has.
+
+    The id alone is projected, as a stored creative's selector carries no served
+    declaration; the KIND on the package route is projected with it
+    (:func:`selector_routes`).
     """
-    # Canonically addressed first: the SDK upgrades a size-encoded id only for the reference
-    # agent, and recognizes that agent by a comparison applying four of the eight steps of
-    # docs/reference/url-canonicalization -- so a respelling of the same agent (a root-label
-    # dot, a dot segment) skipped the upgrade and was graded as a bare kind.
-    from src.core.format_resolver import canonically_addressed
+    from src.core.format_resolver import canonical_projection
 
-    upgraded = upgrade_legacy_format_id(canonically_addressed(assertion))
-    return {
-        name: value
-        for name, value in (
-            ("width", upgraded.width),
-            ("height", upgraded.height),
-            ("duration_ms_exact", upgraded.duration_ms),
-        )
-        if value is not None
-    }
+    try:
+        return canonical_projection(assertion).params
+    except ValueError:
+        return {}
 
 
 def _graded(
@@ -3007,6 +3005,34 @@ def satisfies(
     if refused is not None:
         return refused
     return FormatSatisfaction(satisfied=True, selection=resolution.selection)
+
+
+def accepts_legacy_reference(
+    reference: LibraryFormatId,
+    declarations: Any,
+    legacy_catalog: Iterable[Any] | None,
+    *,
+    catalogue: Sequence[Format],
+) -> bool:
+    """Whether a product would accept a package naming *reference* as its only format selector.
+
+    The deprecated ``format_ids`` filter of ``get_products`` asks this of every product.
+    docs/creative/template-format-ids.mdx § Compatibility (v3.2.7): legacy ids are
+    normalized "to canonical declarations immediately and do all matching on the canonical
+    shape", so the filter is answered by the same normalization and satisfaction the package
+    route runs (:func:`selector_routes`, :func:`resolve_routes`) and never by comparing raw
+    ``(agent_url, id)`` pairs. A product that declares neither format arm imposes no
+    restriction on a package, but it does not ACCEPT any named format, so it does not
+    match a filter that names one.
+    """
+    from src.core.format_resolver import product_format_references
+
+    if not product_declarations(declarations) and not product_format_references(legacy_catalog):
+        return False
+    routes = selector_routes(
+        format_kind=None, format_option_refs=None, params=None, format_ids=[reference], catalogue=catalogue
+    )
+    return resolve_routes(routes, declarations, legacy_catalog=legacy_catalog).refused is None
 
 
 def creative_satisfies(creative: Any, contract: Any) -> FormatSatisfaction:

@@ -1985,6 +1985,41 @@ def given_creatives_on_legacy_ids(ctx: dict, projecting: str, unprojectable: str
     ctx["unprojectable_label"] = _legacy_label(unprojectable)
 
 
+@given(parsers.parse('the buyer\'s library holds creatives on legacy format_ids "{first}" and "{second}"'))
+def given_library_on_two_legacy_ids(ctx: dict, first: str, second: str) -> None:
+    """One creative per legacy reference, each at the reference creative agent.
+
+    Seeded through ``_seed_creative``, which stores the reference and its key with the same
+    production accessor the sync path writes through.
+    """
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["library"] = [
+        _Seeded(
+            _seed_creative(tenant, principal, fmt, name=_legacy_label(fmt)).creative_id,
+            _legacy_label(fmt),
+            "approved",
+            (),
+            None,
+        )
+        for fmt in (first, second)
+    ]
+
+
+@when(
+    parsers.parse(
+        'the Buyer Agent sends list_creatives with filters.format_ids naming "{format_id}" at the standard creative agent'
+    )
+)
+def when_list_creatives_format_id_at_reference_agent(ctx: dict, format_id: str) -> None:
+    """Dispatch ``filters.format_ids`` carrying the one reference the sentence names, as named."""
+    ctx["format_filter_agent_url"] = DEFAULT_CREATIVE_AGENT_URL
+    ctx["format_filter_id"] = format_id
+    _dispatch_format_ids_filter(ctx)
+
+
 @when(parsers.re(r'the Buyer Agent sends list_creatives with filters\.format_kinds \["(?P<kind>[^"]+)"\]'))
 def when_list_creatives_format_kinds(ctx: dict, kind: str) -> None:
     """Dispatch ``filters.format_kinds`` naming the one canonical kind the scenario filters on.

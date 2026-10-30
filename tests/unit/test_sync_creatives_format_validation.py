@@ -54,7 +54,17 @@ class TestSyncCreativesFormatValidation:
         return make_creative_dict(creative_id="creative_123")
 
     def test_format_validation_unknown_format(self, identity, mock_tenant, valid_creative_dict):
-        """Test that validation fails with clear error when format doesn't exist."""
+        """Test that validation fails with clear error when format doesn't exist.
+
+        The id must exist NOWHERE, not merely be absent from the agent's catalogue: a
+        reference-agent id the canonical mapping registry projects (the default
+        ``display_300x250_image``) is a real format whatever the deprecated catalogue lists
+        (template-format-ids.mdx § Compatibility), so it is accepted.
+        """
+        unknown = {
+            **valid_creative_dict,
+            "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "nonexistent_format"},
+        }
         mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
@@ -76,9 +86,7 @@ class TestSyncCreativesFormatValidation:
             mock_registry_getter.return_value = mock_registry
 
             # Execute
-            response = _sync_creatives_impl(
-                req=sync_creatives_request(creatives=[valid_creative_dict]), identity=identity
-            )
+            response = _sync_creatives_impl(req=sync_creatives_request(creatives=[unknown]), identity=identity)
 
             # Verify creative failed with appropriate error
             assert len(response.creatives) == 1
@@ -92,7 +100,7 @@ class TestSyncCreativesFormatValidation:
             # (enums/error-code.json: REFERENCE_NOT_FOUND for a referenced identifier that
             # does not exist), not VALIDATION_ERROR, which it reserves for business rules.
             assert advisory.code == "REFERENCE_NOT_FOUND"
-            assert advisory.details["format_id"] == "display_300x250_image"
+            assert advisory.details["format_id"] == "nonexistent_format"
 
     def test_format_validation_agent_unreachable(self, identity, mock_tenant, valid_creative_dict):
         """An unreachable agent fails the REQUEST transiently, not the creative.

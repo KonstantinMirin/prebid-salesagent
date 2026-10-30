@@ -341,9 +341,13 @@ class TestSyncFormatValidationTransport:
             registry_mock = env.mock["registry"].return_value
             registry_mock.get_format = AsyncMock(return_value=None)
 
+            # An id that exists NOWHERE. The default reference-agent id is one the canonical
+            # mapping registry projects, which makes it a real format whatever the agent's
+            # deprecated catalogue lists (template-format-ids.mdx § Compatibility).
+            unknown = {"agent_url": "https://creative.adcontextprotocol.org", "id": "nonexistent_format"}
             result = env.call_via(
                 transport,
-                creatives=[_creative(creative_id="c_bad_fmt", name="Bad Format")],
+                creatives=[_creative(creative_id="c_bad_fmt", name="Bad Format", format_id=unknown)],
             )
 
         assert result.is_success  # sync itself succeeds, individual creative fails

@@ -83,13 +83,18 @@ logger = logging.getLogger(__name__)
 # ``src.core.schemas.format_id_identity`` is the ONE implementation of it in
 # this codebase — including the spec-mandated canonicalization of agent_url,
 # which it delegates to the SDK. Nothing here re-implements that; these are
-# thin, named delegations so there is ONE answer to "same format?" instead of
-# one per call site. A second rule (the SDK's own ``formats_are_equivalent``,
-# which additionally legacy-upgrades ``display_300x250`` into a parameterized
-# canonical id) would answer differently for the same pair of references — so
-# equivalence is asked of ``format_id_identity`` and of nothing else.
-# Directional SUPPORT is a different question, and that one is still the SDK's
-# (see :func:`format_accepted_by`).
+# thin, named delegations so there is ONE answer to "which catalogue entry does
+# this name?" (:func:`same_format`) instead of one per call site.
+#
+# Three questions, three functions, and none answers another's:
+# * IDENTITY -- the same (agent_url, id), canonicalized: :func:`same_format`.
+#   This is the catalogue lookup key and the stored comparison key.
+# * EQUIVALENCE -- the same canonical shape once both sides are projected through
+#   the mapping registry (canonical-formats.mdx § Format matching vs product
+#   satisfaction, v3.2.7): :func:`equivalent_formats`, built on
+#   :func:`canonical_projection`. The deprecated filters answer this one.
+# * Directional SUPPORT -- whether a product accepts a request: the SDK's, via
+#   :func:`format_accepted_by`, and ``format_satisfaction``'s legacy route.
 
 
 def format_ref_id(ref: FormatRef) -> str | None:
@@ -148,10 +153,99 @@ def format_reference(ref: FormatRef) -> LibraryFormatId:
     return ref
 
 
-def _sdk_projected_kind(v1_format: Format | Mapping[str, Any]) -> str | None:
-    """The kind the SDK's v1 -> v2 projection gives *v1_format*, or ``None`` when it fails closed."""
-    projected = project_v1_format_to_declaration(v1_format).declaration
-    return None if projected is None else str(projected.format_kind)
+#: The canonical parameters a legacy reference's projection is compared on: the dimensions
+#: and the fixed duration, which are what a v1 reference itself can state
+#: (``core/format-id.json`` ``width`` / ``height`` / ``duration_ms``) and what
+#: canonical-formats.mdx § Format matching vs product satisfaction (v3.2.7) compares
+#: ("``width``, ``height``, ``duration_ms_exact``"), in the declaration's vocabulary. A
+#: projection can state more (``slots``, ``pixel_ratios``, ``asset_source`` for the
+#: reference agent's density variants); those are a declaration's manifest obligations,
+#: graded against a manifest, and are deliberately not compared between two references here.
+#:
+#: KNOWN CEILING: density. The reference agent's ``display_300x250_image_2x`` projects, id
+#: alone, to an image at 300x250 with no ``pixel_ratios`` (only its served declaration states
+#: ``[2]``), so on the deprecated ``format_ids`` filters it compares equal to the 1x id. The
+#: upgrade path is projecting with the served declaration (``spec``) at those readers and
+#: adding ``pixel_ratios`` here, with a reference's ``pixel_ratio`` read as that one ratio.
+_PROJECTED_SHAPE_PARAMS = ("width", "height", "duration_ms_exact")
+
+
+@dataclass(frozen=True, slots=True)
+class CanonicalProjection:
+    """The canonical shape a deprecated ``format_id`` projects to: its kind and stated params."""
+
+    kind: str
+    params: dict[str, Any]
+
+
+def canonical_projection(ref: FormatRef, *, spec: Format | None = None) -> CanonicalProjection:
+    """The canonical declaration a deprecated ``format_id`` projects to: kind AND params.
+
+    docs/creative/canonical-formats.mdx § Format matching vs product satisfaction (v3.2.7):
+    a legacy ``format_id`` "resolves through the explicit ``canonical`` annotation,
+    ``v1_format_ref``, or the canonical mapping registry to a canonical declaration ...
+    After that projection, implementations compare the canonical shape and parameters".
+    :func:`canonical_kind_for` documents the order; this is the same projection with the
+    parameters kept, so a reader comparing shapes and a reader asking for the kind cannot
+    project one reference two ways.
+
+    The params come from two places and both are needed, measured on the pin: the SDK's
+    size upgrade moves ``display_300x250_image``'s 300x250 onto the upgraded REFERENCE and
+    projects ``image`` with no params, while an id the glob maps without an upgrade
+    (``video_30s``, ``video_pre_roll_30s``) keeps its reference bare and states
+    ``duration_ms_exact: 30000`` on the DECLARATION. What the reference states wins over
+    what the registry derives, since the reference is what the sender said.
+
+    Raises:
+        ValueError: when no step resolves, as :func:`canonical_kind_for` does.
+    """
+    upgraded = upgraded_reference(ref)
+    declaration = spec.model_copy(update={"format_id": upgraded}) if spec is not None else {"format_id": upgraded}
+    projected = project_v1_format_to_declaration(declaration).declaration
+    if projected is None:
+        raise ValueError(
+            f"no canonical projection for legacy format_id {format_ref_id(ref)!r}: the registry's resolution order "
+            "fails closed for it"
+        )
+    derived = projected.params or {}
+    params = {name: derived[name] for name in _PROJECTED_SHAPE_PARAMS if derived.get(name) is not None}
+    return CanonicalProjection(kind=str(projected.format_kind), params={**params, **_stated_shape_params(upgraded)})
+
+
+def _stated_shape_params(reference: LibraryFormatId) -> dict[str, Any]:
+    """The comparison params *reference* states itself, in the declaration's vocabulary.
+
+    A reference's one fixed ``duration_ms`` is a declaration's ``duration_ms_exact``
+    (canonical-formats.mdx: "``duration_ms_exact`` for a fixed required duration").
+    """
+    stated = {"width": reference.width, "height": reference.height, "duration_ms_exact": reference.duration_ms}
+    return {name: value for name, value in stated.items() if value is not None}
+
+
+def registry_addressed(ref: FormatRef) -> LibraryFormatId:
+    """*ref* canonically addressed, with the reference creative agent spelled as the registry spells it.
+
+    The SDK's size upgrade (``upgrade_legacy_format_id``) recognizes the reference agent by
+    comparing the whole canonical URL, path included, so the agent mounted at ``/mcp`` was
+    not recognized and ``display_468x60_image`` there was not upgraded. An agent's identity
+    is its origin (:func:`names_reference_agent`), so a reference naming the reference agent
+    at any path is handed to the SDK at :data:`CANONICAL_CREATIVE_AGENT_URL`: recognition and
+    the upgrade then follow the one origin rule. For a comparison only, as
+    :func:`canonically_addressed` is.
+    """
+    reference = canonically_addressed(ref)
+    if names_reference_agent(reference):
+        return reference.model_copy(update={"agent_url": CANONICAL_CREATIVE_AGENT_URL})
+    return reference
+
+
+def upgraded_reference(ref: FormatRef) -> LibraryFormatId:
+    """*ref* after the SDK's registry upgrade, addressed by :func:`registry_addressed` first.
+
+    ``display_728x90_image`` at the reference agent, in any spelling of it, upgrades to
+    ``display_image`` + 728x90; another agent's id is returned as that agent stated it.
+    """
+    return upgrade_legacy_format_id(registry_addressed(ref))
 
 
 def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
@@ -196,6 +290,18 @@ def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
     of step 4, and keeps the id-only answer and the declared answer the same wherever the
     declaration adds nothing a higher step reads.
 
+    THE REFERENCE IS CANONICALLY ADDRESSED BEFORE IT IS UPGRADED, for the reason
+    :func:`format_accepted_by` gives: the SDK upgrades a size-encoded id only for the
+    reference agent, and recognizes that agent by a comparison applying four of the eight
+    steps of docs/reference/url-canonicalization. Handed the raw reference, a respelling of
+    the reference agent's URL with a trailing root-label dot or a removable dot segment was
+    not upgraded, so ``display_468x60_image`` there failed closed while the same id at the
+    canonical spelling projected to ``image`` (salesagent-ol033.20.23). The reference agent
+    at another path is the same agent too, so :func:`registry_addressed` spells it as the
+    registry does before the upgrade.
+
+    :func:`canonical_projection` is the projection itself; this is its kind.
+
     Args:
         ref: the deprecated reference, in any shape :func:`format_identity` accepts.
         spec: the fetched format declaration, when the caller already has it. Passing it
@@ -208,16 +314,7 @@ def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
         ValueError: when no step resolves. The caller decides how to refuse -- this
             module does not mint an error code for a projection it could not make.
     """
-    reference = format_reference(ref)
-    upgraded = upgrade_legacy_format_id(reference)
-    declaration = spec.model_copy(update={"format_id": upgraded}) if spec is not None else {"format_id": upgraded}
-    kind = _sdk_projected_kind(declaration)
-    if kind is None:
-        raise ValueError(
-            f"no canonical projection for legacy format_id {reference.id!r}: the registry's resolution order "
-            "fails closed for it"
-        )
-    return kind
+    return canonical_projection(ref, spec=spec).kind
 
 
 def creative_identity_of(creative: LibraryCreativeAsset, *, spec: Format | None) -> CreativeFormatIdentity:
@@ -1093,6 +1190,106 @@ def canonically_addressed(ref: FormatRef) -> LibraryFormatId:
     return reference.model_copy(update={"agent_url": canonical})
 
 
+def equivalent_formats(left: FormatRef, right: FormatRef) -> bool:
+    """Whether *left* and *right* name the same canonical format once both are normalized.
+
+    The EQUIVALENCE relation of docs/creative/canonical-formats.mdx § Format matching vs
+    product satisfaction (v3.2.7): "whether two declarations identify the same underlying
+    creative shape after normalization", so ``display_300x250`` and
+    ``display_300x250_image`` are one format although their ids differ. The satisfaction
+    relation, which is directional, is :func:`format_accepted_by`.
+
+    The spec's rule is to resolve each side "through ... the canonical mapping registry to a
+    canonical declaration" and then "compare the canonical shape and parameters, not the raw
+    ``(agent_url, id)`` pair". So each side is reduced to :func:`_comparison_shape`, and two
+    shapes are equivalent when they name the same format and no parameter BOTH state
+    differs: ``video_30s`` and ``video_pre_roll_30s`` both project to ``video_hosted`` at
+    ``duration_ms_exact`` 30000, and ``display_static`` (``image``, no size) is the same
+    shape as ``display_300x250_image`` with the size left open. The SDK's
+    ``formats_are_equivalent`` is not this relation: it upgrades only the size-encoded
+    display ids and then compares ids, so it answered "different" for all three pairs.
+
+    Equivalence is symmetric and is not satisfaction: whether a product ACCEPTS a reference
+    is :func:`format_accepted_by` and ``format_satisfaction``'s legacy route.
+    """
+    left_shape, right_shape = _comparison_shape(left), _comparison_shape(right)
+    if left_shape is None or right_shape is None or left_shape[0] != right_shape[0]:
+        return False
+    left_params, right_params = left_shape[1], right_shape[1]
+    return all(left_params[name] == right_params[name] for name in left_params.keys() & right_params.keys())
+
+
+def _comparison_shape(ref: FormatRef) -> tuple[tuple[str, object], dict[str, Any]] | None:
+    """What *ref* is compared on for equivalence: the format it names, and the params it states.
+
+    At the reference agent, in any spelling of it, the format is the canonical KIND the
+    registry projects (:func:`canonical_projection`): the owner's rule is that a legacy v1
+    id maps to a kind only at the reference agent's origin, whose namespace the registry is
+    written in. Anywhere else, or for an id the registry cannot project, the format is the
+    reference's own federation identity (``core/format-id.json``: agent_url and id,
+    canonicalized) and the params are the ones the reference states.
+
+    ``None`` for an ``agent_url`` the canonicalization refuses: it names no agent, so it is
+    equivalent to nothing.
+    """
+    if (projection := _reference_agent_projection(ref)) is not None:
+        return ("kind", projection.kind), projection.params
+    try:
+        identity = format_identity(ref)
+    except TargetUriMalformedError:
+        return None
+    return ("format", identity), _stated_shape_params(format_reference(ref))
+
+
+def names_reference_agent(ref: FormatRef) -> bool:
+    """Whether *ref* names the AdCP reference creative agent, compared by origin.
+
+    The canonical mapping registry's ``format_id_glob`` entries and the SDK's size upgrade
+    are written in that agent's id namespace, so it is the one agent whose legacy ids the
+    registry can project without the agent's own declaration. An agent's identity is its
+    origin (``creative_agent_registry.agent_origin``), so the path the reference agent is
+    mounted at does not make it another agent. A URL the canonicalization refuses names no
+    agent at all.
+    """
+    from src.core.creative_agent_registry import agent_origin
+
+    try:
+        return agent_origin(str(format_reference(ref).agent_url)) == agent_origin(CANONICAL_CREATIVE_AGENT_URL)
+    except TargetUriMalformedError:
+        return False
+
+
+def registry_projects(ref: FormatRef) -> bool:
+    """Whether the canonical mapping registry alone projects *ref* to a canonical kind.
+
+    docs/creative/template-format-ids.mdx § Compatibility (v3.2.7): "Normalize them to
+    canonical declarations immediately ... Do not ... treat a deprecated
+    ``list_creative_formats`` response as a source of truth". So whether a legacy reference
+    to the reference agent names a real format is answered by the registry
+    (registries/v1-canonical-mapping.json, "authoritative for v1 -> v2 projection"), not by
+    whether the agent's deprecated catalogue happens to list the id. ``display_468x60_image``
+    is the case: the registry upgrades it to ``display_image`` 468x60, and the reference
+    agent's catalogue does not carry it.
+
+    Only for the reference agent (:func:`names_reference_agent`): the registry's ids are in
+    its namespace, and another agent's id is that agent's own business.
+    """
+    return _reference_agent_projection(ref) is not None
+
+
+def _reference_agent_projection(ref: FormatRef) -> CanonicalProjection | None:
+    """The registry's projection of *ref* when it names the reference agent, else None.
+
+    None too when the registry fails closed for the id.
+    """
+    if not names_reference_agent(ref):
+        return None
+    try:
+        return canonical_projection(ref)
+    except ValueError:
+        return None
+
+
 def find_format(formats: Iterable[Format], format_id: FormatRef) -> Format | None:
     """The format in *formats* that *format_id* names, or None.
 
@@ -1336,9 +1533,9 @@ def get_format(
         # MODEL) against ``format_id`` (a str), which is never equal — so the
         # one canonical resolver's fallback always fell through to the raise.
         all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant_id))
-        # The id component alone, read through ``format_ref_id``: the same
-        # component comparison ``CreativeAgentRegistry.get_format`` makes, and the
-        # only one available when this parameter is a bare ``str`` (#2093). An id
+        # The id component alone, read through ``format_ref_id``: the only
+        # comparison available when no agent_url scopes the lookup (#2093). With
+        # one, ``CreativeAgentRegistry.get_format`` matches the pair instead. An id
         # with no agent_url to namespace it is inherently ambiguous across agents;
         # first in listing order wins, which is what "search all agents" has
         # always meant here.

@@ -206,15 +206,13 @@ class CreativeRepository(SessionEffectsMixin):
         if creative_ids:
             stmt = stmt.where(Creative.creative_id.in_(creative_ids))
 
-        if format_ids:
-            # One indexed IN over the stored comparison key. A ``format_id`` is an OBJECT
-            # (core/format-id.json: agent_url + id) and comparing two of them canonicalizes
-            # agent_url first, which the schema makes a MUST -- so the column holds
-            # the ``FormatKey`` of what was stored and the filter is handed the same key built
-            # from what the buyer asked for. Both sides go through the ONE key builder
-            # (``format_id_identity``), so the comparison is exact: an agent differing only in
-            # host case, a default port, an IDN form or a trailing slash is the same agent on
-            # both sides.
+        if format_ids is not None:
+            # One indexed IN over the stored comparison key. The caller hands the keys of the
+            # stored references its filter names (``legacy_format_references``), each built by
+            # the ONE key builder (``format_id_identity``), so an agent differing only in host
+            # case, a default port, an IDN form or a trailing slash is the same agent here.
+            # ``is not None`` and not truthiness: an EMPTY list is a filter that named no stored
+            # reference, which matches nothing -- read as "no filter" it returned the library.
             stmt = stmt.where(Creative.legacy_format_key.in_(format_ids))
 
         if format_kinds:
@@ -342,6 +340,22 @@ class CreativeRepository(SessionEffectsMixin):
         for row in rows:
             grouped.setdefault(row.creative_id, []).append(row)
         return grouped
+
+    def legacy_format_references(self, principal_id: str) -> list[tuple[FormatKey, dict[str, Any]]]:
+        """Each distinct legacy reference the principal's creatives retain, with its comparison key.
+
+        The deprecated ``format_ids`` filter of ``list_creatives`` matches a creative by the
+        canonical shape its reference normalizes to, which is not a column. The caller
+        decides which of these references a filter names and hands their keys back to
+        :meth:`get_by_principal`, so the page query stays one indexed ``IN``.
+        """
+        rows = self._session.execute(
+            select(Creative.legacy_format_key, Creative.legacy_format_id)
+            .filter_by(tenant_id=self._tenant_id, principal_id=principal_id)
+            .where(Creative.legacy_format_key.isnot(None), Creative.legacy_format_id.isnot(None))
+            .distinct()
+        ).all()
+        return [(FormatKey(key), document) for key, document in rows]
 
     def list_by_principal(self, principal_id: str) -> list[Creative]:
         """Get all creatives for a principal within the tenant (no pagination)."""

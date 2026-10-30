@@ -584,7 +584,7 @@ def _validate_creatives_before_adapter_call(
     if session is None:
         raise ValueError("session is required for _validate_creatives_before_adapter_call")
 
-    from src.core.format_resolver import is_dialled_agent_url
+    from src.core.format_resolver import is_dialled_agent_url, registry_projects
 
     # Collect all creative IDs from all packages
     all_creative_ids = set()
@@ -677,8 +677,11 @@ def _validate_creatives_before_adapter_call(
             )
 
             # Fail validation if format spec not found (no skipping!) — only
-            # meaningful once we know the agent SHOULD have it (a dialled url).
-            if not format_spec:
+            # meaningful once we know the agent SHOULD have it (a dialled url). A
+            # reference the canonical mapping registry projects is a real format whether
+            # or not the agent's deprecated catalogue lists it (template-format-ids.mdx
+            # § Compatibility, v3.2.7), the rule sync_creatives applies on the way in.
+            if not format_spec and not registry_projects(assertion):
                 validation_errors.append(
                     f"Creative {creative.creative_id} has unknown format '{assertion.id}' "
                     f"from agent {assertion.agent_url}. Format must be registered with the creative agent."

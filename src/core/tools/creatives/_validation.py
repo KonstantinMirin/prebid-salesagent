@@ -199,13 +199,18 @@ def _validate_creative_input(
         # rewrap into AdCPAdapterError made a rate-limited agent look like a
         # creative problem . None = the agent genuinely
         # doesn't expose the format.
-        from src.core.format_resolver import fetch_format_spec
+        from src.core.format_resolver import fetch_format_spec, registry_projects
         from src.core.security.outbound_http import CounterpartyUrl
 
         format_spec = fetch_format_spec(
             agent_url, format_id, provenance=CounterpartyUrl(field=f"creatives[{index}].format_id.agent_url")
         )
-        if not format_spec:
+        # The agent's deprecated catalogue is not the authority on whether a legacy id names
+        # a real format: docs/creative/template-format-ids.mdx § Compatibility (v3.2.7), "Do
+        # not ... treat a deprecated list_creative_formats response as a source of truth". A
+        # reference the canonical mapping registry projects is a format, listed or not, and
+        # the write gate (``creative_identity_of``) projects it on the way in.
+        if not format_spec and not registry_projects(assertion):
             # A format_id no agent serves is a REFERENCE that does not resolve, and the
             # pinned enums/error-code.json routes exactly that to REFERENCE_NOT_FOUND
             # ("Generic fallback for a referenced identifier ... that does not exist ...
