@@ -65,17 +65,15 @@ them. ``formats.mdx``'s fifth rule is what this closes on the creative side: a s
 
 WHAT THIS MODULE DOES NOT DO, deliberately:
 
-* It does not grade a LEGACY creative's manifest. ``assets`` is keyed by the matched
-  declaration's ``params.slots[]`` on the canonical branch (creative-manifests.mdx § Basic
-  structure), while a creative naming a ``format_id`` keys its assets by that named format's
-  own asset ids, so grading them against a canonical slot list would refuse every legacy
-  creative for a vocabulary it never used. Only the reference's own parameters are graded
-  (:func:`_legacy_shortfalls`). That leaves a gap, not an exemption: creative-manifests.mdx
-  § Deprecated compatibility branch says a 3.2 implementation "may read it, normalize it to
-  a canonical declaration", which permits reading the legacy shape and does not excuse a
-  manifest the seller does read from § Validation steps 2 to 4. Grading a legacy manifest's
-  assets against its named format's asset requirements is still open, at the
-  ``TODO(#767)`` in ``src/core/tools/creatives/_validation.py``.
+* It does not grade a LEGACY creative's manifest against a PRODUCT declaration. ``assets``
+  is keyed by the matched declaration's ``params.slots[]`` on the canonical branch
+  (creative-manifests.mdx § Basic structure), while a creative naming a ``format_id`` keys
+  its assets by that named format's own asset ids, so grading them against a canonical slot
+  list would refuse every legacy creative for a vocabulary it never used. At a product, only
+  the reference's own parameters are graded (:func:`_legacy_shortfalls`). The manifest itself
+  is graded at ``sync_creatives`` against the format it names, as the agent serves it
+  (:func:`named_format_manifest_verdict`): its required assets present, each of the type the
+  format declares, by the same slot reader as a canonical declaration.
 * Required disclosures are not read here: no image, video or audio declaration param states
   one. A seller's disclosure requirement is its ``creative_policy`` (core/creative-policy.json
   ``require_disclosure_metadata``), enforced on the provenance at sync.
@@ -105,6 +103,9 @@ from adcp.canonical_formats import formats_are_equivalent, upgrade_legacy_format
 from adcp.canonical_formats.format_options import FormatKindNotInClosedSetError
 from adcp.canonical_formats.projection import project_legacy_format_id
 from adcp.types import ErrorCode
+from adcp.types.domains.core.format import (
+    BaseIndividualAsset as LibraryIndividualAsset,
+)  # no stable alias in adcp.types
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from adcp.types.domains.core.format_option_ref import FormatOptionReference as LibraryFormatOptionReference
 from adcp.types.domains.core.placement import Kind as LibraryPlacementKind
@@ -1439,8 +1440,39 @@ def kind_manifest_verdict(kind: str, assets: Any) -> FormatSatisfaction:
     Graded by the same slot reader as a selected declaration, so the two cannot disagree
     about what a slot is.
     """
-    slots = declared_slots_by_kind().get(kind, ())
-    return _manifest_verdict(kind, _manifest_slot_shortfalls(slots, manifest_document(assets)))
+    return _slots_verdict(kind, declared_slots_by_kind().get(kind, ()), assets)
+
+
+def named_format_manifest_verdict(spec: Format, assets: Any) -> FormatSatisfaction:
+    """A LEGACY manifest graded against the format its ``format_id`` names, as the agent serves it.
+
+    creative-manifests.mdx § Validation steps 2 and 3 -- "Confirm all required slots are
+    present" and "Validate each asset against its declared type" -- for the deprecated branch,
+    where the declaration is the named format's ``assets[]``. core/format.json (3.2) states
+    the keying: each asset's ``asset_id`` "must be used as the key in creative manifests",
+    and ``required`` means "Required assets must be provided for a valid creative". So each
+    individual asset is a slot keyed by its ``asset_id``, graded by the same slot reader as a
+    canonical declaration (:func:`_manifest_slot_shortfalls`).
+
+    Not graded, deliberately, and both are ceilings of a branch the pin retires on 2026-11-25:
+
+    * an asset's ``requirements``: the v1 vocabulary (``min_duration_ms``, ``codecs``,
+      ``formats``) is not the canonical params vocabulary :func:`_unsatisfied_params` reads,
+      so grading it needs a translation layer for a shape on its way out;
+    * a ``repeatable_group``: core/format.json does not say how a manifest keys the
+      repetitions of a group, so there is no key to look a group's assets up by.
+    """
+    slots = tuple(
+        {"asset_group_id": asset.asset_id, "asset_type": str(asset.asset_type), "required": asset.required}
+        for asset in spec.assets or ()
+        if isinstance(asset, LibraryIndividualAsset)
+    )
+    return _slots_verdict(spec.format_id.id, slots, assets)
+
+
+def _slots_verdict(graded_against: str, slots: Sequence[Mapping[str, Any]], assets: Any) -> FormatSatisfaction:
+    """*assets* graded against *slots* alone: required slots present, each filled slot's type."""
+    return _manifest_verdict(graded_against, _manifest_slot_shortfalls(slots, manifest_document(assets)))
 
 
 def _selecting(
