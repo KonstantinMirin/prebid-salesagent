@@ -64,7 +64,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from scripts.setup.seed_storyboard_tenant import STORYBOARD_TOKEN  # noqa: E402
+from scripts.setup.seed_storyboard_tenant import STORYBOARD_TOKEN, kit_runner_is_passthrough_only  # noqa: E402
 from scripts.setup.seed_storyboard_tenant import (  # noqa: E402
     STORYBOARD_VIRTUAL_HOST as _SEEDED_STORYBOARD_VIRTUAL_HOST,
 )
@@ -348,6 +348,10 @@ def seed() -> None:
         print(f"Storyboard tenant {tenant.tenant_id} answers to {STORYBOARD_VIRTUAL_HOST}")
         print(f"   posture: required_for={list(REQUIRED_FOR)} covers_content_digest={COVERS_CONTENT_DIGEST}")
 
+        # The runner's commercial state, recorded on BOTH principals it can resolve as --
+        # the same reason both get the account grants below: which one carries a request
+        # depends on whether it was signed, and the billing-gate kit describes the caller.
+        passthrough_only = kit_runner_is_passthrough_only()
         principals = PrincipalRepository(session, tenant.tenant_id)
         counterparty = principals.find_by_agent_url(COUNTERPARTY_AGENT_URL)
         if counterparty is None:
@@ -357,9 +361,11 @@ def seed() -> None:
                 name="Storyboard conformance runner",
                 platform_mappings={"mock": {"advertiser_id": "storyboard-conformance-runner"}},
                 agent_url=COUNTERPARTY_AGENT_URL,
+                billing_passthrough_only=passthrough_only,
             )
             print(f"   counterparty principal created at {COUNTERPARTY_AGENT_URL}")
         else:
+            counterparty.billing_passthrough_only = passthrough_only
             print(f"   counterparty principal already at {COUNTERPARTY_AGENT_URL}")
 
         _seed_webhook_storyboard_account(session, tenant.tenant_id)
