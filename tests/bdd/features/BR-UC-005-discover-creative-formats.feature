@@ -195,6 +195,35 @@ Feature: BR-UC-005 Discover Creative Formats
     # the requested id under another agent, so a seller matching on id alone returns two
     # formats and fails "only".
 
+  @T-UC-005-inv-049-2-respelled-agent @UC-005-MAIN-MCP-06 @invariant @BR-RULE-049
+  Scenario Outline: BR-RULE-049 INV-2 holds - a format_ids filter naming the declaring agent in another spelling matches - <spelling>
+    Given the registry has format "spelled-banner" with format_id id "fmt-201" declared by agent "<declared>"
+    And the registry has format "sibling-banner" with format_id id "fmt-201" declared by agent "<other>"
+    When the Buyer Agent requests formats filtered by format_id "fmt-201" declared by agent "<requested>"
+    Then the response is compliant with the list_creative_formats spec
+    And only "spelled-banner" should be returned
+
+    Examples:
+      | spelling                         | declared                          | other                               | requested                              |
+      | host case and default port       | https://formats.agent.example/api | https://formats.agent.example/other | https://FORMATS.Agent.Example:443/api  |
+      | trailing root-label dot          | https://formats.agent.example/api | https://formats.agent.example/other | https://formats.agent.example./api     |
+      | removable dot segment            | https://formats.agent.example/api | https://formats.agent.example/other | https://formats.agent.example/x/../api |
+      | percent-encoded unreserved octet | https://formats.agent.example/api | https://formats.agent.example/other | https://formats.agent.example/%61pi    |
+      | root-label dot on an IDN host    | https://xn--bcher-kva.example/api | https://xn--bcher-kva.example/other | https://xn--bcher-kva.example./api     |
+
+    # core/format-id.json (3.2.7), on agent_url: "Callers comparing two format-id values MUST
+    # canonicalize agent_url per the AdCP URL canonicalization rules before treating two
+    # formats as the same", and docs/reference/url-canonicalization.mdx: "Implementations MUST
+    # apply every step". Each row respells the declaring agent by one step -- host case and
+    # the default port (2, 4), the root-label dot (2), a dot segment (5), a percent-encoded
+    # unreserved octet (6), and the root-label dot on an IDN host's A-label, which step 2 says
+    # is removed "identically to an input U-label and its equivalent A-label". The sibling is
+    # the same id on the same host under another path, a different agent ("Canonicalization
+    # removes only dot segments, never real path segments"), so a filter that dropped the
+    # agent returns two formats and fails "only".
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json pointer=/properties/agent_url/description
+    # @source repo=adcp ref=v3.2.7 path=docs/reference/url-canonicalization.mdx
+
   @T-UC-005-inv-049-2-violated @UC-005-MAIN-MCP-06 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-2 violated - Non-matching format IDs silently excluded
     Given the registry has format "leaderboard" with format_id id "fmt-001"

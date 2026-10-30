@@ -241,6 +241,22 @@ def when_request_format_ids(ctx: dict, filter_value: str) -> None:
     _call_raw(ctx, format_ids=[{"agent_url": DEFAULT_AGENT_URL, "id": fid} for fid in parsed])
 
 
+@when(
+    parsers.re(
+        r'the Buyer Agent requests formats filtered by format_id "(?P<fmt_id>[^"]+)" '
+        r'declared by agent "(?P<agent_url>[^"]+)"'
+    )
+)
+def when_request_format_id_at_agent(ctx: dict, fmt_id: str, agent_url: str) -> None:
+    """One format_ids reference naming *agent_url* exactly as the scenario spells it.
+
+    Worded apart from ``requests formats with format_ids filter``, whose ``{filter_value}``
+    would otherwise swallow this sentence too. A plain dict, not ``FormatId``, so the SELLER
+    parses and canonicalizes the spelling rather than the test process.
+    """
+    _call_raw(ctx, format_ids=[{"agent_url": agent_url, "id": fmt_id}])
+
+
 # ── Filter: asset_types ─────────────────────────────────────────────
 
 
