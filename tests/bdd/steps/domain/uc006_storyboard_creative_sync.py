@@ -63,10 +63,8 @@ from tests.factories.creative import format_option_ref_for_scope
 from tests.factories.creative_asset import (
     build_assets,
     canonical_assets,
-    image_spec,
-    text_spec,
+    named_format_assets,
     url_spec,
-    video_spec,
 )
 from tests.factories.request import OMIT, CreativeAssetRequestFactory
 
@@ -219,23 +217,13 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
     # not carry, so production refused it with AdCPFormatNotFoundError and the entry came
     # back action="failed" with no status: 3 regressed nodeids [a2a, mcp, rest] in box run
     # innet_181026_0202. ``video_file`` is the capture's one required slot for this format.
+    # Every creative carries the assets its named format requires (``named_format_assets``):
+    # the seller holds a legacy manifest to them, so a missing one fails the entry and the
+    # scenario would grade the manifest, not the per-creative status.
     video_id = "video_standard_30s"
-    video_assets = build_assets(video_spec("video_file", url="https://example.com/video.mp4"))
-    if is_e2e(ctx):
-        native_id = "native_standard"
-        native_assets = build_assets(
-            text_spec("title", content="Discover something new"),
-            text_spec("description", content="A native placement"),
-            image_spec("main_image", url="https://example.com/native.png"),
-            text_spec("cta_text", content="Learn more"),
-            text_spec("sponsored_by", content="Acme"),
-        )
-    else:
-        native_id = "native_content"
-        native_assets = build_assets(
-            text_spec("headline", content="Discover something new"),
-            image_spec("main_image", url="https://example.com/native.png"),
-        )
+    video_assets = named_format_assets(video_id, media_url="https://example.com/video.mp4")
+    native_id = "native_standard" if is_e2e(ctx) else "native_content"
+    native_assets = named_format_assets(native_id, media_url="https://example.com/native.png")
 
     # Each format is named at the agent the env says publishes it, the display one included
     # (``_creative_format_id_entry`` asks the same question): on e2e that is the tenant's
@@ -245,7 +233,7 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
             creative_id="creative-bulk-display-001",
             name="Bulk Display Creative",
             format_id=display,
-            assets=build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
+            assets=named_format_assets(display["id"], media_url="https://example.com/banner.png"),
         ),
         CreativeAssetRequestFactory.payload(
             creative_id="creative-bulk-video-001",
@@ -322,13 +310,9 @@ def when_sync_creative_with_captured_format_id(ctx: dict) -> None:
     ``uc006_sync_creatives._format_payload``'s e2e asset set.
     """
     captured = ctx["captured_format_id"]
-    if is_e2e(ctx):
-        assets = build_assets(
-            image_spec("banner_image", url="https://example.com/banner.png"),
-            url_spec("click_url", url="https://example.com/landing"),
-        )
-    else:
-        assets = build_assets(image_spec("banner_image", url="https://example.com/banner.png"))
+    # What the captured format requires, on every transport: the seller holds a legacy
+    # manifest to its named format's required assets.
+    assets = named_format_assets(captured["id"], media_url="https://example.com/banner.png")
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-format-roundtrip-001",
         name="Format ID Roundtrip Creative",

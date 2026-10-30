@@ -35,7 +35,7 @@ from src.core.database.models import (
 from src.core.database.models import Product as DBProduct
 from src.core.schemas import CreativeStatusEnum, SyncCreativesRequest, SyncCreativesResponse
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
-from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.creative_asset import named_format_assets
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.credentials import credential_headers
 from tests.helpers.envelope_assertions import raises_adcp
@@ -87,8 +87,9 @@ def _make_creative_dict(
         # the media reference inside ``assets``. They survived only because nothing built
         # the request model on the sync path; every transport does now. Backwards
         # compatibility, where wanted, belongs in RequestCompatMiddleware -- not in the
-        # tool signature or _impl.
-        "assets": build_assets(image_spec("banner")),
+        # tool signature or _impl. The assets are the ones the named format requires: the
+        # seller holds a legacy manifest to them.
+        "assets": named_format_assets(format_id),
     }
 
 
@@ -116,15 +117,17 @@ def _seed_account_for(tenant_id: str, principal_ids: tuple[str, ...]) -> None:
 
 @pytest.fixture(autouse=True)
 def mock_format_registry():
-    """Mock creative agent format registry to avoid real HTTP calls."""
+    """Mock creative agent format registry to avoid real HTTP calls.
+
+    The display format is the capture's own declaration, not an invented one: the seller
+    holds a creative's manifest to the assets the format it names requires, so the format
+    served here has to be the one :func:`_make_creative_dict` builds its assets from.
+    """
+    from src.core.format_cache import load_reference_formats
     from tests.helpers.adcp_factories import create_test_format
 
     mock_formats = {
-        DEFAULT_FORMAT_ID: create_test_format(
-            format_id=DEFAULT_FORMAT_ID,
-            name="Display 300x250 Image",
-            type="display",
-        ),
+        DEFAULT_FORMAT_ID: next(fmt for fmt in load_reference_formats() if fmt.format_id.id == DEFAULT_FORMAT_ID),
         VIDEO_FORMAT_ID: create_test_format(
             format_id=VIDEO_FORMAT_ID,
             name="Video Instream 15s",

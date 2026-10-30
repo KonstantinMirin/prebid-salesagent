@@ -18,7 +18,7 @@ from uuid import uuid4
 from adcp.types import AccountReferenceById
 
 from src.core.schemas import SyncCreativesRequest
-from tests.factories.creative_asset import AssetSpec, assert_assets, build_assets, image_spec
+from tests.factories.creative_asset import AssetSpec, assert_assets, build_assets, image_spec, named_format_assets
 
 if TYPE_CHECKING:
     from src.core.schemas import Creative
@@ -59,7 +59,7 @@ def make_creative_dict(creative_id: str = "c1", name: str = "Test Banner") -> di
         "creative_id": creative_id,
         "name": name,
         "format_id": dict(DEFAULT_FORMAT_REFERENCE),
-        "assets": build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
+        "assets": named_format_assets(DEFAULT_FORMAT_REFERENCE["id"]),
     }
 
 
@@ -106,7 +106,7 @@ def creative_payload(**overrides: object) -> dict:
     payload.setdefault("creative_id", "c1")
     payload.setdefault("name", "Test")
     payload.setdefault("format_id", dict(DEFAULT_FORMAT_REFERENCE))
-    payload.setdefault("assets", build_assets(image_spec("banner")))
+    payload.setdefault("assets", named_format_assets(DEFAULT_FORMAT_REFERENCE["id"]))
     return payload
 
 
