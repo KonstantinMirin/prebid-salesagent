@@ -217,6 +217,134 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "params": {"width": 300, "height": 250, "image_formats": ["gif"]},
         },
     ],
+    # A 300x250 image whose OTHER slots carry their own limits (formats/canonical/_base.json
+    # ``slots[]``): a required headline of at most 25 characters and at most two of them, a
+    # body text the declaration caps at 90 characters (the flat ``body_text_max_chars``), and
+    # an optional logo capped at 50 KB -- "1 KB = 1,000 bytes" -- at 1x or 2x.
+    "slot_limited_300x250": [
+        {
+            "format_kind": "image",
+            "format_option_id": _PRODUCT_OPTION_ID,
+            "params": {
+                "width": 300,
+                "height": 250,
+                "body_text_max_chars": 90,
+                "slots": [
+                    {"asset_group_id": "image_main", "asset_type": "image", "required": True},
+                    {"asset_group_id": "headline", "asset_type": "text", "required": True, "max_chars": 25, "max": 2},
+                    {"asset_group_id": "body_text", "asset_type": "text", "required": False},
+                    {
+                        "asset_group_id": "logo",
+                        "asset_type": "image",
+                        "required": False,
+                        "max_size_kb": 50,
+                        "pixel_ratios": [1, 2],
+                    },
+                ],
+            },
+        }
+    ],
+    # A RESPONSIVE image (600 to 1200 wide) held to a 1.91:1 aspect ratio. image.json: the
+    # ratio, "When used with sizes[] or responsive ranges, narrows accepted entries to those
+    # matching the aspect ratio".
+    "responsive_1_91": [
+        {
+            "format_kind": "image",
+            "format_option_id": "satisfaction_image_landscape",
+            "params": {"min_width": 600, "max_width": 1200, "aspect_ratio": "1.91:1"},
+        }
+    ],
+    # A hosted-video option narrowing the file it takes: one codec, one container, a 10 MB
+    # cap, a bitrate ceiling of 8,000 kbps and 25 or 30 frames per second.
+    # formats/canonical/video_hosted.json's ``max_file_size_mb``: "1 MB is exactly 1,000,000
+    # bytes".
+    "mp4_h264_10mb_video": [
+        {
+            "format_kind": "video_hosted",
+            "format_option_id": "satisfaction_video_mp4",
+            "params": {
+                "video_codecs": ["h264"],
+                "containers": ["mp4"],
+                "max_file_size_mb": 10,
+                "max_bitrate_kbps": 8000,
+                "frame_rates": [25, 30],
+            },
+        }
+    ],
+    # FLAT PER-SLOT PARAMS, which formats/canonical/_base.json puts on the declaration: "flat
+    # ``headline_max_chars`` on responsive_creative". A responsive creative's ``headlines``
+    # pool limited by ``headline_max_chars`` and ``headlines_max`` (the param names the role
+    # in the singular and in the plural); a carousel's cards whose ``headline`` member
+    # ``card_headline_max_chars`` limits; an audio spot with a loudness target, a true-peak
+    # ceiling and a required square companion image capped at 100 KB; and a hosted video
+    # requiring captions, with a 300x250 companion banner. Each states its own slots where the
+    # kind's defaults would require more than the scenario sends.
+    "responsive_headlines": [
+        {
+            "format_kind": "responsive_creative",
+            "format_option_id": "satisfaction_responsive",
+            "params": {
+                "headline_max_chars": 30,
+                "headlines_max": 2,
+                "slots": [{"asset_group_id": "headlines", "asset_type": "text", "required": True, "min": 1, "max": 5}],
+            },
+        }
+    ],
+    "carousel_card_headlines": [
+        {
+            "format_kind": "image_carousel",
+            "format_option_id": "satisfaction_carousel",
+            "params": {
+                "card_headline_max_chars": 25,
+                "slots": [{"asset_group_id": "cards", "asset_type": "card", "required": True, "min": 2, "max": 10}],
+            },
+        }
+    ],
+    "audio_with_companion": [
+        {
+            "format_kind": "audio_hosted",
+            "format_option_id": "satisfaction_audio_companion",
+            "params": {
+                "loudness_lufs": -16,
+                "loudness_tolerance_db": 1,
+                "true_peak_dbfs": -2,
+                "companion_image_required": True,
+                "companion_image_aspect_ratio": "1:1",
+                "companion_image_max_file_size_kb": 100,
+            },
+        }
+    ],
+    "captioned_video_with_banner": [
+        {
+            "format_kind": "video_hosted",
+            "format_option_id": "satisfaction_video_captioned",
+            "params": {"captions": "required", "companion_banner_widths": [300], "companion_banner_heights": [250]},
+        }
+    ],
+    # A VERTICAL hosted video stating no aspect_ratio. video_hosted.json: "Vertical = 9:16",
+    # and aspect_ratio is "Inferred from orientation if omitted".
+    "vertical_video": [
+        {
+            "format_kind": "video_hosted",
+            "format_option_id": "satisfaction_video_vertical",
+            "params": {"orientation": "vertical"},
+        }
+    ],
+    # A hosted-audio spot fixed at 30 seconds, mp3 only, capped at 1 MB, sampled at 44.1 or
+    # 48 kHz, in stereo. audio_hosted.json's ``max_file_size_mb`` is in "decimal megabytes".
+    "mp3_30s_audio": [
+        {
+            "format_kind": "audio_hosted",
+            "format_option_id": "satisfaction_audio_30s",
+            "params": {
+                "duration_ms_exact": 30000,
+                "audio_codecs": ["mp3"],
+                "max_file_size_mb": 1,
+                "audio_sample_rates": [44100, 48000],
+                "audio_channels": ["stereo"],
+            },
+        }
+    ],
     # A video option fixed at 15 seconds. ``duration_ms_exact`` is the declaration's
     # spelling of one fixed duration; a legacy reference spells it ``duration_ms``.
     "fixed_15s_video": [
@@ -338,9 +466,63 @@ def _manifest(name: str) -> dict[str, Any]:
     so a refusal row and its accept row differ in the fact under test and nothing else.
     Built per call because a scenario may mutate what it was handed.
     """
-    from tests.factories.creative_asset import build_assets, image_spec, manifest_image_spec, text_spec
+    from tests.factories.creative_asset import (
+        asset_spec,
+        build_assets,
+        image_spec,
+        manifest_image_spec,
+        text_spec,
+        video_spec,
+    )
 
     mrec = manifest_image_spec("image_main")
+    # A 30-second mp4/h264 video of 8 MB at 5,000 kbps and 30 fps, and a 30-second stereo mp3
+    # of 900 KB at 44.1 kHz: what the video and audio declarations accept, each other manifest
+    # of its kind differing in one member. The frame rate is a string, as video-asset.json
+    # types it ("to preserve precision").
+    clip = video_spec(
+        "video_main",
+        duration_ms=30000,
+        video_codec="h264",
+        container_format="mp4",
+        file_size_bytes=8_000_000,
+        video_bitrate_kbps=5000,
+        frame_rate="30",
+    )
+    spot = asset_spec(
+        "audio_main",
+        "audio",
+        url="https://example.com/spot.mp3",
+        duration_ms=30000,
+        codec="mp3",
+        file_size_bytes=900_000,
+        sampling_rate_hz=44100,
+        channels="stereo",
+    )
+
+    def headlined(*specs: Any, headlines: tuple[str, ...] = ("Trail Pro boots",)) -> dict[str, Any]:
+        """The 300x250 plus *headlines* in ``headline`` (an array when several) and *specs*.
+
+        ``slot_limited_300x250`` requires the headline, so each of its manifests carries one
+        and differs from ``image_headlined`` in the one slot under test.
+        """
+        several = len(headlines) > 1
+        return build_assets(mrec, *(text_spec("headline", content=h, multiple=several) for h in headlines), *specs)
+
+    logo = image_spec("logo", width=100, height=100).with_fields(file_size_bytes=40_000)
+    mastered = spot.with_fields(loudness_lufs=-16.5, true_peak_dbfs=-2)
+    companion = image_spec("companion_image", width=250, height=250).with_fields(file_size_bytes=100_000)
+    captioned = clip.with_fields(captions_url="https://example.com/captions.vtt")
+    banner = image_spec("companion_banner", width=300, height=250)
+
+    def headline_pool(*headlines: str) -> Any:
+        """A responsive creative's ``headlines`` pool: one text asset per headline, as an array."""
+        return [text_spec("headlines", content=headline, multiple=True) for headline in headlines]
+
+    def card(headline: str) -> Any:
+        """One card-asset of a carousel's ``cards`` array: a square image and *headline*."""
+        media = {"asset_type": "image", "url": "https://example.com/card.png", "width": 1080, "height": 1080}
+        return asset_spec("cards", "card", multiple=True, media=media, headline=headline)
 
     def rendition(width: int, height: int, **fields: object) -> Any:
         """One rendition of the 300x250 in an ``image_main`` array, at *width* x *height* intrinsic."""
@@ -350,8 +532,14 @@ def _manifest(name: str) -> dict[str, Any]:
         "image_300x250": lambda: build_assets(mrec),
         "image_728x90": lambda: build_assets(manifest_image_spec("image_main", width=728, height=90)),
         "image_160x600": lambda: build_assets(manifest_image_spec("image_main", width=160, height=600)),
-        # 200 KB exactly, the cap ``fixed_300x250`` declares, and 500 KB over it.
-        "image_300x250_200kb": lambda: build_assets(mrec.with_fields(file_size_bytes=200 * 1024)),
+        # 120 KB, between the two caps ``narrowed_twice`` places. 200 KB exactly, the cap
+        # ``fixed_300x250`` declares, one byte over it, 200 binary
+        # kilobytes (204,800 bytes), and 500 binary kilobytes, over the cap however it is read.
+        # canonical-formats.mdx: "1 KB = 1,000 bytes".
+        "image_300x250_120kb": lambda: build_assets(mrec.with_fields(file_size_bytes=120_000)),
+        "image_300x250_200kb": lambda: build_assets(mrec.with_fields(file_size_bytes=200_000)),
+        "image_300x250_200_001b": lambda: build_assets(mrec.with_fields(file_size_bytes=200_001)),
+        "image_300x250_200kib": lambda: build_assets(mrec.with_fields(file_size_bytes=200 * 1024)),
         "image_300x250_500kb": lambda: build_assets(mrec.with_fields(file_size_bytes=500 * 1024)),
         # The 300x250 image silent about its file size -- the member a capped declaration needs.
         "image_300x250_unsized": lambda: build_assets(image_spec("image_main")),
@@ -386,6 +574,72 @@ def _manifest(name: str) -> dict[str, Any]:
         # The required slot holding the wrong asset type, and the media keyed by no slot.
         "image_main_as_text": lambda: build_assets(text_spec("image_main", content="Trail Pro")),
         "image_unnamed": lambda: build_assets(image_spec("banner")),
+        # SLOT LIMITS, against ``slot_limited_300x250``: each limit at its bound and one past
+        # it. A headline of 25 and 26 characters, two and three headlines, a body text of 90
+        # and 91 characters, and a logo of 50,000 and 51,000 bytes -- 51 decimal kilobytes and
+        # 49.8 binary ones -- or silent about its size, or at a density outside 1x and 2x.
+        "image_headlined": lambda: headlined(),
+        "image_headline_25_chars": lambda: headlined(headlines=("x" * 25,)),
+        "image_headline_26_chars": lambda: headlined(headlines=("x" * 26,)),
+        "image_two_headlines": lambda: headlined(headlines=("Trail Pro boots", "Built for the summit")),
+        "image_three_headlines": lambda: headlined(headlines=("Trail Pro boots", "Built for the summit", "Shop now")),
+        "image_body_text_90_chars": lambda: headlined(text_spec("body_text", content="x" * 90)),
+        "image_body_text_91_chars": lambda: headlined(text_spec("body_text", content="x" * 91)),
+        "image_logo_50kb": lambda: headlined(logo.with_fields(file_size_bytes=50_000)),
+        "image_logo_51kb": lambda: headlined(logo.with_fields(file_size_bytes=51_000)),
+        "image_logo_unsized": lambda: headlined(image_spec("logo", width=100, height=100)),
+        "image_logo_2x": lambda: headlined(logo.with_fields(pixel_ratio=2)),
+        "image_logo_3x": lambda: headlined(logo.with_fields(pixel_ratio=3)),
+        # ASPECT RATIO, against ``responsive_1_91``: 1200x628 is 1.91:1 to two places, and
+        # 1200x1200 is inside the width range at 1:1.
+        "image_1200x628": lambda: build_assets(manifest_image_spec("image_main", width=1200, height=628)),
+        "image_1200x1200": lambda: build_assets(manifest_image_spec("image_main", width=1200, height=1200)),
+        # VIDEO: the clip at another duration, codec or container, and over the 10 MB cap by
+        # 400,000 bytes -- 10.4 decimal megabytes, 9.92 binary ones.
+        "video_30s": lambda: build_assets(clip),
+        "video_15s": lambda: build_assets(clip.with_fields(duration_ms=15000)),
+        "video_90s": lambda: build_assets(clip.with_fields(duration_ms=90000)),
+        "video_30s_vp9": lambda: build_assets(clip.with_fields(video_codec="vp9")),
+        "video_30s_webm": lambda: build_assets(clip.with_fields(container_format="webm")),
+        "video_30s_10mb": lambda: build_assets(clip.with_fields(file_size_bytes=10_000_000)),
+        "video_30s_10_4mb": lambda: build_assets(clip.with_fields(file_size_bytes=10_400_000)),
+        # The clip at the bitrate ceiling and over it, and at 60 fps.
+        "video_30s_8000kbps": lambda: build_assets(clip.with_fields(video_bitrate_kbps=8000)),
+        "video_30s_12000kbps": lambda: build_assets(clip.with_fields(video_bitrate_kbps=12000)),
+        "video_30s_60fps": lambda: build_assets(clip.with_fields(frame_rate="60")),
+        # The clip at 1080x1920, 9:16, beside its 640x360 (16:9) self.
+        "video_30s_1080x1920": lambda: build_assets(clip.with_fields(width=1080, height=1920)),
+        # FLAT PER-SLOT PARAMS. A responsive headline at 30 and 31 characters, two and three
+        # headlines; a carousel whose first card's headline is 25 and 26 characters; the
+        # spot at -16.5 LUFS and -2 dBFS with a 250x250 companion of 100,000 bytes, and with
+        # each of those one step past its limit or the companion left out; the clip with a
+        # caption track and a 300x250 banner, without the track, and with a 728x90 banner.
+        "responsive_headline_30_chars": lambda: build_assets(*headline_pool("x" * 30)),
+        "responsive_headline_31_chars": lambda: build_assets(*headline_pool("x" * 31)),
+        "responsive_two_headlines": lambda: build_assets(*headline_pool("Trail Pro boots", "Built for the summit")),
+        "responsive_three_headlines": lambda: build_assets(
+            *headline_pool("Trail Pro boots", "Built for the summit", "Shop now")
+        ),
+        "carousel_card_headline_25_chars": lambda: build_assets(card("x" * 25), card("Second card")),
+        "carousel_card_headline_26_chars": lambda: build_assets(card("x" * 26), card("Second card")),
+        "audio_mastered_with_companion": lambda: build_assets(mastered, companion),
+        "audio_too_loud_with_companion": lambda: build_assets(mastered.with_fields(loudness_lufs=-14.5), companion),
+        "audio_peaking_with_companion": lambda: build_assets(mastered.with_fields(true_peak_dbfs=-1), companion),
+        "audio_with_wide_companion": lambda: build_assets(mastered, companion.with_fields(width=300, height=250)),
+        "audio_with_heavy_companion": lambda: build_assets(mastered, companion.with_fields(file_size_bytes=100_001)),
+        "audio_without_companion": lambda: build_assets(mastered),
+        "video_captioned_with_banner": lambda: build_assets(captioned, banner),
+        "video_uncaptioned_with_banner": lambda: build_assets(clip, banner),
+        "video_captioned_with_leaderboard": lambda: build_assets(captioned, banner.with_fields(width=728, height=90)),
+        # AUDIO: the spot at another duration or codec, and over the 1 MB cap by 40,000 bytes.
+        "audio_30s": lambda: build_assets(spot),
+        "audio_15s": lambda: build_assets(spot.with_fields(duration_ms=15000)),
+        "audio_30s_aac": lambda: build_assets(spot.with_fields(codec="aac")),
+        "audio_30s_1_04mb": lambda: build_assets(spot.with_fields(file_size_bytes=1_040_000)),
+        # The spot at the other accepted sample rate, at one outside the set, and in mono.
+        "audio_30s_48khz": lambda: build_assets(spot.with_fields(sampling_rate_hz=48000)),
+        "audio_30s_22khz": lambda: build_assets(spot.with_fields(sampling_rate_hz=22050)),
+        "audio_30s_mono": lambda: build_assets(spot.with_fields(channels="mono")),
     }
     assert name in manifests, f"no manifest named {name!r}; have {sorted(manifests)}"
     return manifests[name]()
@@ -501,6 +755,19 @@ _PLACEMENTS: dict[str, list[dict[str, Any]]] = {
     "narrowed_file_size": [
         _placement(
             "satisfaction_small_mrec_slot", "included", {"format_kind": "image", "params": {"max_file_size_kb": 150}}
+        ),
+    ],
+    # Stored beside ``plain_300x250`` (one image option, 300x250, no cap): one included
+    # placement narrowing that ONE option into TWO image entries, capped at 100 KB and at
+    # 150 KB, neither naming the option. core/placement.json: its declarations "are
+    # intersected with the product-level format_options", so the placement's effective set
+    # holds two same-kind entries although the product publishes the kind once.
+    "narrowed_twice": [
+        _placement(
+            "satisfaction_capped_mrec_slot",
+            "included",
+            {"format_kind": "image", "params": {"max_file_size_kb": 100}},
+            {"format_kind": "image", "params": {"max_file_size_kb": 150}},
         ),
     ],
     # Stored beside ``duration_range``: an included placement BROADER than the option, its
@@ -1242,14 +1509,72 @@ def given_canonical_creatives_with_manifests(ctx: dict, kind: str, manifests: st
     scenario's parameter: one creative per manifest, each eligible for every placement
     (a create package routes no creative to a placement).
     """
+    _assign_canonical_creatives(ctx, kind, manifests)
+
+
+@given(
+    parsers.parse(
+        'the buyer assigns canonical "{kind}" creatives carrying the "{manifests}" manifests '
+        'naming product options "{options}"'
+    )
+)
+def given_canonical_creatives_with_manifests_and_options(ctx: dict, kind: str, manifests: str, options: str) -> None:
+    """The creative set above, each creative routed by ``format_option_ref`` to its option.
+
+    canonical-formats.mdx: the ref "is **REQUIRED** on the manifest when the target product's
+    ``format_options`` contains two or more declarations sharing the same ``format_kind``".
+    *options* is comma-separated and aligned with *manifests*.
+    """
+    _assign_canonical_creatives(ctx, kind, manifests, options)
+
+
+def _assign_canonical_creatives(ctx: dict, kind: str, manifests: str, options: str | None = None) -> None:
+    """Seed :func:`_seed_canonical_creatives` and put every one on the package being built."""
     ctx["request_kwargs"]["packages"][0]["creative_ids"] = [
-        creative.creative_id for creative in _seed_canonical_creatives(ctx, kind, manifests)
+        creative.creative_id for creative in _seed_canonical_creatives(ctx, kind, manifests, options)
     ]
 
 
-def _seed_canonical_creatives(ctx: dict, kind: str, manifests: str) -> list[Any]:
-    """One committed canonical creative per comma-separated :func:`_manifest` name, in order."""
-    return [_seed_canonical_creative(ctx, kind=kind, assets=_manifest(name.strip())) for name in manifests.split(",")]
+def _product_option_refs(ctx: dict, options: str | None, count: int) -> list[dict[str, str] | None]:
+    """A ``format_option_ref`` per comma-separated option id, or none at all.
+
+    ``core/format-option-ref.json`` has two arms, and the option the product declares says
+    which one names it: ``{scope: "publisher", publisher_domain, format_option_id}`` for a
+    declaration scoped to a publisher, ``{scope: "product", format_option_id}`` otherwise
+    (formats.mdx: "An exact publisher claim must match both ``publisher_domain`` and
+    ``format_option_id``"). An id the product does not declare takes the product arm.
+    Aligned with the manifests the caller seeds: one per creative, in order.
+    """
+    if options is None:
+        return [None] * count
+    scoped = {
+        option["format_option_id"]: option["publisher_domain"]
+        for option in ctx["default_product"].format_options or []
+        if option.get("format_option_id") and option.get("publisher_domain")
+    }
+    refs: list[dict[str, str] | None] = []
+    for option in options.split(","):
+        option_id = option.strip()
+        domain = scoped.get(option_id)
+        refs.append(
+            {"scope": "publisher", "publisher_domain": domain, "format_option_id": option_id}
+            if domain
+            else {"scope": "product", "format_option_id": option_id}
+        )
+    assert len(refs) == count, f"{len(refs)} options for {count} creatives"
+    return refs
+
+
+def _seed_canonical_creatives(ctx: dict, kind: str, manifests: str, options: str | None = None) -> list[Any]:
+    """One committed canonical creative per comma-separated :func:`_manifest` name, in order.
+
+    *options*, when given, routes each to the aligned product option (:func:`_product_option_refs`).
+    """
+    names = [name.strip() for name in manifests.split(",")]
+    return [
+        _seed_canonical_creative(ctx, kind=kind, assets=_manifest(name), format_option_ref_document=ref)
+        for name, ref in zip(names, _product_option_refs(ctx, options, len(names)), strict=True)
+    ]
 
 
 @given(parsers.parse('a canonical "{kind}" creative carrying the "{manifest}" manifest exists'))
@@ -1258,10 +1583,15 @@ def given_canonical_creative_with_manifest_exists(ctx: dict, kind: str, manifest
     ctx["creative_to_assign"] = _seed_canonical_creative(ctx, kind=kind, assets=_manifest(manifest))
 
 
-@given(parsers.parse('canonical "{kind}" creatives carrying the "{manifests}" manifests exist'))
-def given_canonical_creatives_with_manifests_exist(ctx: dict, kind: str, manifests: str) -> None:
-    """The update path's creative set: one stored creative per manifest, assigned by the When."""
-    ctx["creatives_to_assign"] = _seed_canonical_creatives(ctx, kind, manifests)
+@given(
+    parsers.parse(
+        'canonical "{kind}" creatives carrying the "{manifests}" manifests naming product options "{options}" exist'
+    )
+)
+def given_canonical_creatives_with_manifests_exist(ctx: dict, kind: str, manifests: str, options: str) -> None:
+    """The update path's creative set: one stored creative per manifest, each routed to the
+    aligned product option (:func:`_product_option_refs`), assigned by the When."""
+    ctx["creatives_to_assign"] = _seed_canonical_creatives(ctx, kind, manifests, options)
 
 
 # ── UPDATE path ─────────────────────────────────────────────────────
@@ -1387,22 +1717,26 @@ def given_package_carries_creatives(ctx: dict, origin: str, kind: str, manifests
 @when(
     parsers.parse(
         "the Buyer Agent replaces the package's inline creatives through update_media_buy "
-        'with canonical "{kind}" creatives carrying the "{manifests}" manifests'
+        'with canonical "{kind}" creatives carrying the "{manifests}" manifests naming product options "{options}"'
     )
 )
-def when_update_replaces_inline_creatives(ctx: dict, kind: str, manifests: str) -> None:
+def when_update_replaces_inline_creatives(ctx: dict, kind: str, manifests: str, options: str) -> None:
     """Dispatch update_media_buy whose package ``creatives`` carry one NEW body per manifest.
 
     package-update.json ``creatives``: "Replace this package's inline creative assets". Each
     body has a fresh ``creative_id``, so none of the held inline creatives is kept and the
-    array replaces them all. The ids sent are kept in ``ctx["uploaded_creative_ids"]``.
+    array replaces them all, and each names the aligned product option
+    (:func:`_product_option_refs`). The ids sent are kept in ``ctx["uploaded_creative_ids"]``.
     """
-    ctx["uploaded_creative_ids"] = [f"satisfaction_inline_{uuid.uuid4().hex[:12]}" for _ in manifests.split(",")]
+    names = [name.strip() for name in manifests.split(",")]
+    ctx["uploaded_creative_ids"] = [f"satisfaction_inline_{uuid.uuid4().hex[:12]}" for _ in names]
     _dispatch_package_update(
         ctx,
         creatives=[
-            _canonical_claim(creative_id, kind, assets=_manifest(name.strip()))
-            for creative_id, name in zip(ctx["uploaded_creative_ids"], manifests.split(","), strict=True)
+            _canonical_claim(creative_id, kind, assets=_manifest(name), format_option_ref=ref)
+            for creative_id, name, ref in zip(
+                ctx["uploaded_creative_ids"], names, _product_option_refs(ctx, options, len(names)), strict=True
+            )
         ],
     )
 
@@ -1683,17 +2017,15 @@ def _canonical_claim(creative_id: str, kind: str, **members: Any) -> dict[str, A
     The assets fill the kind's required slots (``canonical_assets``): the seller grades a
     canonical manifest against the declaration it selects, or its kind when it selects none
     (creative-manifests.mdx § Validation), so the factory's default ``image``-keyed asset
-    would be a manifest missing ``image_main``. *members* may replace them.
+    would be a manifest missing ``image_main``. *members* may replace them, and must for a
+    kind outside the pinned vocabulary, which declares no slots to fill.
     """
     from tests.factories.creative_asset import canonical_assets
     from tests.factories.request import OMIT, CreativeAssetRequestFactory
 
-    return CreativeAssetRequestFactory.payload(
-        creative_id=creative_id,
-        format_id=OMIT,
-        format_kind=kind,
-        **{"assets": canonical_assets(kind), **members},
-    )
+    if "assets" not in members:
+        members["assets"] = canonical_assets(kind)
+    return CreativeAssetRequestFactory.payload(creative_id=creative_id, format_id=OMIT, format_kind=kind, **members)
 
 
 def _mixed_identity_creative(format_id: str, kind: str) -> dict[str, Any]:

@@ -69,10 +69,25 @@ WHAT THIS MODULE DOES NOT DO, deliberately:
   declaration's ``params.slots[]`` on the canonical branch (creative-manifests.mdx § Basic
   structure), while a creative naming a ``format_id`` keys its assets by that named format's
   own asset ids, so grading them against a canonical slot list would refuse every legacy
-  creative for a vocabulary it never used.
-* Required disclosures, aspect ratios and the per-kind multi-asset constraints (carousel
-  cards, responsive asset counts) are not read: no asset member states them in the
-  declaration's vocabulary.
+  creative for a vocabulary it never used. Only the reference's own parameters are graded
+  (:func:`_legacy_shortfalls`). That leaves a gap, not an exemption: creative-manifests.mdx
+  § Deprecated compatibility branch says a 3.2 implementation "may read it, normalize it to
+  a canonical declaration", which permits reading the legacy shape and does not excuse a
+  manifest the seller does read from § Validation steps 2 to 4. Grading a legacy manifest's
+  assets against its named format's asset requirements is still open, at the
+  ``TODO(#767)`` in ``src/core/tools/creatives/_validation.py``.
+* Required disclosures are not read here: no image, video or audio declaration param states
+  one. A seller's disclosure requirement is its ``creative_policy`` (core/creative-policy.json
+  ``require_disclosure_metadata``), enforced on the provenance at sync.
+* Not every per-kind param is read. Every slot's own constraints are
+  (:func:`_slot_constraint_shortfalls`), including the ones a declaration states flat by the
+  slot's role (:func:`_effective_slot`), and so are a declared ``aspect_ratio``
+  (:func:`_aspect_shortfall`), an audio spot's loudness and true peak and a required caption
+  track (:func:`_level_shortfalls`). Not read: ``cta_values`` (the pin's code for it,
+  CREATIVE_VALUE_NOT_ALLOWED, has no subclass here), the constraints on a card's ``media``
+  (``card_aspect_ratio``, ``card_image_max_file_size_kb``, ``card_video_*``),
+  ``allowed_card_media_asset_types``, a responsive creative's ``video_*_duration_ms`` and
+  ``logo_aspect_ratios``, and ``om_sdk_required``, which no manifest member states.
 """
 
 from __future__ import annotations
@@ -81,9 +96,10 @@ import logging
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
+from decimal import Decimal, InvalidOperation
 from enum import Enum, StrEnum
 from functools import lru_cache
-from typing import Any, get_args
+from typing import Any, TypeGuard, get_args
 
 from adcp.canonical_formats import formats_are_equivalent, upgrade_legacy_format_id
 from adcp.canonical_formats.format_options import FormatKindNotInClosedSetError
@@ -186,9 +202,22 @@ _RESOLUTION_FAILURES: frozenset[FormatRefusal] = frozenset(
 #: size it does not accept -- "an accepted asset's intrinsic width is ``width x pixel_ratio``"
 #: (formats/canonical/image.json). ``pixel_ratio`` is the same axis on a deprecated reference:
 #: core/format-id.json's ``{width: 300, height: 250, pixel_ratio: 2}`` "identifies a 300x250
-#: logical render supplied by a 600x500 image".
+#: logical render supplied by a 600x500 image". ``aspect_ratio`` is the shape of the same
+#: dimensions: an asset whose width and height disagree with the declared ratio matches no
+#: size the declaration accepts (image.json: the ratio "narrows accepted entries").
 _DIMENSION_CONSTRAINTS: frozenset[str] = frozenset(
-    {"width", "height", "min_width", "max_width", "min_height", "max_height", "sizes", "pixel_ratios", "pixel_ratio"}
+    {
+        "width",
+        "height",
+        "min_width",
+        "max_width",
+        "min_height",
+        "max_height",
+        "sizes",
+        "pixel_ratios",
+        "pixel_ratio",
+        "aspect_ratio",
+    }
 )
 
 
@@ -410,7 +439,7 @@ def _declaration_label(declaration: LibraryFormatDeclaration) -> str:
     return declaration.format_option_id or str(declaration.format_kind)
 
 
-def _is_number(value: Any) -> bool:
+def _is_number(value: Any) -> TypeGuard[int | float]:
     """Numeric for the params rules -- ``int``/``float`` but NOT ``bool``.
 
     ``bool`` is an ``int`` subclass in Python, so ``ssl_required: True`` would otherwise be
@@ -741,17 +770,33 @@ _ASSET_FACTS: Mapping[str, tuple[tuple[str, str], ...]] = {
         ("video_codecs", "video_codec"),
         ("audio_codecs", "audio_codec"),
         ("containers", "container_format"),
+        ("min_bitrate_kbps", "video_bitrate_kbps"),
+        ("max_bitrate_kbps", "video_bitrate_kbps"),
+        ("frame_rates", "frame_rate"),
     ),
     "audio": (
         ("duration_ms_exact", "duration_ms"),
         ("max_file_size_mb", "file_size_bytes"),
         ("audio_codecs", "codec"),
+        ("min_bitrate_kbps", "bitrate_kbps"),
+        ("max_bitrate_kbps", "bitrate_kbps"),
+        ("audio_sample_rates", "sampling_rate_hz"),
+        ("audio_channels", "channels"),
     ),
 }
 
-#: Bytes per unit of a file-size cap, for an asset that states ``file_size_bytes``. Binary
-#: units, which is the reading that refuses less where the pin does not say which it means.
-_BYTES_PER_UNIT: Mapping[str, int] = {"max_file_size_kb": 1024, "max_file_size_mb": 1024 * 1024}
+#: The asset members a pinned asset schema types as a STRING holding a number, read as the
+#: number the declaration states: video-asset.json ``frame_rate`` is "Frame rate as string to
+#: preserve precision (e.g., '23.976', '29.97', '30')", and video_hosted.json ``frame_rates``
+#: is an array of numbers.
+_NUMERIC_STRING_MEMBERS: frozenset[str] = frozenset({"frame_rate"})
+
+#: Bytes per unit of a file-size cap, for an asset that states ``file_size_bytes``. Both are
+#: DECIMAL. ``docs/creative/canonical-formats.mdx``: "a field ending in ``_kb`` uses 1 KB =
+#: 1,000 bytes, a field ending in ``_mb`` uses 1 MB = 1,000,000 bytes ... Implementations MUST
+#: NOT substitute binary KiB/MiB units for these fields"; ``core/product-format-declaration.json``
+#: says the same of ``_kb``, and ``video_hosted.json`` / ``audio_hosted.json`` of ``_mb``.
+_BYTES_PER_UNIT: Mapping[str, int] = {"max_file_size_kb": 1000, "max_file_size_mb": 1_000_000}
 
 
 def manifest_document(assets: Any) -> dict[str, Any]:
@@ -871,6 +916,8 @@ def _asset_claim(asset: Mapping[str, Any], ratio: float = 1) -> tuple[dict[str, 
     claim: dict[str, Any] = {}
     for constraint, member in facts:
         value = _plain(asset.get(member))
+        if member in _NUMERIC_STRING_MEMBERS and isinstance(value, str):
+            value = _number_or_text(value)
         divisor = _BYTES_PER_UNIT.get(constraint) or (ratio if member in _INTRINSIC_MEMBERS else 1)
         claim[constraint] = value / divisor if divisor != 1 and _is_number(value) else value
     if "pixel_ratios" in members:
@@ -882,6 +929,14 @@ def _asset_claim(asset: Mapping[str, Any], ratio: float = 1) -> tuple[dict[str, 
     if "duration_ms_exact" in members:
         members["duration_ms_range"] = members["duration_ms_exact"]
     return claim, members
+
+
+def _number_or_text(value: str) -> float | str:
+    """*value* as a number when it reads as one, else unchanged, so it fails a numeric set."""
+    try:
+        return float(value)
+    except ValueError:
+        return value
 
 
 def _candidate_ratios(asset: Mapping[str, Any], declared: Mapping[str, Any]) -> tuple[float, ...]:
@@ -947,9 +1002,10 @@ def _manifest_shortfalls(declaration: LibraryFormatDeclaration, manifest: Mappin
     (:func:`_coverage_shortfalls`).
     """
     declared = dict(_declared_params(declaration))
-    slots = tuple(slot for slot in declared.get("slots") or () if isinstance(slot, Mapping))
+    slots = tuple(_effective_slot(slot, declared) for slot in declared.get("slots") or () if isinstance(slot, Mapping))
     shortfalls = _manifest_slot_shortfalls(slots, manifest)
     primary = _primary_media_slot(slots)
+    shortfalls.extend(_slot_constraint_shortfalls(slots, manifest, primary))
     value = manifest.get(primary) if primary is not None else None
     renditions = [
         (f"{primary}[{index}]" if isinstance(value, list) else str(primary), item)
@@ -964,6 +1020,309 @@ def _manifest_shortfalls(declaration: LibraryFormatDeclaration, manifest: Mappin
     graded = [(path, *_graded_rendition(path, asset, declared)) for path, asset in renditions]
     shortfalls.extend(shortfall for _path, _ratio, failed in graded for shortfall in failed)
     shortfalls.extend(_coverage_shortfalls(str(primary), slot.get("required_pixel_ratios"), graded))
+    ratio = declared.get("aspect_ratio") or _ORIENTATION_RATIOS.get(str(declared.get("orientation")))
+    shortfalls.extend(
+        shortfall for path, asset in renditions if (shortfall := _aspect_shortfall(path, asset, ratio)) is not None
+    )
+    shortfalls.extend(shortfall for path, asset in renditions for shortfall in _level_shortfalls(path, asset, declared))
+    return shortfalls
+
+
+def _level_shortfalls(path: str, asset: Mapping[str, Any], declared: Mapping[str, Any]) -> list[ManifestShortfall]:
+    """The main media asset against the declared constraints that are neither a set nor a bound.
+
+    Three, each read by its own rule because its name does not say its shape:
+
+    * ``loudness_lufs`` with ``loudness_tolerance_db`` -- formats/canonical/audio_hosted.json,
+      "Required integrated loudness in LUFS" and "Permitted deviation from loudness_lufs in
+      dB". The asset's ``loudness_lufs`` (core/assets/audio-asset.json, "Integrated loudness
+      in LUFS") must lie within the tolerance of the target. A declaration stating no
+      tolerance permits no deviation: the pin gives no default, and reading a missing
+      tolerance as zero is this seller's choice, the one that does not relax the target.
+    * ``true_peak_dbfs`` -- audio_hosted.json, "Maximum true-peak level in dBFS"; the asset's
+      ``true_peak_dbfs`` may not exceed it.
+    * ``captions: required`` -- formats/canonical/video_hosted.json ``captions`` (required,
+      recommended, not_required); a required caption track is the asset's ``captions_url``
+      (core/assets/video-asset.json), and a video without one is missing it.
+
+    A level the asset does not state is not graded: audio-asset.json makes both members
+    optional, and only the constraints in :data:`_MANIFEST_MUST_BE_STATED` fail on silence.
+    """
+    asset_type = str(asset.get("asset_type"))
+    shortfalls: list[ManifestShortfall] = []
+    target, stated = declared.get("loudness_lufs"), _plain(asset.get("loudness_lufs"))
+    if asset_type == "audio" and _is_number(target) and _is_number(stated):
+        tolerance = declared.get("loudness_tolerance_db")
+        tolerance = tolerance if _is_number(tolerance) else 0
+        if abs(stated - target) > tolerance:
+            window = (target,) if not tolerance else (target - tolerance, target + tolerance)
+            shortfalls.append(
+                ManifestShortfall(f"assets.{path}.loudness_lufs", "loudness_lufs", _shown(stated), _shown_all(window))
+            )
+    ceiling, peak = declared.get("true_peak_dbfs"), _plain(asset.get("true_peak_dbfs"))
+    if asset_type == "audio" and _is_number(ceiling) and _is_number(peak) and peak > ceiling:
+        shortfalls.append(
+            ManifestShortfall(f"assets.{path}.true_peak_dbfs", "true_peak_dbfs", _shown(peak), (_shown(ceiling),))
+        )
+    if asset_type == "video" and declared.get("captions") == "required" and not asset.get("captions_url"):
+        shortfalls.append(ManifestShortfall(f"assets.{path}.captions_url", "captions", None, ("required",)))
+    return shortfalls
+
+
+#: The aspect ratio each video ``orientation`` names. ``formats/canonical/video_hosted.json``
+#: (and ``video_vast.json``): "Vertical = 9:16 (Reels, Stories, Shorts). Horizontal = 16:9
+#: (instream, CTV). Square = 1:1 (in-feed)", and its ``aspect_ratio``: "Inferred from
+#: orientation if omitted".
+_ORIENTATION_RATIOS: Mapping[str, str] = {"vertical": "9:16", "horizontal": "16:9", "square": "1:1"}
+
+
+def _ratio_agrees(width: Any, height: Any, ratio: str) -> bool:
+    """Whether a *width* x *height* asset has the ``"W:H"`` aspect *ratio* a declaration states.
+
+    ``formats/canonical/image.json`` ``aspect_ratio`` ("e.g., '1.91:1', '1:1'") and
+    ``video_hosted.json``'s state the ratio and no tolerance, so the comparison is made AT THE
+    RATIO'S OWN PRECISION: exactly for whole terms (``9:16`` takes 1080x1920 and nothing
+    else), and to the decimals the ratio is written in otherwise (``1.91:1`` takes 1200x628,
+    whose 1.9108 is 1.91 to two places). That precision is this seller's reading of a ratio
+    the pin writes to two decimals and never as an exact fraction.
+    """
+    numerator, _, denominator = ratio.partition(":")
+    try:
+        terms = (Decimal(numerator), Decimal(denominator))
+    except InvalidOperation:
+        return True
+    if not (_is_number(width) and _is_number(height)) or not all(terms) or not height:
+        return True
+    if all(term == term.to_integral_value() for term in terms):
+        return Decimal(width) * terms[1] == Decimal(height) * terms[0]
+    places = max(-min(int(term.as_tuple().exponent), 0) for term in terms)
+    return round(Decimal(width) / Decimal(height), places) == round(terms[0] / terms[1], places)
+
+
+def _aspect_shortfall(path: str, asset: Mapping[str, Any], ratio: Any) -> ManifestShortfall | None:
+    """The main media asset in *path* against the declaration's aspect *ratio*, if it has one.
+
+    *ratio* is the declared ``aspect_ratio``, or the one a video ``orientation`` names when
+    the declaration omits it (:data:`_ORIENTATION_RATIOS`).
+
+    Step 4 of creative-manifests.mdx § Validation checks "fixed dimensions", and image.json
+    says a declared ratio narrows every size mode: "When provided alongside width/height, must
+    agree. When used with sizes[] or responsive ranges, narrows accepted entries to those
+    matching the aspect ratio." An asset that states no width or height is not graded here;
+    a fixed size it is silent about already fails.
+    """
+    if not isinstance(ratio, str) or _ratio_agrees(asset.get("width"), asset.get("height"), ratio):
+        return None
+    return ManifestShortfall(
+        field=f"assets.{path}",
+        constraint="aspect_ratio",
+        rejected_value=f"{_shown(asset.get('width'))}:{_shown(asset.get('height'))}",
+        accepted_values=(ratio,),
+    )
+
+
+#: The per-slot constraints a declaration may state FLAT, as ``<role>_<suffix>``, and the
+#: slot-entry constraint each suffix is. ``formats/canonical/_base.json`` ``slots``:
+#: "Format-level narrowing parameters that apply across all slots (e.g., flat
+#: ``headline_max_chars`` on responsive_creative) may also live on the format declaration",
+#: and the canonical schemas spell them so: responsive_creative.json ``headline_max_chars`` /
+#: ``headlines_min`` / ``images_landscape_aspect_ratio`` ("per-slot count/length narrowing lives
+#: in flat parameters"), audio_hosted.json ``companion_image_max_file_size_kb`` /
+#: ``companion_image_aspect_ratio`` / ``companion_image_required``, video_hosted.json
+#: ``companion_banner_widths`` / ``companion_banner_heights``. ``max_file_size_kb`` is the
+#: slot's ``max_size_kb`` in the same unit: canonical-formats.mdx, "a field ending in ``_kb``
+#: uses 1 KB = 1,000 bytes". The suffixes are tried longest first, so ``_max_chars`` is never
+#: read as ``_max``.
+_FLAT_SLOT_SUFFIXES: tuple[tuple[str, str], ...] = (
+    ("_max_file_size_kb", "max_size_kb"),
+    ("_aspect_ratio", "aspect_ratio"),
+    ("_max_chars", "max_chars"),
+    ("_required", "required"),
+    ("_heights", "heights"),
+    ("_widths", "widths"),
+    ("_min", "min"),
+    ("_max", "max"),
+)
+
+
+def _slot_roles(group: str) -> frozenset[str]:
+    """The role names a flat param may give slot *group*: its id, singular or plural.
+
+    The pin names a pool slot in the plural and its flat limits in either number:
+    responsive_creative.json's ``headlines`` slot takes ``headlines_min`` and
+    ``headline_max_chars``, and its ``video`` slot ``videos_min``.
+    """
+    return frozenset({group, group.removesuffix("s"), f"{group}s"})
+
+
+def _effective_slot(slot: Mapping[str, Any], declared: Mapping[str, Any]) -> dict[str, Any]:
+    """*slot* with the flat declaration params that name its role folded in (:data:`_FLAT_SLOT_SUFFIXES`).
+
+    A param is read as narrowing the slot, never as relaxing it: of a count or cap stated on
+    both, the stricter holds; a flat ``required`` can require an optional slot and cannot
+    release a required one; an aspect ratio or a width or height set stated on the slot entry
+    wins over the flat one.
+
+    ``<singular>_<member>_max_chars`` limits a STRING MEMBER of each asset the slot holds,
+    which is how image_carousel.json spells the card's text: ``card_headline_max_chars``
+    "Governs the ``headline`` field on each card-asset in the ``cards`` slot", and
+    ``card_description_max_chars`` its ``description``. Those land in ``member_max_chars``.
+    """
+    group = str(slot.get("asset_group_id") or "")
+    roles = _slot_roles(group)
+    effective: dict[str, Any] = dict(slot)
+    members: dict[str, Any] = {}
+    for key, bound in declared.items():
+        if bound is None:
+            continue
+        suffix, constraint = next(((sfx, c) for sfx, c in _FLAT_SLOT_SUFFIXES if key.endswith(sfx)), ("", ""))
+        role = key[: -len(suffix)] if suffix else ""
+        if role in roles:
+            effective[constraint] = _narrower(constraint, effective.get(constraint), bound)
+        elif constraint == "max_chars" and (member := _member_of(role, group)):
+            members[member] = bound
+    if members:
+        effective["member_max_chars"] = members
+    return effective
+
+
+def _member_of(role: str, group: str) -> str | None:
+    """The member a ``<singular>_<member>`` role names on slot *group*'s assets, if it names one."""
+    prefix = f"{group.removesuffix('s')}_"
+    if not role.startswith(prefix):
+        return None
+    return role.removeprefix(prefix) or None
+
+
+def _narrower(constraint: str, own: Any, flat: Any) -> Any:
+    """The stricter of a slot's own *constraint* and the flat declaration param stating it."""
+    if own is None:
+        return flat
+    if constraint == "required":
+        return bool(own) or bool(flat)
+    if _is_number(own) and _is_number(flat):
+        return max(own, flat) if constraint == "min" else min(own, flat)
+    return own
+
+
+#: The asset types a slot's ``max_size_kb`` is answered by, through ``file_size_bytes``:
+#: ``formats/canonical/_base.json`` makes the cap valid for image, video, audio and zip, and
+#: the first three state the member (core/assets/*-asset.json). A zip states none, so a cap
+#: on a zip slot is a fact no member answers and is not graded.
+_SIZED_ASSET_TYPES: frozenset[str] = frozenset({"image", "video", "audio"})
+
+#: The asset types a slot's ``max_chars`` counts, through ``content``: _base.json makes the
+#: limit valid for text, markdown and brief, and text-asset.json and markdown-asset.json
+#: carry the characters in ``content``. A brief asset carries none.
+_CHARACTER_ASSET_TYPES: frozenset[str] = frozenset({"text", "markdown"})
+
+
+def _slot_constraint_shortfalls(
+    slots: Sequence[Mapping[str, Any]], manifest: Mapping[str, Any], primary: str | None
+) -> list[ManifestShortfall]:
+    """What each filled slot fails of the constraints stated FOR THAT SLOT, every slot alike.
+
+    ``formats/canonical/_base.json``: "per-slot constraints (a specific slot's ``max_chars``
+    or ``max_size_kb``) live on the slot entry", and "Format-level narrowing parameters that
+    apply across all slots (e.g., flat ``headline_max_chars``...) may also live on the format
+    declaration". The declaration's other params describe the main media asset and are
+    graded on it (:func:`_manifest_shortfalls`); these are the ones that reach the rest:
+
+    * ``min`` / ``max`` -- "count for repeatable / pool slots", the number of assets the slot
+      holds (one for a single object);
+    * ``max_chars`` -- the length of a text or markdown asset's ``content``, and of a card's
+      ``headline`` or ``description`` (``member_max_chars``);
+    * ``max_size_kb`` -- "exact kilobytes, where 1 KB = 1,000 bytes", against
+      ``file_size_bytes``. Silence fails, as it does for the declaration's own cap
+      (:data:`_MANIFEST_MUST_BE_STATED`): a cap the manifest does not answer cannot be checked;
+    * ``pixel_ratios`` on a slot other than the main one -- a STATED ``pixel_ratio`` outside
+      the set. An unstated one is not graded: the pin infers it from "the matched logical
+      size", and only the main slot has one. The main slot's set is graded with its size;
+    * ``aspect_ratio``, ``widths`` and ``heights`` on a slot other than the main one
+      (:func:`_slot_dimension_shortfalls`).
+
+    *slots* are effective slots (:func:`_effective_slot`): each carries the flat declaration
+    params that name its role, so a limit stated either way is read here once.
+
+    An empty slot is :func:`_manifest_slot_shortfalls`' to report; a slot holding an array
+    is graded item by item, its path indexed as a rendition set's is.
+    """
+    shortfalls: list[ManifestShortfall] = []
+    for slot in slots:
+        group = str(slot.get("asset_group_id") or "")
+        if group not in manifest:
+            continue
+        value = manifest[group]
+        count = len(value) if isinstance(value, list) else 1
+        for bound, failed in ((slot.get("min"), "min"), (slot.get("max"), "max")):
+            if _is_number(bound) and (count < bound if failed == "min" else count > bound):
+                shortfalls.append(ManifestShortfall(f"assets.{group}", failed, str(count), (_shown(bound),)))
+        items = value if isinstance(value, list) else [value]
+        for index, asset in enumerate(items):
+            if isinstance(asset, Mapping):
+                path = f"{group}[{index}]" if isinstance(value, list) else group
+                shortfalls.extend(_slot_asset_shortfalls(path, asset, slot, main=group == primary))
+    return shortfalls
+
+
+def _slot_asset_shortfalls(
+    path: str, asset: Mapping[str, Any], slot: Mapping[str, Any], *, main: bool
+) -> list[ManifestShortfall]:
+    """One asset of a slot against that slot's own constraints (:func:`_slot_constraint_shortfalls`)."""
+    asset_type = str(asset.get("asset_type"))
+    shortfalls: list[ManifestShortfall] = []
+    texts = [(member, asset.get(member), bound) for member, bound in (slot.get("member_max_chars") or {}).items()]
+    if asset_type in _CHARACTER_ASSET_TYPES:
+        texts.append(("content", asset.get("content"), slot.get("max_chars")))
+    shortfalls.extend(
+        ManifestShortfall(f"assets.{path}.{member}", "max_chars", str(len(text)), (_shown(bound),))
+        for member, text, bound in texts
+        if isinstance(text, str) and _is_number(bound) and len(text) > bound
+    )
+    if not main and asset_type in _DIMENSIONED_ASSET_TYPES:
+        shortfalls.extend(_slot_dimension_shortfalls(path, asset, slot))
+    size_cap = slot.get("max_size_kb")
+    if asset_type in _SIZED_ASSET_TYPES and _is_number(size_cap):
+        size = _plain(asset.get("file_size_bytes"))
+        if not _is_number(size) or size / 1000 > size_cap:
+            shortfalls.append(
+                ManifestShortfall(
+                    f"assets.{path}.file_size_bytes",
+                    "max_size_kb",
+                    None if size is None else _shown(size),
+                    (_shown(size_cap),),
+                )
+            )
+    ratios, stated = slot.get("pixel_ratios"), _plain(asset.get("pixel_ratio"))
+    if not main and asset_type == "image" and ratios and _is_number(stated) and stated not in ratios:
+        shortfalls.append(
+            ManifestShortfall(f"assets.{path}.pixel_ratio", "pixel_ratios", _shown(stated), _shown_all(ratios))
+        )
+    return shortfalls
+
+
+#: The asset types whose ``width`` and ``height`` a slot's aspect ratio and size sets are
+#: asked of (core/assets/image-asset.json, video-asset.json).
+_DIMENSIONED_ASSET_TYPES: frozenset[str] = frozenset({"image", "video"})
+
+
+def _slot_dimension_shortfalls(path: str, asset: Mapping[str, Any], slot: Mapping[str, Any]) -> list[ManifestShortfall]:
+    """A non-main slot's asset against the slot's aspect ratio and accepted widths and heights.
+
+    Both reach the slot only as flat params (:func:`_effective_slot`): audio_hosted.json
+    ``companion_image_aspect_ratio``, responsive_creative.json ``images_landscape_aspect_ratio``,
+    video_hosted.json ``companion_banner_widths`` ("Permitted companion banner widths") and
+    ``companion_banner_heights``. The ratio is graded as the main asset's is
+    (:func:`_aspect_shortfall`); a stated width or height outside its set is a size the slot
+    does not accept. An asset silent about a dimension is not graded on it.
+    """
+    shortfalls = [found] if (found := _aspect_shortfall(path, asset, slot.get("aspect_ratio"))) else []
+    for constraint, member in (("widths", "width"), ("heights", "height")):
+        accepted, stated = slot.get(constraint), _plain(asset.get(member))
+        if isinstance(accepted, (list, tuple)) and _is_number(stated) and stated not in accepted:
+            shortfalls.append(
+                ManifestShortfall(f"assets.{path}.{member}", member, _shown(stated), _shown_all(accepted))
+            )
     return shortfalls
 
 
@@ -1438,22 +1797,27 @@ def _kind_route(
     across routes; see :func:`_selecting`, which also says which refusal is reported when
     none satisfies.
 
-    A MANIFEST MUST LAND ON EXACTLY ONE. A package selector may select several declarations
-    (step (2) compares sets), but a creative is validated "against the selected product or
-    publisher declaration" -- one -- and creative-manifests.mdx § Validation step 1 says how
-    a manifest without ``format_option_ref`` finds it: "select the unambiguous compatible
-    ``format_kind`` declaration". So the candidates are graded against the manifest, and:
+    A MANIFEST NAMING NO OPTION NEEDS A KIND THE PRODUCT PUBLISHES ONCE. A package selector
+    may select several declarations (step (2) compares sets), but a creative is validated
+    "against the selected product or publisher declaration" -- one. ``canonical-formats.mdx``'s
+    routing rule, marked normative: "``format_option_ref`` is **REQUIRED** on the manifest
+    when the target product's ``format_options`` contains two or more declarations sharing
+    the same ``format_kind``", and "**OPTIONAL** when each ``format_kind`` in the product's
+    ``format_options`` is unique". ``core/creative-asset.json`` and
+    ``core/creative-manifest.json`` say the same of the field, and ``sync_creatives.mdx``
+    "Required when the target product has multiple options with the same format_kind".
+    creative-manifests.mdx § Validation step 1, "otherwise select the unambiguous compatible
+    ``format_kind`` declaration", is the optional case: the kind alone names one declaration,
+    and it must be compatible. So with a manifest and several candidates the candidates are
+    graded, and:
 
-    * exactly one compatible -- selected, which is the case
-      ``core/creative-asset.json`` calls ``format_option_ref`` "optional when format_kind
-      alone routes the creative to a single declaration";
     * none compatible -- the first candidate's shortfalls are reported, naming every
-      candidate in ``accepted_values`` so the buyer sees each declaration it could target;
-    * several compatible -- :attr:`FormatRefusal.MANIFEST_AMBIGUOUS`. The same field is
-      "Required when the target product has multiple format_options entries sharing the
-      same format_kind" (and ``canonical-formats.mdx``: "without it, the seller can't
-      disambiguate which option the buyer is shipping against"). ``accepted_values`` names
-      the compatible declarations, which are the values the buyer may put in the ref.
+      candidate in ``accepted_values``: the assets fail whichever option the buyer names;
+    * one or more compatible -- :attr:`FormatRefusal.MANIFEST_AMBIGUOUS`, the missing ref.
+      Fitting one of them does not stand in for naming it: the rule turns on what the
+      product publishes, not on what the assets happen to fit, and step 5 is "do not
+      silently relax the target contract". ``accepted_values`` names the compatible
+      declarations, which are the values the buyer can put in the ref and be accepted.
     """
     accepted = [str(declaration.format_kind) for declaration in declarations]
     if kind not in accepted:
@@ -1471,15 +1835,13 @@ def _kind_route(
         return verdict
     if not verdict:
         return replace(verdict, accepted_values=tuple(sorted(_declaration_label(d) for d in candidates)))
-    if len(verdict.selection) == 1:
-        return verdict
     compatible = tuple(sorted(_declaration_label(d) for d in verdict.selection))
     return FormatSatisfaction(
         satisfied=False,
         refusal=FormatRefusal.MANIFEST_AMBIGUOUS,
         rejected_value=kind,
         accepted_values=compatible,
-        summary=f"manifest of {kind!r} satisfies several declarations and names no format_option_ref: {compatible}",
+        summary=f"manifest of {kind!r} names no format_option_ref among {len(candidates)} declarations: {compatible}",
     )
 
 
@@ -2037,7 +2399,12 @@ def _fills(
       contract"), each compared as the product's own arm is compared (:func:`_legacy_lane`).
       The projection would again drop what the SDK cannot map.
     * Otherwise the placement's effective declarations, which a canonical creative's
-      manifest is graded against. An empty set admits nothing, so it fails closed.
+      manifest is graded against. An empty set admits nothing, so it fails closed. A creative
+      naming no option that fits one or more of them lies in the set even when the verdict is
+      :attr:`FormatRefusal.MANIFEST_AMBIGUOUS`: the ref is required by what the PRODUCT
+      publishes (``canonical-formats.mdx``: "the target product's ``format_options``"), which
+      the product gate has already asked, and a placement narrowing one product option into
+      several entries does not make the ref required.
     """
     from src.core.format_resolver import NamedFormats
     from src.core.schemas import CreativeFormatIdentity
@@ -2048,7 +2415,10 @@ def _fills(
         return bool(creative_satisfies(creative, contract)) and bool(
             creative_satisfies(creative, NamedFormats(format_ids=layer.references))
         )
-    return bool(effective.format_options) and bool(creative_satisfies(creative, effective))
+    if not effective.format_options:
+        return False
+    verdict = creative_satisfies(creative, effective)
+    return bool(verdict) or verdict.refusal is FormatRefusal.MANIFEST_AMBIGUOUS
 
 
 def creatives_uncovered(

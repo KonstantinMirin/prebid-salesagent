@@ -15,6 +15,7 @@ from src.core.errors.details import CreativeManifestDetails, EntityRefDetails, E
 from src.core.exceptions import (
     AdCPCreativeValidationFailedError,
     AdCPFormatNotFoundError,
+    AdCPInvalidRequestError,
     AdCPProvenanceDigitalSourceTypeMissingError,
     AdCPProvenanceDisclosureMissingError,
     AdCPProvenanceEmbeddedMissingError,
@@ -147,11 +148,18 @@ def _validate_creative_input(
     # it. What the DTO DOES already enforce is the arm exclusivity -- both arms and neither
     # arm are both refused on construction above -- which is the other half the identity
     # construction used to provide here.
+    #
+    # INVALID_REQUEST, not VALIDATION_ERROR. core/creative-asset.json types ``format_kind`` as
+    # core/canonical-format-kind.json, an enum the pin calls "closed for producer validation"
+    # whose tolerant in-memory parsing "does not change versioned JSON Schema validation". A
+    # value outside it is a schema violation, which enums/error-code.json codes INVALID_REQUEST
+    # ("violates schema constraints"); VALIDATION_ERROR is for violations "beyond schema
+    # validation". The DTO is tolerant only because the SDK generates the field as ``str``.
     if creative.format_kind is not None:
         try:
             _CANONICAL_KIND.validate_python(creative.format_kind)
         except PydanticValidationError as exc:
-            raise AdCPValidationError(
+            raise AdCPInvalidRequestError(
                 details=ValidationDetails(rejected_value=str(creative.format_kind)),
                 field="format_kind",
             ) from exc
