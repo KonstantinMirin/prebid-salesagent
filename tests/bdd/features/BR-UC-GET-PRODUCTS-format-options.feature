@@ -287,6 +287,40 @@ Feature: Canonical format options a seller stores are announced to buyers on the
     # The seller's other authoring paths (CREATE_SAMPLE_DATA seeding, the mock adapter's
     # product config, inventory profiles, the setup scripts) are not graded here.
 
+  # ── The operator authors a multi-publisher product without placements ────────────────
+  #
+  # core/product.json format_options (v3.2.7), addressed to the product's author: "If a
+  # product spans multiple publishers but omits placements[], there is no public routing key
+  # for per-placement creatives: its format_options MUST therefore be the common intersection
+  # accepted across every selected publisher/property scope. A seller that needs a union of
+  # publisher-specific formats MUST publish placements[] with publisher-scoped identities and
+  # narrowing." An option scoped to one publisher (core/product-format-declaration.json
+  # publisher_domain) is accepted only in that publisher's scope (formats.mdx § Matching and
+  # satisfaction: "publisher-scoped options only to their publisher"), so it is outside the
+  # intersection, and the seller refuses to author it. The buyer-visible effect is the
+  # product's absence from get_products.
+  #
+  # Both scenarios post the same admin form on the scenario's own transport: two property
+  # tags of two different publishers, no placements, a product-local 300x250 option and a
+  # 728x90 option. They differ in one thing, whether the 728x90 is scoped to the first
+  # publisher. A seller that did not hold its author to the intersection stores and announces
+  # the refused product; one that refused every multi-publisher product reddens the accept.
+  #
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/formats.mdx
+
+  @T-UC-GET-PRODUCTS-format-options-operator-common-intersection-accepted @format_option_announcement @requires_db
+  Scenario: the operator's multi-publisher product whose options every publisher accepts is announced
+    Given the operator submits the admin product form for a product sold across two publishers declaring a "product-local" leaderboard option beside a product-local one
+    When the buyer requests products
+    Then the buyer is announced the operator's product with both options
+
+  @T-UC-GET-PRODUCTS-format-options-operator-common-intersection-refused @format_option_announcement @requires_db
+  Scenario: the operator's multi-publisher product with an option scoped to one publisher is refused
+    Given the operator submits the admin product form for a product sold across two publishers declaring a "publisher-scoped" leaderboard option beside a product-local one
+    When the buyer requests products
+    Then the admin form refuses the operator's product and the buyer is not announced it
+
   @T-UC-GET-PRODUCTS-format-options-several @format_option_announcement @requires_db
   Scenario: a product declaring several format options announces every one of them
     Given the seller stores a canonically-authored product declaring three format options

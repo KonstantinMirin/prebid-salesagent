@@ -2226,6 +2226,44 @@ def publisher_slice_layers(
     )
 
 
+def outside_common_intersection(product: Any) -> tuple[LibraryFormatDeclaration, ...]:
+    """The declarations of a product's served contract that not every publisher slice accepts.
+
+    ``core/product.json`` ``format_options``, addressed to the product's AUTHOR: "If a product
+    spans multiple publishers but omits placements[], there is no public routing key for
+    per-placement creatives: its format_options MUST therefore be the common intersection
+    accepted across every selected publisher/property scope. A seller that needs a union of
+    publisher-specific formats MUST publish placements[] with publisher-scoped identities and
+    narrowing." The slices are :func:`publisher_slice_layers`' -- the ones the buy path covers
+    -- so the author is held to the set the buyer is graded against. Empty for a product with
+    placements, a single publisher, or only product-local options.
+    """
+    publishers = coverage_publishers(product)
+    if publishers is None:
+        return ()
+    declared = product_declarations(product.format_contract.format_options)
+    slices = publisher_slice_layers(publishers, declared)
+    return tuple(d for d in declared if any(d not in (layer.declarations or ()) for layer in slices))
+
+
+def refuse_outside_common_intersection(product: Any) -> None:
+    """``ValueError`` when a product's served contract is not the common intersection the pin requires of it.
+
+    Asked of every product save -- the admin product forms, an inventory profile's save for
+    each product it supplies the contract to, and :class:`ProductRepository`'s writes -- so
+    no write path stores what :func:`outside_common_intersection` finds.
+    """
+    outside = outside_common_intersection(product)
+    if outside:
+        raise ValueError(
+            f"Product {product.product_id!r} sells inventory of several publishers and publishes no "
+            f"placements, so every format option must be accepted by all of them. Scoped to one "
+            f"publisher: {', '.join(sorted({_declaration_label(d) for d in outside}))}. Declare "
+            f"them product-local by omitting publisher_domain, or publish placements with "
+            f"publisher-scoped identities."
+        )
+
+
 def _placement_projection(references: Iterable[LibraryFormatId]) -> tuple[LibraryFormatDeclaration, ...]:
     """A placement's deprecated ``format_ids``, projected by the SDK, as an id-less layer.
 

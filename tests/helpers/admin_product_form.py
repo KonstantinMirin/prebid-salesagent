@@ -29,11 +29,12 @@ def minimal_product_edit_form(**overrides: object) -> dict[str, object]:
     return form
 
 
-def minimal_product_create_form(property_tag_selection: str, **overrides: object) -> dict[str, object]:
+def minimal_product_create_form(property_tag_selection: str | list[str], **overrides: object) -> dict[str, object]:
     """The product-create form at the minimum the handler requires.
 
     *property_tag_selection* is the ``"<publisher_domain>:<tag>"`` value the property picker
-    submits; ``tests.factories.core.seed_property_tag_selection`` seeds the rows it names and
+    submits, or a list of them for a product of several publishers;
+    ``tests.factories.core.seed_property_tag_selection`` seeds the rows each names and
     returns it. ``formats: "[]"`` leaves the deprecated arm empty, so a test authors the
     canonical arm through a ``format_options`` override.
     """
