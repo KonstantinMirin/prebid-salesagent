@@ -39,7 +39,13 @@ from src.core.database.repositories.account_serialization import (
 )
 from src.core.database.repositories.uow import AccountUoW
 from src.core.errors.codes import ErrorCode, ErrorCodeT
-from src.core.errors.details import BillingNotSupportedDetails, ConfigurationDetails, ErrorDetails, ValidationDetails
+from src.core.errors.details import (
+    BillingNotPermittedForAgentDetails,
+    BillingNotSupportedDetails,
+    ConfigurationDetails,
+    ErrorDetails,
+    ValidationDetails,
+)
 from src.core.exceptions import AdCPConfigurationError, AdCPValidationError
 from src.core.helpers import enum_value
 from src.core.helpers.brand_key import brand_key_parts
@@ -402,6 +408,7 @@ class _FieldPolicy:
 FailureClass = Literal[
     "unsupported_field",
     "billing_not_supported",
+    "billing_not_permitted_for_agent",
     "sandbox_not_supported",
     "notification_config_invalid",
 ]
@@ -414,6 +421,7 @@ FailureClass = Literal[
 _FAILURE_CLASS_TO_CODE: dict[FailureClass, ErrorCodeT] = {
     "unsupported_field": ErrorCode.UNSUPPORTED_FEATURE,
     "billing_not_supported": ErrorCode.BILLING_NOT_SUPPORTED,
+    "billing_not_permitted_for_agent": ErrorCode.BILLING_NOT_PERMITTED_FOR_AGENT,
     "sandbox_not_supported": ErrorCode.UNSUPPORTED_FEATURE,
     "notification_config_invalid": ErrorCode.VALIDATION_ERROR,
 }
@@ -846,8 +854,10 @@ def _provisioning_gates(
     proof_failures: dict[int, list[GateFailure]],
 ) -> list[Callable[[], list[GateFailure] | None]]:
     """The provisioning branch's gate list, in order: billing policy (BR-RULE-059) ->
-    sandbox capability (BR-RULE-209 INV-6) -> notification_configs. The first failure
-    short-circuits the rest.
+    the calling agent's billing permission -> sandbox capability (BR-RULE-209 INV-6) ->
+    notification_configs. The first failure short-circuits the rest, so the per-agent
+    gate only ever sees a value the seller's capability accepts, which is the one case
+    its code exists for (enums/error-code.json BILLING_NOT_PERMITTED_FOR_AGENT).
 
     ``brand.domain`` is NOT gated here. It is an identifier -- a lookup key for the
     account relationship, never dereferenced -- so ``core/brand-ref.json``'s hostname
@@ -861,6 +871,7 @@ def _provisioning_gates(
     """
     return [
         lambda: _check_billing_policy(billing_val, identity),
+        lambda: _check_agent_billing_permission(billing_val, identity),
         lambda: _check_sandbox_capability(sandbox, tenant),
         lambda: _notification_configs_gate(entry, proof_failures.get(index)),
     ]
@@ -922,6 +933,42 @@ def _check_billing_policy(
             )
         ]
     return None
+
+
+def _check_agent_billing_permission(
+    billing_val: str | None,
+    identity: ResolvedIdentity,
+) -> list[GateFailure] | None:
+    """Refuse a billing value the calling buyer agent's commercial relationship does not allow.
+
+    The per-buyer-agent gate, distinct from the seller-wide capability gate before it
+    (enums/error-code.json BILLING_NOT_PERMITTED_FOR_AGENT; error-handling.mdx "Billing
+    and account setup"). A passthrough-only agent has no payments relationship, so only
+    ``operator`` can be invoiced and ``agent``/``advertiser`` are refused.
+
+    The identity is established by construction: a ``ResolvedIdentity`` principal IS the
+    seller's onboarding record for the credential, which is the "credential-to-agent
+    mapping" the code requires before it may be emitted. An unmapped caller never
+    reaches a protected tool.
+
+    ``details`` carries the pin's clamped shape and nothing else
+    (error-details/billing-not-permitted-for-agent.json, additionalProperties false):
+    the rejected value and ONE retry value. ``operator`` is suggested only when the
+    seller's capability accepts it; otherwise there is no value this agent can retry
+    with, and the absence tells the buyer to complete onboarding offline.
+    """
+    from src.core.billing_policy import resolve_supported_billing
+
+    if billing_val is None or billing_val == "operator" or not identity.principal.billing_passthrough_only:
+        return None
+    suggested = "operator" if "operator" in resolve_supported_billing(identity.tenant) else None
+    return [
+        GateFailure(
+            failure_class="billing_not_permitted_for_agent",
+            field="billing",
+            details=BillingNotPermittedForAgentDetails(rejected_billing=billing_val, suggested_billing=suggested),
+        )
+    ]
 
 
 def _extract_natural_key(entry: SyncEntry) -> NaturalKey:

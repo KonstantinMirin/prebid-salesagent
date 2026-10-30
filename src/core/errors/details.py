@@ -45,6 +45,7 @@ from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import ErrorCodeT
 
 __all__ = [
+    "BillingNotPermittedForAgentDetails",
     "BillingNotSupportedDetails",
     "ValidationDetails",
     "PricingValidationDetails",
@@ -744,3 +745,17 @@ class BillingNotSupportedDetails(ErrorDetails):
 
     scope: Literal["capability", "account"] | None = None
     supported_billing: list[str] | None = None
+
+
+class BillingNotPermittedForAgentDetails(ErrorDetails):
+    """``BILLING_NOT_PERMITTED_FOR_AGENT`` — ``error-details/billing-not-permitted-for-agent.json``.
+
+    The pin's two fields and no others: the schema is ``additionalProperties: false``
+    and forbids any per-agent commercial state (the permitted subset, rate card,
+    payment terms) because the clamp is what keeps the code from being an oracle.
+    ``suggested_billing`` is at most ONE retry value; absent means
+    terminal-pending-onboarding.
+    """
+
+    rejected_billing: str
+    suggested_billing: str | None = None

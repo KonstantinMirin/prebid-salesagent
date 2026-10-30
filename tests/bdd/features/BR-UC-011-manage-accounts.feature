@@ -696,10 +696,17 @@ Feature: BR-UC-011 Manage Accounts
     And the per-account error details rejected_billing is "agent"
     And the per-account error details suggested_billing is "operator"
     And the per-account error details do not include permitted_billing, rate_card, payment_terms, credit_limit, billing_entity, or account_id
-    # XFAIL-EXPECTED: production gap — GH #1772 (no per-buyer-agent commercial gate exists in production)
+    # Graduated (#1772): the per-buyer-agent gate reads the agent's onboarding record
+    # (principals.billing_passthrough_only) after the capability gate has accepted the value.
     # Clamped details shape (additionalProperties: false) — the per-agent code MUST NOT act as
     # a commercial-state oracle; only rejected_billing + optional suggested_billing may appear.
     # Only emitted under ESTABLISHED agent identity — unidentified callers get BILLING_NOT_SUPPORTED.
+    # Here every caller of a protected tool is a principal row, which IS the "credential-to-agent
+    # mapping in the seller's onboarding record" the code requires (error-handling.mdx).
+    # SELLER CHOICE (the pin says only "typically operator"): a passthrough-only agent can be
+    # invoiced through the operator alone, so suggested_billing is "operator" when the seller's
+    # supported_billing includes it and is omitted otherwise (terminal-pending-onboarding).
+    # @source repo=adcp ref=v3.2.7 path=docs/building/by-layer/L3/error-handling.mdx (Billing and account setup)
     # @source repo=adcp ref=v3.2.7 path=static/compliance/source/universal/billing-gate-dispatch.yaml pointer=phases/per_agent_gate_reject/steps/sync_accounts_passthrough_rejects_agent
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/error-details/billing-not-permitted-for-agent.json
 
@@ -715,7 +722,8 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent retries the sync_accounts request with the seller's suggested_billing value and a fresh idempotency_key
     Then the account for brand domain "acme-corp.com" has action "created"
     And the account billing is "operator"
-    # XFAIL-EXPECTED: production gap — GH #1772 (per-agent gate + autonomous recovery unimplemented)
+    # Graduated (#1772): the retry carries the suggested_billing value read off the rejection,
+    # as the storyboard's context_outputs capture it, not a value typed into the step.
     # The recover phase is NOT a replay: different payload requires a fresh idempotency_key
     # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/billing-gate-dispatch.yaml pointer=phases/per_agent_gate_recover/steps/sync_accounts_recover_with_suggested
 
@@ -839,6 +847,25 @@ Feature: BR-UC-011 Manage Accounts
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/notification_configs
     # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/notification-config-lifecycle.yaml pointer=phases/register_and_echo_paused_subscriber
+
+  @T-UC-011-notif-sandbox-register-paused @sync @notification-configs @sandbox @partition @boundary
+  Scenario: A sandbox account provisioned with a paused subscriber returns its account_id and echoes the subscriber
+    Given the Buyer is authenticated
+    And the seller declares account.sandbox equals true in capabilities
+    When the Buyer Agent sends a sync_accounts request provisioning a sandbox account for brand domain "acme-corp.com" with a paused notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/account-primary" and event_types "creative.status_changed, creative.purged"
+    Then the response is compliant with the sync_accounts success spec
+    And the provisioned account should have sandbox equals true
+    And the account should have a seller-assigned account_id
+    And the account notification_configs echo exactly 1 subscriber
+    And the echoed subscriber "buyer-primary" has url "https://buyer.example/webhooks/adcp/account-primary" and active false
+    And the echoed subscriber has event_types "creative.status_changed, creative.purged"
+    # The storyboard's own request shape: provisioning with sandbox true AND a paused
+    # subscriber in one entry. The account_id is what the storyboard's settings-update
+    # follow-up addresses the account by, so it is graded here, not assumed.
+    # A seller that declares account.sandbox accepts the entry; one that does not refuses it
+    # (T-UC-011-sandbox-capability-not-declared), which is a seller posture, not a defect.
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/notification-config-lifecycle.yaml pointer=phases/register_and_echo_paused_subscriber/steps/sync_accounts_create_paused_notification_config
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/account/properties/sandbox
 
   @T-UC-011-notif-replace-clear @sync @notification-configs @partition @boundary
   Scenario: Re-sending a subscriber_id replaces in place; an empty array clears the set

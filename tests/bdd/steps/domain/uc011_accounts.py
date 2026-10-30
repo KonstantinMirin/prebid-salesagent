@@ -439,18 +439,19 @@ def given_agent_passthrough_only(ctx: dict) -> None:
     capability ACCEPTS the requested value but the calling buyer agent's
     commercial relationship with the seller does not (e.g., the agent is
     onboarded as passthrough-only — no payments relationship — so ``agent`` and
-    ``advertiser`` reject)." The correct fixture therefore declares agent (and
-    advertiser) as *capability-supported* — the value is enum-valid AND in the
-    seller's supported_billing — so the ONLY thing that could reject it is the
-    per-buyer-agent commercial gate. Production has no such gate (GH #1772), so it
-    accepts the capability-supported value and provisions the account; that is
-    the gap these scenarios grade (strict xfail in conftest _XFAIL_TAGS).
+    ``advertiser`` reject)." The fixture therefore declares agent (and advertiser)
+    as *capability-supported* — the value is enum-valid AND in the seller's
+    supported_billing — so the ONLY thing that can reject it is the per-buyer-agent
+    commercial gate, and then records the agent's relationship where the seller
+    keeps it: the principal's onboarding row (``billing_passthrough_only``).
 
-    Real DB seeding via ``set_billing_policy`` (writes the tenant
-    ``supported_billing`` column) — NOT mock injection — so the setup is
-    e2e_rest-compatible.
+    Both writes are real DB state — the tenant ``supported_billing`` column and the
+    principal row — NOT mock injection, so the setup is the same on every transport,
+    e2e_rest included.
     """
+    _setup_tenant_and_principal(ctx)
     _set_billing_policy(ctx, ["operator", "agent", "advertiser"])
+    ctx["env"].register_agent_as_passthrough_only()
 
 
 def _set_approval_mode(ctx: dict, mode: str) -> None:
@@ -1733,11 +1734,11 @@ def then_operation_error_naming_field(ctx: dict, code: str, field: str) -> None:
 #     ``recovery`` and NO ``details`` (scope/supported_billing), and the rejected
 #     entry is NOT persisted (the loop ``continue``s), so a recovery retry with a
 #     supported value provisions a fresh account (action "created").
-#   - There is NO per-buyer-agent commercial gate anywhere in production: a
-#     capability-supported billing value ("agent" when the tenant declares it in
-#     supported_billing) is accepted and the account is provisioned. Production
-#     therefore never emits BILLING_NOT_PERMITTED_FOR_AGENT — the per-agent
-#     reject/recover scenarios stay strict tag-level xfails (conftest _XFAIL_TAGS).
+#   - The per-buyer-agent gate (_check_agent_billing_permission) runs after the
+#     capability gate: a capability-supported value the calling agent's onboarding
+#     record does not allow (passthrough-only: anything but "operator") is rejected
+#     with BILLING_NOT_PERMITTED_FOR_AGENT and the clamped details
+#     {rejected_billing, suggested_billing}, and the entry is not persisted.
 # ═══════════════════════════════════════════════════════════════════════
 
 
@@ -1790,18 +1791,19 @@ def when_retry_sync_with_billing(ctx: dict, billing: str) -> None:
     "the Buyer Agent retries the sync_accounts request with the seller's suggested_billing value and a fresh idempotency_key"
 )
 def when_retry_sync_with_suggested_billing(ctx: dict) -> None:
-    """Retry the prior request with the seller's suggested_billing value.
+    """Retry the prior request with the value the seller put in details.suggested_billing.
 
-    For a passthrough-only agent the single canonical retry value is
-    ``operator`` (error-details/billing-not-permitted-for-agent.json:
-    "Typically ``operator`` for passthrough-only agents"; examples[0] =
-    {"rejected_billing": "agent", "suggested_billing": "operator"}). Production
-    never emits ``suggested_billing`` (no per-agent gate, GH #1772), so this leg is
-    only reached after the scenario has already xfailed on the missing
-    BILLING_NOT_PERMITTED_FOR_AGENT error — the step exists so the scenario runs
-    non-dormant.
+    READ OFF THE PRIOR RESPONSE, the way the storyboard captures it
+    (billing-gate-dispatch.yaml per_agent_gate_reject ``context_outputs:
+    accounts[0].errors[0].details.suggested_billing``), never typed here: a retry that
+    hard-coded ``operator`` would pass the recover leg whatever the seller suggested,
+    or whether it suggested anything at all. An absent suggestion means
+    terminal-pending-onboarding (error-details/billing-not-permitted-for-agent.json),
+    so there is nothing to retry with and the step fails rather than inventing one.
     """
-    _retry_sync_with_billing(ctx, "operator")
+    suggested = _agent_gate_error_details(ctx).get("suggested_billing")
+    assert suggested, "the seller suggested no billing value to retry with (details.suggested_billing absent)"
+    _retry_sync_with_billing(ctx, suggested)
 
 
 def _last_account_errors(ctx: dict) -> list[Any]:
@@ -3630,22 +3632,29 @@ def _notif_config(
     return entry
 
 
-def _notif_entry(domain: str, notification_configs: list[dict[str, Any]]) -> dict[str, Any]:
+def _notif_entry(domain: str, notification_configs: list[dict[str, Any]], *, sandbox: bool = False) -> dict[str, Any]:
     """The one provisioning accounts[] entry every notification_configs scenario sends.
 
     Shared by the typed dispatch below and by the event-scope When, which must send the
     SAME entry as a literal payload because the value it carries is schema-invalid on
-    purpose and so cannot survive ``SyncAccountsRequest``.
+    purpose and so cannot survive ``SyncAccountsRequest``. ``sandbox`` is sent only when
+    asked for: the key is part of the natural key, so an omitted flag and ``false`` are
+    the same production account and every pre-existing caller stays byte-identical.
     """
-    return {
+    entry: dict[str, Any] = {
         "brand": {"domain": domain},
         "operator": domain,
         "billing": "operator",
         "notification_configs": notification_configs,
     }
+    if sandbox:
+        entry["sandbox"] = True
+    return entry
 
 
-def _dispatch_sync_notification(ctx: dict, domain: str, notification_configs: list[dict[str, Any]]) -> None:
+def _dispatch_sync_notification(
+    ctx: dict, domain: str, notification_configs: list[dict[str, Any]], *, sandbox: bool = False
+) -> None:
     """Dispatch a sync_accounts request carrying a notification_configs array for one account.
 
     THE POSITIVE-PATH DISPATCH for this surface: every caller sends a document the pinned
@@ -3666,7 +3675,8 @@ def _dispatch_sync_notification(ctx: dict, domain: str, notification_configs: li
     from src.core.schemas.account import SyncAccountsRequest
 
     req = SyncAccountsRequest(
-        idempotency_key=fresh_idempotency_key(), accounts=[_notif_entry(domain, notification_configs)]
+        idempotency_key=fresh_idempotency_key(),
+        accounts=[_notif_entry(domain, notification_configs, sandbox=sandbox)],
     )
     dispatch_request(ctx, req=req, signed=ctx.get("signed", False))
 
@@ -3982,6 +3992,28 @@ def when_sync_provision_paused_subscriber(ctx: dict, domain: str, sub: str, url:
     auth = {"schemes": ["Bearer"], "credentials": credential}
     cfg = _notif_config(sub, url, ets, active=False, authentication=auth)
     _dispatch_sync_notification(ctx, domain, [cfg])
+
+
+@when(
+    parsers.re(
+        r"the Buyer Agent sends a sync_accounts request provisioning a sandbox account for brand domain "
+        r'"(?P<domain>[^"]+)" with a paused notification config subscriber "(?P<sub>[^"]+)" for url '
+        r'"(?P<url>[^"]+)" and event_types "(?P<ets>[^"]+)"'
+    )
+)
+def when_sync_provision_sandbox_paused_subscriber(ctx: dict, domain: str, sub: str, url: str, ets: str) -> None:
+    """Provision a SANDBOX account carrying one paused subscriber, as the storyboard sends it.
+
+    The shape of notification-config-lifecycle.yaml ``sync_accounts_create_paused_notification_config``:
+    a provisioning entry with ``sandbox: true`` and one ``active: false`` subscriber. Both
+    halves are graded apart elsewhere (sandbox provisioning, paused registration); this is
+    the combination the storyboard sends, where a seller whose sandbox posture refuses the
+    entry never reaches the subscriber at all. A conformant document, so it goes through
+    the typed positive-path dispatch.
+    """
+    ctx["notif_domain"] = domain
+    cfg = _notif_config(sub, url, ets, active=False)
+    _dispatch_sync_notification(ctx, domain, [cfg], sandbox=True)
 
 
 @when(
