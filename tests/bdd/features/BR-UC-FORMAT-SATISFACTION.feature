@@ -2175,6 +2175,34 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # and the entry fails -- and nothing is written.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image.json pointer=/properties/slots/default
 
+  @T-UC-FORMAT-SATISFACTION-manifest-library-kind-unknown @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives refuses a creative whose format_kind is outside the pinned vocabulary - <kind>
+    Given the buyer syncs a canonical "<kind>" creative carrying the "image_300x250" manifest
+    When the Buyer Agent syncs it into the library
+    Then the creative is reported failed with INVALID_REQUEST at "format_kind" and nothing is stored
+
+    Examples:
+      | kind          |
+      | display_image |
+      | video         |
+
+    # "REJECT UNKNOWN SELECTIONS" (creative-manifests.mdx § Validation step 5) starts at the
+    # kind. core/creative-asset.json types format_kind as core/canonical-format-kind.json, an
+    # enum the pin calls "closed for producer validation: sellers do not mint ad-hoc values",
+    # and "SDKs may retain unknown future values in tolerant in-memory parsers, but that does
+    # not change versioned JSON Schema validation". display_image is the v1 registry's
+    # canonical name for a sized display image and video is an asset type; neither is one of
+    # the sixteen kinds. The accept row is @T-UC-FORMAT-SATISFACTION-manifest-library-accepted:
+    # the same manifest under kind image, stored.
+    #
+    # THE CODE is INVALID_REQUEST, which enums/error-code.json gives to a request that
+    # "violates schema constraints"; VALIDATION_ERROR is for violations "beyond schema
+    # validation", and an out-of-enum value is a schema violation. The refusal is per item:
+    # the batch completes, the entry fails naming format_kind, and nothing is written.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/canonical-format-kind.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-asset.json pointer=/properties/format_kind
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
+
   @T-UC-FORMAT-SATISFACTION-manifest-legacy-only-product-accepted @format_satisfaction_sync @requires_db
   Scenario: a canonical creative filling its kind's slots is assigned to a product publishing no declaration
     Given a packaged product declaring only the deprecated format_ids

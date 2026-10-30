@@ -1615,17 +1615,15 @@ def _canonical_claim(creative_id: str, kind: str, **members: Any) -> dict[str, A
     The assets fill the kind's required slots (``canonical_assets``): the seller grades a
     canonical manifest against the declaration it selects, or its kind when it selects none
     (creative-manifests.mdx § Validation), so the factory's default ``image``-keyed asset
-    would be a manifest missing ``image_main``. *members* may replace them.
+    would be a manifest missing ``image_main``. *members* may replace them, and must for a
+    kind outside the pinned vocabulary, which declares no slots to fill.
     """
     from tests.factories.creative_asset import canonical_assets
     from tests.factories.request import OMIT, CreativeAssetRequestFactory
 
-    return CreativeAssetRequestFactory.payload(
-        creative_id=creative_id,
-        format_id=OMIT,
-        format_kind=kind,
-        **{"assets": canonical_assets(kind), **members},
-    )
+    if "assets" not in members:
+        members["assets"] = canonical_assets(kind)
+    return CreativeAssetRequestFactory.payload(creative_id=creative_id, format_id=OMIT, format_kind=kind, **members)
 
 
 def _mixed_identity_creative(format_id: str, kind: str) -> dict[str, Any]:
