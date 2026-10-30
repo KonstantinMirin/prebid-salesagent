@@ -37,6 +37,18 @@ from tests.helpers.peer_creative_agent import (
 )
 from tests.helpers.tls_material import trust_test_ca
 
+#: A creative agent that does not answer: the shared TLS front's own name, so the egress
+#: gate resolves it and lets the dial through, at a port nothing listens on. A made-up host
+#: fails DNS inside the gate instead, which is a VALIDATION_ERROR on the buyer's agent_url
+#: -- a different outcome from an agent that is down. Not the operator agent (another
+#: port), so a format named here is a counterparty reference the seller has to dial.
+UNREACHABLE_AGENT_URL = "https://creative-agent.adcp.test:8444/api/creative-agent"
+
+
+def _unreachable_agent_on_the_live_stack(env: PeerCreativeAgentMixin) -> str:
+    """On the live stack nothing listens at the URL, so the server's own dial fails."""
+    return UNREACHABLE_AGENT_URL
+
 
 def _serve_peer_tool_on_the_live_stack(
     env: PeerCreativeAgentMixin, key: str, tool: str, document: dict[str, Any]
@@ -253,3 +265,32 @@ class PeerCreativeAgentMixin(EgressHatchMixin):
         asked nothing" read off an agent nobody configured is true of every scenario.
         """
         return self.peer_tool_calls(self._require_hosted_key(), tool)
+
+    @realize_e2e(_unreachable_agent_on_the_live_stack)
+    def unreachable_creative_agent_url(self) -> str:
+        """The URL of a creative agent that does not answer, for the lifetime of this env.
+
+        On e2e the live server dials it and nothing answers. In process the test CA does
+        not front that port and the private-range hatch is not this env's to open, so the
+        dial itself is what fails: the registry's egress call to this agent raises
+        ``OutboundDeliveryFailed``, the type the seam gives every undelivered request, and
+        every other destination is sent as before. Everything above the dial -- the
+        registry's routing of a counterparty URL, ``raise_mapped_outbound_error``, the
+        format fetch and the sync's transient handling -- is production's on both paths.
+        """
+        from unittest.mock import patch
+
+        from src.core import creative_agent_registry
+        from src.core.security.egress.attempts import OutboundDeliveryFailed
+
+        send = creative_agent_registry.asend
+
+        async def dial(url: str, **kwargs: Any) -> Any:
+            if url.startswith(UNREACHABLE_AGENT_URL):
+                raise OutboundDeliveryFailed(attempts=1, http_status=None)
+            return await send(url, **kwargs)
+
+        patcher = patch.object(creative_agent_registry, "asend", dial)
+        patcher.start()
+        self._guard("unreachable creative agent", patcher.stop)
+        return UNREACHABLE_AGENT_URL
