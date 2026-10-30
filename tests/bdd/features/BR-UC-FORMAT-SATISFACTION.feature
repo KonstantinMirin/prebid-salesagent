@@ -661,7 +661,8 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   # that publisher and other.example, streamhaus_only the first alone.
   #
   # Seller choice, recorded: a slice no declaration applies to is an empty set and fails
-  # closed for every selection. The pin's "an indeterminate slice fails closed" has no other
+  # closed for every selection, a package naming no selector included
+  # (publisher-slices-empty-uncovered). The pin's "an indeterminate slice fails closed" has no other
   # instance here, because every declaration this seller stores is inline and resolves
   # without the publisher's adagents.json.
   #
@@ -698,6 +699,33 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # the refusal; one that refused every publisher-scoped selection reddens streamhaus_only.
     # no_selector "selects all formats supported by the product" (package-request.json),
     # which include the product-local option every slice accepts.
+
+  @T-UC-FORMAT-SATISFACTION-publisher-slices-empty-covered @format_satisfaction @requires_db
+  Scenario: a package naming no selector is accepted when every option is scoped to its one publisher
+    Given the seller declares canonical format options "publisher_only_options" across publishers "streamhaus_only"
+    And the buyer's package selects "no_selector"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+  @T-UC-FORMAT-SATISFACTION-publisher-slices-empty-uncovered @format_satisfaction @requires_db
+  Scenario: a package naming no selector is refused when a publisher's slice is empty
+    Given the seller declares canonical format options "publisher_only_options" across publishers "streamhaus_and_other"
+    And the buyer's package selects "no_selector"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the package's product for the uncovered publisher slice "other.example"
+
+    # The recorded seller choice above, graded: publisher_only_options scopes both options to
+    # shorts.streamhaus.example, so other.example's slice is empty. The package names no
+    # selector and so "selects all formats supported by the product" (package-request.json),
+    # yet none of them applies to that slice; accepting it would buy other.example's
+    # inventory with no format that can serve it, which formats.mdx forbids ("it must not
+    # silently remove inventory"). The accept control differs in one thing: streamhaus_only
+    # drops other.example. A seller treating a selector-less package as covered by
+    # construction accepts the refusal; one refusing every publisher-scoped product reddens
+    # the control. The buyer selected nothing, so the refusal points at
+    # packages[0].product_id and its rejected_value is the empty slice's publisher_domain.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/formats.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
 
   @T-UC-FORMAT-SATISFACTION-publisher-slices-creatives-covered @format_satisfaction @requires_db
   Scenario Outline: creatives that cover every publisher's slice are accepted - <publishers> <manifests>

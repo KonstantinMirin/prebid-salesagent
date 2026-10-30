@@ -307,6 +307,13 @@ _MREC, _LEADERBOARD = _DECLARATIONS["two_image_options"]
 #: ``_PUBLISHER_DOMAIN``'s (formats.mdx § Matching and satisfaction).
 _DECLARATIONS["local_and_publisher_options"] = [_MREC, {**_LEADERBOARD, "publisher_domain": _PUBLISHER_DOMAIN}]
 
+#: ``two_image_options`` with BOTH options scoped to ``_PUBLISHER_DOMAIN``: no option is
+#: product-local, so in a product also sold across another publisher that publisher's slice
+#: is empty, and nothing any package selects can cover it.
+_DECLARATIONS["publisher_only_options"] = [
+    {**option, "publisher_domain": _PUBLISHER_DOMAIN} for option in (_MREC, _LEADERBOARD)
+]
+
 #: The publisher no option is scoped to, beside ``_PUBLISHER_DOMAIN`` in a multi-publisher product.
 _OTHER_PUBLISHER_DOMAIN = "other.example"
 
@@ -2094,6 +2101,23 @@ def then_refused_unresolved_placement(ctx: dict, arm: str, placement_id: str) ->
     the seller resolves the publisher's catalog for it.
     """
     _assert_placement_refusal(ctx, arm, "placement_unresolved", placement_id)
+
+
+@then(
+    parsers.parse(
+        'the buyer is refused UNSUPPORTED_FEATURE naming the package\'s product for the uncovered publisher slice "{slice_id}"'
+    )
+)
+def then_refused_uncovered_slice_without_selector(ctx: dict, slice_id: str) -> None:
+    """The coverage refusal for a package that named NO selector, at ``packages[0].product_id``.
+
+    Such a package "selects all formats supported by the product"
+    (``media-buy/package-request.json``), so no arm is at fault and the pointer names the
+    product the buyer chose. ``details.rejected_value`` is the slice left unserved -- the
+    buyer supplied no value -- named by its ``publisher_domain``, as the creative-set
+    refusal names it.
+    """
+    _assert_placement_refusal(ctx, "product_id", "placement_uncovered", slice_id)
 
 
 def _assert_placement_refusal(ctx: dict, arm: str, capability: str, rejected: str) -> None:

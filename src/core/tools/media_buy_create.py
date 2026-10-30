@@ -950,7 +950,7 @@ def _resolve_package_selectors(
         # here and answered VALIDATION_ERROR by the package loop, which the contract leaves
         # no room for.
         if verdict is not None:
-            assert verdict.field is not None, "a selector route always names its request field"
+            assert verdict.field is not None, "a selector refusal names a package field: its route's, or product_id"
             raise canonical_refusal(
                 verdict,
                 field=package_field_path(verdict.field, pkg_index),
