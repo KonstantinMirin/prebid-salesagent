@@ -2626,6 +2626,8 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | responsive_pool_limits      | responsive_creative | responsive_logo_4_1             |
       | responsive_pool_limits      | responsive_creative | responsive_logo_150kb           |
       | responsive_pool_limits      | responsive_creative | responsive_image_150kb          |
+      | native_image_cap            | native_in_feed      | native_main_image_100kb         |
+      | native_image_cap            | native_in_feed      | native_icon_100kb               |
 
   @T-UC-FORMAT-SATISFACTION-manifest-sync-flat-slot-params-refused @format_satisfaction_sync @requires_db
   Scenario Outline: sync_creatives refuses an assignment whose slot fails a limit the declaration states flat - <declaration> <manifest>
@@ -2657,6 +2659,9 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | responsive_pool_limits      | responsive_creative | responsive_logo_2_1              | CREATIVE_SIZE_MISMATCH             | assets.logo[0]                             | 200:100  | 1:1, 4:1 |
       | responsive_pool_limits      | responsive_creative | responsive_logo_150_001b         | CREATIVE_VALIDATION_FAILED_GENERIC | assets.logo[0].file_size_bytes             | 150001   | 150      |
       | responsive_pool_limits      | responsive_creative | responsive_image_150_001b        | CREATIVE_VALIDATION_FAILED_GENERIC | assets.images_landscape[0].file_size_bytes | 150001   | 150      |
+      | native_image_cap            | native_in_feed      | native_main_image_100_001b       | CREATIVE_VALIDATION_FAILED_GENERIC | assets.main_image.file_size_bytes          | 100001   | 100      |
+      | native_image_cap            | native_in_feed      | native_icon_100_001b             | CREATIVE_VALIDATION_FAILED_GENERIC | assets.icon.file_size_bytes                | 100001   | 100      |
+      | native_image_cap            | native_in_feed      | native_main_image_102_400b       | CREATIVE_VALIDATION_FAILED_GENERIC | assets.main_image.file_size_bytes          | 102400   | 100      |
 
   @T-UC-FORMAT-SATISFACTION-manifest-sync-flat-slot-params-missing @format_satisfaction_sync @requires_db
   Scenario Outline: sync_creatives refuses an assignment missing what the declaration requires flat - <declaration> <manifest>
@@ -2721,6 +2726,12 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # shape is a size, so that row is CREATIVE_SIZE_MISMATCH; a count, a duration, a file
     # size and a media type are not.
     #
+    # THE NATIVE UNIT'S IMAGES. native_in_feed.json's max_image_file_size_kb is "Maximum file
+    # size in kilobytes for main_image and icon", the two image slots the format declares, so
+    # each is held to it in decimal kilobytes: 100,000 bytes is accepted, 100,001 is refused,
+    # and so is 102,400, which is 100 binary kilobytes. It is the same cap
+    # asset_image_max_file_size_kb states on the responsive creative, spelled the other way.
+    #
     # SELLER CHOICES the pin leaves open, recorded here and asked upstream in
     # adcontextprotocol/adcp#8629: max_cards is a "narrowing" parameter (_base.json:
     # "Format-level narrowing parameters"), so with the slot's own max of 10 the stricter of
@@ -2730,6 +2741,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # and video as allowed.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image_carousel.json
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/card-asset.json pointer=/properties/media
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/native_in_feed.json pointer=/properties/max_image_file_size_kb
     # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx section="Technical completeness and file-size units"
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/_base.json pointer=/properties/slots/description
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/responsive_creative.json

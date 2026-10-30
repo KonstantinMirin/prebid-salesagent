@@ -86,7 +86,8 @@ WHAT THIS MODULE DOES NOT DO, deliberately:
   track (:func:`_level_shortfalls`). So are ``cta_values`` (:func:`_closed_value_shortfalls`,
   CREATIVE_VALUE_NOT_ALLOWED), a carousel's card count and what it states about each card's
   ``media`` (:func:`_card_media_shortfalls`), and a responsive creative's video duration
-  bounds, logo aspect ratios and image file-size cap. Not read: ``om_sdk_required``, which no
+  bounds, logo aspect ratios and image file-size cap, and a native unit's image file-size cap
+  (``max_image_file_size_kb``). Not read: ``om_sdk_required``, which no
   manifest member states (adcontextprotocol/adcp#8627 asks how a seller is meant to validate it).
 """
 
@@ -1196,6 +1197,16 @@ _FLAT_SLOT_SUFFIXES: tuple[tuple[str, str], ...] = (
 #: ``max_width`` or ``max_file_size_kb`` name no slot and stay the main media's params.
 _FLAT_SLOT_PREFIXES: tuple[tuple[str, str], ...] = (("min_", "min"), ("max_", "max"))
 
+#: A per-asset-type file-size cap spelled with the bound FIRST, ``max_<type>_file_size_kb``:
+#: native_in_feed.json ``max_image_file_size_kb``, "Maximum file size in kilobytes for
+#: main_image and icon" -- the two image slots that format declares. So it names the same
+#: role responsive_creative.json's ``asset_image_max_file_size_kb`` does, every slot holding
+#: an image (``asset_<type>``, :func:`_effective_slot`), and is that slot's ``max_size_kb``
+#: in decimal kilobytes (canonical-formats.mdx: "1 KB = 1,000 bytes"). Tried before the
+#: prefixes, so ``max_`` never reads it as a count; the main media's own ``max_file_size_kb``
+#: names no type and is left to them.
+_TYPED_FILE_SIZE_SUFFIX = "_file_size_kb"
+
 #: The two asset types a card's ``media`` may carry (core/assets/card-asset.json: "Either an
 #: ``image`` or ``video`` asset"), which is also how image_carousel.json names the per-type
 #: limits on it: ``card_image_max_file_size_kb``, ``card_video_max_file_size_kb``,
@@ -1213,12 +1224,16 @@ _DEFAULT_CARD_MEDIA_TYPES: tuple[str, ...] = ("image",)
 def _flat_constraint(key: str) -> tuple[str, str]:
     """The slot constraint flat declaration param *key* states, and the role it names.
 
-    ``("", "")`` when the name has neither a suffix (:data:`_FLAT_SLOT_SUFFIXES`) nor a
-    prefix (:data:`_FLAT_SLOT_PREFIXES`) this module reads.
+    ``("", "")`` when the name has neither a suffix (:data:`_FLAT_SLOT_SUFFIXES`), nor the
+    typed file-size spelling (:data:`_TYPED_FILE_SIZE_SUFFIX`), nor a prefix
+    (:data:`_FLAT_SLOT_PREFIXES`) this module reads.
     """
     for suffix, constraint in _FLAT_SLOT_SUFFIXES:
         if key.endswith(suffix):
             return constraint, key[: -len(suffix)]
+    if key.startswith("max_") and key.endswith(_TYPED_FILE_SIZE_SUFFIX):
+        if asset_type := key[len("max_") : -len(_TYPED_FILE_SIZE_SUFFIX)]:
+            return "max_size_kb", f"asset_{asset_type}"
     for prefix, constraint in _FLAT_SLOT_PREFIXES:
         if key.startswith(prefix):
             return constraint, key[len(prefix) :]
@@ -1251,7 +1266,10 @@ def _effective_slot(slot: Mapping[str, Any], declared: Mapping[str, Any]) -> dic
     ``asset_<type>_<suffix>`` names every slot holding that asset type:
     responsive_creative.json ``asset_image_max_file_size_kb`` caps each image the pool holds,
     whichever slot it fills. That reading of a name the pin gives no description is this
-    seller's: the role is no slot's, and the asset type is the only thing it can name.
+    seller's: the role is no slot's, and the asset type is the only thing it can name. The
+    pin's own description of the same cap on native_in_feed.json, ``max_image_file_size_kb``
+    (:data:`_TYPED_FILE_SIZE_SUFFIX`), names exactly the format's image slots, which is that
+    reading.
 
     A CARD slot also carries what image_carousel.json states about each card's ``media``
     (core/assets/card-asset.json: "Either an ``image`` or ``video`` asset, matching the parent

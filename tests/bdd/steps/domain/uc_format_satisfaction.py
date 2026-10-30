@@ -405,6 +405,16 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "params": {"cta_values": ["WATCH_MORE", "SHOP_NOW"]},
         }
     ],
+    # A native unit capping its images at 100 KB: native_in_feed.json ``max_image_file_size_kb``,
+    # "Maximum file size in kilobytes for main_image and icon". The default slots are kept, so
+    # both image slots are the canonical optional ones.
+    "native_image_cap": [
+        {
+            "format_kind": "native_in_feed",
+            "format_option_id": "satisfaction_native_image_cap",
+            "params": {"max_image_file_size_kb": 100},
+        }
+    ],
     # A VERTICAL hosted video stating no aspect_ratio. video_hosted.json: "Vertical = 9:16",
     # and aspect_ratio is "Inferred from orientation if omitted".
     "vertical_video": [
@@ -683,6 +693,11 @@ def _manifest(name: str) -> dict[str, Any]:
         url_spec("landing_page_url", url="https://example.com/trail-pro"),
     )
 
+    def native_image(role: str, file_size_bytes: int) -> dict[str, Any]:
+        """The native unit's required assets beside one image in *role* of *file_size_bytes*."""
+        image = image_spec(role, width=1200, height=627).with_fields(file_size_bytes=file_size_bytes)
+        return build_assets(*native, image)
+
     def rendition(width: int, height: int, **fields: object) -> Any:
         """One rendition of the 300x250 in an ``image_main`` array, at *width* x *height* intrinsic."""
         return manifest_image_spec("image_main", width=width, height=height, multiple=True).with_fields(**fields)
@@ -825,6 +840,14 @@ def _manifest(name: str) -> dict[str, Any]:
         "image_cta_lowercase": lambda: build_assets(mrec, text_spec("cta", content="shop_now")),
         "native_cta_sign_up": lambda: build_assets(*native, text_spec("cta", content="SIGN_UP")),
         "native_cta_download": lambda: build_assets(*native, text_spec("cta", content="DOWNLOAD")),
+        # THE NATIVE IMAGE CAP, against ``native_image_cap``: the main image and the icon at
+        # 100,000 bytes and one byte over, and the main image at 102,400 bytes -- 100 binary
+        # kilobytes, over the cap only in the decimal kilobytes the pin states.
+        "native_main_image_100kb": lambda: native_image("main_image", 100_000),
+        "native_icon_100kb": lambda: native_image("icon", 100_000),
+        "native_main_image_100_001b": lambda: native_image("main_image", 100_001),
+        "native_icon_100_001b": lambda: native_image("icon", 100_001),
+        "native_main_image_102_400b": lambda: native_image("main_image", 102_400),
         "video_cta_watch_more": lambda: build_assets(clip, text_spec("cta", content="WATCH_MORE")),
         "video_cta_learn_more": lambda: build_assets(clip, text_spec("cta", content="LEARN_MORE")),
         # AUDIO: the spot at another duration or codec, and over the 1 MB cap by 40,000 bytes.
