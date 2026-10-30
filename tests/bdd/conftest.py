@@ -470,6 +470,24 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: UC-003 ext-t — invoice_recipient authorization (BR-RULE-214) not implemented;
     # production accepts the override without an authorization check, so no VALIDATION_ERROR is raised.
     "T-UC-003-ext-t": "invoice_recipient authorization not implemented (BR-RULE-214) — production gap",
+    # ── create_media_buy and update_media_buy disagree (#2483) ──
+    # Each scenario states, on update_media_buy, work create_media_buy already does. Neither
+    # tool is patched alone: #2483 moves both onto shared services, and each entry
+    # graduates (XPASS strict on all four transports) when it lands.
+    "T-UC-003-local-inline-creatives-ad-server-push": (
+        "update_media_buy syncs and assigns a package's inline creatives but never calls the "
+        "ad server's add_creative_assets, which create_media_buy does; create and update "
+        "disagree — prebid/salesagent#2483"
+    ),
+    # The tenant arm of BR-RULE-017. Its Given now sets the tenant flag alone (see
+    # given_tenant_human_review_flag), so the scenario grades the tenant column; before, the
+    # Given also raised the adapter's flag and the pass rode the adapter arm.
+    "T-UC-003-approval-tenant": (
+        "update_media_buy consults only the adapter's manual_approval_required, never "
+        "tenant.human_review_required, which create_media_buy treats as authoritative, so a "
+        "tenant-only review answers completed where submitted is owed; create and update "
+        "disagree — prebid/salesagent#2483"
+    ),
     # Graduated: T-UC-003-ext-u (new_packages refused UNSUPPORTED_FEATURE). XPASS(strict) on
     # a2a, mcp, rest and e2e_rest in box run innet_291026_0131. Inspected per
     # .claude/rules/workflows/xpass-graduation.md: the scenario states the full obligation
@@ -1877,8 +1895,9 @@ _LEDGER_INVOICE_RECIPIENT = (
 )
 _LEDGER_UPDATE_TENANT_REVIEW = (
     "update_media_buy consults only the adapter's manual_approval_required, never "
-    "tenant.human_review_required, so the tenant-only row answers completed where it expects "
-    "submitted; owner decision"
+    "tenant.human_review_required, which create_media_buy treats as authoritative, so the "
+    "tenant-only row answers completed where it expects submitted; create and update disagree "
+    "— prebid/salesagent#2483"
 )
 
 
@@ -2301,6 +2320,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         #   _submitted_wire_dict (loud failure if wire_response missing on non-IMPL).
         # - T-UC-003-approval-tenant → GRADUATE — BR-RULE-017 INV-2: same real-wire path;
         #   status "submitted" asserted on the typed payload parsed from the live wire.
+        #   That pass rode the adapter flag its Given also raised; with the Given setting the
+        #   tenant flag alone it is xfailed in _XFAIL_TAGS against #2483 on every transport.
         # - T-UC-003-approval-adapter → GRADUATE — BR-RULE-017 INV-3: same real-wire path;
         #   the last_a2a_task guard is Transport.A2A-gated and inert on e2e_rest.
         # No UC-003 entries remain in e2e_rest_known_failures.txt — no sibling conflict.

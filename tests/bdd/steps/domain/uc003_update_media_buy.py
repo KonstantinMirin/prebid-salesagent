@@ -2427,19 +2427,24 @@ def given_request_with_budget_update(ctx: dict) -> None:
 def given_tenant_human_review_flag(ctx: dict, tenant_flag: str) -> None:
     """Set the tenant's human_review_required flag for approval workflow tests.
 
-    Delegates to the existing auto-approval / manual-approval helpers in
-    given_media_buy.py, which also configure the adapter mock and identity cache.
+    The sentence names one input, so "true" sets one: ``given_tenant_review_only`` raises the
+    tenant column and leaves every adapter as a real one with its own flag off, in process
+    and on the live server alike. It used to delegate to ``given_tenant_manual_approval``,
+    which raises the adapter's flag too, so @T-UC-003-approval-tenant ("tenant requires
+    manual review", BR-RULE-017 INV-2) passed on the adapter arm and graded nothing about
+    the tenant. The approval-workflow outlines follow this Given with their own adapter
+    Given, so their rows are unchanged.
     """
     from tests.bdd.steps.generic.given_media_buy import (
         given_tenant_auto_approval,
-        given_tenant_manual_approval,
+        given_tenant_review_only,
     )
 
     flag = tenant_flag.strip().lower()
     if flag == "false":
         given_tenant_auto_approval(ctx)
     elif flag == "true":
-        given_tenant_manual_approval(ctx)
+        given_tenant_review_only(ctx)
     else:
         raise ValueError(f"Unknown tenant_flag: {tenant_flag}")
 

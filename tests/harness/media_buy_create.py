@@ -547,7 +547,7 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
 
     @realize_e2e(_uploaded_assets_from_the_audit_trail)
     def uploaded_adapter_assets(self) -> list[dict[str, Any]]:
-        """The asset dicts the create path handed the ad server, newest call last.
+        """The asset dicts the create or update path handed the ad server, in :meth:`adapter_mocks` order.
 
         A NAMED SEAM instead of a step reaching into ``env.mock``: the escape-hatch guard
         refuses that reach in a step because it "works in-process, cannot work on e2e_rest,
@@ -565,13 +565,31 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
         ``adapter.creatives_manager.add_creative_assets`` instead; a scenario wanting those
         needs its own seam rather than a widened one here, because which path ran is part of
         what it is asserting.
+
+        Every adapter in :meth:`adapter_mocks` is read: an upload the update path makes lands
+        on the update module's adapter and nowhere else, so reading only the create module's
+        would report an empty list for every update. The order is NOT newest-last across
+        adapters: each adapter's calls are in call order, and the adapters follow
+        :meth:`adapter_mocks`, so every create-module upload precedes every update-module one
+        whenever they happened. A Then reading ``[-1]`` gets the newest update upload in a
+        scenario that updates, and the newest create upload in one that only creates.
         """
-        adapter = self.mock["adapter"].return_value
         uploaded: list[dict[str, Any]] = []
-        for call in adapter.add_creative_assets.call_args_list:
-            assets = call.args[1] if len(call.args) > 1 else call.kwargs.get("assets")
-            uploaded.extend(assets or [])
+        for adapter in self.adapter_mocks():
+            for call in adapter.add_creative_assets.call_args_list:
+                assets = call.args[1] if len(call.args) > 1 else call.kwargs.get("assets")
+                uploaded.extend(assets or [])
         return uploaded
+
+    def adapter_mocks(self) -> list[MagicMock]:
+        """Every ad-server adapter this env patches, one entry per production ``get_adapter``.
+
+        The one list a Given configuring the adapter and a Then reading what it received
+        both walk, so a module that gains its own patched ``get_adapter`` is added here once
+        and both sides see it. This env patches the create module's; a subclass that patches
+        another module's overrides this and appends its own.
+        """
+        return [self.mock["adapter"].return_value]
 
     def report_creative_deadline(self, deadline: datetime) -> None:
         """Make the ad server report *deadline* as the creative_deadline of every order it creates.
