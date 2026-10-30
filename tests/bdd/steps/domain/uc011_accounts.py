@@ -3632,22 +3632,29 @@ def _notif_config(
     return entry
 
 
-def _notif_entry(domain: str, notification_configs: list[dict[str, Any]]) -> dict[str, Any]:
+def _notif_entry(domain: str, notification_configs: list[dict[str, Any]], *, sandbox: bool = False) -> dict[str, Any]:
     """The one provisioning accounts[] entry every notification_configs scenario sends.
 
     Shared by the typed dispatch below and by the event-scope When, which must send the
     SAME entry as a literal payload because the value it carries is schema-invalid on
-    purpose and so cannot survive ``SyncAccountsRequest``.
+    purpose and so cannot survive ``SyncAccountsRequest``. ``sandbox`` is sent only when
+    asked for: the key is part of the natural key, so an omitted flag and ``false`` are
+    the same production account and every pre-existing caller stays byte-identical.
     """
-    return {
+    entry: dict[str, Any] = {
         "brand": {"domain": domain},
         "operator": domain,
         "billing": "operator",
         "notification_configs": notification_configs,
     }
+    if sandbox:
+        entry["sandbox"] = True
+    return entry
 
 
-def _dispatch_sync_notification(ctx: dict, domain: str, notification_configs: list[dict[str, Any]]) -> None:
+def _dispatch_sync_notification(
+    ctx: dict, domain: str, notification_configs: list[dict[str, Any]], *, sandbox: bool = False
+) -> None:
     """Dispatch a sync_accounts request carrying a notification_configs array for one account.
 
     THE POSITIVE-PATH DISPATCH for this surface: every caller sends a document the pinned
@@ -3668,7 +3675,8 @@ def _dispatch_sync_notification(ctx: dict, domain: str, notification_configs: li
     from src.core.schemas.account import SyncAccountsRequest
 
     req = SyncAccountsRequest(
-        idempotency_key=fresh_idempotency_key(), accounts=[_notif_entry(domain, notification_configs)]
+        idempotency_key=fresh_idempotency_key(),
+        accounts=[_notif_entry(domain, notification_configs, sandbox=sandbox)],
     )
     dispatch_request(ctx, req=req, signed=ctx.get("signed", False))
 
@@ -3984,6 +3992,28 @@ def when_sync_provision_paused_subscriber(ctx: dict, domain: str, sub: str, url:
     auth = {"schemes": ["Bearer"], "credentials": credential}
     cfg = _notif_config(sub, url, ets, active=False, authentication=auth)
     _dispatch_sync_notification(ctx, domain, [cfg])
+
+
+@when(
+    parsers.re(
+        r"the Buyer Agent sends a sync_accounts request provisioning a sandbox account for brand domain "
+        r'"(?P<domain>[^"]+)" with a paused notification config subscriber "(?P<sub>[^"]+)" for url '
+        r'"(?P<url>[^"]+)" and event_types "(?P<ets>[^"]+)"'
+    )
+)
+def when_sync_provision_sandbox_paused_subscriber(ctx: dict, domain: str, sub: str, url: str, ets: str) -> None:
+    """Provision a SANDBOX account carrying one paused subscriber, as the storyboard sends it.
+
+    The shape of notification-config-lifecycle.yaml ``sync_accounts_create_paused_notification_config``:
+    a provisioning entry with ``sandbox: true`` and one ``active: false`` subscriber. Both
+    halves are graded apart elsewhere (sandbox provisioning, paused registration); this is
+    the combination the storyboard sends, where a seller whose sandbox posture refuses the
+    entry never reaches the subscriber at all. A conformant document, so it goes through
+    the typed positive-path dispatch.
+    """
+    ctx["notif_domain"] = domain
+    cfg = _notif_config(sub, url, ets, active=False)
+    _dispatch_sync_notification(ctx, domain, [cfg], sandbox=True)
 
 
 @when(

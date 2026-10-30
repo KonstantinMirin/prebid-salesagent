@@ -848,6 +848,25 @@ Feature: BR-UC-011 Manage Accounts
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/notification_configs
     # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/notification-config-lifecycle.yaml pointer=phases/register_and_echo_paused_subscriber
 
+  @T-UC-011-notif-sandbox-register-paused @sync @notification-configs @sandbox @partition @boundary
+  Scenario: A sandbox account provisioned with a paused subscriber returns its account_id and echoes the subscriber
+    Given the Buyer is authenticated
+    And the seller declares account.sandbox equals true in capabilities
+    When the Buyer Agent sends a sync_accounts request provisioning a sandbox account for brand domain "acme-corp.com" with a paused notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/account-primary" and event_types "creative.status_changed, creative.purged"
+    Then the response is compliant with the sync_accounts success spec
+    And the provisioned account should have sandbox equals true
+    And the account should have a seller-assigned account_id
+    And the account notification_configs echo exactly 1 subscriber
+    And the echoed subscriber "buyer-primary" has url "https://buyer.example/webhooks/adcp/account-primary" and active false
+    And the echoed subscriber has event_types "creative.status_changed, creative.purged"
+    # The storyboard's own request shape: provisioning with sandbox true AND a paused
+    # subscriber in one entry. The account_id is what the storyboard's settings-update
+    # follow-up addresses the account by, so it is graded here, not assumed.
+    # A seller that declares account.sandbox accepts the entry; one that does not refuses it
+    # (T-UC-011-sandbox-capability-not-declared), which is a seller posture, not a defect.
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/universal/notification-config-lifecycle.yaml pointer=phases/register_and_echo_paused_subscriber/steps/sync_accounts_create_paused_notification_config
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/account/properties/sandbox
+
   @T-UC-011-notif-replace-clear @sync @notification-configs @partition @boundary
   Scenario: Re-sending a subscriber_id replaces in place; an empty array clears the set
     Given the Buyer is authenticated

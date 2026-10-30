@@ -7450,6 +7450,12 @@ mappings:
       upstream_refs: []
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-011-notif-sandbox-register-paused"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-011-preferred-reporting-protocol-noop"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null
