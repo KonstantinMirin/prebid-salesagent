@@ -751,6 +751,45 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # uncovered placement targetable, which a package does not buy. unnarrowed is the
     # control for a seller that refused every product with included placements.
 
+  @T-UC-FORMAT-SATISFACTION-creatives-cover-placement-narrowing-one-option-twice @format_satisfaction @requires_db
+  Scenario Outline: a creative naming no option covers a placement that narrows the product's one option into two entries - <manifests>
+    Given the seller declares canonical format options "plain_300x250" across placements "narrowed_twice"
+    And the buyer assigns canonical "image" creatives carrying the "<manifests>" manifests
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+    Examples:
+      | manifests           |
+      | image_300x250       |
+      | image_300x250_120kb |
+
+  @T-UC-FORMAT-SATISFACTION-creatives-miss-placement-narrowing-one-option-twice @format_satisfaction @requires_db
+  Scenario: a creative fitting neither entry of a placement that narrows the product's one option twice leaves it uncovered
+    Given the seller declares canonical format options "plain_300x250" across placements "narrowed_twice"
+    And the buyer assigns canonical "image" creatives carrying the "image_300x250_200kb" manifests
+    When the Buyer Agent sends the create_media_buy request
+    Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "packages" for leaving placement "satisfaction_capped_mrec_slot" uncovered
+
+    # THE REF IS REQUIRED BY THE PRODUCT, NOT BY A PLACEMENT. canonical-formats.mdx makes
+    # format_option_ref "REQUIRED on the manifest when the target product's format_options
+    # contains two or more declarations sharing the same format_kind" and "OPTIONAL when each
+    # format_kind in the product's format_options is unique". plain_300x250 publishes image
+    # once, so these creatives name no option. narrowed_twice is one included placement whose
+    # format_options narrow that option into two image entries, capped at 100 KB and 150 KB
+    # (core/placement.json: they "are intersected with the product-level format_options"), so
+    # the placement's effective set holds two same-kind entries. A creative lies in that set
+    # when it satisfies either entry: the 51,200-byte image fits both, the 120,000-byte one
+    # only the 150 KB entry. A seller that applies the ref rule to the placement's entries
+    # finds both creatives ambiguous there and refuses them as uncovering the placement.
+    #
+    # The refusal differs from the accept rows only in the creative's size: 200,000 bytes is
+    # over both caps (1 KB = 1,000 bytes) and inside the product's uncapped option, so the
+    # product accepts it and only the placement does not. A seller ignoring the placement's
+    # narrowing accepts it.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx section="Routing rule for multi-element format_options"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/format_options/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
+
   @T-UC-FORMAT-SATISFACTION-legacy-placements-creatives-uncovered @format_satisfaction @requires_db
   Scenario Outline: creatives that leave a legacy-narrowed placement uncovered are refused - <manifests>
     Given the seller publishes only the deprecated 300x250 and 728x90 formats across placements "legacy_split"

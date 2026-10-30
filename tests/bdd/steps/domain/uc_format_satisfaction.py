@@ -506,9 +506,11 @@ def _manifest(name: str) -> dict[str, Any]:
         "image_300x250": lambda: build_assets(mrec),
         "image_728x90": lambda: build_assets(manifest_image_spec("image_main", width=728, height=90)),
         "image_160x600": lambda: build_assets(manifest_image_spec("image_main", width=160, height=600)),
-        # 200 KB exactly, the cap ``fixed_300x250`` declares, one byte over it, 200 binary
+        # 120 KB, between the two caps ``narrowed_twice`` places. 200 KB exactly, the cap
+        # ``fixed_300x250`` declares, one byte over it, 200 binary
         # kilobytes (204,800 bytes), and 500 binary kilobytes, over the cap however it is read.
         # canonical-formats.mdx: "1 KB = 1,000 bytes".
+        "image_300x250_120kb": lambda: build_assets(mrec.with_fields(file_size_bytes=120_000)),
         "image_300x250_200kb": lambda: build_assets(mrec.with_fields(file_size_bytes=200_000)),
         "image_300x250_200_001b": lambda: build_assets(mrec.with_fields(file_size_bytes=200_001)),
         "image_300x250_200kib": lambda: build_assets(mrec.with_fields(file_size_bytes=200 * 1024)),
@@ -727,6 +729,19 @@ _PLACEMENTS: dict[str, list[dict[str, Any]]] = {
     "narrowed_file_size": [
         _placement(
             "satisfaction_small_mrec_slot", "included", {"format_kind": "image", "params": {"max_file_size_kb": 150}}
+        ),
+    ],
+    # Stored beside ``plain_300x250`` (one image option, 300x250, no cap): one included
+    # placement narrowing that ONE option into TWO image entries, capped at 100 KB and at
+    # 150 KB, neither naming the option. core/placement.json: its declarations "are
+    # intersected with the product-level format_options", so the placement's effective set
+    # holds two same-kind entries although the product publishes the kind once.
+    "narrowed_twice": [
+        _placement(
+            "satisfaction_capped_mrec_slot",
+            "included",
+            {"format_kind": "image", "params": {"max_file_size_kb": 100}},
+            {"format_kind": "image", "params": {"max_file_size_kb": 150}},
         ),
     ],
     # Stored beside ``duration_range``: an included placement BROADER than the option, its
