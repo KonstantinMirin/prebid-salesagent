@@ -69,9 +69,13 @@ WHAT THIS MODULE DOES NOT DO, deliberately:
   declaration's ``params.slots[]`` on the canonical branch (creative-manifests.mdx § Basic
   structure), while a creative naming a ``format_id`` keys its assets by that named format's
   own asset ids, so grading them against a canonical slot list would refuse every legacy
-  creative for a vocabulary it never used. creative-manifests.mdx § Deprecated compatibility
-  branch says a 3.2 implementation "may read it, normalize it to a canonical declaration";
-  the reference's own parameters are graded (:func:`_legacy_shortfalls`).
+  creative for a vocabulary it never used. Only the reference's own parameters are graded
+  (:func:`_legacy_shortfalls`). That leaves a gap, not an exemption: creative-manifests.mdx
+  § Deprecated compatibility branch says a 3.2 implementation "may read it, normalize it to
+  a canonical declaration", which permits reading the legacy shape and does not excuse a
+  manifest the seller does read from § Validation steps 2 to 4. Grading a legacy manifest's
+  assets against its named format's asset requirements is still open, at the
+  ``TODO(#767)`` in ``src/core/tools/creatives/_validation.py``.
 * Required disclosures are not read here: no image, video or audio declaration param states
   one. A seller's disclosure requirement is its ``creative_policy`` (core/creative-policy.json
   ``require_disclosure_metadata``), enforced on the provenance at sync.
