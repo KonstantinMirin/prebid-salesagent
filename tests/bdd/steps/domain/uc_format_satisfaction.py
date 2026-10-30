@@ -2034,13 +2034,26 @@ def given_selector(ctx: dict, selector: str) -> None:
     the package carries a product_id, a pricing_option_id and a budget that every other
     create scenario also sends, and a selector scenario is not about any of those.
     """
-    packages = ctx["request_kwargs"]["packages"]
-    assert len(packages) == 1, f"expected exactly one package to put a selector on, got {len(packages)}"
-    packages[0].update(_SELECTORS[selector])
+    _put_selector(ctx, _SELECTORS[selector])
     # Which selector was sent, for the conflict Then: its refusal must summarize exactly the
     # arms the buyer supplied, and reading them back off this table is what keeps the
     # scenario's claim tied to its own input rather than to a restated list.
     ctx["selector"] = selector
+
+
+def _put_selector(ctx: dict, members: dict[str, Any]) -> None:
+    """Merge *members* onto the request's single package."""
+    packages = ctx["request_kwargs"]["packages"]
+    assert len(packages) == 1, f"expected exactly one package to put a selector on, got {len(packages)}"
+    packages[0].update(members)
+
+
+@given(
+    parsers.parse("the buyer's package selects format_id \"{format_id}\" at the creative agent's url with {variant}")
+)
+def given_selector_at_respelled_agent(ctx: dict, format_id: str, variant: str) -> None:
+    """A legacy selector naming *format_id* at the creative agent's url in the named spelling."""
+    _put_selector(ctx, {"format_ids": [{"agent_url": _agent_url_spelled(variant), "id": format_id}]})
 
 
 # ── Then steps ──────────────────────────────────────────────────────

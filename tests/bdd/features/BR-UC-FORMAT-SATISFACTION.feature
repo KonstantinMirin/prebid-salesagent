@@ -1805,6 +1805,28 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     When the Buyer Agent sends the create_media_buy request
     Then the buyer is refused UNSUPPORTED_FEATURE naming the "format_ids" selector and the 300x250 it accepts
 
+  # THE BUYER'S SIDE OF THE SAME RULE. The two outlines above respell the agent on the
+  # PRODUCT's entry; this one respells it on the package selector. display_300x250_image
+  # reaches the fixed_300x250 declaration only through the registry's upgrade, which applies
+  # in the standard agent's namespace alone, so a seller that recognized the agent by a partial
+  # canonicalization skipped the upgrade on the root-label dot and dot-segment rows, found no
+  # projected size, and refused the package (core/format-id.json agent_url MUST;
+  # docs/reference/url-canonicalization.mdx steps 2 and 5).
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json pointer=/properties/agent_url/description
+  # @source repo=adcp ref=v3.2.7 path=docs/reference/url-canonicalization.mdx
+  @T-UC-FORMAT-SATISFACTION-respelled-selector-agent @format_satisfaction @requires_db
+  Scenario Outline: a legacy selector naming the creative agent in another spelling is normalized and accepted - <variant>
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the buyer's package selects format_id "display_300x250_image" at the creative agent's url with <variant>
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+    Examples:
+      | variant                   |
+      | an upper-cased host       |
+      | a trailing root-label dot |
+      | a removable dot segment   |
+
   # ── MANIFEST IDENTITY: which arm a creative names, and what the seller does with it ───
   #
   # docs/creative/creative-manifests.mdx (at the pin) gives a creative ONE identity:
