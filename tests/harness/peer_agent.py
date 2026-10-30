@@ -43,6 +43,11 @@ from tests.helpers.tls_material import trust_test_ca
 #: -- a different outcome from an agent that is down. Not the operator agent (another
 #: port), so a format named here is a counterparty reference the seller has to dial.
 UNREACHABLE_AGENT_URL = "https://creative-agent.adcp.test:8444/api/creative-agent"
+#: Where that name resolves in process: a public-range address, as the e2e network's TLS
+#: front sits at one (``E2E_NETWORK_SUBNET`` in docker-compose.e2e.yml), so the egress gate
+#: admits it with no private-range hatch. The TCP connect to it is refused, so nothing is
+#: ever sent there.
+_UNREACHABLE_AGENT_ADDRESS = "223.255.255.62"
 
 
 def _unreachable_agent_on_the_live_stack(env: PeerCreativeAgentMixin) -> str:
@@ -270,27 +275,49 @@ class PeerCreativeAgentMixin(EgressHatchMixin):
     def unreachable_creative_agent_url(self) -> str:
         """The URL of a creative agent that does not answer, for the lifetime of this env.
 
-        On e2e the live server dials it and nothing answers. In process the test CA does
-        not front that port and the private-range hatch is not this env's to open, so the
-        dial itself is what fails: the registry's egress call to this agent raises
-        ``OutboundDeliveryFailed``, the type the seam gives every undelivered request, and
-        every other destination is sent as before. Everything above the dial -- the
-        registry's routing of a counterparty URL, ``raise_mapped_outbound_error``, the
-        format fetch and the sync's transient handling -- is production's on both paths.
+        On e2e the live server dials it and nothing listens on that port. In process the
+        same thing happens one layer down, at the calls the seller makes into the system
+        and does not own: the resolver answers the agent's host with a public-range
+        address, and a TCP connect to that address is refused, as a closed port refuses
+        it -- the async connect httpcore opens through anyio and the sync one it opens
+        through ``socket.create_connection`` alike, so nothing is ever sent there. Every
+        dial to this agent fails at the socket -- the egress seam's one-shot ``asend`` (a
+        counterparty format lookup) and the MCP session ``call_operator_mcp_tool`` opens
+        (the listing) -- and every other host and address is resolved and connected as
+        before. Everything above the socket -- the egress gate, the seam's retries and
+        backoff, the MCP client's ``/mcp`` fallback, the error mapping and each tool's
+        handling of an undelivered request -- is production's on both paths.
         """
+        import errno
+        import socket
         from unittest.mock import patch
+        from urllib.parse import urlsplit
 
-        from src.core import creative_agent_registry
-        from src.core.security.egress.attempts import OutboundDeliveryFailed
+        import anyio
 
-        send = creative_agent_registry.asend
+        host = urlsplit(UNREACHABLE_AGENT_URL).hostname
+        resolve, connect, open_connection = socket.getaddrinfo, anyio.connect_tcp, socket.create_connection
+        answer = (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "")
 
-        async def dial(url: str, **kwargs: Any) -> Any:
-            if url.startswith(UNREACHABLE_AGENT_URL):
-                raise OutboundDeliveryFailed(attempts=1, http_status=None)
-            return await send(url, **kwargs)
+        def refuse(address: Any) -> None:
+            if str(address) == _UNREACHABLE_AGENT_ADDRESS:
+                raise ConnectionRefusedError(errno.ECONNREFUSED, "Connection refused")
 
-        patcher = patch.object(creative_agent_registry, "asend", dial)
-        patcher.start()
-        self._guard("unreachable creative agent", patcher.stop)
+        def getaddrinfo(name: Any, port: Any, *args: Any, **kwargs: Any) -> Any:
+            if name == host:
+                return [(*answer, (_UNREACHABLE_AGENT_ADDRESS, port or 0))]
+            return resolve(name, port, *args, **kwargs)
+
+        async def connect_tcp(remote_host: Any, remote_port: int, **kwargs: Any) -> Any:
+            refuse(remote_host)
+            return await connect(remote_host, remote_port, **kwargs)
+
+        def create_connection(address: tuple[Any, ...], *args: Any, **kwargs: Any) -> Any:
+            refuse(address[0])
+            return open_connection(address, *args, **kwargs)
+
+        for target, replacement in ((socket, getaddrinfo), (anyio, connect_tcp), (socket, create_connection)):
+            patcher = patch.object(target, replacement.__name__, replacement)
+            patcher.start()
+            self._guard("unreachable creative agent", patcher.stop)
         return UNREACHABLE_AGENT_URL
