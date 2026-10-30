@@ -1555,22 +1555,27 @@ def _kind_route(
     across routes; see :func:`_selecting`, which also says which refusal is reported when
     none satisfies.
 
-    A MANIFEST MUST LAND ON EXACTLY ONE. A package selector may select several declarations
-    (step (2) compares sets), but a creative is validated "against the selected product or
-    publisher declaration" -- one -- and creative-manifests.mdx § Validation step 1 says how
-    a manifest without ``format_option_ref`` finds it: "select the unambiguous compatible
-    ``format_kind`` declaration". So the candidates are graded against the manifest, and:
+    A MANIFEST NAMING NO OPTION NEEDS A KIND THE PRODUCT PUBLISHES ONCE. A package selector
+    may select several declarations (step (2) compares sets), but a creative is validated
+    "against the selected product or publisher declaration" -- one. ``canonical-formats.mdx``'s
+    routing rule, marked normative: "``format_option_ref`` is **REQUIRED** on the manifest
+    when the target product's ``format_options`` contains two or more declarations sharing
+    the same ``format_kind``", and "**OPTIONAL** when each ``format_kind`` in the product's
+    ``format_options`` is unique". ``core/creative-asset.json`` and
+    ``core/creative-manifest.json`` say the same of the field, and ``sync_creatives.mdx``
+    "Required when the target product has multiple options with the same format_kind".
+    creative-manifests.mdx § Validation step 1, "otherwise select the unambiguous compatible
+    ``format_kind`` declaration", is the optional case: the kind alone names one declaration,
+    and it must be compatible. So with a manifest and several candidates the candidates are
+    graded, and:
 
-    * exactly one compatible -- selected, which is the case
-      ``core/creative-asset.json`` calls ``format_option_ref`` "optional when format_kind
-      alone routes the creative to a single declaration";
     * none compatible -- the first candidate's shortfalls are reported, naming every
-      candidate in ``accepted_values`` so the buyer sees each declaration it could target;
-    * several compatible -- :attr:`FormatRefusal.MANIFEST_AMBIGUOUS`. The same field is
-      "Required when the target product has multiple format_options entries sharing the
-      same format_kind" (and ``canonical-formats.mdx``: "without it, the seller can't
-      disambiguate which option the buyer is shipping against"). ``accepted_values`` names
-      the compatible declarations, which are the values the buyer may put in the ref.
+      candidate in ``accepted_values``: the assets fail whichever option the buyer names;
+    * one or more compatible -- :attr:`FormatRefusal.MANIFEST_AMBIGUOUS`, the missing ref.
+      Fitting one of them does not stand in for naming it: the rule turns on what the
+      product publishes, not on what the assets happen to fit, and step 5 is "do not
+      silently relax the target contract". ``accepted_values`` names the compatible
+      declarations, which are the values the buyer can put in the ref and be accepted.
     """
     accepted = [str(declaration.format_kind) for declaration in declarations]
     if kind not in accepted:
@@ -1588,15 +1593,13 @@ def _kind_route(
         return verdict
     if not verdict:
         return replace(verdict, accepted_values=tuple(sorted(_declaration_label(d) for d in candidates)))
-    if len(verdict.selection) == 1:
-        return verdict
     compatible = tuple(sorted(_declaration_label(d) for d in verdict.selection))
     return FormatSatisfaction(
         satisfied=False,
         refusal=FormatRefusal.MANIFEST_AMBIGUOUS,
         rejected_value=kind,
         accepted_values=compatible,
-        summary=f"manifest of {kind!r} satisfies several declarations and names no format_option_ref: {compatible}",
+        summary=f"manifest of {kind!r} names no format_option_ref among {len(candidates)} declarations: {compatible}",
     )
 
 
@@ -2095,7 +2098,12 @@ def _fills(
       contract"), each compared as the product's own arm is compared (:func:`_legacy_lane`).
       The projection would again drop what the SDK cannot map.
     * Otherwise the placement's effective declarations, which a canonical creative's
-      manifest is graded against. An empty set admits nothing, so it fails closed.
+      manifest is graded against. An empty set admits nothing, so it fails closed. A creative
+      naming no option that fits one or more of them lies in the set even when the verdict is
+      :attr:`FormatRefusal.MANIFEST_AMBIGUOUS`: the ref is required by what the PRODUCT
+      publishes (``canonical-formats.mdx``: "the target product's ``format_options``"), which
+      the product gate has already asked, and a placement narrowing one product option into
+      several entries does not make the ref required.
     """
     from src.core.format_resolver import NamedFormats
     from src.core.schemas import CreativeFormatIdentity
@@ -2106,7 +2114,10 @@ def _fills(
         return bool(creative_satisfies(creative, contract)) and bool(
             creative_satisfies(creative, NamedFormats(format_ids=layer.references))
         )
-    return bool(effective.format_options) and bool(creative_satisfies(creative, effective))
+    if not effective.format_options:
+        return False
+    verdict = creative_satisfies(creative, effective)
+    return bool(verdict) or verdict.refusal is FormatRefusal.MANIFEST_AMBIGUOUS
 
 
 def creatives_uncovered(

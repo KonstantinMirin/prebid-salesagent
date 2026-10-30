@@ -1300,9 +1300,47 @@ def given_canonical_creatives_with_manifests(ctx: dict, kind: str, manifests: st
     ]
 
 
-def _seed_canonical_creatives(ctx: dict, kind: str, manifests: str) -> list[Any]:
-    """One committed canonical creative per comma-separated :func:`_manifest` name, in order."""
-    return [_seed_canonical_creative(ctx, kind=kind, assets=_manifest(name.strip())) for name in manifests.split(",")]
+@given(
+    parsers.parse(
+        'the buyer assigns canonical "{kind}" creatives carrying the "{manifests}" manifests '
+        'naming product options "{options}"'
+    )
+)
+def given_canonical_creatives_with_manifests_and_options(ctx: dict, kind: str, manifests: str, options: str) -> None:
+    """The creative set above, each creative routed by ``format_option_ref`` to its option.
+
+    canonical-formats.mdx: the ref "is **REQUIRED** on the manifest when the target product's
+    ``format_options`` contains two or more declarations sharing the same ``format_kind``".
+    *options* is comma-separated and aligned with *manifests*.
+    """
+    ctx["request_kwargs"]["packages"][0]["creative_ids"] = [
+        creative.creative_id for creative in _seed_canonical_creatives(ctx, kind, manifests, options)
+    ]
+
+
+def _product_option_refs(options: str | None, count: int) -> list[dict[str, str] | None]:
+    """A product-scoped ``format_option_ref`` per comma-separated option id, or none at all.
+
+    ``core/format-option-ref.json``'s product arm, ``{scope: "product", format_option_id}``.
+    Aligned with the manifests the caller seeds: one per creative, in order.
+    """
+    if options is None:
+        return [None] * count
+    refs = [{"scope": "product", "format_option_id": option.strip()} for option in options.split(",")]
+    assert len(refs) == count, f"{len(refs)} options for {count} creatives"
+    return list(refs)
+
+
+def _seed_canonical_creatives(ctx: dict, kind: str, manifests: str, options: str | None = None) -> list[Any]:
+    """One committed canonical creative per comma-separated :func:`_manifest` name, in order.
+
+    *options*, when given, routes each to the aligned product option (:func:`_product_option_refs`).
+    """
+    names = [name.strip() for name in manifests.split(",")]
+    return [
+        _seed_canonical_creative(ctx, kind=kind, assets=_manifest(name), format_option_ref_document=ref)
+        for name, ref in zip(names, _product_option_refs(options, len(names)), strict=True)
+    ]
 
 
 @given(parsers.parse('a canonical "{kind}" creative carrying the "{manifest}" manifest exists'))
@@ -1311,10 +1349,15 @@ def given_canonical_creative_with_manifest_exists(ctx: dict, kind: str, manifest
     ctx["creative_to_assign"] = _seed_canonical_creative(ctx, kind=kind, assets=_manifest(manifest))
 
 
-@given(parsers.parse('canonical "{kind}" creatives carrying the "{manifests}" manifests exist'))
-def given_canonical_creatives_with_manifests_exist(ctx: dict, kind: str, manifests: str) -> None:
-    """The update path's creative set: one stored creative per manifest, assigned by the When."""
-    ctx["creatives_to_assign"] = _seed_canonical_creatives(ctx, kind, manifests)
+@given(
+    parsers.parse(
+        'canonical "{kind}" creatives carrying the "{manifests}" manifests naming product options "{options}" exist'
+    )
+)
+def given_canonical_creatives_with_manifests_exist(ctx: dict, kind: str, manifests: str, options: str) -> None:
+    """The update path's creative set: one stored creative per manifest, each routed to the
+    aligned product option (:func:`_product_option_refs`), assigned by the When."""
+    ctx["creatives_to_assign"] = _seed_canonical_creatives(ctx, kind, manifests, options)
 
 
 # ── UPDATE path ─────────────────────────────────────────────────────
@@ -1440,22 +1483,26 @@ def given_package_carries_creatives(ctx: dict, origin: str, kind: str, manifests
 @when(
     parsers.parse(
         "the Buyer Agent replaces the package's inline creatives through update_media_buy "
-        'with canonical "{kind}" creatives carrying the "{manifests}" manifests'
+        'with canonical "{kind}" creatives carrying the "{manifests}" manifests naming product options "{options}"'
     )
 )
-def when_update_replaces_inline_creatives(ctx: dict, kind: str, manifests: str) -> None:
+def when_update_replaces_inline_creatives(ctx: dict, kind: str, manifests: str, options: str) -> None:
     """Dispatch update_media_buy whose package ``creatives`` carry one NEW body per manifest.
 
     package-update.json ``creatives``: "Replace this package's inline creative assets". Each
     body has a fresh ``creative_id``, so none of the held inline creatives is kept and the
-    array replaces them all. The ids sent are kept in ``ctx["uploaded_creative_ids"]``.
+    array replaces them all, and each names the aligned product option
+    (:func:`_product_option_refs`). The ids sent are kept in ``ctx["uploaded_creative_ids"]``.
     """
-    ctx["uploaded_creative_ids"] = [f"satisfaction_inline_{uuid.uuid4().hex[:12]}" for _ in manifests.split(",")]
+    names = [name.strip() for name in manifests.split(",")]
+    ctx["uploaded_creative_ids"] = [f"satisfaction_inline_{uuid.uuid4().hex[:12]}" for _ in names]
     _dispatch_package_update(
         ctx,
         creatives=[
-            _canonical_claim(creative_id, kind, assets=_manifest(name.strip()))
-            for creative_id, name in zip(ctx["uploaded_creative_ids"], manifests.split(","), strict=True)
+            _canonical_claim(creative_id, kind, assets=_manifest(name), format_option_ref=ref)
+            for creative_id, name, ref in zip(
+                ctx["uploaded_creative_ids"], names, _product_option_refs(options, len(names)), strict=True
+            )
         ],
     )
 
