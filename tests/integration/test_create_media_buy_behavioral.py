@@ -492,12 +492,13 @@ class TestMultipleInvalidCreativesAccumulated:
         # ``stamp_format_identity`` derives the stored columns through the production
         # projection, which refuses a reference with no canonical kind, so the invented ids
         # made this test die in its own setup. Distinctness is what the loop needs (three
-        # creatives, not one), and all three project to ``image`` from the glob alone.
+        # creatives, not one), and all three project to ``image`` from the glob alone at the
+        # factory's default agent, the reference one, the only agent whose ids the glob reads.
         creatives = []
         for creative_index, format_id in enumerate(("display_300x250", "display_728x90", "display_970x250"), start=1):
             c = MagicMock()
             c.creative_id = f"creative_{creative_index}"
-            stamp_format_identity(c, format_id=format_id, agent_url="https://creative.example.com")
+            stamp_format_identity(c, format_id=format_id)
             c.data = {}
             creatives.append(c)
 

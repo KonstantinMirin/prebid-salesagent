@@ -99,7 +99,7 @@ from typing import Any, NamedTuple
 import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from src.core.schemas import CreativeFormatIdentity, FormatId, canonical_agent_url
+from src.core.schemas import CreativeFormatIdentity, Format, FormatId, canonical_agent_url
 from tests.bdd.steps._outcome_helpers import (
     assert_listed_format_option_ref,
     assert_listed_on_canonical_kind,
@@ -110,7 +110,7 @@ from tests.bdd.steps._outcome_helpers import (
 )
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
-from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL, format_option_ref_for_scope
+from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL, declared_format_spec, format_option_ref_for_scope
 from tests.helpers.envelope_assertions import assert_envelope_shape
 from tests.helpers.pinned_schema import validator_for
 
@@ -154,6 +154,7 @@ def _seed_creative(
     format_params: dict[str, Any] | None = None,
     canonical_kind: str | None = None,
     format_option_ref: dict[str, Any] | None = None,
+    format_spec: Format | None = None,
     **overrides: Any,
 ) -> Any:
     """Seed one approved creative owned by *principal*, optionally concept- or tag-bearing.
@@ -192,6 +193,10 @@ def _seed_creative(
         kwargs["canonical_kind"] = canonical_kind
     if format_option_ref is not None:
         kwargs["format_option_ref_document"] = format_option_ref
+    if format_spec is not None:
+        # The declaration an agent other than the reference one serves: the registry
+        # projects an id alone only at the reference agent's origin.
+        kwargs["format_spec"] = format_spec
     # An explicit name (the ``name_contains`` filter is a name substring match), a
     # non-approved status, and explicit created_at / updated_at so the ordering
     # assertions have distinct, deterministic sort keys instead of every row sharing one
@@ -1586,7 +1591,12 @@ def given_creatives_in_two_formats(ctx: dict) -> None:
     wanted = _seed_creative(tenant, principal, _CONCEPT_FORMATS[0], name="display creative on this agent")
     sibling = _seed_creative(tenant, principal, _CONCEPT_FORMATS[1], name="video creative on this agent")
     decoy = _seed_creative(
-        tenant, principal, _CONCEPT_FORMATS[0], name="display creative on another agent", agent_url=other_agent_url
+        tenant,
+        principal,
+        _CONCEPT_FORMATS[0],
+        name="display creative on another agent",
+        agent_url=other_agent_url,
+        format_spec=declared_format_spec(other_agent_url, _CONCEPT_FORMATS[0]),
     )
     ctx["tenant"] = tenant
     ctx["principal"] = principal
@@ -1647,7 +1657,12 @@ def given_creative_under_respelled_agent_url(ctx: dict) -> None:
         tenant, principal, _CONCEPT_FORMATS[0], name=_RESPELLED_LABEL, agent_url=_RESPELLED_AGENT_URL
     )
     unrelated = _seed_creative(
-        tenant, principal, _CONCEPT_FORMATS[0], name=_UNRELATED_LABEL, agent_url=_UNRELATED_AGENT_URL
+        tenant,
+        principal,
+        _CONCEPT_FORMATS[0],
+        name=_UNRELATED_LABEL,
+        agent_url=_UNRELATED_AGENT_URL,
+        format_spec=declared_format_spec(_UNRELATED_AGENT_URL, _CONCEPT_FORMATS[0]),
     )
     ctx["tenant"] = tenant
     ctx["principal"] = principal

@@ -906,7 +906,7 @@ class TestCreateMediaBuyCreativeValidation:
         # Build a creative in DB that has no URL in its data
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_1"
-        stamp_format_identity(mock_creative, format_id="display_300x250", agent_url="http://agent.test")
+        stamp_format_identity(mock_creative, format_id="display_300x250")
         mock_creative.data = {}  # no media_url
 
         # Build a mock format spec (reference format, no output_format_ids)
@@ -945,7 +945,7 @@ class TestCreateMediaBuyCreativeValidation:
 
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_err"
-        stamp_format_identity(mock_creative, format_id="display_300x250", agent_url="http://agent.test")
+        stamp_format_identity(mock_creative, format_id="display_300x250")
         mock_creative.data = {}
         mock_creative.status = "error"
 
@@ -981,7 +981,7 @@ class TestCreateMediaBuyCreativeValidation:
 
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_rej"
-        stamp_format_identity(mock_creative, format_id="display_300x250", agent_url="http://agent.test")
+        stamp_format_identity(mock_creative, format_id="display_300x250")
         mock_creative.data = {}
         mock_creative.status = "rejected"
 
@@ -1024,7 +1024,7 @@ class TestCreateMediaBuyCreativeValidation:
         # reference has no canonical kind and this helper has no catalog to resolve one
         # with. Every real generative format in the pinned capture (7 of 71) declares
         # ``canonical.kind`` and so projects in production, where the spec IS passed.
-        stamp_format_identity(mock_creative, format_id="display_300x250", agent_url="http://agent.test")
+        stamp_format_identity(mock_creative, format_id="display_300x250")
         mock_creative.data = {}  # No media_url -- but generative should skip validation
 
         mock_format_spec = MagicMock()
@@ -1055,12 +1055,12 @@ class TestCreateMediaBuyCreativeValidation:
         # Two reference creatives, both missing URL
         mock_creative_1 = MagicMock()
         mock_creative_1.creative_id = "c_1"
-        stamp_format_identity(mock_creative_1, format_id="display_300x250", agent_url="http://agent.test")
+        stamp_format_identity(mock_creative_1, format_id="display_300x250")
         mock_creative_1.data = {}
 
         mock_creative_2 = MagicMock()
         mock_creative_2.creative_id = "c_2"
-        stamp_format_identity(mock_creative_2, format_id="display_728x90", agent_url="http://agent.test")
+        stamp_format_identity(mock_creative_2, format_id="display_728x90")
         mock_creative_2.data = {}
 
         mock_format_spec = MagicMock()
@@ -1967,12 +1967,12 @@ class TestUpdateMediaBuyCreativeIds:
         mock_c1 = MagicMock()
         mock_c1.creative_id = "c_new1"
         mock_c1.status = "approved"
-        stamp_format_identity(mock_c1, format_id="display_300x250", agent_url="http://agent.test")
+        stamp_format_identity(mock_c1, format_id="display_300x250")
 
         mock_c2 = MagicMock()
         mock_c2.creative_id = "c_new2"
         mock_c2.status = "approved"
-        stamp_format_identity(mock_c2, format_id="display_300x250", agent_url="http://agent.test")
+        stamp_format_identity(mock_c2, format_id="display_300x250")
 
         # Existing assignment for c_old (should be removed)
         mock_existing_assignment = _stored_assignment("c_old")
@@ -2137,7 +2137,7 @@ class TestUpdateMediaBuyCreativeIds:
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_err"
         mock_creative.status = "error"
-        stamp_format_identity(mock_creative, format_id="display_300x250", agent_url="http://agent.test")
+        stamp_format_identity(mock_creative, format_id="display_300x250")
 
         mock_buy = MagicMock()
         mock_buy.media_buy_id = "mb_1"
@@ -2224,12 +2224,12 @@ class TestUpdateMediaBuyCreativeIds:
         mock_c2 = MagicMock()
         mock_c2.creative_id = "c2"
         mock_c2.status = "approved"
-        stamp_format_identity(mock_c2, format_id="display_300x250", agent_url="http://agent.test")
+        stamp_format_identity(mock_c2, format_id="display_300x250")
 
         mock_c4 = MagicMock()
         mock_c4.creative_id = "c4"
         mock_c4.status = "approved"
-        stamp_format_identity(mock_c4, format_id="display_300x250", agent_url="http://agent.test")
+        stamp_format_identity(mock_c4, format_id="display_300x250")
 
         # Existing assignments: c1, c2, c3
         mock_assign_c1 = _stored_assignment("c1")

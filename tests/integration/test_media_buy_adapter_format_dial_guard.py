@@ -33,6 +33,7 @@ import pytest
 from src.adapters.broadstreet import BroadstreetAdapter
 from src.core.schemas import Format
 from tests.factories import AuthorizedPropertyFactory, CreativeFactory
+from tests.factories.creative import declared_format_spec
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.transport import Transport
 from tests.integration.media_buy_helpers import _make_create_request
@@ -145,11 +146,10 @@ class TestReDialOfBuyerProvenanceUrlIsNotOperatorMisclassified:
         from src.core.format_resolver import fetch_format_spec
 
         third_party_agent_url = "https://169.254.169.254"
-        # A literal ``format_id_glob`` in registries/v1-canonical-mapping.json, which
-        # projects to ``image`` at ANY agent. ``display_300x250_image`` stood here, and the
-        # SDK maps that v1 name only for a reference at the reference agent's origin, so at
-        # this third-party url it had no canonical kind and the factory's own projection
-        # refused it (UNSUPPORTED_FEATURE) before the re-dial this class grades was reached.
+        # The registry projects a v1 id alone only at the reference agent's origin, so at
+        # this third-party url the id has a canonical kind only through the declaration
+        # the agent serves. Without one the factory's own projection refused the seed
+        # (UNSUPPORTED_FEATURE) before the re-dial this class grades was reached.
         format_id = "display_300x250"
 
         with MediaBuyCreateEnv() as env:
@@ -165,6 +165,7 @@ class TestReDialOfBuyerProvenanceUrlIsNotOperatorMisclassified:
                 creative_id="c_third_party",
                 format=format_id,
                 agent_url=third_party_agent_url,
+                format_spec=declared_format_spec(third_party_agent_url, format_id),
                 data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
             )
 
