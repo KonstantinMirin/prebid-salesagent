@@ -134,34 +134,61 @@ def when_request_products_filtered_by_respelled_agent(ctx: dict, format_id: str,
     )
 
 
-@given(
-    parsers.parse(
-        'the seller stores products declaring a 300x250 image as "{same_shape_id}", as a canonical image option, '
-        'and a 728x90 image as "{other_shape_id}"'
-    )
-)
-def given_products_of_two_shapes(ctx: dict, same_shape_id: str, other_shape_id: str) -> None:
-    """Two products accepting a 300x250 image -- one by a legacy id, one canonically -- and a 728x90 one.
+#: Named product format contracts the canonical-shape outline stores, one product each. The
+#: legacy ids are the reference agent's, so only the registry's normalization relates them to
+#: a filter's id; the canonical options carry the parameters a projection is compared on
+#: (canonical-formats.mdx: width, height, duration_ms_exact). ``format_ids=None`` on a
+#: canonical-only product so the factory's default legacy arm does not answer for it.
+_FILTER_PRODUCT_CONTRACTS: dict[str, dict[str, Any]] = {
+    "display_300x250_image": {"format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250_image"}]},
+    "display_728x90_image": {"format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_728x90_image"}]},
+    "image_300x250_option": {
+        "format_ids": None,
+        "format_options": [
+            {"format_kind": "image", "format_option_id": "filter_image_mrec", "params": {"width": 300, "height": 250}}
+        ],
+    },
+    "video_30s_option": {
+        "format_ids": None,
+        "format_options": [
+            {
+                "format_kind": "video_hosted",
+                "format_option_id": "filter_video_30s",
+                "params": {"duration_ms_exact": 30000},
+            }
+        ],
+    },
+    "video_15s_option": {
+        "format_ids": None,
+        "format_options": [
+            {
+                "format_kind": "video_hosted",
+                "format_option_id": "filter_video_15s",
+                "params": {"duration_ms_exact": 15000},
+            }
+        ],
+    },
+}
 
-    The legacy ids are the reference agent's, so the registry's normalization is what relates
-    them to the filter's id; no product spells the id the filter will send.
+
+def _contract_names(listed: str) -> list[str]:
+    """The comma-separated contract names a scenario cell lists."""
+    return [name.strip() for name in listed.split(",") if name.strip()]
+
+
+@given(parsers.parse('the seller stores products declaring "{accepting}" and a product declaring "{rejected}"'))
+def given_products_of_named_contracts(ctx: dict, accepting: str, rejected: str) -> None:
+    """One product per named contract: those the filter should select, and one it should not.
+
+    The rejected product must be the SAME canonical kind as an accepting one, or a filter that
+    compared kinds alone would exclude it for the boring reason and the row would not grade
+    the parameters.
     """
     tenant = ctx["tenant"]
     ctx["accepting_products"] = [
-        _product_declaring_shared_id_under(tenant, DEFAULT_CREATIVE_AGENT_URL, same_shape_id),
-        _priced_product(
-            tenant,
-            format_ids=None,
-            format_options=[
-                {
-                    "format_kind": "image",
-                    "format_option_id": "filter_image_mrec",
-                    "params": {"width": 300, "height": 250},
-                }
-            ],
-        ),
+        _priced_product(tenant, **_FILTER_PRODUCT_CONTRACTS[name]) for name in _contract_names(accepting)
     ]
-    ctx["other_agent_product"] = _product_declaring_shared_id_under(tenant, DEFAULT_CREATIVE_AGENT_URL, other_shape_id)
+    ctx["rejected_product"] = _priced_product(tenant, **_FILTER_PRODUCT_CONTRACTS[rejected])
 
 
 @when(parsers.parse('the buyer requests products filtering format_ids by "{format_id}" at the standard creative agent'))
@@ -215,17 +242,17 @@ def then_other_agent_product_excluded(ctx: dict) -> None:
     )
 
 
-@then("the announced products are exactly the two that accept a 300x250 image")
+@then("the announced products are exactly the ones whose contract accepts the filter's normalized shape")
 def then_only_the_accepting_products_announced(ctx: dict) -> None:
-    """An EXACT set: both 300x250 products, and not the 728x90 one.
+    """An EXACT set: every accepting product, and not the rejected one.
 
     A raw-pair filter announces none of them (no product spells the filter's id), and a
-    filter that ignored the reference announces all three; each fails the equality.
+    filter that ignored the parameters announces the rejected one too; each fails the equality.
     """
     announced = _announced_product_ids(ctx)
     expected = {product.product_id for product in ctx["accepting_products"]}
     assert announced == expected, (
         f"the format_ids filter did not select exactly the products accepting its normalized shape: "
         f"expected {sorted(expected)}, got {sorted(announced)} "
-        f"(the 728x90 product is {ctx['other_agent_product'].product_id!r})"
+        f"(the product it must not select is {ctx['rejected_product'].product_id!r})"
     )

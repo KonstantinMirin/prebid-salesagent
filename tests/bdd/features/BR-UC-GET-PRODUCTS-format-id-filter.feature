@@ -81,11 +81,23 @@ Feature: A legacy format_id filter on get_products selects on the declaring agen
   # A LEGACY REFERENCE IS MATCHED ON THE CANONICAL SHAPE IT NORMALIZES TO.
   # docs/creative/template-format-ids.mdx (3.2.7) § Compatibility: "Normalize them to
   # canonical declarations immediately and do all matching on the canonical shape", and
-  # core/product-format-declaration.json: "do not exact-match raw (agent_url, id) pairs once
-  # a format_id has been projected". The filter names display_300x250, which the registry
-  # projects to an image at 300x250. One product declares display_300x250_image (the same
-  # shape under another id), one declares only a canonical image fixed at 300x250, and one
-  # declares display_728x90_image. A seller comparing raw pairs selects none of them.
+  # docs/creative/canonical-formats.mdx § Format matching vs product satisfaction: a legacy
+  # format_id "resolves through ... the canonical mapping registry to a canonical declaration
+  # ... After that projection, implementations compare the canonical shape and parameters,
+  # not the raw (agent_url, id) pair". core/product-format-declaration.json says the same:
+  # "do not exact-match raw (agent_url, id) pairs once a format_id has been projected".
+  #
+  # Each row names a filter id no stored product spells, so a seller comparing raw pairs
+  # selects nothing, and a rejected product of the SAME canonical kind at other parameters,
+  # so a seller comparing the kind alone selects it too:
+  #
+  #   * display_300x250: the SDK's size upgrade projects it to an image at 300x250, the shape
+  #     display_300x250_image and a canonical 300x250 image option both accept; the 728x90
+  #     image is rejected.
+  #   * video_30s: the SDK does not upgrade it at all. Only the registry's projection states
+  #     its duration (video_hosted, duration_ms_exact 30000), so a seller reading the upgrade
+  #     alone grades a bare video_hosted kind, which is under-specified for a fixed-duration
+  #     product and selects neither video product. The 15-second option is rejected.
   #
   # Which relation the deprecated filter uses is the SELLER'S CHOICE: the pin names two
   # (canonical-formats.mdx § Format matching vs product satisfaction: equivalence and
@@ -96,8 +108,14 @@ Feature: A legacy format_id filter on get_products selects on the declaring agen
   # @source repo=adcp ref=v3.2.7 path=docs/creative/template-format-ids.mdx
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-format-declaration.json pointer=/description
   # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json
   @T-UC-GET-PRODUCTS-format-id-filter-canonical-shape @format_id_filter @requires_db
-  Scenario: a format_ids filter selects the products that accept the canonical shape its reference normalizes to
-    Given the seller stores products declaring a 300x250 image as "display_300x250_image", as a canonical image option, and a 728x90 image as "display_728x90_image"
-    When the buyer requests products filtering format_ids by "display_300x250" at the standard creative agent
-    Then the announced products are exactly the two that accept a 300x250 image
+  Scenario Outline: a format_ids filter selects the products that accept the canonical shape its reference normalizes to - <filter>
+    Given the seller stores products declaring "<accepting>" and a product declaring "<rejected>"
+    When the buyer requests products filtering format_ids by "<filter>" at the standard creative agent
+    Then the announced products are exactly the ones whose contract accepts the filter's normalized shape
+
+    Examples:
+      | filter          | accepting                                    | rejected             |
+      | display_300x250 | display_300x250_image, image_300x250_option  | display_728x90_image |
+      | video_30s       | video_30s_option                             | video_15s_option     |
