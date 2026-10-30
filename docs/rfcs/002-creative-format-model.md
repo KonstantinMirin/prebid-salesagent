@@ -975,21 +975,35 @@ The remaining gaps:
   scenario, and the rows the data migration leaves on the legacy arm are named only in its log.
 - **Placement-level options on the get_products wire (S4).** A placement's inline
   `format_options` are not graded on the response.
-- **Author-side intersection (F3).** The admin saves accept a publisher-scoped option on a
-  multi-publisher product without `placements[]` (salesagent-ol033.20.8.2). The owner's
-  decision is to refuse the save and migrate existing rows.
-- **Manifest validation beyond what is graded (M3).** A legacy manifest's assets are not
-  graded against its named format. `cta_values`, card media constraints, `responsive_creative`'s
-  video duration, logo aspect ratios and file-size caps, and `image_carousel`'s card bounds are
-  not read. `om_sdk_required` cannot be graded on a manifest.
+- **Author-side intersection (F3).** At `813ee8dff` the admin saves accept a publisher-scoped
+  option on a multi-publisher product without `placements[]` (salesagent-ol033.20.8.2). On
+  `integrate/wave1` at `ff5795e1a` (wave 11, not yet box-run) the product save refuses it and data
+  migration `7a74ba340f11` narrows the stored rows; a product whose intersection is empty is
+  left as stored and logged. Graded by
+  `@T-UC-GET-PRODUCTS-format-options-operator-common-intersection-accepted` and `-refused`.
+- **Manifest validation beyond what is graded (M3).** At `813ee8dff` a legacy manifest's assets
+  are not graded against its named format, and `cta_values`, card media constraints,
+  `responsive_creative`'s video duration, logo aspect ratios and file-size caps, and
+  `image_carousel`'s card bounds are not read. On `ff5795e1a` (wave 11, not yet box-run) all of these
+  are read and have scenarios, a missing click destination is refused
+  `CREATIVE_MISSING_CLICK_URL` and a `cta` outside `cta_values` `CREATIVE_VALUE_NOT_ALLOWED`.
+  `om_sdk_required` still cannot be graded on a manifest
+  ([adcp#8627](https://github.com/adcontextprotocol/adcp/issues/8627)).
 - **Inline creatives on update (C2).** `update_media_buy` doesn't upload inline creatives to the
-  ad server, while `create_media_buy` does. At `813ee8dff` no scenario states this: the two
-  `update_media_buy` inline scenarios in `BR-UC-FORMAT-SATISFACTION.feature` grade placement
-  coverage, not the upload. Following the rule in Part 10, it gets a BDD scenario marked xfail
-  against #2483, which is in progress. The capability flag is hardcoded in
-  `src/services/seller_capabilities.py`.
+  ad server, while `create_media_buy` does. At `813ee8dff` no scenario stated this. On `ff5795e1a`
+  (wave 11), following the rule in Part 10,
+  `@T-UC-003-local-inline-creatives-ad-server-push`
+  (`tests/bdd/features/local-uc003-create-update-parity.feature`) states it on a2a, mcp, rest
+  and e2e_rest, strict-xfailed against #2483. `@T-UC-003-approval-tenant` is xfailed the same
+  way: `update_media_buy` reads only the adapter's approval flag, not the tenant's. The
+  capability flag is hardcoded in `src/services/seller_capabilities.py`.
 - **A foreign declaration without `canonical` (L2).** At `813ee8dff` such a declaration still
-  reaches the registry glob through the SDK. The reference-origin rule in Part 10 refuses it.
+  reaches the registry glob through the SDK. On `ff5795e1a` (wave 11, not yet box-run) the
+  reference-origin rule in Part 10 is built: a peer's id projects only through its own
+  `canonical` or the structural entries, VAST and DAAST version constraints included, and
+  otherwise fails closed (`@T-UC-FORMAT-SATISFACTION-upsert-peer-id-skips-glob`,
+  `-upsert-structural`, `-upsert-structural-versioned`). The SDK's own structural match ignores
+  those versions ([adcp-client-python#1750](https://github.com/adcontextprotocol/adcp-client-python/issues/1750)).
   The `list_creatives` fail-closed Given also runs in process: `CreativeListEnv` cannot serve an
   unprojectable format, so fail-closed on the wire is graded only on the creative write
   (`@T-UC-FORMAT-SATISFACTION-upsert-unprojectable`).
