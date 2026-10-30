@@ -1,8 +1,9 @@
 """UC-005: a creative agent's catalog is parsed entry by entry, and a discard is reported.
 
 Scenarios ``T-UC-005-peer-catalog-partial-discard``, ``-empty`` and ``-all-discarded``
-(#1333), and ``T-UC-005-own-agents-only``: a seller that does not federate the standard
-creative agent lists, and refers buyers to, only its own. The peer-catalog Givens hand
+(#1333), ``T-UC-005-peer-catalog-unreachable`` (an agent that does not answer costs its own
+formats and is reported), and ``T-UC-005-own-agents-only``: a seller that does not
+federate the standard creative agent lists, and refers buyers to, only its own. The peer-catalog Givens hand
 ``CreativeFormatsEnv.set_peer_format_payload`` the agent's ``formats`` array as RAW JSON,
 because the obligation is about what the seller does with
 a document it did not write: in process the env serves it from a real MCP endpoint and
@@ -123,9 +124,32 @@ def then_referrals_name_only_own_agent(ctx: dict) -> None:
     assert referred == expected, f"expected referrals to name only {expected}, got {referred}"
 
 
-@then(parsers.parse('the discarded entries should be reported as "{code}" on "{section}" with recovery "{recovery}"'))
-def then_discard_reported(ctx: dict, code: str, section: str, recovery: str) -> None:
-    """Exactly one advisory, however many entries were discarded: it names the agent's loss."""
+@given(parsers.parse("the seller's products declare the standard creative agent's format \"{format_id}\""))
+def given_products_declare_reference_format(ctx: dict, format_id: str) -> None:
+    """The tenant's product declares *format_id* at the standard creative agent, which stays federated."""
+    ctx["env"].declare_reference_formats(format_id)
+
+
+@given("a creative agent the seller configured does not answer")
+def given_configured_agent_unreachable(ctx: dict) -> None:
+    """The tenant's one peer ``creative_agents`` row names an agent nothing answers at.
+
+    ``unreachable_creative_agent_url`` is that agent in both worlds: on e2e nothing listens
+    on its port, and in process its connect is refused below the seller's own code, so the
+    listing's MCP dial to it fails exactly where a real dial would.
+    """
+    env = ctx["env"]
+    env.configure_peer_agent(env.unreachable_creative_agent_url(), owner="unreachable creative agent")
+
+
+@then(
+    parsers.re(
+        r'the (?:discarded entries|unreachable creative agent) should be reported as "(?P<code>[^"]+)"'
+        r' on "(?P<section>[^"]+)" with recovery "(?P<recovery>[^"]+)"'
+    )
+)
+def then_agent_loss_reported(ctx: dict, code: str, section: str, recovery: str) -> None:
+    """Exactly one advisory per agent that cost the buyer formats, however many: it names the loss."""
     reported = [{key: error.get(key) for key in ("code", "field", "recovery")} for error in wire_advisory_errors(ctx)]
     assert reported == [{"code": code, "field": section, "recovery": recovery}], (
         f"expected one {code} advisory on {section!r}, got {reported}"

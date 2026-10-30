@@ -284,6 +284,50 @@ Feature: BR-UC-005 Discover Creative Formats
     Then the response is compliant with the list_creative_formats spec
     And "rich-media" should be returned
     # BR-RULE-049 INV-3: both individual and group assets checked
+
+  @T-UC-005-inv-049-3-group-violated @UC-005-MAIN-MCP-07 @invariant @BR-RULE-049 @hand-edited
+  Scenario: BR-RULE-049 INV-3 edge - A group whose assets match no requested type excludes the format
+    Given the registry has format "text-carousel" with a repeatable asset group containing "text" and "html"
+    And the registry has format "video-ad" with assets of type "video"
+    When the Buyer Agent requests formats with asset_types filter ["video"]
+    Then the response is compliant with the list_creative_formats spec
+    And only "video-ad" should be returned
+    # HAND-EDITED: authored locally, not rendered from adcp-req (mirror upstream).
+    # The asset_types filter keeps "formats that include these asset types". The assets
+    # nested in a repeatable group are assets the format includes, so they are read
+    # (@T-UC-005-inv-049-3-group); reading them must not admit a format whose group holds
+    # none of the requested types. "video-ad" is the control: the same request returns it,
+    # so the exclusion is the filter's and not an empty listing. The outcome is the same
+    # whether or not group members count, which the pin leaves unstated (adcp#8630).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json pointer=/properties/asset_types
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json pointer=/properties/assets
+
+  @T-UC-005-inv-049-3-mixed @UC-005-MAIN-MCP-07 @invariant @BR-RULE-049 @hand-edited
+  Scenario Outline: BR-RULE-049 INV-3 edge - Individual and group assets of one format both count - asset_types ["<requested>"]
+    Given the registry has format "mixed-media" with an individual "video" asset and a repeatable asset group containing "image" and "text"
+    And the registry has format "html-banner" with assets of type "html"
+    When the Buyer Agent requests formats with asset_types filter ["<requested>"]
+    Then the response is compliant with the list_creative_formats spec
+    And only "<returned>" should be returned
+
+    Examples:
+      | requested | returned    |
+      | image     | mixed-media |
+      | video     | mixed-media |
+      | html      | html-banner |
+    # HAND-EDITED: authored locally, not rendered from adcp-req (mirror upstream).
+    # One format carrying a video slot beside a repeatable group of image and text includes
+    # all three types, so it is kept by a request for a type held only in the group (image)
+    # and by one for the type held only in the individual slot (video), and dropped by a
+    # request for a type it holds nowhere (html), which keeps "html-banner" and only it.
+    # Every row requests ONE type, so none of them depends on whether several requested
+    # types combine as any-of or all-of. The image row reads a type held only inside the
+    # group as one the format "includes"; the pin does not say so in words, which
+    # adcp#8630 asks it to, and core/format.json lists the group among the "array of all
+    # assets supported for this format". That is also the reading
+    # @T-UC-005-inv-049-3-group grades.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json pointer=/properties/asset_types
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json pointer=/properties/assets
     # --- INV-4: dimension ANY render match ---
 
   @T-UC-005-inv-049-4-holds @UC-005-MAIN-MCP-08 @invariant @BR-RULE-049
@@ -577,6 +621,24 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests the format catalog
     Then no formats from the creative agent should be returned
     And the discarded entries should be reported as "AGENT_FORMATS_DISCARDED" on "formats" with recovery "terminal"
+
+  # A configured creative agent that does not answer costs the buyer that agent's formats
+  # and nothing else: the listing is still a successful response, the format the standard
+  # creative agent publishes for the seller's product is listed, and the failure rides the
+  # response's errors[] as one advisory naming the section it degrades. AGENT_UNREACHABLE
+  # is a platform-specific code, which the pin permits ("senders MAY emit codes outside
+  # that set"); a buyer decodes it by its recovery, transient, since the agent may answer
+  # a retry. Storyboard: ungraded.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json pointer=/properties/code
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-response.json pointer=/properties/errors
+  @T-UC-005-peer-catalog-unreachable @UC-005-MAIN-MCP-01 @edge-case @hand-edited
+  Scenario: A configured creative agent that does not answer is reported, and the other agents' formats are still listed
+    Given the seller's products declare the standard creative agent's format "video_vast"
+    And a creative agent the seller configured does not answer
+    When the Buyer Agent requests the format catalog
+    Then the response is compliant with the list_creative_formats spec
+    And the formats on the wire should be exactly "VAST Video"
+    And the unreachable creative agent should be reported as "AGENT_UNREACHABLE" on "formats" with recovery "transient"
 
   # Which creative agents a seller federates is the seller's choice: the pinned response
   # requires only formats, and creative_agents is an optional referral list. A seller that
@@ -1087,6 +1149,27 @@ Feature: BR-UC-005 Discover Creative Formats
       | omitted (no dimension filter)     | valid    |
       | no render matches constraints     | valid    |
 
+  @T-UC-005-boundary-dimension-one-past @UC-005-MAIN-MCP-08 @boundary @dimension_filter @hand-edited
+  Scenario Outline: Dimension filter boundary - a render one pixel past <filter> 300 is excluded
+    Given the registry has format "at-bound" with render width 300 and height 250
+    And the registry has format "one-pixel-past" with render width <past_width> and height 250
+    When the Buyer Agent requests formats with <filter> 300
+    Then the response is compliant with the list_creative_formats spec
+    And only "at-bound" should be returned
+
+    Examples:
+      | filter    | past_width |
+      | min_width | 299        |
+      | max_width | 301        |
+    # HAND-EDITED: authored locally, not rendered from adcp-req (mirror upstream).
+    # Both width bounds are inclusive: min_width returns formats "where ANY render has
+    # width >= this value", max_width those "where ANY render has width <= this value".
+    # So the 300px render is kept at the bound and the render one pixel outside it is
+    # dropped, in both directions; each row grades the inclusive and the exclusive side of
+    # the same comparison at once. @T-UC-005-dim-boundary grades the bound alone.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json pointer=/properties/min_width
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json pointer=/properties/max_width
+
   @T-UC-005-boundary-responsive @UC-005-MAIN-MCP-10 @boundary @is_responsive_filter
   Scenario Outline: Responsive filter boundary - <boundary_point>
     Given a seller with both responsive and fixed-dimension formats
@@ -1114,6 +1197,18 @@ Feature: BR-UC-005 Discover Creative Formats
       | case-insensitive match      | valid    |
       | omitted (no filter)         | valid    |
       | no match (empty result)     | valid    |
+
+  @T-UC-005-boundary-name-search-empty @UC-005-MAIN-MCP-11 @boundary @name_search_filter @hand-edited
+  Scenario: Name search filter boundary - an empty string filters nothing
+    Given a seller with formats named "Standard Banner", "Video Interstitial", "Native Card"
+    When the Buyer Agent requests creative formats at name_search boundary "empty string (filters nothing)"
+    Then the response is compliant with the list_creative_formats spec
+    And the response should include all registered formats
+    # HAND-EDITED: authored locally, not rendered from adcp-req (mirror upstream).
+    # name_search is a "case-insensitive partial match" and the request schema puts no
+    # minLength on it, so "" is a valid request whose term is contained in every name: it
+    # keeps every format, and is neither refused nor answered with an empty list.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json pointer=/properties/name_search
 
   @T-UC-005-boundary-wcag @UC-005-MAIN-MCP-12 @boundary @wcag_level
   Scenario Outline: WCAG level filter boundary - <boundary_point>
