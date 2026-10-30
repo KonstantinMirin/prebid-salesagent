@@ -1288,14 +1288,14 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     # BOTH sizes of the legacy-only product on one arm: a set, which is how a buyer covers
     # ``legacy_split``'s two included placements through the deprecated selector.
     "legacy_both_sizes": {"format_ids": [_LEGACY_MREC, _LEGACY_LEADERBOARD]},
-    # Two legacy references that normalize to the KIND alone. The registry maps both to
-    # ``image`` by glob, while neither carries or projects a size: ``display_image`` is the
-    # unparameterized template, and the SDK upgrades ``display_300x250`` to 300x250 only for
-    # the reference agent, so at another agent it projects nothing. Against a product fixing
-    # 300x250 each is "a broad request with no dimensions", which
-    # core/product-format-declaration.json says "does not satisfy a fixed-size ... product".
-    # Both were accepted by satisfaction and refused only by a raw-key gate that ran after
-    # it -- VALIDATION_ERROR, and for the wrong reason (salesagent-ol033.20.26).
+    # Two legacy references that state no size. ``display_image`` is the unparameterized
+    # template the registry maps to ``image`` by glob, so against a product fixing 300x250 it
+    # is "a broad request with no dimensions", which core/product-format-declaration.json
+    # says "does not satisfy a fixed-size ... product". ``display_300x250`` at another agent
+    # that serves no declaration for it projects to nothing at all: the registry maps a
+    # legacy id (glob and size upgrade alike) only at the reference agent's origin. Both
+    # were accepted by satisfaction and refused only by a raw-key gate that ran after it --
+    # VALIDATION_ERROR, and for the wrong reason (salesagent-ol033.20.26).
     "legacy_unsized_template": {"format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_image"}]},
     "foreign_agent_display_300x250": {
         "format_ids": [{"agent_url": "https://another-creative-agent.example", "id": "display_300x250"}]
@@ -2497,9 +2497,17 @@ def _serve_publisher_format(ctx: dict, format_id: str, asset_types: str, kind: s
     ctx["env"].set_served_catalogue([ctx["served_format"]])
 
 
-def _publisher_format(format_id: str, asset_types: str, kind: str | None, **format_id_fields: str) -> Any:
+def _publisher_format(
+    format_id: str,
+    asset_types: str,
+    kind: str | None,
+    *,
+    slot_fields: dict[str, Any] | None = None,
+    **format_id_fields: str,
+) -> Any:
     """One publisher format: its id, its comma-separated asset types and its canonical kind, if any.
 
+    *slot_fields* are further members every slot carries (its ``requirements``);
     *format_id_fields* override the reference's other members (its ``agent_url``).
     """
     from adcp.types import CanonicalProjectionReference
@@ -2508,7 +2516,9 @@ def _publisher_format(format_id: str, asset_types: str, kind: str | None, **form
 
     return FormatFactory(
         format_id=FormatIdFactory(id=format_id, **format_id_fields),
-        assets=[make_asset(t, asset_id=f"{t}_{i}") for i, t in enumerate(asset_types.split(", "))],
+        assets=[
+            make_asset(t, asset_id=f"{t}_{i}", **(slot_fields or {})) for i, t in enumerate(asset_types.split(", "))
+        ],
         canonical=CanonicalProjectionReference(kind=kind) if kind is not None else None,
     )
 
@@ -2531,6 +2541,28 @@ def given_served_publisher_format(ctx: dict, format_id: str, asset_types: str, k
 def given_served_unannotated_publisher_format(ctx: dict, format_id: str, asset_types: str) -> None:
     """A publisher format that leaves its projection to the registry (steps 3 and 4)."""
     _serve_publisher_format(ctx, format_id, asset_types, None)
+
+
+@given(
+    parsers.parse(
+        'the seller\'s creative agent serves "{format_id}" with one "{asset_type}" slot requiring version '
+        '"{version}" and no canonical kind'
+    )
+)
+def given_served_versioned_publisher_format(ctx: dict, format_id: str, asset_type: str, version: str) -> None:
+    """A publisher format whose one VAST or DAAST slot states its version, with no canonical projection.
+
+    The version is stated the way core/format.json lets a slot state it, as the slot's
+    ``requirements.<asset_type>_version`` (``vast_version`` / ``daast_version``): the
+    registry's versioned structural entries match on it.
+    """
+    ctx["env"].set_served_catalogue(
+        [
+            _publisher_format(
+                format_id, asset_type, None, slot_fields={"requirements": {f"{asset_type}_version": version}}
+            )
+        ]
+    )
 
 
 #: The agent a relisted format is declared under: not the seller's creative agent, and not

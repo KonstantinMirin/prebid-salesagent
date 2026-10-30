@@ -693,14 +693,15 @@ class TestCanonicalKindForSizeEncodedIds:
         assert canonical_kind_for(format_id) == kind, why
 
     @pytest.mark.parametrize(
-        ("agent_url", "kind"),
+        ("agent_url", "slug", "kind"),
         [
-            ("https://creative.adcontextprotocol.org", "image"),
-            ("https://peer-agent.example.com", "display_tag"),
+            ("https://creative.adcontextprotocol.org", "display_300x250_image", "image"),
+            ("https://peer-agent.example.com", "display_300x250_image", "display_tag"),
+            ("https://peer-agent.example.com", "display_300x250", "display_tag"),
         ],
-        ids=["standard-agent-glob-before-structural", "peer-agent-structural"],
+        ids=["standard-agent-glob-before-structural", "peer-agent-structural", "peer-agent-glob-named-id-structural"],
     )
-    def test_an_unannotated_declaration_reaches_the_glob_before_the_structural_entry(self, agent_url, kind):
+    def test_an_unannotated_declaration_reaches_the_glob_before_the_structural_entry(self, agent_url, slug, kind):
         """Supplying the declaration cannot let step 4 answer ahead of step 3.
 
         A v1 image format with no ``canonical`` has the standard ``image`` + ``url`` shape,
@@ -711,14 +712,16 @@ class TestCanonicalKindForSizeEncodedIds:
         one. Projecting the raw id first answered ``display_tag`` with the declaration and
         ``image`` without it.
 
-        The peer row is the control, and it differs only in the agent: the SDK's upgrade is
-        the standard agent's namespace alone, the raw slug matches no literal glob, and the
-        structural entry is the step that answers there.
+        The peer rows are the control, and they differ only in the agent: the registry's globs
+        and the SDK's upgrade are the standard agent's namespace alone, so at a peer step 3 is
+        not consulted and the structural entry is the step that answers. The last row names an
+        id a literal glob DOES match (``display_300x250`` -> ``image``), which is what separates
+        "step 3 is skipped at a peer" from "the peer's slug happens to match no glob".
         """
         from src.core.format_resolver import canonical_kind_for
         from tests.factories.format import FormatFactory, FormatIdFactory, make_asset
 
-        format_id = FormatIdFactory(agent_url=agent_url, id="display_300x250_image")
+        format_id = FormatIdFactory(agent_url=agent_url, id=slug)
         declaration = FormatFactory(
             format_id=format_id,
             assets=[make_asset("image", asset_id="image_0"), make_asset("url", asset_id="url_1")],
@@ -726,6 +729,43 @@ class TestCanonicalKindForSizeEncodedIds:
         )
 
         assert canonical_kind_for(format_id, spec=declaration) == kind
+
+    @pytest.mark.parametrize(
+        ("asset_type", "requirements", "kind"),
+        [
+            ("vast", {"vast_version": "4.2"}, "video_vast"),
+            ("vast", {"vast_versions": ["3.0"]}, "video_vast"),
+            ("daast", {"daast_version": "1.0"}, "audio_daast"),
+            ("vast", None, None),
+        ],
+        ids=["vast-4-singular", "vast-3-listed", "daast-1-singular", "vast-no-version-fails-closed"],
+    )
+    def test_a_peer_slot_declaring_its_version_reaches_the_versioned_structural_entry(
+        self, asset_type, requirements, kind
+    ):
+        """Step 4 at a peer reads the slot's VAST/DAAST version, not only its asset type.
+
+        registries/v1-canonical-mapping.json at the pin matches a structural entry "against
+        the format's slot shape, asset types, and version constraints", and its ``vast`` and
+        ``daast`` entries each require a version (``>=4.0``, ``3.x``/``2.x``, ``1.0``/``1.1``).
+        A peer's id reaches a kind only through its declaration, so a matcher handed the asset
+        types alone refused every peer VAST and DAAST format. The version-less row is the
+        control: with no version stated no versioned entry matches, and nothing else does.
+        """
+        from src.core.format_resolver import canonical_kind_for
+        from tests.factories.format import FormatFactory, FormatIdFactory, make_asset
+
+        format_id = FormatIdFactory(agent_url="https://peer-agent.example.com", id="acme_preroll")
+        slot = {"requirements": requirements} if requirements is not None else {}
+        declaration = FormatFactory(
+            format_id=format_id, assets=[make_asset(asset_type, asset_id="slot_0", **slot)], canonical=None
+        )
+
+        if kind is None:
+            with pytest.raises(ValueError, match="no canonical projection"):
+                canonical_kind_for(format_id, spec=declaration)
+        else:
+            assert canonical_kind_for(format_id, spec=declaration) == kind
 
     def test_an_id_the_registry_cannot_reach_at_all_still_fails_closed(self):
         """The fallback must not become a guess: an unknown slug has no kind to project to."""

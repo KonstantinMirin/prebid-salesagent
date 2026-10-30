@@ -17,13 +17,21 @@ from typing import Any
 from adcp.canonical_formats import (
     CANONICAL_CREATIVE_AGENT_URL,
     format_is_supported,
+    load_default_registry,
     project_v1_format_to_declaration,
+    structural_match,
     upgrade_legacy_format_id,
 )
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from adcp.types.domains.core.package_format_snapshot import PackageFormatSnapshot as LibraryPackageFormatSnapshot
 from adcp.types.domains.core.product_format_declaration import (
     ProductFormatDeclaration as LibraryFormatDeclaration,
+)
+from adcp.types.domains.core.requirements.daast_asset_requirements import (
+    DaastAssetRequirements as LibraryDaastAssetRequirements,
+)
+from adcp.types.domains.core.requirements.vast_asset_requirements import (
+    VastAssetRequirements as LibraryVastAssetRequirements,
 )
 from pydantic import TypeAdapter, ValidationError
 
@@ -196,23 +204,27 @@ def canonical_projection(ref: FormatRef, *, spec: Format | None = None) -> Canon
     ``duration_ms_exact: 30000`` on the DECLARATION. What the reference states wins over
     what the registry derives, since the reference is what the sender said.
 
-    THE ID ALONE PROJECTS ONLY AT THE REFERENCE AGENT (:func:`names_reference_agent`). The
+    THE ID PROJECTS ONLY AT THE REFERENCE AGENT (:func:`names_reference_agent`). The
     registry's ``format_id_glob`` entries and the SDK's size upgrade are written in that
     agent's id namespace, and the SDK matches the glob on the id without reading the
     ``agent_url`` half, so handed ``display_300x250`` at any other agent it answered
     ``image`` 300x250 for a format that agent never declared. Another agent's id is that
     agent's own: it projects only through the agent's served declaration (*spec*), and with
-    none it has no projection. A URL the canonicalization refuses names no agent, so it has
-    none either.
+    none it has no projection (:func:`_agent_declared_projection`). That holds when the
+    agent serves a declaration with no ``canonical`` too: its id is still not looked up in
+    the globs, and only the declaration's slot shape (registry step 4) can project it. A URL
+    the canonicalization refuses names no agent, so it has none either.
 
     Raises:
         ValueError: when no step resolves, as :func:`canonical_kind_for` does.
     """
-    if spec is None and not names_reference_agent(ref):
-        raise ValueError(
-            f"no canonical projection for legacy format_id {format_ref_id(ref)!r}: the mapping registry projects "
-            "an id alone only at the reference creative agent"
-        )
+    if not names_reference_agent(ref):
+        if spec is None:
+            raise ValueError(
+                f"no canonical projection for legacy format_id {format_ref_id(ref)!r}: the mapping registry projects "
+                "an id alone only at the reference creative agent"
+            )
+        return _agent_declared_projection(ref, spec)
     upgraded = upgraded_reference(ref)
     declaration = spec.model_copy(update={"format_id": upgraded}) if spec is not None else {"format_id": upgraded}
     projected = project_v1_format_to_declaration(declaration).declaration
@@ -224,6 +236,80 @@ def canonical_projection(ref: FormatRef, *, spec: Format | None = None) -> Canon
     derived = projected.params or {}
     params = {name: derived[name] for name in _PROJECTED_SHAPE_PARAMS if derived.get(name) is not None}
     return CanonicalProjection(kind=str(projected.format_kind), params={**params, **_stated_shape_params(upgraded)})
+
+
+def _agent_declared_projection(ref: FormatRef, spec: Format) -> CanonicalProjection:
+    """Another agent's legacy id, projected through that agent's served declaration alone.
+
+    registries/v1-canonical-mapping.json (3.2.7) "Resolution order", with step 3 left out:
+    (2) "if the v1 format declaration carries an explicit ``canonical`` field, use it",
+    else (4) the registry's ``structural`` entries matched against the declaration's asset
+    types -- "the PRIMARY fallback for v1 wire traffic -- catches custom v1 formats (a
+    publisher's ``acme_homepage_300x250`` is structurally an IAB MREC)" -- else (6) fail
+    closed. Step 3, the ``format_id_glob`` lookup, is the reference agent's id namespace
+    (:func:`canonical_projection`), so a peer's ``video_30s`` with a ``url`` slot is a
+    ``display_tag`` by its shape, not a ``video_hosted`` by its name.
+
+    The SDK's ``project_v1_format_to_declaration`` runs step 3 between the two and reads no
+    ``agent_url``, so it cannot be asked for this order. Steps 2 and 4 are therefore read
+    here, with the SDK's own ``structural_match`` over its bundled registry, in the
+    registry's entry order as the SDK takes them. Every constraint a structural entry
+    declares is handed over -- the slot's asset types and its VAST and DAAST versions
+    (:func:`_declared_versions`) -- because the registry matches that mode "against the
+    format's slot shape, asset types, and version constraints", and three of its seven
+    structural entries require a version. The params are only what the reference states:
+    every compared param a registry entry derives (``width``, ``height``,
+    ``duration_ms_exact``) comes from a glob entry, never a structural one.
+
+    Raises:
+        ValueError: when neither step resolves.
+    """
+    params = _stated_shape_params(canonically_addressed(ref))
+    if spec.canonical is not None:
+        return CanonicalProjection(kind=str(spec.canonical.kind), params=params)
+    # A repeatable group carries no ``asset_type`` of its own; the SDK's step 4 skips it too.
+    asset_types = list(
+        dict.fromkeys(
+            name for asset in spec.assets or [] if isinstance(name := getattr(asset, "asset_type", None), str)
+        )
+    )
+    vast_versions, daast_versions = _declared_versions(spec)
+    for mapping in load_default_registry().mappings:
+        structural = getattr(mapping.v1_pattern, "structural", None)
+        if structural is not None and structural_match(
+            asset_types=asset_types,
+            vast_versions=vast_versions or None,
+            daast_versions=daast_versions or None,
+            pattern=structural,
+        ):
+            return CanonicalProjection(kind=str(mapping.v2.canonical), params=params)
+    raise ValueError(
+        f"no canonical projection for legacy format_id {format_ref_id(ref)!r}: the agent's declaration carries no "
+        "canonical and its slots match no structural entry"
+    )
+
+
+def _declared_versions(spec: Format) -> tuple[list[str], list[str]]:
+    """The VAST and DAAST versions *spec*'s slots declare, for the structural entries that require one.
+
+    The pinned ``Format`` carries a version only in a slot's ``requirements``
+    (``vast_version`` / ``vast_versions``, ``daast_version`` / ``daast_versions``); it
+    declares no top-level version member, so a slot is the only place to read one. The SDK's
+    own step 4 collects the same keys, but only from a dict, so handed this model it finds
+    none and its VAST and DAAST structural entries never match
+    (adcontextprotocol/adcp-client-python#1750).
+    """
+    vast: list[str] = []
+    daast: list[str] = []
+    for asset in spec.assets or []:
+        requirements = getattr(asset, "requirements", None)
+        if isinstance(requirements, LibraryVastAssetRequirements):
+            stated = [requirements.vast_version, *(requirements.vast_versions or [])]
+            vast.extend(str(version) for version in stated if version is not None)
+        elif isinstance(requirements, LibraryDaastAssetRequirements):
+            listed = requirements.daast_versions.root if requirements.daast_versions is not None else []
+            daast.extend(str(version) for version in [requirements.daast_version, *listed] if version is not None)
+    return vast, daast
 
 
 def _stated_shape_params(reference: LibraryFormatId) -> dict[str, Any]:
@@ -293,8 +379,10 @@ def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
 
     The declaration is the fetched *spec* when the caller has one, else the reference alone,
     so steps 2 and 4 have nothing to read and only the glob can answer -- which it does only
-    for a reference naming the reference agent (:func:`canonical_projection`). EITHER WAY THE SDK
-    IS HANDED THE UPGRADED ID, once, before the order runs. ``display_300x250_image`` is not
+    for a reference naming the reference agent (:func:`canonical_projection`). At any other
+    agent step 3 is not run even with a declaration: steps 2 and 4 read the agent's own
+    declaration and nothing else (:func:`_agent_declared_projection`), so what follows is
+    the reference agent's order. THE SDK IS HANDED THE UPGRADED ID, once, before the order runs. ``display_300x250_image`` is not
     spelled like any glob, but it is a member of the ``display_image`` mapping: the SDK's
     ``upgrade_legacy_format_id`` rewrites it to that template (salesagent-iz7dm). Upgrading
     only after a failed projection let step 4 answer first whenever a declaration was
@@ -368,7 +456,7 @@ def creative_identity_of(creative: LibraryCreativeAsset, *, spec: Format | None)
         spec: the fetched format declaration, when the caller already has it. Passing it is
             what makes the agent's own explicit projection (registry step 2) and the
             structural match (step 4) reachable; without it only the glob (step 3) is
-            consulted.
+            consulted, and only for a reference at the reference agent.
     """
     format_id = creative.format_id
     if format_id is None:
