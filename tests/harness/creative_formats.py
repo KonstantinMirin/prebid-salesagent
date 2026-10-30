@@ -9,9 +9,10 @@ agent over the egress seam, and the format processing logic.
 A scenario that names the formats a seller serves calls ``set_registry_formats``. The
 formats are served by a real peer creative agent -- the webhook-capture service, started
 once per worker in process and running in the compose stack on e2e -- the tenant's one
-``creative_agents`` row points at it, and the tenant does not federate the standard
-creative agent. The seller then lists exactly those formats, on every transport, through
-production's own path.
+``creative_agents`` row points at it, the tenant does not federate the standard creative
+agent, and the tenant's one product declares each of them -- the list is a projection of
+the seller's products, so a format no product declares is not listed. The seller then
+lists exactly those formats, on every transport, through production's own path.
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
 
@@ -76,6 +77,8 @@ class CreativeFormatsEnv(PeerCreativeAgentMixin, IntegrationEnv):
 
     #: The formats :meth:`set_registry_formats` seeded, or None when no Given named any.
     _seeded_formats: list[Any] | None = None
+    #: The tenant's one product whose declarations the listing is derived from, once seeded.
+    _declaring_product: Any = None
 
     def _configure_mocks(self) -> None:
         """Install production's testing-mode registry, fresh per env, and a no-op audit logger.
@@ -92,15 +95,59 @@ class CreativeFormatsEnv(PeerCreativeAgentMixin, IntegrationEnv):
         self.mock["audit_logger"].return_value = MagicMock()
 
     def set_registry_formats(self, formats: list[Any]) -> None:
-        """The seller's catalog is exactly *formats*, on every transport.
+        """The seller's compatibility list is exactly *formats*, on every transport.
 
-        ``seed_own_creative_agent`` serves them from the peer, points the tenant's peer row at
-        it and stops federating the standard creative agent. The entries are served
-        verbatim (no re-homing): the listing path returns each ``format_id`` as published,
-        so a Given's format keeps the identity its request steps name.
+        Two facts make it so, because the list is a projection of the seller's products
+        (``_list_creative_formats_impl``): a product declares each format, and a creative
+        agent publishes each one's definition. ``seed_own_creative_agent`` serves them from
+        the peer, points the tenant's peer row at it and stops federating the standard
+        creative agent; :meth:`declare_formats` puts their ids on the tenant's product. The
+        entries are served verbatim (no re-homing): the listing path returns each
+        ``format_id`` as published, so a Given's format keeps the identity its request steps
+        name.
         """
         self.seed_own_creative_agent(formats, rehome=False)
+        self.declare_formats([fmt.format_id for fmt in formats])
         self._seeded_formats = list(formats)
+
+    def declare_formats(self, format_ids: list[Any]) -> None:
+        """The tenant's one product declares exactly *format_ids* as its named-format arm.
+
+        A legacy-only product (``core/product.json``'s "Named-format product" branch), whose
+        ``format_ids`` the seller serves as authored, so the listing derives exactly these
+        ids. Each is stored as the column stores a reference, ``{agent_url, id}``; a re-seed
+        re-points the same product rather than adding a second one. No ids and no product yet
+        seeds none: a product declaring no format is a state the product forms refuse.
+        """
+        from tests.factories import ProductFactory
+
+        references = [{"agent_url": str(fid.agent_url), "id": str(fid.id)} for fid in format_ids]
+        if self._declaring_product is None:
+            if not references:
+                return
+            self._declaring_product = ProductFactory(tenant=self.ensure_tenant(), format_ids=references)
+        else:
+            self._declaring_product.format_ids = references
+        self._commit_factory_data()
+
+    def declare_reference_formats(self, *format_ids: str) -> None:
+        """The tenant's product declares the reference creative agent's formats named *format_ids*.
+
+        The standard creative agent stays federated and publishes these definitions from the
+        committed capture, so the seller lists exactly them: a scenario that needs real
+        ``Format`` bodies on the wire, or more than one entry for a filter to remove, names
+        them here.
+        """
+        from src.core.creative_agent_registry import PUBLIC_DEFAULT_AGENT_URL
+        from src.core.schemas import FormatId
+
+        self.declare_formats([FormatId(agent_url=PUBLIC_DEFAULT_AGENT_URL, id=fid) for fid in format_ids])
+
+    def adapter_served_format_ids(self) -> list[Any]:
+        """The ids the tenant's ad-server adapter serves its own formats under, as it states them."""
+        from src.core.helpers.adapter_helpers import adapter_served_creative_formats
+
+        return [fmt.format_id for fmt in adapter_served_creative_formats(self._tenant_id)]
 
     def set_peer_format_payload(self, payload: list[dict[str, Any]]) -> None:
         """A creative agent configured on the tenant answers ``list_creative_formats`` with *payload*.
@@ -111,23 +158,27 @@ class CreativeFormatsEnv(PeerCreativeAgentMixin, IntegrationEnv):
         tenant row is a real ``creative_agents`` row, and the registry is production's
         testing-mode ``ReferenceFormatsRegistry``. The standard creative agent stays
         federated: these scenarios locate the peer's formats by the agent_url it published.
+
+        The tenant's product declares every entry's ``format_id``, so an entry the seller
+        keeps is one it lists: the listing is a projection of the products, and an entry no
+        product declared would be absent whether or not the parse kept it.
         """
+        from src.core.schemas import FormatId
+
         self.configure_peer_agent(
             self.serve_peer_catalog(new_peer_key(), {"formats": payload}), owner="set_peer_format_payload"
         )
+        self.declare_formats([FormatId.model_validate(entry["format_id"]) for entry in payload])
 
     def served_registry_formats(self) -> list[Any]:
-        """The formats the seller's creative agents serve this scenario, on every transport.
+        """The formats the seller lists this scenario, on every transport.
 
-        What :meth:`set_registry_formats` seeded -- the peer serves exactly those and the
-        standard agent is not federated -- or, when no Given named any, the reference
-        catalog the standard creative agent answers from.
+        What :meth:`set_registry_formats` seeded -- the peer serves exactly those, the
+        standard agent is not federated and the tenant's product declares each -- or, when
+        no Given named any, nothing: the list is a projection of the seller's products, and
+        a tenant with none declares no format.
         """
-        if self._seeded_formats is not None:
-            return list(self._seeded_formats)
-        from src.core.format_cache import load_reference_formats
-
-        return list(load_reference_formats())
+        return list(self._seeded_formats or [])
 
     def call_impl(self, **kwargs: Any) -> ListCreativeFormatsResponse:
         """Call _list_creative_formats_impl.

@@ -578,8 +578,9 @@ def _derived_skills() -> list[AgentSkill]:
 
     ``id`` and ``name`` are the tool name -- a REST route, an MCP tool and an A2A skill for
     one tool carry one name, so there is nothing here that could diverge from the other two
-    transports. ``description`` comes from the pinned SDK, the same source MCP registration
-    reads. ``tags`` come off the DTO (``DTO.TAGS``): the SDK carries none, so they are ours,
+    transports. ``description`` is ``ToolSpec.advertised_description``, the one answer MCP
+    registration reads too: the pinned SDK's sentence, or the pinned request schema's own for
+    a deprecated compatibility surface. ``tags`` come off the DTO (``DTO.TAGS``): the SDK carries none, so they are ours,
     but they describe the tool's shape like the field descriptions beside them rather than
     its wiring -- so they sit with the shape, not in the registry.
 
@@ -592,7 +593,8 @@ def _derived_skills() -> list[AgentSkill]:
         AgentSkill(
             id=name,
             name=name,
-            description=descriptions.get(name, (spec.impl.__doc__ or "").strip().split("\n")[0]),
+            description=spec.advertised_description(descriptions.get(name))
+            or (spec.impl.__doc__ or "").strip().split("\n")[0],
             tags=list(getattr(spec.dto, "TAGS", ())),
         )
         for name, spec in TOOLS.items()

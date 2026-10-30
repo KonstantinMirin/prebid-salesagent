@@ -7180,6 +7180,16 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
         seed=_seed_media_buy_chain_create_dispatch,
     ),
+    # The inline-creatives create reads the created package back with get_media_buys, so it
+    # needs the env that dispatches both: MediaBuyCreateListEnv routes a GetMediaBuysRequest
+    # to the list tool and everything else to the create. The seed is the catch-all's, which
+    # it used before the readback was added.
+    EnvRoute(
+        tag="uc002-inline-creatives-readback",
+        when=_uc("UC-002", lambda m: "T-UC-002-alt-creatives" in m),
+        env_builder=_env("tests.harness.media_buy_create_list.MediaBuyCreateListEnv"),
+        seed=_seed_media_buy_chain_create_dispatch,
+    ),
     # The pending_creatives_to_start lifecycle creates a buy and then updates it, so it needs
     # the env that dispatches both: MediaBuyDualEnv subclasses MediaBuyCreateEnv and routes a
     # request carrying media_buy_id to update_media_buy. The seed is the uc002-ext one, so the

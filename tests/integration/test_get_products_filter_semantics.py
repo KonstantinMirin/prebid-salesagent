@@ -10,6 +10,7 @@ Tests covering:
 
 import pytest
 
+from src.core.format_cache import load_reference_formats
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     ListCreativeFormatsRequest,
@@ -17,7 +18,7 @@ from src.core.schemas import (
 )
 from src.core.tenant_context import TenantContext
 from src.core.tools.creative_formats import _list_creative_formats_impl
-from tests.factories import TenantFactory
+from tests.factories import ProductFactory, TenantFactory
 from tests.factories.principal import PrincipalFactory
 from tests.harness._base import BareIntegrationEnv
 
@@ -34,9 +35,19 @@ def identity(integration_db):
     is listed, and the adapter config is looked up by tenant). The context is derived
     from the row through production's own constructor, so the identity cannot describe a
     tenant the database disagrees with.
+
+    The tenant's product declares every format of the reference catalog: the list projects
+    the seller's product declarations, so these filter tests grade the whole catalog only
+    because a product names all of it.
     """
     with BareIntegrationEnv():
         tenant = TenantFactory(tenant_id="filter-sem-test", name="Filter Semantics Test")
+        ProductFactory(
+            tenant=tenant,
+            format_ids=[
+                {"agent_url": str(fmt.format_id.agent_url), "id": fmt.format_id.id} for fmt in load_reference_formats()
+            ],
+        )
         context = TenantContext.from_orm_model(tenant)
     return PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="filter-sem-test", tenant=context)
 

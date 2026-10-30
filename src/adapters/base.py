@@ -725,8 +725,8 @@ class AdServerAdapter(ABC):
 
         Override in adapters that act as both sales and creative agents. Whatever this
         answers is the tenant's catalogue for those formats on EVERY path --
-        ``list_creative_formats`` advertises it and ``sync_creatives`` resolves against
-        it, both reading it through ``adapter_served_creative_formats``, so the two cannot
+        ``list_creative_formats`` lists it when a product declares it and ``sync_creatives``
+        resolves against it, both reading it through ``adapter_served_creative_formats``, so the two cannot
         disagree about a format one of them serves. These formats are NOT in
         ``CreativeAgentRegistry``: that answers for the agents it DIALS, and the point of
         an adapter-served format is that there is nothing to dial.

@@ -47,6 +47,31 @@ Feature: BR-UC-005 Discover Creative Formats
     # graded on its own by @T-UC-005-inv-031-2-holds, so it is no longer hostage to this
     # scenario's remaining gap.
 
+  @T-UC-005-local-product-projection @hand-edited @main-flow @post-s1
+  Scenario: the compatibility list names only the formats the seller's products declare
+    Given the registry has formats:
+      | name             |
+      | declared-banner  |
+      | undeclared-video |
+    But the seller's products declare only format "declared-banner" and one format no creative agent publishes
+    When the Buyer Agent requests all formats with no filters
+    Then the response is compliant with the list_creative_formats spec
+    And the formats on the wire should be exactly "declared-banner"
+    # HAND-EDITED: authored locally, not rendered from adcp-req.
+    #
+    # The list is a projection of the seller's products, never a catalogue of its own.
+    # media-buy/specification.mdx § Canonical creative-format discovery: "Compatibility
+    # list_creative_formats responses MAY be projected from canonical declarations for older
+    # 3.x peers, but MUST NOT be independently authored"; creative/sales-agent-creative-
+    # capabilities.mdx § Compatibility: "The projection must be derived; it must not become a
+    # second authored catalog." So the creative agent publishing "undeclared-video" does not
+    # put it on the list, and the declared format no agent publishes has no definition to
+    # project, so it is omitted rather than invented. Each half fails a different seller: one
+    # that lists its agents' catalogues, and one that mints an entry from a bare reference.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/specification.mdx section="Canonical creative-format discovery"
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/sales-agent-creative-capabilities.mdx section="Compatibility"
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/task-reference/list_creative_formats.mdx section="Compatibility behavior"
+
   @T-UC-005-main-filtered @UC-005-MAIN-MCP-05 @main-flow @post-s3
   Scenario: Discover filtered format catalog
     # Filters on asset_types, which the media-buy request declares. `type` is NOT a
@@ -1383,7 +1408,8 @@ Feature: BR-UC-005 Discover Creative Formats
 
   @T-UC-005-storyboard-baseline-format-id-object-shape @storyboard-v3.1 @v3-1 @format-id-shape @baseline-conformance
   Scenario: Baseline list_creative_formats response carries format_id objects with agent_url and id
-    Given the Buyer Agent calls list_creative_formats without filters
+    Given the creative agent registry has formats across multiple categories
+    And the Buyer Agent calls list_creative_formats without filters
     When the response returns a non-empty formats array
     Then the response is compliant with the list_creative_formats spec
     And every entry's format_id should be an object carrying both agent_url and id
@@ -1395,4 +1421,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # discover_formats: format_id object shape is the federation contract
     # The strict "every entry / never a bare string" form is mandated by the schema
     # (core/format-id.json: required [agent_url, id]); the storyboard grades field_present on formats[0].
+    # LOCAL CORRECTION: the first Given is added. The list projects the seller's product
+    # declarations (@T-UC-005-local-product-projection), so a seller with no product lists
+    # nothing and the non-empty precondition had no state to stand on.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json
