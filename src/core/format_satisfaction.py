@@ -1747,6 +1747,10 @@ class PlacementLayer:
     what a selector and a canonical creative are compared with; a creative asserting a legacy
     reference is compared with the references themselves on the deprecated lane, as the
     product's own arm compares it (:func:`creatives_uncovered`).
+
+    A PUBLISHER SLICE is the same shape (:func:`publisher_slice_layers`): ``placement_id`` is
+    the slice's ``publisher_domain`` and ``declarations`` the product declarations that apply
+    to it.
     """
 
     placement_id: str
@@ -1805,6 +1809,61 @@ def included_placement_layers(placements: Iterable[Any] | None) -> tuple[Placeme
         else:
             layers.append(PlacementLayer(placement_id, declarations=None))
     return tuple(layers)
+
+
+def coverage_publishers(product: Any) -> list[dict[str, Any]] | None:
+    """The ``publisher_properties`` a product's coverage is sliced by, or None when slicing changes nothing.
+
+    Read off the product ORM row, and only when it can matter: the product stores no
+    ``placements`` (they are the routing key whenever present) and one of its declarations
+    is publisher-scoped. A product whose options are all product-local has every slice equal
+    to its own set ("Product-local options apply to every slice"), so each package is
+    covered by construction and the row's properties are not read.
+    """
+    if product.placements:
+        return None
+    if not any(d.publisher_domain for d in product_declarations(product.format_contract.format_options)):
+        return None
+    return list(product.effective_properties or [])
+
+
+def publisher_slice_layers(
+    publisher_properties: Iterable[Any] | None, declarations: Sequence[LibraryFormatDeclaration]
+) -> tuple[PlacementLayer, ...]:
+    """A multi-publisher product's eligibility slices, one layer per publisher, when it omits ``placements[]``.
+
+    ``docs/creative/formats.mdx`` § Matching and satisfaction: "If a multi-publisher product
+    omits ``placements[]``, each ``publisher_properties[]`` selector is an eligibility slice:
+    product-local options apply to every slice, publisher-scoped options only to their
+    publisher". ``canonical-formats.mdx`` states it again and adds that "distinct creatives
+    must cover every slice". So each slice is a layer whose set is the product-local
+    declarations plus the ones scoped to its ``publisher_domain``, and the coverage rule
+    reads it exactly as it reads an included placement. Selectors naming one publisher
+    are one slice: they share every declaration that applies.
+
+    ``core/product.json`` puts the same case to the AUTHOR: such a product's
+    ``format_options`` "MUST therefore be the common intersection accepted across every
+    selected publisher/property scope". A product honouring that has every slice equal to its
+    own set, and these layers then refuse nothing. A publisher-scoped option is not in the
+    intersection, so a package selecting only it -- or a creative set satisfying only it --
+    leaves another publisher's slice uncovered, which both texts refuse.
+
+    A slice no declaration applies to is an EMPTY layer, which nothing covers, so it fails
+    closed. A single-publisher product has one slice, its own set, and gets no layer.
+    """
+    domains = list(
+        dict.fromkeys(
+            str(selector["publisher_domain"])
+            for selector in publisher_properties or []
+            if isinstance(selector, Mapping) and selector.get("publisher_domain")
+        )
+    )
+    if len(domains) < 2:
+        return ()
+    return tuple(
+        PlacementLayer(domain, tuple(d for d in declarations if d.publisher_domain in (None, domain)))
+        for domain in domains
+    )
 
 
 def _placement_projection(references: Iterable[LibraryFormatId]) -> tuple[LibraryFormatDeclaration, ...]:
@@ -2023,15 +2082,10 @@ def creatives_uncovered(
     creatives are assigned. A product declaring neither arm imposes no format restriction, so
     it has no effective set to grade against (:func:`resolve_routes`).
 
-    A MULTI-PUBLISHER PRODUCT WITH NO ``placements[]`` has no layer here, so its creatives are
-    graded against the product declarations alone. The pin states this case twice and the
-    two texts differ: ``formats.mdx`` § Matching and satisfaction treats each
-    ``publisher_properties[]`` selector as an eligibility slice that fails closed when
-    indeterminate, while ``core/product.json`` ``format_options`` says such a product "has no
-    public routing key for per-placement creatives: its format_options MUST therefore be the
-    common intersection accepted across every selected publisher/property scope". The schema
-    is the normative text, so the product's own declarations ARE every slice's accepted set
-    and there is nothing per-publisher left to cover.
+    A MULTI-PUBLISHER PRODUCT WITH NO ``placements[]`` is covered slice by slice
+    (:func:`publisher_slice_layers`): ``canonical-formats.mdx``, "distinct creatives must
+    cover every slice". A creative that satisfies only one publisher's scoped option does not
+    fill another publisher's slice, and the refusal names that slice's ``publisher_domain``.
     """
     if not creatives:
         return None
@@ -2040,7 +2094,11 @@ def creatives_uncovered(
     # reading of the product.
     contract = product.format_contract
     bound = resolve_routes(
-        (), contract.format_options, legacy_catalog=contract.format_ids, placements=product.placements
+        (),
+        contract.format_options,
+        legacy_catalog=contract.format_ids,
+        placements=product.placements,
+        publishers=coverage_publishers(product),
     )
     unresolved = _unresolved_placement(bound.placements, field=None)
     if unresolved is not None:
@@ -2194,7 +2252,9 @@ class SelectorResolution:
 
     #: One pair per arm the buyer named, in step (4)'s precedence order. Empty where the
     #: product narrows neither arm, or the package names no selector: both mean the
-    #: selector imposes nothing, which is :meth:`__bool__`'s ``True`` with no selection.
+    #: selector imposes nothing, which is :meth:`__bool__`'s ``True`` with no selection --
+    #: unless the product has a placement or slice none of its declarations covers
+    #: (:attr:`uncovered`).
     routes: tuple[tuple[FormatRoute, FormatSatisfaction], ...] = ()
     #: The product's included placements and their narrowing, for :attr:`uncovered`.
     #: Empty for every single-route caller (a stored creative), which is what keeps the
@@ -2336,43 +2396,56 @@ class SelectorResolution:
         "uncovered inventory MUST be rejected or refined, never silently omitted".
 
         Asked only once every route resolved, agreed and selected a declaration, because
-        coverage is a property of the SELECTED set. A package naming no selector "selects
-        all formats supported by the product" (``media-buy/package-request.json``), and the
-        product set is every placement's upper bound, so it is covered by construction. A
-        product with one included placement is held to the same rule: that placement is all
-        of the package's inventory.
+        coverage is a property of the SELECTED set. A product with one included placement is
+        held to the same rule: that placement is all of the package's inventory.
+
+        A PACKAGE NAMING NO SELECTOR "selects all formats supported by the product"
+        (``media-buy/package-request.json``), so its selected set is every product
+        declaration, graded by the same rule. That covers every placement and slice some
+        declaration applies to, and refuses one none does: an empty publisher slice
+        (:func:`publisher_slice_layers`), whose only cure is another product. The refusal
+        names the uncovered unit at ``product_id``, because the buyer selected nothing to
+        name. An unresolved ``publisher_ref`` placement is not refused for such a package:
+        no selection is graded against it, as the feature's ``publisher_ref_included |
+        no_selector`` accept row records.
 
         The SET is the winning arm's, because the pin states the rule over a set: each
         included placement must accept at least one declaration the arm selected. Two refs
         selecting the two options of a product whose placements accept one each cover both.
+        A multi-publisher product with no placements is held to it slice by slice
+        (:func:`publisher_slice_layers`): a selection of one publisher's scoped options
+        leaves every other publisher's slice uncovered.
 
         Read off :attr:`_winning_arm` and never through :attr:`selection`, which asks
         ``bool(self)`` and so this property: the winning arm is the first, as there.
 
-        AN UNRESOLVED PLACEMENT is reported first, and whatever was selected: a
+        AN UNRESOLVED PLACEMENT is reported first, whatever a selector selected: a
         ``publisher_ref`` placement's effective set cannot be computed here, so no selection
         can be shown to cover it, and ``core/product.json`` says "an unresolved publisher
         placement or format-option reference MUST fail closed" (:class:`PlacementLayer`).
         """
-        if not self.routes or not self.placements:
+        if not self.placements:
             return None
         if self.unresolved is not None or self.conflicting or self.unsatisfied is not None:
             return None
-        field = self.routes[0][0].field
-        unresolved = _unresolved_placement(self.placements, field)
-        if unresolved is not None:
-            return unresolved
-        chosen = self._winning_arm
+        if self.routes:
+            field = self.routes[0][0].field
+            unresolved = _unresolved_placement(self.placements, field)
+            if unresolved is not None:
+                return unresolved
+            chosen = self._winning_arm
+            # The selection as the buyer can recognise it: the option ids a product published,
+            # or on the deprecated lane -- whose declarations are the SDK's projection, carrying
+            # ids the projection minted and the buyer was never shown -- the references sent.
+            labels = (
+                sorted(_declaration_label(d) for d in chosen)
+                if self.published
+                else sorted({_route_selector(route) for route, _ in self._arms[0]})
+            )
+        else:
+            field, chosen, labels = "product_id", self.declarations, []
         if not chosen:
             return None
-        # The selection as the buyer can recognise it: the option ids a product published, or
-        # on the deprecated lane -- whose declarations are the SDK's projection, carrying ids
-        # the projection minted and the buyer was never shown -- the references the buyer sent.
-        labels = (
-            sorted(_declaration_label(d) for d in chosen)
-            if self.published
-            else sorted({_route_selector(route) for route, _ in self._arms[0]})
-        )
         sets = _placement_sets(self.placements, self.declarations)
         for layer, pairs in sets:
             if not any(declaration in chosen for declaration, _ in pairs):
@@ -2380,8 +2453,10 @@ class SelectorResolution:
                     satisfied=False,
                     refusal=FormatRefusal.PLACEMENT_UNCOVERED,
                     # One value when the arm selected one; a set has no single offending
-                    # value, and the field pointer already names the arm.
-                    rejected_value=labels[0] if len(labels) == 1 else None,
+                    # value, and the field pointer already names the arm. With no selector
+                    # the buyer supplied nothing, and the unit left unserved is the value,
+                    # as on the creative-set refusal (:func:`creatives_uncovered`).
+                    rejected_value=(labels[0] if len(labels) == 1 else None) if self.routes else layer.placement_id,
                     # What this product would accept from this package on its own: the
                     # declarations every included placement admits. Empty when the
                     # placements share none, which is when only a set can cover them.
@@ -2395,7 +2470,7 @@ class SelectorResolution:
                     )
                     if self.published
                     else (),
-                    summary=f"selected formats {labels!r} do not cover included placement {layer.placement_id!r}",
+                    summary=f"selected formats {labels or '(all of the product)'!r} do not cover {layer.placement_id!r}",
                     field=field,
                 )
         return None
@@ -2442,6 +2517,7 @@ def resolve_routes(
     *,
     legacy_catalog: Iterable[Any] | None = None,
     placements: Iterable[Any] | None = None,
+    publishers: Iterable[Any] | None = None,
 ) -> SelectorResolution:
     """Resolve EVERY route independently. :class:`SelectorResolution` carries the verdict.
 
@@ -2455,6 +2531,9 @@ def resolve_routes(
     (:attr:`SelectorResolution.uncovered`). Read on both lanes: on the deprecated one the
     selected set is the SDK's projection of the deprecated arm (:func:`_legacy_lane`), and an
     included ``publisher_ref`` placement fails closed whichever arm the product publishes.
+    *publishers* is the product's ``publisher_properties`` (:func:`coverage_publishers`), read
+    only when it stores no placements: each publisher is then an eligibility slice
+    (:func:`publisher_slice_layers`) covered by the same rule.
 
     A product publishing ``format_options[]`` is graded on them; one publishing only the
     deprecated ``format_ids`` is graded on that arm, with each entry also projected to its
@@ -2489,7 +2568,9 @@ def resolve_routes(
             )
             for route in routes
         ),
-        placements=included_placement_layers(placements),
+        placements=included_placement_layers(placements)
+        if placements
+        else publisher_slice_layers(publishers, declared),
         declarations=declared or tuple(declaration for declaration in projected if declaration is not None),
         published=bool(declared),
     )

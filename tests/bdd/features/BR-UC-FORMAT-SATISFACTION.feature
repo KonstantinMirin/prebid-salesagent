@@ -643,6 +643,116 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/format_options/description
 
+  # ── Coverage of a multi-publisher product WITHOUT placements: publisher slices ─────────
+  #
+  # docs/creative/formats.mdx § Matching and satisfaction: "If a multi-publisher product
+  # omits placements[], each publisher_properties[] selector is an eligibility slice:
+  # product-local options apply to every slice, publisher-scoped options only to their
+  # publisher". canonical-formats.mdx says it again: "distinct creatives must cover every
+  # slice". core/product.json format_options addresses the same product to its AUTHOR: its
+  # format_options "MUST therefore be the common intersection accepted across every selected
+  # publisher/property scope". The texts agree: a publisher-scoped option is outside that
+  # intersection, and a package that selects only it, or creatives that satisfy only it,
+  # leave the other publisher's slice uncovered. This seller rejects (the pin allows reject or
+  # refine), with the placement-coverage refusal: details.capability placement_uncovered.
+  #
+  # local_and_publisher_options is two_image_options with the 728x90 option scoped to
+  # shorts.streamhaus.example; the 300x250 stays product-local. streamhaus_and_other sells
+  # that publisher and other.example, streamhaus_only the first alone.
+  #
+  # Seller choice, recorded: a slice no declaration applies to is an empty set and fails
+  # closed for every selection, a package naming no selector included
+  # (publisher-slices-empty-uncovered). The pin's "an indeterminate slice fails closed" has no other
+  # instance here, because every declaration this seller stores is inline and resolves
+  # without the publisher's adagents.json.
+  #
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/formats.mdx
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-format-declaration.json pointer=/properties/publisher_domain/description
+
+  @T-UC-FORMAT-SATISFACTION-publisher-slices-covered @format_satisfaction @requires_db
+  Scenario Outline: a selection that covers every publisher's slice is accepted - <publishers> <selector>
+    Given the seller declares canonical format options "local_and_publisher_options" across publishers "<publishers>"
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+    Examples:
+      | publishers           | selector                  |
+      | streamhaus_and_other | product_option_ref        |
+      | streamhaus_and_other | local_and_publisher_refs  |
+      | streamhaus_and_other | no_selector               |
+      | streamhaus_only      | publisher_leaderboard_ref |
+
+  @T-UC-FORMAT-SATISFACTION-publisher-slices-uncovered @format_satisfaction @requires_db
+  Scenario: a selection of one publisher's scoped option leaves another publisher's slice uncovered
+    Given the seller declares canonical format options "local_and_publisher_options" across publishers "streamhaus_and_other"
+    And the buyer's package selects "publisher_leaderboard_ref"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "format_option_refs" selector for an uncovered publisher slice of "satisfaction_image_leaderboard"
+
+    # Each accept row differs from the refusal in one thing: streamhaus_only drops the
+    # publisher the scoped option does not apply to, local_and_publisher_refs adds the
+    # product-local option, and product_option_ref selects it instead. A seller that graded a
+    # multi-publisher product on its whole option set (the reading before this rule) accepts
+    # the refusal; one that refused every publisher-scoped selection reddens streamhaus_only.
+    # no_selector "selects all formats supported by the product" (package-request.json),
+    # which include the product-local option every slice accepts.
+
+  @T-UC-FORMAT-SATISFACTION-publisher-slices-empty-covered @format_satisfaction @requires_db
+  Scenario: a package naming no selector is accepted when every option is scoped to its one publisher
+    Given the seller declares canonical format options "publisher_only_options" across publishers "streamhaus_only"
+    And the buyer's package selects "no_selector"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+  @T-UC-FORMAT-SATISFACTION-publisher-slices-empty-uncovered @format_satisfaction @requires_db
+  Scenario: a package naming no selector is refused when a publisher's slice is empty
+    Given the seller declares canonical format options "publisher_only_options" across publishers "streamhaus_and_other"
+    And the buyer's package selects "no_selector"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the package's product for the uncovered publisher slice "other.example"
+
+    # The recorded seller choice above, graded: publisher_only_options scopes both options to
+    # shorts.streamhaus.example, so other.example's slice is empty. The package names no
+    # selector and so "selects all formats supported by the product" (package-request.json),
+    # yet none of them applies to that slice; accepting it would buy other.example's
+    # inventory with no format that can serve it, which formats.mdx forbids ("it must not
+    # silently remove inventory"). The accept control differs in one thing: streamhaus_only
+    # drops other.example. A seller treating a selector-less package as covered by
+    # construction accepts the refusal; one refusing every publisher-scoped product reddens
+    # the control. The buyer selected nothing, so the refusal points at
+    # packages[0].product_id and its rejected_value is the empty slice's publisher_domain.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/formats.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
+
+  @T-UC-FORMAT-SATISFACTION-publisher-slices-creatives-covered @format_satisfaction @requires_db
+  Scenario Outline: creatives that cover every publisher's slice are accepted - <publishers> <manifests>
+    Given the seller declares canonical format options "local_and_publisher_options" across publishers "<publishers>"
+    And the buyer assigns canonical "image" creatives carrying the "<manifests>" manifests
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer receives the media buy
+
+    Examples:
+      | publishers           | manifests                  |
+      | streamhaus_and_other | image_300x250              |
+      | streamhaus_and_other | image_300x250,image_728x90 |
+      | streamhaus_only      | image_728x90               |
+
+  @T-UC-FORMAT-SATISFACTION-publisher-slices-creatives-uncovered @format_satisfaction @requires_db
+  Scenario: creatives satisfying only one publisher's scoped option leave another publisher's slice uncovered
+    Given the seller declares canonical format options "local_and_publisher_options" across publishers "streamhaus_and_other"
+    And the buyer assigns canonical "image" creatives carrying the "image_728x90" manifests
+    When the Buyer Agent sends the create_media_buy request
+    Then the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "packages" for leaving the publisher slice "other.example" uncovered
+
+    # The 728x90 creative satisfies the product on its own (the scoped option), so a seller
+    # grading creatives one at a time accepts it. The accept rows differ in one thing:
+    # streamhaus_only drops other.example, and image_300x250,image_728x90 adds the creative
+    # that fills its slice. The package names no selector, so the refusal is the creative
+    # set's, and it names the slice by its publisher_domain.
+
   # ── Coverage through the DEPRECATED arm: a legacy-only product's placements ───────────
   #
   # core/placement.json format_ids at the pin: "When present on a product placement, this

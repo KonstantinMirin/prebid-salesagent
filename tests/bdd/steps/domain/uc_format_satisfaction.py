@@ -302,6 +302,32 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
 #: items are whole declarations, matched to the product's by ``format_option_id``.
 _MREC, _LEADERBOARD = _DECLARATIONS["two_image_options"]
 
+#: ``two_image_options`` with the 728x90 option PUBLISHER-SCOPED: the 300x250 is product-local,
+#: so it applies to every publisher's slice, and the 728x90 applies only to
+#: ``_PUBLISHER_DOMAIN``'s (formats.mdx § Matching and satisfaction).
+_DECLARATIONS["local_and_publisher_options"] = [_MREC, {**_LEADERBOARD, "publisher_domain": _PUBLISHER_DOMAIN}]
+
+#: ``two_image_options`` with BOTH options scoped to ``_PUBLISHER_DOMAIN``: no option is
+#: product-local, so in a product also sold across another publisher that publisher's slice
+#: is empty, and nothing any package selects can cover it.
+_DECLARATIONS["publisher_only_options"] = [
+    {**option, "publisher_domain": _PUBLISHER_DOMAIN} for option in (_MREC, _LEADERBOARD)
+]
+
+#: The publisher no option is scoped to, beside ``_PUBLISHER_DOMAIN`` in a multi-publisher product.
+_OTHER_PUBLISHER_DOMAIN = "other.example"
+
+#: What the seller STORES in ``properties`` (served as ``publisher_properties``), per name, for
+#: the publisher-slice coverage scenarios. One ``core/publisher-property-selector.json``
+#: selector per publisher; each is an eligibility slice when the product has no placements.
+_PUBLISHERS: dict[str, list[dict[str, str]]] = {
+    "streamhaus_and_other": [
+        {"publisher_domain": _PUBLISHER_DOMAIN, "selection_type": "all"},
+        {"publisher_domain": _OTHER_PUBLISHER_DOMAIN, "selection_type": "all"},
+    ],
+    "streamhaus_only": [{"publisher_domain": _PUBLISHER_DOMAIN, "selection_type": "all"}],
+}
+
 
 def _manifest(name: str) -> dict[str, Any]:
     """The ``assets`` of a canonical creative, by the name a scenario gives its manifest.
@@ -631,6 +657,27 @@ _SELECTORS: dict[str, dict[str, Any]] = {
             {"scope": "publisher", "publisher_domain": _PUBLISHER_DOMAIN, "format_option_id": _PRODUCT_OPTION_ID}
         ]
     },
+    # ``local_and_publisher_options``' publisher-scoped 728x90 alone, and beside the
+    # product-local 300x250: a SET, which is how a buyer covers every publisher's slice.
+    "publisher_leaderboard_ref": {
+        "format_option_refs": [
+            {
+                "scope": "publisher",
+                "publisher_domain": _PUBLISHER_DOMAIN,
+                "format_option_id": _LEADERBOARD["format_option_id"],
+            }
+        ]
+    },
+    "local_and_publisher_refs": {
+        "format_option_refs": [
+            {"scope": "product", "format_option_id": _PRODUCT_OPTION_ID},
+            {
+                "scope": "publisher",
+                "publisher_domain": _PUBLISHER_DOMAIN,
+                "format_option_id": _LEADERBOARD["format_option_id"],
+            },
+        ]
+    },
     # Step 11: two co-present routes that BOTH resolve, to the same declaration. The
     # declaration asserts this exact legacy id in its v1_format_ref, so the legacy route is
     # a lookup rather than a guess.
@@ -857,12 +904,19 @@ def given_tenant_for_create(ctx: dict) -> None:
 
 
 def _store_declaring_product(
-    ctx: dict, declaration: str, *, with_legacy_arm: bool, placements: str | None = None
+    ctx: dict,
+    declaration: str,
+    *,
+    with_legacy_arm: bool,
+    placements: str | None = None,
+    publishers: str | None = None,
 ) -> None:
     """Store one product carrying *declaration*, with or without the deprecated arm.
 
     *placements* names a :data:`_PLACEMENTS` row stored in the product's ``placements``
     column; ``None`` stores none, which is every scenario but the coverage ones.
+    *publishers* names a :data:`_PUBLISHERS` row stored as the product's ``properties``;
+    ``None`` keeps the tenant's own ``all_inventory`` tag, a single publisher.
 
     ``with_legacy_arm=False`` stores a CANONICAL-ONLY product: ``format_ids`` NULL, which
     migration 08cd415b3d91 made representable. The product id carries the shape so two
@@ -871,10 +925,11 @@ def _store_declaring_product(
     product_id = f"satisfaction_{declaration}" if with_legacy_arm else f"satisfaction_canonical_{declaration}"
     _store_product(
         ctx,
-        f"{product_id}_{placements}" if placements else product_id,
+        "_".join(part for part in (product_id, placements, publishers) if part),
         format_ids=list(_LEGACY_ARM) if with_legacy_arm else None,
         format_options=_DECLARATIONS[declaration],
         placements=_PLACEMENTS[placements] if placements else None,
+        properties=_PUBLISHERS[publishers] if publishers else None,
     )
 
 
@@ -885,13 +940,15 @@ def _store_product(
     format_ids: list[dict[str, Any]] | None,
     format_options: list[dict[str, Any]] | None,
     placements: list[dict[str, Any]] | None = None,
+    properties: list[dict[str, Any]] | None = None,
     inventory_profile_id: int | None = None,
 ) -> None:
     """Store one product with the given arms and point the buyer's package at it.
 
     The product becomes ``ctx["default_product"]``, which is what the shared create-request
     builder points the package at -- so the buyer's request names THIS product without this
-    module duplicating the request literal.
+    module duplicating the request literal. *properties* replaces the ``all_inventory`` tag:
+    ``ck_product_properties_xor`` stores exactly one of the two.
     """
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
@@ -902,7 +959,8 @@ def _store_product(
         format_ids=format_ids,
         format_options=format_options,
         placements=placements,
-        property_tags=["all_inventory"],
+        properties=properties,
+        property_tags=None if properties else ["all_inventory"],
         inventory_profile_id=inventory_profile_id,
     )
     ctx["default_pricing_option"] = PricingOptionFactory(
@@ -934,6 +992,16 @@ def given_declaration_across_placements(ctx: dict, declaration: str, placements:
     document, and an included one may narrow the product's declarations inline.
     """
     _store_declaring_product(ctx, declaration, with_legacy_arm=True, placements=placements)
+
+
+@given(parsers.parse('the seller declares canonical format options "{declaration}" across publishers "{publishers}"'))
+def given_declaration_across_publishers(ctx: dict, declaration: str, publishers: str) -> None:
+    """Store the dual-arm product of :func:`given_declaration` sold across the named publishers.
+
+    No placements: the product's ``publisher_properties`` selectors are then what the
+    coverage rule slices it by (formats.mdx § Matching and satisfaction).
+    """
+    _store_declaring_product(ctx, declaration, with_legacy_arm=True, publishers=publishers)
 
 
 @given(parsers.parse("the seller publishes only a deprecated format sized {width:d}x{height:d}"))
@@ -1998,8 +2066,17 @@ def then_refused_unsupported_feature(ctx: dict, arm: str) -> None:
         'for an uncovered placement of "{selected}"'
     )
 )
+@then(
+    parsers.parse(
+        'the buyer is refused UNSUPPORTED_FEATURE naming the "{arm}" selector '
+        'for an uncovered publisher slice of "{selected}"'
+    )
+)
 def then_refused_uncovered_placement(ctx: dict, arm: str, selected: str) -> None:
     """The selector refusal above, narrowed to the placement-coverage rule by its details.
+
+    A publisher slice is refused by the same rule with the same details: the pin states the
+    slice and the placement as one coverage obligation, and ``capability`` names that rule.
 
     ``details.capability`` names the rule that refused, which is what separates this
     refusal from an unpublished option ref or an unsatisfied param on the same arm and code.
@@ -2024,6 +2101,23 @@ def then_refused_unresolved_placement(ctx: dict, arm: str, placement_id: str) ->
     the seller resolves the publisher's catalog for it.
     """
     _assert_placement_refusal(ctx, arm, "placement_unresolved", placement_id)
+
+
+@then(
+    parsers.parse(
+        'the buyer is refused UNSUPPORTED_FEATURE naming the package\'s product for the uncovered publisher slice "{slice_id}"'
+    )
+)
+def then_refused_uncovered_slice_without_selector(ctx: dict, slice_id: str) -> None:
+    """The coverage refusal for a package that named NO selector, at ``packages[0].product_id``.
+
+    Such a package "selects all formats supported by the product"
+    (``media-buy/package-request.json``), so no arm is at fault and the pointer names the
+    product the buyer chose. ``details.rejected_value`` is the slice left unserved -- the
+    buyer supplied no value -- named by its ``publisher_domain``, as the creative-set
+    refusal names it.
+    """
+    _assert_placement_refusal(ctx, "product_id", "placement_uncovered", slice_id)
 
 
 def _assert_placement_refusal(ctx: dict, arm: str, capability: str, rejected: str) -> None:
@@ -2265,8 +2359,17 @@ def then_creative_refused(ctx: dict, code: str) -> None:
         'for leaving placement "{placement_id}" uncovered'
     )
 )
+@then(
+    parsers.parse(
+        'the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "{field}" '
+        'for leaving the publisher slice "{placement_id}" uncovered'
+    )
+)
 def then_creatives_leave_placement_uncovered(ctx: dict, field: str, placement_id: str) -> None:
     """The creative-set coverage refusal: the code, the request field, and which placement.
+
+    For a multi-publisher product without placements the uncovered unit is a publisher's
+    eligibility slice, and ``rejected_value`` is that slice's ``publisher_domain``.
 
     ``details.rejected_value`` is the included placement the set leaves unserved -- with
     several creatives there is no single offending creative, and the placement is what the
