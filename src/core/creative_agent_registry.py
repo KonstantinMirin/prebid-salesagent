@@ -33,6 +33,7 @@ from src.core.config import get_settings
 from src.core.database.models import CreativeAgent as DBCreativeAgent
 from src.core.errors.codes import AppErrorCode
 from src.core.exceptions import AdCPConfigurationError, AdCPValidationError
+from src.core.format_cache import DEFAULT_AGENT_URL as REFERENCE_FORMATS_AGENT_URL
 from src.core.format_cache import load_reference_formats
 
 # The ONE home of the outbound request-signing posture gate, shared with
@@ -210,8 +211,15 @@ def names_listed_agent(agent_url: str, agent_urls: Collection[str]) -> bool:
     return agent_url in agent_urls or (is_operator_agent(agent_url) and any(map(is_operator_agent, agent_urls)))
 
 
-def _lists_as(fmt: Format, agent_url: str, format_id: str) -> bool:
+def _lists_as(fmt: Format, agent_url: str, format_id: str, stand_in_origin: str | None) -> bool:
     """Whether catalogue entry *fmt* is the format *format_id* of the agent at canonical *agent_url*.
+
+    The entry's declaring agent names the requested one (:func:`names_listed_agent`), or the
+    entry is listed by the agent that answers in the operator agent's place, at
+    *stand_in_origin* (``CreativeAgentRegistry._operator_catalog_agent``). That agent lists
+    its formats under its own address, and an agent's identity is its origin, so its own
+    entries are the ones it serves for the operator; an entry it lists under any other
+    agent's URL still is not.
 
     An entry whose own ``agent_url`` the canonicalization refuses names no agent, so it is
     not the one asked for.
@@ -222,7 +230,9 @@ def _lists_as(fmt: Format, agent_url: str, format_id: str) -> bool:
         declared = canonical_agent_url(fmt.format_id.agent_url)
     except TargetUriMalformedError:
         return False
-    return names_listed_agent(agent_url, (declared,))
+    return names_listed_agent(agent_url, (declared,)) or (
+        stand_in_origin is not None and agent_origin(declared) == stand_in_origin
+    )
 
 
 def _connection_agent_url(agent_url: str) -> str:
@@ -986,9 +996,23 @@ class CreativeAgentRegistry:
         # an entry the dialled agent lists under ANOTHER agent's URL as this agent's format
         # (salesagent-ol033.20.23). The agent half is ``names_listed_agent``'s, the rule the
         # registration check applies: the operator agent by origin, every other one by its
-        # canonical URL.
+        # canonical URL. The operator agent's catalogue is answered by another agent when
+        # one stands in for it, and that agent's own entries are the operator's.
         requested = canonical_agent_url(agent_url)
-        return next((fmt for fmt in formats if _lists_as(fmt, requested, format_id)), None)
+        stand_in = self._operator_catalog_agent() if is_operator_agent(requested) else None
+        stand_in_origin = agent_origin(stand_in) if stand_in else None
+        return next((fmt for fmt in formats if _lists_as(fmt, requested, format_id, stand_in_origin)), None)
+
+    def _operator_catalog_agent(self) -> str | None:
+        """The agent whose catalogue answers for the operator agent in its place, or None.
+
+        CREATIVE_AGENT_URL when it is configured: :func:`_connection_agent_url` dials that
+        endpoint for every operator reference, and the agent there lists its formats under
+        its own address (the reference agent stamps ``<its origin>/api/creative-agent``),
+        not under the operator identity it stands in for. None when the operator agent is
+        dialled at its own identity, whose entries name it already.
+        """
+        return get_settings().integrations.creative_agent_url or None
 
     async def preview_creative(
         self,
@@ -1158,6 +1182,10 @@ class ReferenceFormatsRegistry(CreativeAgentRegistry):
 
     def _operator_formats_override(self) -> list[Format] | None:
         return _get_reference_formats()
+
+    def _operator_catalog_agent(self) -> str | None:
+        """The reference agent the checked-in capture was taken from, whose URL its entries carry."""
+        return REFERENCE_FORMATS_AGENT_URL
 
 
 _registry: CreativeAgentRegistry | None = None
