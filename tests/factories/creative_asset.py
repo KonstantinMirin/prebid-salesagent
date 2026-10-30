@@ -330,7 +330,7 @@ def make_test_banner_creative(**overrides: object) -> CreativeAsset:
     see #1430 DRY extraction.
 
     FOR SYNC TESTS, which is why the format must be one the reference agent actually
-    serves. This defaulted to ``display_300x250`` — a format that is NOT among the 71 in
+    serves. This defaulted to ``display_300x250`` — a format that is NOT among those in
     ``tests/fixtures/creative_formats/reference_formats.json``, so every creative built
     here is refused by ``_validation.py`` with ``AdCPFormatNotFoundError`` and comes back
     ``action='failed'``. That was invisible while the harness served a stand-in

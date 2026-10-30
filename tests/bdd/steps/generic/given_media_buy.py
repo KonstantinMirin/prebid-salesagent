@@ -2381,12 +2381,12 @@ def given_creative_format_not_generative(ctx: dict) -> None:
     ``display_300x250_image``, which satisfies this precondition on BOTH halves -- and the
     id this used to assert satisfied neither.
 
-    MEASURED against tests/fixtures/creative_formats/reference_formats.json, 71 formats:
+    MEASURED against tests/fixtures/creative_formats/reference_formats.json, 76 formats:
     ``display_300x250`` is ABSENT from the capture entirely, so calling it "a reference
     format with no output_format_ids" was false twice over -- it is not a reference format
     the agent serves, and a format that does not exist has no output_format_ids to lack.
     ``display_300x250_image`` IS in the capture and carries no ``output_format_ids`` key
-    (64 of the 71 carry none), so the docstring is now true rather than aspirational.
+    (69 of the 76 carry none), so the docstring is now true rather than aspirational.
     """
     kwargs = ctx.get("request_kwargs", {})
     for pkg in kwargs.get("packages", []):

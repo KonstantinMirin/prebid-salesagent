@@ -3081,7 +3081,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             #   display_300x250       — no agent serves it. An inline creative goes through
             #     sync_creatives, whose creatives/_validation.py resolves format_id through
             #     the creative-agent registry, and in a test process
-            #     get_creative_agent_registry() returns ReferenceFormatsRegistry — the 71
+            #     get_creative_agent_registry() returns ReferenceFormatsRegistry — the
             #     formats in tests/fixtures/creative_formats/reference_formats.json, which is
             #     also what the e2e server serves. That catalog carries
             #     display_300x250_image / _html / _generative / _2x and NO bare
@@ -7011,7 +7011,7 @@ ENV_ROUTES: list[EnvRoute] = [
         # "the parent still blanks the fetch, measured at len=0") WERE TRUE AND ARE NOW
         # FALSE: 1883dedc4 installs production's own ``ReferenceFormatsRegistry`` on the
         # parent and deleted the ``run_async`` patch, so BOTH envs serve the committed
-        # 71-format capture with nothing arranged. They are recorded as retired rather
+        # capture with nothing arranged. They are recorded as retired rather
         # than deleted because they are what made the Given for these two scenarios reach
         # for ``mock["registry"]`` -- a key this env DELETES -- and died there with
         # ``KeyError`` on all four transports from the day the scenarios were written
@@ -7022,7 +7022,7 @@ ENV_ROUTES: list[EnvRoute] = [
         # THE CATALOGUE IS HERMETIC HERE; THE PREVIEW IS NOT, and the paragraph this
         # replaces claimed the env "never dials" on the strength of the catalogue alone.
         # Resolution is hermetic: under ADCP_TESTING the unpatched registry is
-        # ``ReferenceFormatsRegistry``, which answers all 71 formats from the checked-in
+        # ``ReferenceFormatsRegistry``, which answers every format from the checked-in
         # capture, ``display_300x250_image`` projecting to ``image``. The PREVIEW is a
         # real request: with the Given fixed and the gate reached, production's own
         # ``preview_creative`` runs for a static agent-backed format, and the projectable

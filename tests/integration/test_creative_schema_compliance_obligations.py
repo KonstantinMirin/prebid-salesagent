@@ -308,7 +308,7 @@ class TestCreativeActionEnumThroughSync:
             # registry answers None and _validation.py refuses the entry. This used to
             # replace get_format with an AsyncMock(return_value=None), which asserted
             # the same thing about a method that never ran; the registry is production's
-            # own now and the capture's 71 ids are the whole of what it serves.
+            # own now and the capture's ids are the whole of what it serves.
             unserved = FormatIdFactory(agent_url=AGENT_URL, id="format_no_agent_serves")
 
             response = env.call_impl(

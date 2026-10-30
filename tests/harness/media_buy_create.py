@@ -307,7 +307,7 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
             # compares whole -- and with the arm pinned to the synthetic ``display_300x250``
             # those were unsatisfiable together: the only id equal to the arm was the one the
             # agent does not serve. Measured against
-            # tests/fixtures/creative_formats/reference_formats.json (71 formats):
+            # tests/fixtures/creative_formats/reference_formats.json:
             # ``display_300x250`` is ABSENT, ``display_300x250_image`` is PRESENT. This is
             # also already ProductFactory's own default, for the reason written at
             # tests/factories/product.py.

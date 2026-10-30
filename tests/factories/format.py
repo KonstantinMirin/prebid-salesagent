@@ -42,7 +42,7 @@ from src.core.schemas import Format, FormatId
 
 #: Derived, not re-typed -- see ``tests.factories.creative.DEFAULT_CREATIVE_AGENT_URL``, which
 #: is the same value under the name the step modules import. Both are the federated identity
-#: the catalog's own 71 entries declare; neither is a destination.
+#: the catalog's own entries declare; neither is a destination.
 AGENT_URL = PUBLIC_DEFAULT_AGENT_URL
 
 # ── Asset class mapping ──────────────────────────────────────────────
@@ -325,7 +325,7 @@ def resolvable_format_ref(format_id: str, **parameters: int) -> dict[str, Any]:
     ``_legacy_lane``'s own docstring records why it is deliberately not widened.
 
     Consequence for picking an id: read what the scenario ASSERTS first. A scenario asserting a
-    REFUSAL needs only resolvability, so any of the 71 will do -- which is why salesagent-3oo5h
+    REFUSAL needs only resolvability, so any captured id will do -- which is why salesagent-3oo5h
     was a one-literal fix. A scenario asserting an ACCEPT needs both gates, so the product's arm
     must be a catalog id too (salesagent-rkuzz is nine rows where it is not).
 
@@ -341,7 +341,7 @@ def resolvable_format_ref(format_id: str, **parameters: int) -> dict[str, Any]:
 
     "RAISES" above means from the id ALONE, which is the only question this door asks. A
     captured id is still PROJECTABLE through the format's own ``canonical`` declaration --
-    measured, 64 of the 71 declare one, ``video_1280x720`` among them -- so a caller who has
+    measured, 69 of the 76 declare one, ``video_1280x720`` among them -- so a caller who has
     the catalog resolves it at step 1. What the caller needs is to actually HAVE the catalog:
     the sync path does (``find_format(all_formats, ...)``), ``CreativeFactory`` does through
     ``served_format_spec``, and a bare ``canonical_kind_for(id)`` does not.
@@ -350,7 +350,7 @@ def resolvable_format_ref(format_id: str, **parameters: int) -> dict[str, Any]:
     NOT serve, and vice versa. A caller needing DIMENSIONS wants the ``display_NNNxNNN_image``
     family, the only one ``upgrade_legacy_format_id`` sizes; a caller needing only a resolvable
     identity -- which is what a legacy-lane claim needs, since ``_legacy_lane`` compares whole
-    identities and reads no dimensions -- can take any of the 71. Do not add a third
+    identities and reads no dimensions -- can take any captured id. Do not add a third
     dimension-from-id derivation to narrow this: salesagent-lyh1i owns collapsing the two that
     already exist.
     """
@@ -385,8 +385,8 @@ def resolvable_format_ref(format_id: str, **parameters: int) -> dict[str, Any]:
 def _canonical_kind_of(fmt: Format) -> str | None:
     """The canonical format kind a reference format declares, as a plain string.
 
-    THIS USED TO READ ``fmt.type``, AND ``type`` IS NOT A FIELD. It is a key the capture
-    carries on every one of its 71 entries, and the pinned ``LibraryFormat``'s
+    THIS USED TO READ ``fmt.type``, AND ``type`` IS NOT A FIELD. It was a key the v3.1.25
+    capture carried on every one of its 71 entries, and the pinned ``LibraryFormat``'s
     ``extra="allow"`` STORED it, so a plain attribute read found it. The local subclass now
     sets ``extra="ignore"`` -- correctly, because deleting a declared field from an
     ``extra="allow"`` parent promotes it to an extra that reaches the wire -- and the key is
@@ -396,7 +396,7 @@ def _canonical_kind_of(fmt: Format) -> str | None:
 
     ``canonical.kind`` is the pinned replacement and not merely an available one:
     ``core/format-id.json`` makes it required when a format declares a projection, the
-    capture declares one on 64 of the 71, and it is the same vocabulary everything inside
+    capture declares one on 69 of the 76, and it is the same vocabulary everything inside
     this seller keys on. Reading a field the pin declares is what stops the next ``extra``
     tightening from silently emptying this selector again.
     """
