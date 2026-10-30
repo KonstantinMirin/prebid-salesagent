@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
-from pytest_bdd import given, parsers, then
+from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import (
     WIRE_MISSING,
@@ -29,6 +29,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_lookup,
 )
 from tests.bdd.steps.domain.uc002_create_media_buy import _first_package, given_request_with_account_id
+from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.given_media_buy import (
     _add_creative_ids_to_package,
     _create_approved_creative,
@@ -402,6 +403,32 @@ def then_response_carries_assignments(ctx: dict) -> None:
     assignments = wire_field(ctx, "packages")[0].get("creative_assignments") or []
     assert sorted(a["creative_id"] for a in assignments) == _requested_creative_ids(ctx), (
         f"packages[0].creative_assignments on the wire: {assignments!r}"
+    )
+
+
+@when("the Buyer Agent reads the created media buy back with get_media_buys")
+def when_read_back_created_buy(ctx: dict) -> None:
+    """get_media_buys for the buy the create answered, on the same transport and identity.
+
+    The created package's id is kept first: the readback replaces the result the create's
+    Thens read. get_media_buys.mdx: a seller without a creative library reports inline
+    creatives on ``media_buys[].packages[].creative_approvals``.
+    """
+    from src.core.schemas._base import GetMediaBuysRequest
+
+    ctx["created_package_id"] = wire_field(ctx, "packages")[0]["package_id"]
+    dispatch_request(ctx, req=GetMediaBuysRequest(media_buy_ids=[_created_buy_id(ctx)]))
+
+
+@then("the created package should report creative approvals for exactly the inline creatives")
+def then_created_package_reports_inline_creatives(ctx: dict) -> None:
+    """The readback names exactly the creatives the create carried inline, on the wire."""
+    from tests.bdd.steps.domain.uc019_query_media_buys import _reported_creative_ids
+
+    reported = _reported_creative_ids(ctx, ctx["created_package_id"])
+    assert reported == _requested_creative_ids(ctx), (
+        f"get_media_buys reports creatives {reported} for the created package, "
+        f"expected the inline uploads {_requested_creative_ids(ctx)}"
     )
 
 

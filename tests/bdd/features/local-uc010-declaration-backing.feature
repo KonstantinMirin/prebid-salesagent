@@ -86,8 +86,11 @@ Feature: UC-010 get_adcp_capabilities — capability declarations must be implem
     # This seller accepts packages[].creatives on create_media_buy and update_media_buy,
     # so the flag's VALUE is the obligation, not only its boolean shape (which
     # @T-UC-010-main grades). The acceptance half is graded on all four transports by
-    # @T-UC-002-ext-canonical-product-slots-inline (an inline creative is uploaded to the
-    # library and assigned to the package the create made); the update half by
+    # @T-UC-002-alt-creatives (the create answers packages[].creative_assignments for the
+    # inline creatives, and get_media_buys reads them back as the package's
+    # creative_approvals) and @T-UC-002-ext-canonical-product-slots-inline (an inline
+    # creative is uploaded to the library and assigned to the package the create made); the
+    # update half by
     # @T-UC-003-local-inline-creatives-replace and @T-UC-003-local-inline-creatives-keep-library.
     # At the pin the flag is `deprecated: true` with `x-removed-in: 4.0.0` ("Deprecated 3.x
     # compatibility capability for creatives provided inline in create_media_buy and

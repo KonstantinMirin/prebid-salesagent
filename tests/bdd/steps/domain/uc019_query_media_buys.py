@@ -3357,6 +3357,15 @@ def _wire_package(ctx: dict, pkg_id: str, *, mb_id: str | None = None) -> dict:
     return matching[0]
 
 
+def _reported_creative_ids(ctx: dict, pkg_id: str) -> list[str]:
+    """The creatives a package's ``creative_approvals`` name on the get_media_buys wire, sorted.
+
+    ``get_media_buys`` reports one ``creative_approvals`` entry per creative assigned to the
+    package, so this is the seller's record of the package's creatives as the buyer reads it.
+    """
+    return sorted(approval["creative_id"] for approval in _wire_package(ctx, pkg_id).get("creative_approvals") or [])
+
+
 def _wire_advisories(ctx: dict) -> list[dict]:
     """Return the non-fatal ``errors[]`` advisories carried by the 200-OK document.
 

@@ -117,7 +117,19 @@ Feature: BR-UC-002 Create Media Buy
     And the system should upload the creatives to the creative library
     And the system should assign the uploaded creatives to packages
     And the response should include the created media buy with creative assignments
+    When the Buyer Agent reads the created media buy back with get_media_buys
+    Then the created package should report creative approvals for exactly the inline creatives
     # POST-S1: Buyer knows their media buy has been created and is activating
+    # LOCAL CORRECTION: the readback is added. The create response's creative_assignments
+    # (core/package.json, the create_media_buy.mdx example reads
+    # packages[0].creative_assignments) say what the seller answered; the readback says what
+    # it kept, as a buyer reads it later. This seller declares
+    # media_buy.features.inline_creative_management and no creative library, so at the pin
+    # get_media_buys creative_approvals is the buyer's readback surface for an inline
+    # creative, as the inline_creatives_without_sync storyboard reads it after its update.
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/create_media_buy.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/package.json pointer=/properties/creative_assignments
+    # @source repo=adcp ref=v3.2.7 path=docs/media-buy/task-reference/get_media_buys.mdx
     # The inline creatives come from the create Given. The former line "the request includes
     # packages with inline "creatives" array" bound UC-003's update-request catch-all, which
     # builds an update body and refuses that wording.

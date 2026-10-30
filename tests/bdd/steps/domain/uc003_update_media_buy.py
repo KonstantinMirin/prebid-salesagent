@@ -1673,19 +1673,13 @@ def when_read_back_media_buy(ctx: dict, media_buy_id: str) -> None:
 
 @then(parsers.parse('the package "{package_id}" should report creative approvals for exactly {creative_ids}'))
 def then_package_reports_exactly(ctx: dict, package_id: str, creative_ids: str) -> None:
-    """The package's ``creative_approvals`` on the get_media_buys wire name exactly *creative_ids*.
-
-    ``get_media_buys`` reports one ``creative_approvals`` entry per creative assigned to the
-    package, so this set is the seller's record of the package's creatives as the buyer
-    sees it.
-    """
+    """The package's ``creative_approvals`` on the get_media_buys wire name exactly *creative_ids*."""
     import json
 
-    from tests.bdd.steps.domain.uc019_query_media_buys import _wire_package
+    from tests.bdd.steps.domain.uc019_query_media_buys import _reported_creative_ids
 
     expected = sorted(json.loads(creative_ids))
-    package = _wire_package(ctx, _resolve_package_id(ctx, package_id))
-    reported = sorted(approval["creative_id"] for approval in package.get("creative_approvals") or [])
+    reported = _reported_creative_ids(ctx, _resolve_package_id(ctx, package_id))
     assert reported == expected, f"package {package_id!r} reports creatives {reported} on the wire, expected {expected}"
 
 
