@@ -1113,14 +1113,14 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     # BOTH sizes of the legacy-only product on one arm: a set, which is how a buyer covers
     # ``legacy_split``'s two included placements through the deprecated selector.
     "legacy_both_sizes": {"format_ids": [_LEGACY_MREC, _LEGACY_LEADERBOARD]},
-    # Two legacy references that normalize to the KIND alone. The registry maps both to
-    # ``image`` by glob, while neither carries or projects a size: ``display_image`` is the
-    # unparameterized template, and the SDK upgrades ``display_300x250`` to 300x250 only for
-    # the reference agent, so at another agent it projects nothing. Against a product fixing
-    # 300x250 each is "a broad request with no dimensions", which
-    # core/product-format-declaration.json says "does not satisfy a fixed-size ... product".
-    # Both were accepted by satisfaction and refused only by a raw-key gate that ran after
-    # it -- VALIDATION_ERROR, and for the wrong reason (salesagent-ol033.20.26).
+    # Two legacy references that state no size. ``display_image`` is the unparameterized
+    # template the registry maps to ``image`` by glob, so against a product fixing 300x250 it
+    # is "a broad request with no dimensions", which core/product-format-declaration.json
+    # says "does not satisfy a fixed-size ... product". ``display_300x250`` at another agent
+    # that serves no declaration for it projects to nothing at all: the registry maps a
+    # legacy id (glob and size upgrade alike) only at the reference agent's origin. Both
+    # were accepted by satisfaction and refused only by a raw-key gate that ran after it --
+    # VALIDATION_ERROR, and for the wrong reason (salesagent-ol033.20.26).
     "legacy_unsized_template": {"format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_image"}]},
     "foreign_agent_display_300x250": {
         "format_ids": [{"agent_url": "https://another-creative-agent.example", "id": "display_300x250"}]

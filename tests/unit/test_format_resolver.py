@@ -693,14 +693,15 @@ class TestCanonicalKindForSizeEncodedIds:
         assert canonical_kind_for(format_id) == kind, why
 
     @pytest.mark.parametrize(
-        ("agent_url", "kind"),
+        ("agent_url", "slug", "kind"),
         [
-            ("https://creative.adcontextprotocol.org", "image"),
-            ("https://peer-agent.example.com", "display_tag"),
+            ("https://creative.adcontextprotocol.org", "display_300x250_image", "image"),
+            ("https://peer-agent.example.com", "display_300x250_image", "display_tag"),
+            ("https://peer-agent.example.com", "display_300x250", "display_tag"),
         ],
-        ids=["standard-agent-glob-before-structural", "peer-agent-structural"],
+        ids=["standard-agent-glob-before-structural", "peer-agent-structural", "peer-agent-glob-named-id-structural"],
     )
-    def test_an_unannotated_declaration_reaches_the_glob_before_the_structural_entry(self, agent_url, kind):
+    def test_an_unannotated_declaration_reaches_the_glob_before_the_structural_entry(self, agent_url, slug, kind):
         """Supplying the declaration cannot let step 4 answer ahead of step 3.
 
         A v1 image format with no ``canonical`` has the standard ``image`` + ``url`` shape,
@@ -711,14 +712,16 @@ class TestCanonicalKindForSizeEncodedIds:
         one. Projecting the raw id first answered ``display_tag`` with the declaration and
         ``image`` without it.
 
-        The peer row is the control, and it differs only in the agent: the SDK's upgrade is
-        the standard agent's namespace alone, the raw slug matches no literal glob, and the
-        structural entry is the step that answers there.
+        The peer rows are the control, and they differ only in the agent: the registry's globs
+        and the SDK's upgrade are the standard agent's namespace alone, so at a peer step 3 is
+        not consulted and the structural entry is the step that answers. The last row names an
+        id a literal glob DOES match (``display_300x250`` -> ``image``), which is what separates
+        "step 3 is skipped at a peer" from "the peer's slug happens to match no glob".
         """
         from src.core.format_resolver import canonical_kind_for
         from tests.factories.format import FormatFactory, FormatIdFactory, make_asset
 
-        format_id = FormatIdFactory(agent_url=agent_url, id="display_300x250_image")
+        format_id = FormatIdFactory(agent_url=agent_url, id=slug)
         declaration = FormatFactory(
             format_id=format_id,
             assets=[make_asset("image", asset_id="image_0"), make_asset("url", asset_id="url_1")],

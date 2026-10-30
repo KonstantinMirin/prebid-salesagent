@@ -212,16 +212,17 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | required_slots       | slot_wrong_asset_type            | format_kind        |
       | publisher_300        | wrong_publisher_option_id        | format_option_refs |
 
-    # legacy_unsized_template and foreign_agent_display_300x250 are legacy references that
-    # normalize to the kind and nothing else:
-    # the unsized display_image template, and display_300x250 at an agent the registry's
-    # size upgrade does not cover. Neither states the fixed size, so each is the legacy
+    # legacy_unsized_template is a legacy reference that normalizes to the kind and nothing
+    # else: the unsized display_image template states no fixed size, so it is the legacy
     # spelling of bare_image_kind, and core/product-format-declaration.json refuses it the
     # same way: "A broad request with no dimensions or duration does not satisfy a
-    # fixed-size or fixed-duration product". Until salesagent-ol033.20.26 both were ACCEPTED
-    # by satisfaction and then refused VALIDATION_ERROR by a raw (agent_url, id) gate -- the
-    # comparison the same document forbids -- so removing that gate needed the satisfaction
-    # rule to refuse them for the reason the pin gives.
+    # fixed-size or fixed-duration product". foreign_agent_display_300x250 is display_300x250
+    # at an agent that serves no declaration for it: the registry maps a legacy id only at
+    # the reference agent's origin, so it projects to nothing and is refused on the same
+    # arm. Until salesagent-ol033.20.26 both were ACCEPTED by satisfaction and then refused
+    # VALIDATION_ERROR by a raw (agent_url, id) gate -- the comparison the same document
+    # forbids -- so removing that gate needed the satisfaction rule to refuse them for the
+    # reason the pin gives.
     #
     # malformed_agent_display_300x250 names the creative agent's host with two trailing dots.
     # docs/reference/url-canonicalization step 2: "More than one trailing dot creates an empty
@@ -1414,11 +1415,13 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     When the Buyer Agent syncs it into the library
     Then the creative is stored carrying canonical kind "video_hosted"
 
-  # THE ORDER BETWEEN STEPS 2 AND 3. The publisher calls its HTML5 banner `display_300x250`,
-  # which the registry's literal glob maps to image, and its own declaration says html5.
-  # Step 2 -- "if the v1 format declaration carries an explicit canonical field, use it" --
-  # comes first, so the stored kind is html5. A seller consulting the glob first stores
-  # image, and so does a seller ignoring the declaration: either inversion reddens this row.
+  # STEP 2 AT A PEER WHOSE ID A GLOB NAMES. The publisher calls its HTML5 banner
+  # `display_300x250`, an id the registry's literal glob maps to image at the reference
+  # agent, and its own declaration says html5. Step 2 -- "if the v1 format declaration
+  # carries an explicit canonical field, use it" -- is what projects a peer's id, so the
+  # stored kind is html5. A seller consulting the glob first stores image, and a seller
+  # ignoring the declaration finds no structural entry for an `html` slot and refuses it:
+  # either reddens this row.
   @T-UC-FORMAT-SATISFACTION-upsert-declared-outranks-glob @creative_library_upsert @requires_db
   Scenario: a format's own canonical projection outranks a registry glob naming its id
     Given a packaged product declaring only the deprecated format_ids
@@ -1427,22 +1430,27 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     When the Buyer Agent syncs it into the library
     Then the creative is stored carrying canonical kind "html5"
 
-  # THE ORDER BETWEEN STEPS 3 AND 4. The publisher serves `video_30s` with a single `url`
-  # slot and no canonical. The registry's literal glob maps that id to video_hosted at
-  # duration_ms_exact 30000 (step 3), and its structural `url` entry maps the slot shape to
-  # display_tag (step 4). The literal glob carries no agent_url, so it matches the id at the
-  # tenant's peer as it would at the standard agent. Step 3 comes first, so the stored kind is
-  # video_hosted; a seller running the structural match first stores display_tag and reddens
-  # the row. The pin leaves the agent a glob applies to unstated; the SDK applies a literal
-  # glob at any agent, and this seller keeps that.
+  # A PEER'S ID IS NOT LOOKED UP IN THE GLOBS, EVEN WHEN ITS DECLARATION CARRIES NO
+  # CANONICAL. The publisher serves `video_30s` with a single `url` slot and no canonical.
+  # At the reference agent the registry's literal glob maps that id to video_hosted at
+  # duration_ms_exact 30000 (step 3). The globs are written in the reference agent's id
+  # namespace, and this seller maps a legacy id by glob only at the reference agent's origin
+  # (the owner's ruling, 2026-10-30): at the tenant's peer the id is the peer's own, step 3
+  # does not apply, and the registry's structural `url` entry -- "the PRIMARY fallback for
+  # v1 wire traffic", which "catches custom v1 formats ... without enumerating every
+  # possible v1 name" -- maps the slot shape to display_tag (step 4). A seller applying the
+  # glob at any agent, as the SDK does, stores video_hosted; a seller that drops step 4 at a
+  # peer along with step 3 refuses the creative. Either reddens the row. The pin does not
+  # say which agent's ids step 3 applies to: adcontextprotocol/adcp#8626 asks for that to be
+  # written down.
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json pointer=/description
-  @T-UC-FORMAT-SATISFACTION-upsert-glob-outranks-structural @creative_library_upsert @requires_db
-  Scenario: a registry glob naming a format's id outranks the structural match on its slots
+  @T-UC-FORMAT-SATISFACTION-upsert-peer-id-skips-glob @creative_library_upsert @requires_db
+  Scenario: a peer agent's legacy id is projected by its slots, not by a registry glob naming the id
     Given a packaged product declaring only the deprecated format_ids
     And the seller's creative agent serves "video_30s" with assets "url" declaring no canonical kind
     And the buyer syncs a creative identified by that served format
     When the Buyer Agent syncs it into the library
-    Then the creative is stored carrying canonical kind "video_hosted"
+    Then the creative is stored carrying canonical kind "display_tag"
 
   @T-UC-FORMAT-SATISFACTION-upsert-projectable @creative_library_upsert @requires_db
   Scenario: a creative whose format does resolve is stored with its canonical kind

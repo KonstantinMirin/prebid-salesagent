@@ -241,8 +241,13 @@ class TestAnOperatorRefusalNamesNoEndpoint:
             registry = env.mock["registry"].return_value
             # The tenant's own creative agent serves the format, so the dial the sync makes is
             # an OPERATOR dial to the endpoint this deployment configured -- the address the
-            # refusal must not disclose.
-            env.set_served_catalogue([FormatFactory(format_id={"id": _FORMAT_ID, "agent_url": AGENT_URL})])
+            # refusal must not disclose. The peer's id is its own, so the format declares its
+            # canonical kind: the registry maps a legacy id only at the reference agent's
+            # origin, and without the annotation the sync refuses the creative at projection,
+            # before the dial this test grades.
+            env.set_served_catalogue(
+                [FormatFactory(format_id={"id": _FORMAT_ID, "agent_url": AGENT_URL}, canonical={"kind": "image"})]
+            )
             (seeded,) = env.seeded_format_ids()
             withheld_markers = _withheld_from_the_buyer(seeded.agent_url)
             registry.preview_creative.side_effect = OutboundRequestBlocked()
