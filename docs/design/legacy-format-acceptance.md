@@ -205,7 +205,8 @@ design did not predict, recorded because each changed the work:
   condition.** When the product takes the creative's template at other parameters,
   `_legacy_shortfalls` reports each parameter that fails (`format_id.width`,
   `format_id.pixel_ratio`, ...) and `creative_refusal` codes them as it codes a manifest's:
-  a size or density is `CREATIVE_SIZE_MISMATCH`, anything else
+  a size or density is `CREATIVE_SIZE_MISMATCH`, a required click destination left out
+  `CREATIVE_MISSING_CLICK_URL`, anything else
   `CREATIVE_VALIDATION_FAILED_GENERIC`. A format the product does not take at all is still
   `VALIDATION_ERROR`, raised by the assignment sites themselves, and lenient
   `sync_creatives` still skips both.

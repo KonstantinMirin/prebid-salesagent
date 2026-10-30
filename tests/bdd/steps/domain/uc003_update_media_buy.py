@@ -1550,14 +1550,14 @@ def _inline_creative_payload(creative_id: str, name: str) -> dict[str, Any]:
     The ``asset_type`` discriminator comes from ``image_spec``: a hand-built asset map
     without it is refused by ``AdCPPackageUpdate.creatives`` before the update runs.
     """
-    from tests.factories.creative_asset import build_assets, image_spec
+    from tests.factories.creative_asset import named_format_assets
     from tests.factories.request import CreativeAssetRequestFactory
 
     return CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
         name=name,
         format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-        assets=build_assets(image_spec("primary", url=f"https://example.com/{creative_id}.png")),
+        assets=named_format_assets("display_300x250_image", media_url=f"https://example.com/{creative_id}.png"),
     )
 
 

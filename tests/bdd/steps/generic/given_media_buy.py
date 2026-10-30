@@ -29,7 +29,7 @@ from tests.factories import (
     PricingOptionFactory,
     ProductFactory,
 )
-from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.creative_asset import build_assets, image_spec, named_format_assets
 from tests.factories.malformed import malformed
 from tests.factories.mint import mint
 from tests.factories.request import CreativeAssetRequestFactory
@@ -2112,9 +2112,9 @@ def inline_creative_payload(number: int, fmt_id: str = "display_300x250_image") 
             "agent_url": "https://creative.adcontextprotocol.org",
             "id": fmt_id,
         },
-        # Keyed by the asset_id the CAPTURE declares for this format, not by the
-        # deleted stub's ``primary``. See _create_approved_creative.
-        assets=build_assets(image_spec("banner_image", url=f"https://example.com/banner-{number}.png")),
+        # Every asset the CAPTURE requires for this format, keyed by its asset_id, not by
+        # the deleted stub's ``primary``. See _create_approved_creative.
+        assets=named_format_assets(fmt_id, media_url=f"https://example.com/banner-{number}.png"),
     )
 
 

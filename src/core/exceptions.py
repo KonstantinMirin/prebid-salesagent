@@ -1559,17 +1559,23 @@ class AdCPCreativeRejectedError(AdCPSalesAgentError[CreativeRejectionDetails]):
 
 # The manifest-against-declaration refusals of docs/creative/creative-manifests.mdx
 # § Validation ("Validate a manifest against the selected product or publisher declaration").
-# Both are correctable per the pinned enumMetadata. The size code is the specific one the enum
-# names for dimensions; every other buyer-correctable manifest failure (a missing required
-# slot, a wrong asset type, a duration, a codec, a file size, an ambiguous selection) takes
-# the generic one, which the enum reserves for exactly "cannot classify the failure with a more
-# specific standard code".
+# All three are correctable per the pinned enumMetadata. The size code is the specific one the
+# enum names for dimensions, and the click-URL code the one for a required destination URL left
+# out; every other buyer-correctable manifest failure (a missing required slot, a wrong asset
+# type, a duration, a codec, a file size, an ambiguous selection) takes the generic one, which
+# the enum reserves for exactly "cannot classify the failure with a more specific standard code".
 
 
 class AdCPCreativeSizeMismatchError(AdCPSalesAgentError[CreativeManifestDetails]):
     """The creative's dimensions satisfy no size the selected declaration accepts (422, CREATIVE_SIZE_MISMATCH)."""
 
     _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_SIZE_MISMATCH
+
+
+class AdCPCreativeMissingClickUrlError(AdCPSalesAgentError[CreativeManifestDetails]):
+    """The manifest leaves out the destination URL its declaration requires (422, CREATIVE_MISSING_CLICK_URL)."""
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_MISSING_CLICK_URL
 
 
 class AdCPCreativeValidationFailedError(AdCPSalesAgentError[CreativeManifestDetails]):

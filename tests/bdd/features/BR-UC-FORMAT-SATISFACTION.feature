@@ -2873,6 +2873,58 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-asset.json pointer=/properties/format_kind
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
 
+  @T-UC-FORMAT-SATISFACTION-legacy-manifest-library-accepted @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives stores a legacy creative carrying every asset its named format requires
+    Given the buyer syncs a creative identified by format_id "display_300x250_image" carrying the "complete" manifest
+    When the Buyer Agent syncs it into the library
+    Then the creative is stored carrying canonical kind "image"
+
+  @T-UC-FORMAT-SATISFACTION-legacy-manifest-library-missing @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives refuses a legacy creative missing an asset its named format requires - <manifest>
+    Given the buyer syncs a creative identified by format_id "display_300x250_image" carrying the "<manifest>" manifest
+    When the Buyer Agent syncs it into the library
+    Then the creative is reported failed with <code> at "creatives[0]" and nothing is stored
+    And the entry names "<path>" missing where "<accepted>" is accepted
+
+    Examples:
+      | manifest             | code                               | path                | accepted |
+      | banner_image_missing | CREATIVE_VALIDATION_FAILED_GENERIC | assets.banner_image | image    |
+      | click_url_missing    | CREATIVE_MISSING_CLICK_URL         | assets.click_url    | url      |
+
+  @T-UC-FORMAT-SATISFACTION-legacy-manifest-library-wrong-type @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives refuses a legacy creative filling a required asset with another asset type
+    Given the buyer syncs a creative identified by format_id "display_300x250_image" carrying the "banner_image_as_text" manifest
+    When the Buyer Agent syncs it into the library
+    Then the creative is reported failed with CREATIVE_VALIDATION_FAILED_GENERIC at "creatives[0]" and nothing is stored
+    And the entry names "assets.banner_image.asset_type" stating "text" where "image" is accepted
+
+    # THE DEPRECATED BRANCH IS HELD TO ITS NAMED FORMAT. A creative naming a format_id keys its
+    # assets by that format's own asset ids, and core/format.json says each asset_id "must be
+    # used as the key in creative manifests" and that "Required assets must be provided for a
+    # valid creative". creative-manifests.mdx § Validation steps 2 and 3, "Confirm all required
+    # slots are present" and "Validate each asset against its declared type", apply to it at
+    # sync_creatives, where "Sellers perform final acceptance". The declaration is the format
+    # the agent serves: display_300x250_image declares banner_image (image) and click_url (url),
+    # both required. Every refusal row differs from the accept row in one asset, so a seller
+    # that does not read the named format's assets accepts all three. The refusal is per
+    # creative -- the batch completes and the entry fails -- and nothing is written.
+    #
+    # THE CODE is the most specific one enums/error-code.json gives the failure, because
+    # CREATIVE_VALIDATION_FAILED_GENERIC's own text says "Producers SHOULD prefer a specific
+    # creative code whenever one applies". click_url is the format's click destination -- the
+    # vocabulary registry (core/asset-group-vocabulary.json) lists it as an alias of
+    # landing_page_url, "Click-through destination URL for the ad" -- so leaving it out is
+    # CREATIVE_MISSING_CLICK_URL: "A submitted creative that requires a destination URL does
+    # not provide one". A missing image and a mistyped asset have no specific code and take the
+    # generic one, as a canonical manifest that does not fill its kind's slots does
+    # (@T-UC-FORMAT-SATISFACTION-manifest-library-slot-missing).
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json pointer=/$defs/baseIndividualAsset/properties/asset_id
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json pointer=/$defs/baseIndividualAsset/properties/required
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-manifests.mdx section="Validation"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json property=CREATIVE_VALIDATION_FAILED_GENERIC
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json property=CREATIVE_MISSING_CLICK_URL
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/asset-group-vocabulary.json pointer=/vocabulary/landing_page_url
+
   @T-UC-FORMAT-SATISFACTION-manifest-legacy-only-product-accepted @format_satisfaction_sync @requires_db
   Scenario: a canonical creative filling its kind's slots is assigned to a product publishing no declaration
     Given a packaged product declaring only the deprecated format_ids

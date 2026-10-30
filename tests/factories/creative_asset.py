@@ -6,8 +6,9 @@ Used by creative sync tests instead of hand-crafted dicts.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 import factory
 from adcp.types import LegacyCreativeAsset as CreativeAsset
@@ -95,7 +96,7 @@ class CreativeAssetFactory(factory.Factory):
     creative_id = factory.Sequence(lambda n: f"c_{n:04d}")
     name = factory.Sequence(lambda n: f"Test Creative {n}")
     format_id = factory.LazyFunction(lambda: FormatId(id="display_300x250_image", agent_url=AGENT_URL))
-    assets = factory.LazyFunction(lambda: build_assets(image_spec("banner")))
+    assets = factory.LazyFunction(lambda: named_format_assets("display_300x250_image"))
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +258,65 @@ def canonical_assets(kind: str) -> dict:
     )
 
 
+def named_format_assets(
+    format_id: str = "display_300x250_image", *, media_url: str | None = None, prompt: str | None = None
+) -> dict:
+    """The ``assets`` a manifest naming legacy *format_id* must carry: one per REQUIRED asset.
+
+    The deprecated branch's sibling of :func:`canonical_assets`, for a format the committed
+    capture carries (``load_reference_formats``) -- the one the harness serves -- so the asset
+    ids and types are the ones the seller grades against (``display_300x250_image`` ->
+    ``banner_image`` image plus ``click_url`` url). :func:`format_manifest` builds it.
+    """
+    from src.core.format_cache import load_reference_formats
+
+    (fmt,) = (fmt for fmt in load_reference_formats() if fmt.format_id.id == format_id)
+    return format_manifest(fmt, media_url=media_url, prompt=prompt)
+
+
+def prompt_assets(content: str, *also: AssetSpec, format_id: str = "display_300x250_generative") -> dict:
+    """A generative creative's assets: what its named format requires, the prompt carrying *content*.
+
+    The captured generative formats require a ``generation_prompt`` text asset, so a creative
+    in one carries it whatever other prompt role (``message``, ``brief``) a test also sends.
+    *also* are those further assets; give a prompt role the same *content* and the build's
+    prompt is *content* whichever asset production reads it from.
+    """
+    return {**named_format_assets(format_id, prompt=content), **build_assets(*also)}
+
+
+def format_manifest(fmt: Any, *, media_url: str | None = None, prompt: str | None = None) -> dict:
+    """The ``assets`` that fill *fmt*'s required assets, each keyed by its ``asset_id``.
+
+    core/format.json: each asset's ``asset_id`` "must be used as the key in creative
+    manifests", and "Required assets must be provided for a valid creative". Read off the
+    format, not listed by the caller, so a manifest cannot drift from the format it names.
+
+    *media_url* replaces the default URL of the image, video or audio asset, for a caller
+    whose creatives must differ in what they serve; *prompt* is the content of the text
+    asset, for a generative format whose required text asset is the build's prompt.
+
+    A required type with no builder raises ``KeyError`` naming it, so a scenario cannot
+    silently send an incomplete manifest.
+    """
+    media = {} if media_url is None else {"url": media_url}
+    builders: dict[str, Callable[[str], AssetSpec]] = {
+        "image": lambda asset_id: image_spec(asset_id, **media),
+        "url": lambda asset_id: url_spec(asset_id, url="https://example.com/landing"),
+        "text": lambda asset_id: text_spec(asset_id, content=prompt or "Test copy"),
+        "video": lambda asset_id: video_spec(asset_id, **media),
+        "audio": lambda asset_id: asset_spec(asset_id, "audio", url=media_url or "https://example.com/spot.mp3"),
+        "html": lambda asset_id: asset_spec(asset_id, "html", content="<div>ad</div>"),
+    }
+    return build_assets(
+        *(
+            builders[str(asset.asset_type)](asset.asset_id)
+            for asset in fmt.assets or ()
+            if getattr(asset, "item_type", None) == "individual" and asset.required
+        )
+    )
+
+
 def assert_assets(stored_assets: Mapping, *specs: AssetSpec) -> None:
     """Assert every spec is present in ``stored_assets`` with its declared fields preserved."""
     for spec in specs:
@@ -281,7 +341,7 @@ def make_test_banner_creative(**overrides: object) -> CreativeAsset:
         "creative_id": "c_test_1",
         "name": "Test Banner",
         "format_id": FormatId(agent_url=AGENT_URL, id="display_300x250_image"),
-        "assets": build_assets(image_spec("banner")),
+        "assets": named_format_assets("display_300x250_image"),
     }
     defaults.update(overrides)
     return make_creative_asset_minimal(**defaults)

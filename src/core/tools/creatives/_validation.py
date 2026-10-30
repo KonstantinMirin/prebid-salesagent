@@ -23,7 +23,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.format_resolver import is_dialled_agent_url
-from src.core.format_satisfaction import creative_refusal, kind_manifest_verdict
+from src.core.format_satisfaction import creative_refusal, kind_manifest_verdict, named_format_manifest_verdict
 from src.core.idempotency_canonical import selected_output_digest
 from src.core.schemas import (
     Creative,
@@ -222,8 +222,15 @@ def _validate_creative_input(
                 details=EntityRefDetails(format_id=format_id),
                 field="format_id",
             )
-        # TODO(#767): Call validate_creative when available in creative agent spec
-        # to validate that creative manifest matches format requirements
+        # creative-manifests.mdx § Validation (v3.2.7): "Sellers perform final acceptance
+        # during sync_creatives". A legacy manifest's declaration is the format it names, as
+        # the agent serves it, and it is held to that format's assets the way a canonical
+        # manifest is held to its slots. A reference only the mapping registry projects has
+        # no served format to read, so there is nothing to grade it against here.
+        if format_spec is not None:
+            verdict = named_format_manifest_verdict(format_spec, creative.assets)
+            if not verdict:
+                raise creative_refusal(verdict, field=f"creatives[{index}]", creative_id=validated_creative.creative_id)
     else:
         logger.debug(f"Skipping external validation for adapter-provided format '{format_id}' (agent_url: {agent_url})")
 
@@ -239,7 +246,8 @@ def check_unassigned_manifest(creative: CreativeAsset, *, index: int, creative_i
     sync that assigns it to nothing selects no declaration, so the manifest is held to what
     its ``format_kind`` names: the canonical format's slots, required and typed
     (``kind_manifest_verdict``). Only the canonical arm: a legacy item keys its assets by its
-    named format's own asset ids, not by a canonical slot list.
+    named format's own asset ids, and is held to that format whether or not it is assigned
+    (``named_format_manifest_verdict``, in :func:`_validate_creative_input`).
 
     ``field`` names the item, which the pin's creative codes ask a seller to identify; the
     manifest paths that failed are in ``details.problems[]``.

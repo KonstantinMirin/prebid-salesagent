@@ -40,7 +40,7 @@ from src.core.schemas import (
 from src.core.schemas.creative import ListCreativesRequest
 from tests.factories import PricingOptionFactory, stamp_format_identity
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
-from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.creative_asset import build_assets, format_manifest, image_spec
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.credentials import credential_headers
 from tests.helpers.envelope_assertions import raises_adcp
@@ -50,6 +50,29 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 ACCOUNT_ID = "acct_lifecycle"
+
+
+def _served_format(format_id: str):
+    """The declaration ``get_format`` answers for *format_id* in these tests.
+
+    The two display ids are the capture's own declarations; ``video_pre_roll_15s`` is not in
+    the capture, so it is a test format with one required video asset. The sync payloads
+    build their assets from the same declaration (``format_manifest``), because the seller
+    holds a creative's manifest to the assets its named format requires.
+    """
+    from src.core.format_cache import load_reference_formats
+    from tests.helpers.adcp_factories import create_test_format
+
+    if format_id == "video_pre_roll_15s":
+        return create_test_format(
+            format_id=format_id, name="Video Instream 15s", type="video", description="15 second instream video"
+        )
+    return next(fmt for fmt in load_reference_formats() if fmt.format_id.id == format_id)
+
+
+def _manifest(format_id: str) -> dict:
+    """The assets the served *format_id* requires."""
+    return format_manifest(_served_format(format_id))
 
 
 def _db_creative(*, format_id: str = "display_300x250_image", **columns) -> DBCreative:
@@ -168,28 +191,9 @@ class TestCreativeLifecycleMCP:
         This fixture patches ``get_format`` only -- the EXISTENCE check -- while the
         projection resolves its spec from ``list_all_formats``.
         """
-        from tests.helpers.adcp_factories import create_test_format
-
-        # Mock formats that tests use - create with factory
         mock_formats = {
-            "display_300x250_image": create_test_format(
-                format_id="display_300x250_image",
-                name="Display 300x250 Image",
-                type="display",
-                description="Standard display banner",
-            ),
-            "display_728x90_image": create_test_format(
-                format_id="display_728x90_image",
-                name="Display 728x90 Image",
-                type="display",
-                description="Leaderboard banner",
-            ),
-            "video_pre_roll_15s": create_test_format(
-                format_id="video_pre_roll_15s",
-                name="Video Instream 15s",
-                type="video",
-                description="15 second instream video",
-            ),
+            format_id: _served_format(format_id)
+            for format_id in ("display_300x250_image", "display_728x90_image", "video_pre_roll_15s")
         }
 
         with patch("src.core.creative_agent_registry.CreativeAgentRegistry.get_format") as mock_get:
@@ -341,19 +345,19 @@ class TestCreativeLifecycleMCP:
                 "creative_id": "creative_display_1",
                 "name": "Banner Ad 300x250",
                 "format_id": {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250_image"},
-                "assets": build_assets(image_spec("banner")),
+                "assets": _manifest("display_300x250_image"),
             },
             {
                 "creative_id": "creative_video_1",
                 "name": "Video Ad 30sec",
                 "format_id": {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "video_pre_roll_15s"},
-                "assets": build_assets(image_spec("banner")),
+                "assets": _manifest("video_pre_roll_15s"),
             },
             {
                 "creative_id": "creative_display_2",
                 "name": "Leaderboard Ad 728x90",
                 "format_id": {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_728x90_image"},
-                "assets": build_assets(image_spec("banner")),
+                "assets": _manifest("display_728x90_image"),
             },
         ]
 
@@ -437,7 +441,7 @@ class TestCreativeLifecycleMCP:
                 "creative_id": "creative_update_test",
                 "name": "Updated Creative Name",
                 "format_id": {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250_image"},
-                "assets": build_assets(image_spec("banner")),
+                "assets": _manifest("display_300x250_image"),
             }
         ]
 
@@ -549,7 +553,7 @@ class TestCreativeLifecycleMCP:
                 "creative_id": "valid_creative",
                 "name": "Valid Creative",
                 "format_id": {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250_image"},
-                "assets": build_assets(image_spec("banner")),
+                "assets": _manifest("display_300x250_image"),
             },
             {
                 "creative_id": "invalid_creative",
@@ -558,7 +562,7 @@ class TestCreativeLifecycleMCP:
                 # would reject the whole request, which is correct but grades something else:
                 # partial success is for per-creative business failures.
                 "format_id": {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250_image"},
-                "assets": build_assets(image_spec("banner")),
+                "assets": _manifest("display_300x250_image"),
             },
         ]
 
