@@ -34,12 +34,12 @@ from sqlalchemy import select
 from src.core.database.models import Product, Tenant
 from src.core.product_conversion import convert_product_model_to_schema
 from tests.factories import (
-    AuthorizedPropertyFactory,
     InventoryProfileFactory,
     ProductFactory,
-    PropertyTagFactory,
     TenantFactory,
 )
+from tests.factories.core import seed_property_tag_selection
+from tests.helpers.admin_product_form import minimal_product_create_form, minimal_product_edit_form
 from tests.helpers.admin_session import admin_auth_session, admin_test_app
 
 pytestmark = [pytest.mark.admin, pytest.mark.requires_db]
@@ -63,10 +63,9 @@ def seller(factory_session):
     underneath it and the product attached to that one instead.
     """
     tenant = TenantFactory(ad_server="mock")
-    PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
-    authorized_property = AuthorizedPropertyFactory(tenant=tenant, tags=["all_inventory"])
+    selection = seed_property_tag_selection(tenant)
     factory_session.commit()
-    return tenant, f"{authorized_property.publisher_domain}:all_inventory"
+    return tenant, selection
 
 
 @pytest.fixture
@@ -78,45 +77,6 @@ def operator(seller):
     with app.test_client() as client:
         admin_auth_session(client, tenant_id)
         yield client
-
-
-def _create_form(property_tag_selection: str, **overrides: object) -> dict[str, object]:
-    """The product-create form, filled in to the minimum the handler requires."""
-    form: dict[str, object] = {
-        "name": "Canonically Authored Product",
-        "description": "Authored through the operator form",
-        "formats": "[]",
-        "pricing_model_0": "cpm_fixed",
-        "currency_0": "USD",
-        "rate_0": "10.00",
-        "property_mode": "tags",
-        "selected_property_tags": property_tag_selection,
-        "delivery_measurement_provider": "publisher",
-    }
-    form.update(overrides)
-    return form
-
-
-def _edit_form(**overrides: object) -> dict[str, object]:
-    """The product-edit form, filled in to the minimum the handler requires.
-
-    The pricing block is NOT optional here: ``edit_product`` refuses a product with no
-    pricing option, and a payload that omits it is refused before the format arms are
-    read at all -- which would make a refusal test pass for the wrong reason.
-
-    ``delivery_measurement_provider`` is not optional either, for a blunter reason: the
-    route writes ``delivery_measurement`` unconditionally from the field, and the column
-    is NOT NULL, so a payload omitting it raises IntegrityError (salesagent-igxy9).
-    """
-    form: dict[str, object] = {
-        "name": "Edited Product",
-        "pricing_model_0": "cpm_fixed",
-        "currency_0": "USD",
-        "rate_0": "10.00",
-        "delivery_measurement_provider": "publisher",
-    }
-    form.update(overrides)
-    return form
 
 
 def _stored(session, tenant_id: str, product_id: str) -> Product | None:
@@ -172,7 +132,9 @@ def test_the_operator_form_authors_a_canonical_only_product(operator, seller, fa
 
     response = operator.post(
         f"/tenant/{tenant_id}/products/add",
-        data=_create_form(tag_selection, product_id="canonical_only", format_options=json.dumps([IMAGE_DECLARATION])),
+        data=minimal_product_create_form(
+            tag_selection, product_id="canonical_only", format_options=json.dumps([IMAGE_DECLARATION])
+        ),
     )
 
     assert response.status_code in (301, 302), response.data[:2000]
@@ -198,7 +160,7 @@ def test_a_product_declaring_neither_arm_is_refused_at_authoring_time(operator, 
 
     response = operator.post(
         f"/tenant/{tenant_id}/products/add",
-        data=_create_form(tag_selection, product_id="no_format_arm", format_options=""),
+        data=minimal_product_create_form(tag_selection, product_id="no_format_arm", format_options=""),
     )
 
     assert response.status_code == 200, "a refusal re-renders the form rather than redirecting"
@@ -216,7 +178,7 @@ def test_a_product_linked_to_a_canonical_profile_authors_no_declarations_of_its_
 
     response = operator.post(
         f"/tenant/{tenant_id}/products/add",
-        data=_create_form(
+        data=minimal_product_create_form(
             tag_selection, product_id="profile_linked", format_options="", inventory_profile_id=str(profile.id)
         ),
     )
@@ -240,7 +202,7 @@ def test_a_legacy_only_profile_does_not_stand_in_for_canonical_declarations(oper
 
     response = operator.post(
         f"/tenant/{tenant_id}/products/add",
-        data=_create_form(
+        data=minimal_product_create_form(
             tag_selection, product_id="legacy_profile_linked", format_options="", inventory_profile_id=str(profile.id)
         ),
     )
@@ -256,7 +218,7 @@ def test_an_unparseable_declaration_is_refused(operator, seller, factory_session
 
     response = operator.post(
         f"/tenant/{tenant_id}/products/add",
-        data=_create_form(tag_selection, product_id="bad_json", format_options="[{format_kind: image}]"),
+        data=minimal_product_create_form(tag_selection, product_id="bad_json", format_options="[{format_kind: image}]"),
     )
 
     assert response.status_code == 200
@@ -276,7 +238,7 @@ def test_a_format_kind_the_pin_does_not_define_is_refused(operator, seller, fact
 
     response = operator.post(
         f"/tenant/{tenant_id}/products/add",
-        data=_create_form(
+        data=minimal_product_create_form(
             tag_selection,
             product_id="unknown_kind",
             format_options=json.dumps([{"format_kind": "interpretive_dance", "params": {}}]),
@@ -304,7 +266,7 @@ def test_the_edit_form_authors_the_canonical_arm_on_a_legacy_product(operator, s
 
     response = operator.post(
         f"/tenant/{tenant_id}/products/legacy_product/edit",
-        data=_edit_form(name="Legacy Product", format_options=json.dumps([declaration])),
+        data=minimal_product_edit_form(name="Legacy Product", format_options=json.dumps([declaration])),
         follow_redirects=True,
     )
 
@@ -335,7 +297,7 @@ def test_the_edit_form_refuses_clearing_the_last_declared_arm(operator, seller, 
 
     response = operator.post(
         f"/tenant/{tenant_id}/products/canonical_product/edit",
-        data=_edit_form(name="Canonical Product", format_options=""),
+        data=minimal_product_edit_form(name="Canonical Product", format_options=""),
         follow_redirects=True,
     )
 
@@ -373,7 +335,7 @@ def test_the_create_form_stores_no_legacy_arm_even_when_one_is_submitted(operato
 
     response = operator.post(
         f"/tenant/{tenant_id}/products/add",
-        data=_create_form(
+        data=minimal_product_create_form(
             tag_selection,
             product_id="legacy_submitted",
             formats=json.dumps(
@@ -416,7 +378,7 @@ def test_editing_a_legacy_product_leaves_its_stored_arm_untouched(operator, sell
 
     response = operator.post(
         f"/tenant/{tenant_id}/products/legacy_product/edit",
-        data=_edit_form(name="Renamed Legacy Product"),
+        data=minimal_product_edit_form(name="Renamed Legacy Product"),
         follow_redirects=True,
     )
 
@@ -462,7 +424,9 @@ def test_an_own_publisher_option_must_be_one_the_catalog_publishes(
 
     response = operator.post(
         f"/tenant/{tenant.tenant_id}/products/add",
-        data=_create_form(tag_selection, product_id="own_option", format_options=json.dumps([reference])),
+        data=minimal_product_create_form(
+            tag_selection, product_id="own_option", format_options=json.dumps([reference])
+        ),
     )
 
     row = _stored(factory_session, tenant.tenant_id, "own_option")
@@ -487,7 +451,9 @@ def test_another_publishers_option_is_not_resolved_against_this_sellers_catalog(
 
     response = operator.post(
         f"/tenant/{tenant.tenant_id}/products/add",
-        data=_create_form(tag_selection, product_id="foreign_option", format_options=json.dumps([reference])),
+        data=minimal_product_create_form(
+            tag_selection, product_id="foreign_option", format_options=json.dumps([reference])
+        ),
     )
 
     assert response.status_code in (301, 302), response.data[:2000]
@@ -576,7 +542,7 @@ def test_linking_a_profile_whose_own_option_the_catalog_withdrew_is_refused(
     if route == "create":
         response = operator.post(
             f"/tenant/{tenant.tenant_id}/products/add",
-            data=_create_form(
+            data=minimal_product_create_form(
                 tag_selection,
                 product_id="links_profile",
                 format_options=json.dumps([IMAGE_DECLARATION]),
@@ -587,7 +553,7 @@ def test_linking_a_profile_whose_own_option_the_catalog_withdrew_is_refused(
     else:
         response = operator.post(
             f"/tenant/{tenant.tenant_id}/products/links_profile/edit",
-            data=_edit_form(inventory_profile_id=str(profile.id)),
+            data=minimal_product_edit_form(inventory_profile_id=str(profile.id)),
             follow_redirects=True,
         )
 

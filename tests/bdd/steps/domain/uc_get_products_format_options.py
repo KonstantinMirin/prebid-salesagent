@@ -19,17 +19,12 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then
 
-from src.core.database.models import PropertyTag
 from tests.bdd.steps._outcome_helpers import wire_advisory_errors, wire_entry
-from tests.factories import (
-    AuthorizedPropertyFactory,
-    PricingOptionFactory,
-    ProductFactory,
-    PropertyTagFactory,
-)
-from tests.factories.core import get_or_create
+from tests.factories import PricingOptionFactory, ProductFactory
+from tests.factories.core import seed_property_tag_selection
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.factories.inventory_profile import InventoryProfileFactory
+from tests.helpers.admin_product_form import minimal_product_create_form
 
 #: The params a stored "image" declaration carries. Concrete values, so an announcement that
 #: substituted defaults for what the seller stored is visible rather than plausible.
@@ -314,26 +309,11 @@ def given_operator_authored_product(ctx: dict, format_kind: str) -> None:
     never created would then read an empty catalogue in its Then.
     """
     tenant = ctx["tenant"]
-    get_or_create(
-        ctx["env"],
-        PropertyTag,
-        {"tenant_id": tenant.tenant_id, "tag_id": "all_inventory"},
-        lambda: PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory"),
+    form = minimal_product_create_form(
+        seed_property_tag_selection(tenant, ctx["env"]),
+        product_id="operator_authored",
+        format_options=json.dumps([{"format_kind": format_kind, "params": dict(_STORED_IMAGE_PARAMS)}]),
     )
-    authorized = AuthorizedPropertyFactory(tenant=tenant, tags=["all_inventory"])
-    form = {
-        "product_id": "operator_authored",
-        "name": "Operator Authored Product",
-        "description": "Authored through the admin product form",
-        "formats": "[]",
-        "format_options": json.dumps([{"format_kind": format_kind, "params": dict(_STORED_IMAGE_PARAMS)}]),
-        "pricing_model_0": "cpm_fixed",
-        "currency_0": "USD",
-        "rate_0": "10.00",
-        "property_mode": "tags",
-        "selected_property_tags": f"{authorized.publisher_domain}:all_inventory",
-        "delivery_measurement_provider": "publisher",
-    }
     response = ctx["env"].admin_request(tenant.tenant_id, "post", "products/add", data=form)
     assert response.status_code == 302, (
         f"the admin product form did not create the product (status {response.status_code}); "

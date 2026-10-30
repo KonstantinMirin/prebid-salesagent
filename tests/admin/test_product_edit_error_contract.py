@@ -32,12 +32,12 @@ import pytest
 from werkzeug.exceptions import NotFound
 
 from tests.factories import (
-    AuthorizedPropertyFactory,
     PricingOptionFactory,
     ProductFactory,
-    PropertyTagFactory,
     TenantFactory,
 )
+from tests.factories.core import seed_property_tag_selection
+from tests.helpers.admin_product_form import minimal_product_create_form, minimal_product_edit_form
 from tests.helpers.admin_session import admin_auth_session, admin_test_app
 
 pytestmark = [pytest.mark.admin, pytest.mark.requires_db]
@@ -58,12 +58,11 @@ def editable_product(factory_session):
     this module injects.
     """
     tenant = TenantFactory(ad_server="mock")
-    PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
-    authorized = AuthorizedPropertyFactory(tenant=tenant, tags=["all_inventory"])
+    selection = seed_property_tag_selection(tenant)
     product = ProductFactory(tenant=tenant, product_id="edit_me", property_tags=["all_inventory"])
     PricingOptionFactory(product=product, pricing_model="cpm", currency="USD", is_fixed=True)
     factory_session.commit()
-    tenant.property_tag_selection = f"{authorized.publisher_domain}:all_inventory"
+    tenant.property_tag_selection = selection
     return tenant
 
 
@@ -75,19 +74,10 @@ def operator(editable_product):
         yield client
 
 
-def _edit_form() -> dict[str, object]:
-    """The minimum the edit handler requires to reach the pricing parse."""
-    return {
-        "name": "Edited Product",
-        "pricing_model_0": "cpm_fixed",
-        "currency_0": "USD",
-        "rate_0": "10.00",
-        "delivery_measurement_provider": "publisher",
-    }
-
-
 def _post_edit(client, tenant_id):
-    return client.post(f"/tenant/{tenant_id}/products/edit_me/edit", data=_edit_form(), follow_redirects=False)
+    return client.post(
+        f"/tenant/{tenant_id}/products/edit_me/edit", data=minimal_product_edit_form(), follow_redirects=False
+    )
 
 
 def test_a_programming_error_is_not_answered_as_an_operator_mistake(operator, editable_product):
@@ -143,14 +133,11 @@ def test_the_create_handler_does_not_answer_a_programming_error_either(operator,
     ):
         response = operator.post(
             f"/tenant/{editable_product.tenant_id}/products/add",
-            data=_edit_form()
-            | {
-                "description": "Reaches the pricing parse",
-                "formats": "[]",
-                "format_options": json.dumps([{"format_kind": "image", "params": {"width": 300, "height": 250}}]),
-                "property_mode": "tags",
-                "selected_property_tags": editable_product.property_tag_selection,
-            },
+            data=minimal_product_create_form(
+                editable_product.property_tag_selection,
+                description="Reaches the pricing parse",
+                format_options=json.dumps([{"format_kind": "image", "params": {"width": 300, "height": 250}}]),
+            ),
             follow_redirects=False,
         )
 

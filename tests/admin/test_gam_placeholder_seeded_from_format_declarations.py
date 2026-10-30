@@ -38,11 +38,9 @@ import pytest
 from sqlalchemy import select
 
 from src.core.database.models import Product
-from tests.factories import (
-    AuthorizedPropertyFactory,
-    PropertyTagFactory,
-    TenantFactory,
-)
+from tests.factories import TenantFactory
+from tests.factories.core import seed_property_tag_selection
+from tests.helpers.admin_product_form import minimal_product_create_form
 from tests.helpers.admin_session import admin_auth_session, admin_test_app
 
 pytestmark = [pytest.mark.admin, pytest.mark.requires_db]
@@ -67,10 +65,9 @@ def gam_seller(factory_session):
     branch -- the one that seeds a GAM ``implementation_config``.
     """
     tenant = TenantFactory(ad_server="google_ad_manager")
-    PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
-    authorized_property = AuthorizedPropertyFactory(tenant=tenant, tags=["all_inventory"])
+    selection = seed_property_tag_selection(tenant)
     factory_session.commit()
-    return tenant, f"{authorized_property.publisher_domain}:all_inventory"
+    return tenant, selection
 
 
 @pytest.fixture
@@ -81,27 +78,6 @@ def operator(gam_seller):
     with app.test_client() as client:
         admin_auth_session(client, tenant.tenant_id)
         yield client
-
-
-def _create_form(property_tag_selection: str, **overrides: object) -> dict[str, object]:
-    """The product-create form at the minimum the handler requires.
-
-    ``formats: "[]"`` is the canonical-only case: the deprecated arm is empty, so before
-    this change ``if formats:`` was false and the explicit fallback answered.
-    """
-    form: dict[str, object] = {
-        "name": "Canonically Declared Billboard",
-        "description": "Declares image 970x250 canonically and nothing on the legacy arm",
-        "formats": "[]",
-        "pricing_model_0": "cpm_fixed",
-        "currency_0": "USD",
-        "rate_0": "10.00",
-        "property_mode": "tags",
-        "selected_property_tags": property_tag_selection,
-        "delivery_measurement_provider": "publisher",
-    }
-    form.update(overrides)
-    return form
 
 
 def _stored_placeholders(session, tenant_id: str) -> list[dict]:
@@ -123,7 +99,12 @@ def test_a_canonical_only_product_is_seeded_with_the_size_it_declares(operator, 
     tenant, tag_selection = gam_seller
     response = operator.post(
         f"/tenant/{tenant.tenant_id}/products/add",
-        data=_create_form(tag_selection, format_options=json.dumps([IMAGE_970x250])),
+        data=minimal_product_create_form(
+            tag_selection,
+            name="Canonically Declared Billboard",
+            description="Declares image 970x250 canonically and nothing on the legacy arm",
+            format_options=json.dumps([IMAGE_970x250]),
+        ),
         follow_redirects=False,
     )
     assert response.status_code in (302, 303), response.data[:3000]
