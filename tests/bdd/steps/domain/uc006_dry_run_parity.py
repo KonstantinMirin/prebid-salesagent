@@ -37,52 +37,55 @@ from tests.factories.creative_asset import build_assets, image_spec, url_spec
 from tests.factories.request import CreativeAssetRequestFactory
 from tests.harness.transport import TransportResult
 
-#: A format id that differs from the transport's default on EVERY transport. It is never
-#: sent to a creative agent: the mismatch case puts it on the PRODUCT (a product may
-#: declare any format), and the format-update case seeds the library ROW on it (a row is
-#: not validated) and moves the creative to the default, which the agent serves. The
-#: first version of this file used display_300x250_image, which is the e2e stack's
-#: default format -- so on e2e_rest both cases quietly became "same format" and failed.
+#: A format id that differs from the default format on EVERY transport. It is never sent
+#: in a creative payload: the mismatch case puts it on the PRODUCT, and the format-update
+#: case seeds the library ROW on it and moves the creative to the default. The first
+#: version of this file used display_300x250_image, which is now the default everywhere --
+#: so on e2e_rest both cases quietly became "same format" and failed.
 #:
-#: IT ALSO HAS TO BE PROJECTABLE, which ``display_300x250_other`` -- the invented id that
-#: stood here -- is not. "A row is not validated" stopped being true of its IDENTITY:
-#: ``creative_identity_of`` now refuses a reference with no canonical projection, so
-#: seeding the row raised before the scenario's own subject ran. ``display_728x90``
-#: differs from both defaults (in-process ``display_300x250``, e2e
-#: ``display_300x250_image``) and is matched by the registry's own ``display_728x90``
-#: glob, so it projects to ``image`` with no catalog at all.
-_OTHER_FORMAT_ID = "display_728x90"
+#: IT IS A CAPTURED ID, named at the agent that publishes it (``_format_entry``). Seeding a
+#: row projects its reference to a canonical kind (``creative_identity_of``), and the
+#: mapping registry projects a legacy id alone only at the reference agent's origin; any
+#: other agent's id has a kind only through the declaration that agent serves. The invented
+#: ``display_728x90`` that stood here projected through the registry's glob in process,
+#: where the scenario's agent is the reference one, and was refused on e2e_rest, where it is
+#: the tenant's hosted agent and nothing declares that id. ``display_728x90_image`` is in
+#: the capture, so ``env.catalog_agent_url`` has the scenario's agent publish it and the
+#: seeded row carries that agent's declaration on every transport.
+_OTHER_FORMAT_ID = "display_728x90_image"
 
 
-def _creative(ctx: dict, creative_id: str, name: str, *, format_id: str | None = None) -> dict:
+def _format_entry(ctx: dict, format_id: str | None = None) -> dict[str, str]:
+    """``{agent_url, id}`` for *format_id* (the default format unless told otherwise) at the agent publishing it."""
+    fmt = format_id or _format_payload(ctx, ctx["env"])[0]
+    return {"agent_url": ctx["env"].catalog_agent_url(fmt), "id": fmt}
+
+
+def _creative(ctx: dict, creative_id: str, name: str) -> dict:
     fmt, agent_url, assets = _format_payload(ctx, ctx["env"])
     return CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
         name=name,
-        format_id={"id": format_id or fmt, "agent_url": agent_url},
+        format_id={"id": fmt, "agent_url": agent_url},
         assets=assets,
     )
 
 
 def _seed_row(ctx: dict, creative_id: str, name: str, *, format_id: str | None = None) -> None:
     """A creative already in the caller's library, on the request's default format unless told otherwise."""
-    fmt, agent_url, _ = _format_payload(ctx, ctx["env"])
     CreativeFactory(
         tenant=ctx["tenant"],
         principal=ctx["principal"],
         creative_id=creative_id,
         name=name,
-        **seeded_format_columns(ctx["env"], {"agent_url": agent_url, "id": format_id or fmt}),
+        **seeded_format_columns(ctx["env"], _format_entry(ctx, format_id)),
     )
 
 
 def _seed_package(ctx: dict, *, product_format_id: str | None = None, media_buy: dict[str, Any] | None = None) -> str:
     """A package whose product accepts *product_format_id* (the default format unless told otherwise)."""
-    fmt, agent_url, _ = _format_payload(ctx, ctx["env"])
     buy = MediaBuyFactory(tenant=ctx["tenant"], principal=ctx["principal"], **(media_buy or {"status": "active"}))
-    product = ProductFactory(
-        tenant=ctx["tenant"], format_ids=[{"agent_url": agent_url, "id": product_format_id or fmt}]
-    )
+    product = ProductFactory(tenant=ctx["tenant"], format_ids=[_format_entry(ctx, product_format_id)])
     package = MediaPackageFactory(media_buy=buy, package_config={"product_id": product.product_id, "budget": 1000.0})
     ctx["package"] = package
     return package.package_id
