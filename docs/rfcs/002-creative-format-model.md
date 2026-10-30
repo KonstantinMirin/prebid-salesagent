@@ -26,6 +26,15 @@ of this seller, so the `canonical_formats` storyboard, which requires it, grades
 Parts 1 to 9 are kept as the record of the argument; where they name a version, it is the version
 they were written against, not the current pin.
 
+**Third revision, 2026-10-30.** Parts 10 and 11 now describe the design as built on
+`integrate/wave1` at `813ee8dff`, graded by box run `innet_301026_1301`: authoring on
+`format_options[]` and the data migration (S1), the derived legacy projection and its divergence
+advisory (F4, E1), resolution in the registry's order and the reference-origin rule for legacy
+ids (L1, L2), `list_creative_formats` projected from product declarations (S5), and the two
+legacy ceilings the owner accepted because legacy-only products go obsolete on 2026-11-25 (L4).
+The seller derives `format_ids` itself instead of calling the SDK's `project_product_to_v1`, so
+the proposal above to call the SDK's projection machinery applies to inbound resolution only.
+
 ## Summary
 
 The sales agent implements the creative format model that AdCP replaced in 3.1. It stores
@@ -562,14 +571,15 @@ rest were decided or forgotten.
 ## Part 10: The canonical authoring contract
 
 Parts 1 through 5 argue that the canonical kind is the representation every consumer can share,
-and they argue it from the resolution asymmetry. The pin no longer leaves that to inference.
-This part carries the obligation text, the contract a declaration satisfies, and the rules the
-earlier parts omit.
+and they argue it from the resolution asymmetry. The pin states that direction outright. This
+part quotes the obligation, then describes how the seller meets it: how products are authored,
+how the deprecated `format_ids` arm is derived, how a legacy reference is resolved, what
+`list_creative_formats` lists, and which legacy cases are accepted ceilings. Part 11 says what
+grades each rule.
 
 ### The obligation, quoted
 
-`core/product.json`, `properties.format_ids.description`, at the pin (re-read 2026-10-28; unchanged
-since this part was first written):
+`core/product.json`, `properties.format_ids.description`, at the pin:
 
 > Deprecated in AdCP 3.2; removed in AdCP 4.0. Legacy named-format compatibility path. Products
 > MUST carry `format_ids`, `format_options`, or both during the 3.x migration window. New
@@ -590,9 +600,11 @@ And the root `anyOf` names the two branches, with `deprecated: true` on exactly 
 | `anyOf[0]` | Named-format product | `format_ids` | Yes |
 | `anyOf[1]` | Canonical-format product | `format_options` | No |
 
-So the direction is a pinned property description with MUST on the authoring side, not a reading
-of the registry. The last sentence refuses this seller's current shape by name: `format_ids` is
-the authored `NOT NULL` catalog and `format_options` is carried through unauthored.
+`docs/creative/canonical-formats.mdx` § Deprecated named-format compatibility projection
+(normative) adds the producer rules: "Canonical `format_options` are the source of truth.
+Compatibility `format_ids` MUST be derived from them rather than maintained as a second authored
+catalog", and "A producer that cannot guarantee agreement MUST omit the legacy compatibility
+projection."
 
 ### What a declaration has to say
 
@@ -612,16 +624,74 @@ carrying it "MUST set `canonical_formats_only` to true and MUST NOT carry `v1_fo
 because "legacy format_ids cannot preserve this constraint". A seller that wants locale
 eligibility therefore gives up legacy reach for that option, by construction and not by choice.
 
-### Outbound projection is seller-asserted, and the SDK emits the advisories
+### Every authoring path writes the canonical arm (S1)
 
-`registries/v1-canonical-mapping.json` states the direction of truth normatively: the registry
-is "authoritative for v1 → v2 projection only", v2 to v1 "MUST rely on `v1_format_ref` on the v2
-`ProductFormatDeclaration` — sellers assert the v1 pairing explicitly", and SDKs "MUST NOT
-synthesize a v1 `format_id` from the registry by inverting structural matches". Step 4 of the
-six-step order repeats it for structural matches, which yield a family rather than an id.
+The seller authors products on `format_options[]` only:
 
-Three advisory codes ride on that path, and **the pin assigns all three to the SDK, not to
-seller business logic.** Each is in the pin's 120-code enum.
+- The admin product create and edit forms author declarations. Saving declarations on an
+  existing row clears its stored `format_ids`. A product linked to an inventory profile that has
+  a canonical arm doesn't need declarations of its own, because the profile supplies them.
+- Inventory profiles carry their own `format_options` column, and the admin profile forms author
+  it. Their `format_ids` column is nullable.
+- Every seed path authors declarations that assert a `v1_format_ref`: `CREATE_SAMPLE_DATA`,
+  `scripts/setup/seed_products.py`, `scripts/setup/init_database.py` and
+  `scripts/setup/storyboard_signing.py`. The mock adapter's product-config route writes no
+  `format_ids`.
+
+Existing rows are moved by a data migration, not by code that reads the legacy arm at request
+time. `alembic/versions/ddb20e636cee_move_legacy_format_ids_into_format_options.py` projects
+each legacy id with `adcp.canonical_formats.project_legacy_format_id` and moves profiles before
+the products that link them. It fails closed per row: if any id on a row can't be projected
+(for example, a custom agent's format), the row stays on its legacy arm and the migration log
+names it. A product linked to a profile that stays legacy-only also stays where it is.
+
+### The legacy projection is derived from the declarations (F4, E1)
+
+`Product.format_contract` (`src/core/database/models.py`) is the one place that answers what a
+product's format contract is. It returns one of two types from `src/core/format_resolver.py`:
+
+| Type | When | `format_ids` |
+|---|---|---|
+| `CanonicalFormats` | The product, or the profile it links, has declarations | Computed from the declarations' `v1_format_ref` entries, deduplicated on the canonical identity, in declared order. The stored `format_ids` column is never read. |
+| `NamedFormats` | No declarations anywhere | The authored legacy arm, served as stored. This is the deprecated "Named-format product" branch, which the 3.x window still admits for a row the migration couldn't move. |
+
+`linked_format_contract` decides between the product and its profile: the profile supplies the
+contract, except that a legacy-only profile yields to a product that has declarations, because
+the pin makes `format_options` the source of truth.
+
+Three rules govern the derivation:
+
+1. **Nothing is synthesized.** `registries/v1-canonical-mapping.json` makes the registry
+   "authoritative for v1 → v2 projection only", and the v2 to v1 direction "MUST rely on
+   `v1_format_ref`". So a `format_id` is never computed from a `format_kind` or a structural
+   match. A product whose declarations assert no `v1_format_ref` is served with no `format_ids`
+   key at all, which declines the pin's MAY for that product.
+2. **A reference the declaration doesn't narrow is omitted and reported.** Before a
+   `v1_format_ref` reaches `format_ids`, `format_satisfaction.declaration_narrows` checks that the
+   declaration's `params` narrow the referenced format. It is the same `_narrows` rule the legacy
+   selector route applies, so a reference the product would not project is one the route would
+   not select. A reference that fails is left out ("A producer that cannot guarantee agreement
+   MUST omit the legacy compatibility projection"). `format_declaration_divergence` reports it as
+   a `FORMAT_DECLARATION_DIVERGENT` advisory on `errors[]` of the populated `get_products`
+   success, with `source: "producer"`, `field: "products[i]"` and the details the enum
+   description names (`product_id`, `format_ids`, `format_options_summary`,
+   `divergence_reason`). Every advisory for that code is built in one place in
+   `src/core/tools/products.py`.
+3. **The projection goes to every peer.** canonical-formats.mdx says a producer "MAY derive
+   deprecated `format_ids` from those declarations only for a negotiated older-3.x
+   compatibility response". The owner decided on 2026-10-28 to emit the derived `format_ids` to
+   all peers without gating on the negotiated version. That deliberately goes beyond the MAY,
+   and is recorded here so it isn't read as an oversight.
+
+Every reader that needs a product's formats reads `Product.format_contract`, never the stored
+columns: the `get_products` converter, the manual-approval path of `create_media_buy`, the GAM
+sizing readers (`src/services/gam_inventory_service.py`, `src/services/dynamic_pricing_service.py`)
+and `list_creative_formats`. The mock, Kevel, Triton and Broadstreet adapters read neither arm.
+
+### Which advisories belong to the SDK
+
+`registries/v1-canonical-mapping.json` assigns three advisory codes to the SDK. Each is in the
+pin's error-code enum, so `src/core/errors/codes.py` already carries them.
 
 | Code | Raised when | Actor, per the registry text |
 |---|---|---|
@@ -629,31 +699,142 @@ seller business logic.** Each is in the pin's 120-code enum.
 | `FORMAT_DECLARATION_V1_AMBIGUOUS` | A v2 declaration carries no `v1_format_ref` and a v1-only buyer queries the product | "SDKs MUST surface … via `errors[]` augmentation rather than synthesize a plausible-but-arbitrary v1 `format_id`" |
 | `FORMAT_PROJECTION_FAILED` | Resolution fails closed | "SDKs MUST augment the response's `errors[]` array with an entry carrying `source: "sdk"`, `sdk_id: "<package>@<version>"` … `field: "products[N].format_ids[K]"`" |
 
-The consequence for this seller is narrow and worth stating plainly, because Part 5's error
-taxonomy section reads as though nothing were owed. Nothing is owed on the code TABLE, which
-`src/core/errors/codes.py` derives from the published enum. What is owed is the CALL: the seller
-has to run the SDK's projection on the outbound path so the advisories can be produced at all.
-It calls none of it today, so no advisory can reach a `get_products` response whatever the SDK
-is capable of.
+The seller is the producer. It emits `FORMAT_DECLARATION_DIVERGENT` itself, as a
+self-detecting producer, which the enum description permits ("a SELLER may self-detect on
+emit"). It never needs `FORMAT_DECLARATION_V1_AMBIGUOUS`, because it doesn't project a
+declaration that has no `v1_format_ref`. It never needs `FORMAT_PROJECTION_FAILED` either: when
+an inbound legacy reference can't be resolved, the seller refuses it (see the next section).
 
-The machinery to call, all from `adcp.canonical_formats`:
+The SDK's side of the narrowing SHOULD is not met by the pinned SDK. Its projection helpers
+don't run the check on a seller-asserted `v1_format_ref`, and `check_narrows` misses three of
+the pinned `narrowing_vectors` (pixel density, range containment, exact value). This is filed as
+[adcp-client-python#1749](https://github.com/adcontextprotocol/adcp-client-python/issues/1749).
+That gap belongs to the consumer side. The seller's own derivation runs its own check, so the
+gap doesn't affect what this seller publishes.
 
-| Helper | Role |
+From `adcp.canonical_formats`, the seller calls the following:
+
+| Helper | Where |
 |---|---|
-| `project_v1_format_to_declaration` | Inbound: walks the six-step order. Replaces the resolver Parts 4 and 7 planned to write. |
-| `project_product_to_v1` | Outbound: walks a product's declarations and accumulates refs plus advisories. Additive — it "produces the *additive* set that the seller publishes alongside seller-declared v1 ids". |
-| `check_narrows` | Returns one `Divergence` per diverging field, empty when the declaration narrows. |
-| `validate_format_kind_in_options` | The closed-set gate, raising `FormatKindNotInClosedSetError`. |
-| `find_declaration_by_kind` | Lookup by kind, disambiguated by `format_option_id`. |
-| `make_sdk_advisory` | Builds the `errors[]` entry, setting `source=sdk` and `sdk_id` itself. |
-| `V1_TRANSLATABLE` | The four kinds with no v1 form: `agent_placement`, `sponsored_placement`, `responsive_creative`, `image_carousel`. |
+| `project_v1_format_to_declaration` | `canonical_kind_for`, for steps 2 to 6 of the resolution order |
+| `upgrade_legacy_format_id` | Before the order runs, once, so a member id such as `display_300x250_image` reaches its template |
+| `project_legacy_format_id` | The data migration, and the package route in `format_satisfaction.py` |
+| `format_is_supported` | Matching a legacy-only product (the first L4 ceiling below) |
+| `formats_are_equivalent` | Canonical equivalence between two declarations |
+| `FormatKindNotInClosedSetError` | The per-product closed set (V2). `validate_format_kind_in_options` itself is not called because of a typing mismatch (salesagent-ol033.17); the membership test is two lines with the same behaviour. |
+
+It doesn't call `project_product_to_v1`. That helper is additive and doesn't omit a reference
+that fails to narrow, so the seller derives `format_ids` itself.
+
+### A legacy reference resolves in the registry's order, at the reference agent's origin (L1, L2)
+
+Before two legacy references are compared, each `agent_url` is canonicalized under the AdCP URL
+canonicalization rules, as `core/format-id.json` requires ("Callers comparing two `format-id`
+values MUST canonicalize `agent_url`"). `CreativeAgentRegistry.get_format` matches the
+canonical `(agent_url, id)` pair. `registry_addressed` and `upgraded_reference` address a
+reference canonically before it is projected.
+
+A legacy `format_id` then resolves to a canonical kind in the order
+`registries/v1-canonical-mapping.json` makes normative:
+
+1. **`v1_format_ref`.** On the package route, `_legacy_route` selects the declaration whose
+   `v1_format_ref` names the reference.
+2. **Steps 2 to 6.** `canonical_kind_for` hands the SDK's `project_v1_format_to_declaration` the
+   upgraded id, together with the declaration the agent serves when there is one. That walks
+   the `canonical` annotation, then the registry glob, then the structural match, then the
+   ambiguous family, and fails closed.
+3. **Fail closed.** An unprojectable reference is refused with `UNSUPPORTED_FEATURE`, as
+   `media-buy/package-request.json` requires, on the package route and on the creative write
+   (`creative_identity_of` raises `AdCPCapabilityNotSupportedError`). Nothing is stored.
+
+**The registry maps an id only at the reference agent's origin.** The registry's
+`format_id_glob` entries and the SDK's size upgrade use the id namespace of the AdCP reference
+creative agent, `https://creative.adcontextprotocol.org`. The SDK matches a glob on the id
+alone, without reading `agent_url`. The pin points the same way: sellers SHOULD point each
+`v1_format_ref[].agent_url` for an IAB-standard format at that agent and use "the
+registry-published id". A seller-bespoke format's id is "seller-namespaced", and such formats
+"won't appear in `v1-canonical-mapping.json`'s registry; they're seller-asserted only"
+(`core/product-format-declaration.json`, `v1_format_ref`). So:
+
+- A legacy id maps through the registry only when its `agent_url` names the reference agent.
+  `names_reference_agent` compares by origin, so the path the agent is mounted at doesn't make
+  it another agent.
+- Another agent's id belongs to that agent. It maps only through the `canonical` annotation on
+  the declaration that agent serves. A foreign declaration that carries no `canonical` doesn't
+  fall through to the registry glob or the structural match. The reference is unprojectable
+  and is refused `UNSUPPORTED_FEATURE` (owner decision, 2026-10-30).
+- An `agent_url` that canonicalization refuses names no agent, so it has no projection.
+- `declaration_narrows` reads a `v1_format_ref` with no projection as stating no constraint.
+
+The operator's own creative agent is one case to note. Its catalogue is answered by the agent
+that stands in for it (`CREATIVE_AGENT_URL`, or the checked-in reference capture in a test
+deployment), so an operator lookup also accepts that agent's entries, compared by origin.
+`CreativeAgentRegistry.lists_format` is the one rule for "is this catalogue entry the format
+that reference names", and both `get_format` and `list_creative_formats` use it.
+
+Once projected, legacy references are compared on the canonical shape, never on the raw key
+(`core/product-format-declaration.json`, Format matching vs satisfaction: "do not exact-match
+raw `(agent_url, id)` pairs once a `format_id` has been projected"). `canonical_projection`
+yields the kind plus `width`, `height` and `duration_ms_exact`. The `get_products` and
+`list_creatives` `format_ids` filters match on that shape. `sync_creatives` and
+`create_media_buy` accept a reference the registry projects, whether or not the agent's
+deprecated catalogue lists the id (`registry_projects`), because template-format-ids.mdx says
+not to "treat a deprecated `list_creative_formats` response as a source of truth".
+
+A canonical kind is never turned back into a legacy id. `format_ids_to_provide` on a package
+snapshot is read from `v1_format_ref` only, and a creative's legacy echo is the buyer's own
+assertion, returned verbatim (L3).
+
+### `list_creative_formats` is a projection of product declarations (S5)
+
+The pin deprecates the sales-agent task ("sales-agent `list_creative_formats` is deprecated in
+3.2") and allows a compatibility response only as a derivation: "Compatibility
+`list_creative_formats` responses MAY be projected from canonical declarations for older 3.x
+peers, but MUST NOT be independently authored" (`docs/media-buy/specification.mdx` § Canonical
+creative-format discovery).
+
+The seller serves it that way:
+
+- `_declared_formats` (`src/core/tools/creative_formats.py`) collects the named formats the
+  tenant's products declare. It reads each product's `Product.format_contract.format_ids`, so
+  the set is exactly what the same products carry on `get_products`.
+- A format is listed only when a product declares it, with the definition its creative agent,
+  or the in-process adapter, publishes. A format an agent publishes that no product declares is
+  left off the list. A declared reference that no agent defines is omitted, not invented.
+- The MCP tool and the A2A skill advertise the pinned request schema's description, which marks
+  the task deprecated, instead of the SDK's "Returns format_ids needed for sync_creatives"
+  (`ToolSpec.advertised_description` in `src/core/tools/registry.py`). Nothing declares the task
+  required. The buy path enforces `format_options[]`, never this list.
+
+Known ceiling: the list reads every product of the tenant, with no principal or account
+scoping, so a format that only a hidden product declares is listed to every caller. The pin lets
+a seller with one shared list ignore the request's `account`. The upgrade path is the principal
+filter that `get_products` applies, read from the same rows.
+
+### Accepted ceilings: legacy-only products and pixel density (L4)
+
+Two legacy cases are not matched on the full canonical shape:
+
+1. **A legacy-only product** (`NamedFormats`) is matched through the SDK's
+   `format_is_supported`, which upgrades only `display_WxH` ids. A `video_30s` selector or
+   filter therefore doesn't match a product that lists `video_pre_roll_30s`.
+2. **Density.** An id-only projection of the reference agent's `display_*_image_2x` carries no
+   `pixel_ratios`, because `_PROJECTED_SHAPE_PARAMS` compares only `width`, `height` and
+   `duration_ms_exact`. The deprecated `format_ids` filters treat it as the 1x id, and a `_2x`
+   selector narrows to a 1x 300x250 declaration. The pin says "An omitted legacy ratio is 1x",
+   so that selector should be refused. The ceiling and its upgrade path are recorded at
+   `_PROJECTED_SHAPE_PARAMS`.
+
+The owner accepted both on 2026-10-30 as documented ceilings, with no further work, because
+legacy-only products and v1 ids go obsolete on 2026-11-25. Fixing either case would need the
+served declaration's projection at those readers.
 
 ### Placements layer, and an unresolved reference fails closed
 
-`format_options.description` carries the layering rule, which no part of this RFC covered. When
-placements are published, product-level `format_options` are "the union of formats deliverable
-somewhere in the product and the upper bound for every placement", and a placement's effective
-accepted set is the intersection of three layers:
+`format_options.description` carries the layering rule. When placements are published,
+product-level `format_options` are "the union of formats deliverable somewhere in the product
+and the upper bound for every placement", and a placement's effective accepted set is the
+intersection of three layers:
 
 1. The product's `format_options`.
 2. The product placement's inline `format_options`, when present.
@@ -673,9 +854,8 @@ Matching across layers is specified rather than left to equality:
 - Otherwise, declarations match when they share a `format_kind` and the narrower `params`
   satisfy the broader declaration.
 
-That third rule is the satisfaction relation, and it is the one the four creative-versus-product
-gates should collapse into. `format_is_supported` already implements the asymmetric version of
-it in the SDK and is "intentionally stricter than `formats_are_equivalent`".
+That third rule is the satisfaction relation, and `src/core/format_satisfaction.py` implements
+it.
 
 Which constraints a claim has to STATE is named by the pin rather than left to the shape of the
 constraint. `docs/creative/canonical-formats.mdx` § Format matching vs product satisfaction:
@@ -693,7 +873,7 @@ Locale policy follows the same intersection, under RFC 4647 Basic Filtering: wit
 policy a placement may introduce any concrete policy as a narrowing, and with both present
 "every placement range must be contained by a product range".
 
-### Creative coverage across placements
+### Creative coverage across placements (F3)
 
 One more rule, which bears on assignment rather than on discovery: for a product or package with
 multiple included placements, a single creative meant for all of them "MUST lie in the
@@ -701,22 +881,27 @@ intersection of every selected placement's effective set". Per-placement creativ
 union, "but the selected creative set MUST cover every included placement; uncovered inventory
 MUST be rejected or refined, never silently omitted".
 
-The closing clause is the one to implement against. Silently omitting uncovered inventory is the
-failure mode, and it is the shape a seller falls into by filtering rather than refusing.
+The seller rejects and never refines, which the pin allows. Package selectors and the assigned
+creative set are checked against every included placement on `create_media_buy`,
+`update_media_buy` and `sync_creatives` assignment. A multi-publisher product that publishes no
+`placements[]` is checked per publisher slice (`format_satisfaction.publisher_slice_layers`), so
+a package or creative set that leaves a slice uncovered is refused.
 
-### What has to change, and what the measured state is
+`core/product.json` also binds the seller as the product's author: such a product's
+`format_options` "MUST therefore be the common intersection accepted across every selected
+publisher/property scope". The admin product and inventory-profile saves don't refuse a
+publisher-scoped option on that product yet (salesagent-ol033.20.8.2). The owner decided on
+2026-10-30 that the save is refused and existing rows get a data migration.
 
-The measured state is in [Part 11](#part-11-what-grades-each-obligation), one row per
-obligation, and in full in the status audit. The earlier table here was measured on an
-integration branch that has since landed, and its rows are superseded by those grades.
+### Where `create_media_buy` and `update_media_buy` disagree
 
-One structural point from that table still governs the remaining work. While the only
-comparable identity is derived from the legacy pair, every comparison is legacy-keyed by
-construction, and comparison sites cannot be fixed one at a time. The identity type is the fix:
-if the comparable identity is the kind, the call sites converge on it because nothing else is
-available to compare. That is the same reasoning as the directive against guards: a type that
-cannot express the wrong comparison forbids it, where a scan over comparison sites permits it and
-reports afterwards.
+Creatives reach a media buy through two functions that were written separately and still
+disagree in places. One known case: `update_media_buy` saves inline creatives to the library
+and assigns them, but doesn't upload them to the ad server, while `create_media_buy` does. The
+rule for every such divergence is the same. It isn't patched in one of the two functions.
+Instead, a BDD scenario states the shared behaviour and is marked xfail against
+[prebid/salesagent#2483](https://github.com/prebid/salesagent/issues/2483), the refactor that
+moves both tools onto shared services.
 
 ## Part 11: What grades each obligation
 
@@ -731,89 +916,87 @@ skips it. Every claim elsewhere in the tree that an obligation is "graded by the
 `canonical_formats` storyboard" means, here, graded by the BDD scenario that mirrors the
 storyboard step, or not graded.
 
-The table is the 2026-10-29 re-grade of tree `1b5c6880b`, which replaces the 2026-10-28 grade.
-Each row was graded against the pinned spec (v3.2.7, adcp 9.3.0) and the code, and the transport
-column reads the per-nodeid outcomes of box run `innet_291026_0257`, which ran that commit on a
-clean tree. "yes" means every clause the seller implements is asserted by a scenario whose steps
-read values off the wire and that passed on a2a, mcp, rest and e2e_rest; "partly" means some
-clauses are graded that way and the gaps in the bead name the clauses that are not, whether
-unbuilt or built with no scenario. Each bead carries the obligation's
-pin text, code evidence, scenarios and gaps, and `docs/audits/creative-rfc-status.html` lists the
-evidence nodeids and keeps the 2026-10-28 grade under each obligation.
+The table describes `integrate/wave1` at `813ee8dff`. Each status is the per-obligation grade
+recorded in `docs/audits/creative-rfc-status.html`. The transport column reads the per-nodeid
+outcomes of box run `innet_301026_1301`, which ran that commit on a clean tree against the pin
+its `meta.json` records. In that run, every scenario the beads below name passed on a2a, mcp,
+rest and e2e_rest. The two values mean:
+
+- "yes": every clause the seller implements is asserted by such a scenario.
+- "partly": a clause the seller implements has no scenario, or a clause isn't built. The gap
+  list after the table names which.
+
+Each bead carries the obligation's pin text, code evidence, scenarios and gaps.
 
 | # | Obligation | Status | Graded on all four transports | Bead |
 |---|---|---|---|---|
-| S1 | Move each product's creative contract into format_options[] | partial | partly | `salesagent-ol033.20.1` |
+| S1 | Move each product's creative contract into format_options[] | implemented | partly | `salesagent-ol033.20.1` |
 | S2 | A canonical-only product is servable: the product root anyOf admits format_options without format_ids | implemented | yes | `salesagent-ol033.20.2` |
-| S3 | Publish reusable publisher options in /.well-known/adagents.json and reference them by {publisher_domain, format_option_id} | partial | no | `salesagent-ol033.20.3` |
+| S3 | Publish reusable publisher options in /.well-known/adagents.json and reference them by {publisher_domain, format_option_id} | implemented | yes | `salesagent-ol033.20.3` |
 | S4 | Return the applicable options from get_products | implemented | partly | `salesagent-ol033.20.4` |
-| S5 | Stop advertising list_creative_formats as a required sales task — it is deprecated for sales agents | partial | no | `salesagent-ol033.20.5` |
-| F1 | Canonical compatibility is directional and exact — exact dimensions/durations match; a requested range must be contained, overlap insufficient; required slots present with compatible asset types; an exact publisher claim matches both halves | implemented | yes | `salesagent-ol033.20.6` |
+| S5 | list_creative_formats is a deprecated compatibility surface, projected from product declarations and never authored | implemented | yes | `salesagent-ol033.20.5` |
+| F1 | Canonical compatibility is directional and exact: exact dimensions/durations match; a requested range must be contained, overlap insufficient; required slots present with compatible asset types; an exact publisher claim matches both halves | implemented | yes | `salesagent-ol033.20.6` |
 | F2 | Equal format_kind alone does not prove compatibility | implemented | yes | `salesagent-ol033.20.7` |
 | F3 | For a multi-placement product the selected format set must cover every placement; reject or refine, never silently remove inventory | partial | partly | `salesagent-ol033.20.8` |
-| F4 | The compatibility projection must be DERIVED from canonical data and must not become a second authored catalog | partial | partly | `salesagent-ol033.20.9` |
-| P1 | Honour the canonical product filters filters.format_kinds and filters.format_option_refs | implemented | partly | `salesagent-ol033.20.10` |
+| F4 | The compatibility projection must be DERIVED from canonical data and must not become a second authored catalog | implemented | yes | `salesagent-ol033.20.9` |
+| P1 | Honour the canonical product filters filters.format_kinds and filters.format_option_refs | implemented | yes | `salesagent-ol033.20.10` |
 | P2 | Honour package-level canonical selectors format_kind / format_option_refs on create_media_buy and update_media_buy | implemented | yes | `salesagent-ol033.20.11` |
 | M1 | Manifest identity is format_kind plus optional format_option_ref; new manifests use the canonical branch | implemented | yes | `salesagent-ol033.20.12` |
-| M2 | format_option_ref is required when the target product carries multiple format_options sharing a format_kind | partial | partly | `salesagent-ol033.20.13` |
-| M3 | Validate the manifest against the selected declaration : resolve the ref, confirm required slots, validate each asset's type and technical constraints, check fixed dimensions/durations/codecs/file sizes, reject uncovered selections without relaxing the target | partial | partly | `salesagent-ol033.20.14` |
+| M2 | format_option_ref is required when the target product carries multiple format_options sharing a format_kind | implemented | yes | `salesagent-ol033.20.13` |
+| M3 | Validate the manifest against the selected declaration: resolve the ref, confirm required slots, validate each asset's type and technical constraints, check fixed dimensions/durations/codecs/file sizes, reject uncovered selections without relaxing the target | partial | partly | `salesagent-ol033.20.14` |
 | M4 | A manifest must not mix format_id and format_kind (root oneOf, each arm with a not) | implemented | yes | `salesagent-ol033.20.15` |
 | M5 | Preserve format_kind and format_option_ref through preview, sync, library and delivery paths | implemented | yes | `salesagent-ol033.20.16` |
-| M6 | Carry representation_selection when the manifest was resolved from equivalent trafficking representations | absent | no | `salesagent-ol033.20.17` |
+| M6 | Carry representation_selection when the manifest was resolved from equivalent trafficking representations | implemented | yes | `salesagent-ol033.20.17` |
 | C1 | Declare creative.has_creative_library: true when the agent exposes reusable library operations such as sync_creatives and list_creatives | not applicable | — | `salesagent-ol033.20.18` |
-| C2 | Declare media_buy.inline_creative_management when package-scoped creative bodies are accepted on create/update | implemented | partly | `salesagent-ol033.20.19` |
+| C2 | Declare media_buy.inline_creative_management when package-scoped creative bodies are accepted on create/update | partial | partly | `salesagent-ol033.20.19` |
 | C3 | Declare creative.supports_revisions and preserve immutable buyer revision_id values through sync, review, readback and delivery | not applicable | — | `salesagent-ol033.20.20` |
 | C4 | Declare creative in supported_protocols and advertise creative.supported_formats[] if the endpoint can build, validate or preview | not applicable | — | — |
 | E1 | Flag divergent dual emission with a non-fatal FORMAT_DECLARATION_DIVERGENT advisory in errors[], source: "producer", keeping the get_products response a populated success | implemented | yes | `salesagent-ol033.20.21` |
 | E2 | Reject disagreeing canonical and legacy selectors, and conflicting canonical routes, with CONFLICTING_SELECTORS; report an unprojectable legacy route as UNSUPPORTED_FEATURE before attempting equivalence | implemented | yes | `salesagent-ol033.20.22` |
 | G1 | build_creative accepts target_capability_id and returns a canonical manifest | not applicable | — | — |
 | G2 | preview_creative / creative delivery features | not applicable | — | — |
-| L1 | Canonicalize agent_url before treating two format references as the same (MUST) | partial | partly | `salesagent-ol033.20.23` |
-| L2 | Legacy → canonical projection follows the registry's normative order and fails closed; canonical → legacy must not be synthesized | partial | partly | `salesagent-ol033.20.24` |
+| L1 | Canonicalize agent_url before treating two format references as the same (MUST) | implemented | yes | `salesagent-ol033.20.23` |
+| L2 | Legacy → canonical projection follows the registry's normative order and fails closed; canonical → legacy must not be synthesized | implemented | partly | `salesagent-ol033.20.24` |
 | L3 | Retain and echo the buyer's own format_id verbatim on the legacy arm | implemented | yes | `salesagent-ol033.20.25` |
-| L4 | Do not author new template/parameterized format_id values; normalize legacy ones immediately and match on the canonical shape | partial | partly | `salesagent-ol033.20.26` |
+| L4 | Do not author new template/parameterized format_id values; normalize legacy ones immediately and match on the canonical shape | partial, ceilings accepted | partly | `salesagent-ol033.20.26` |
 | V1 | The seller's accepted format_kind vocabulary is the seller's, not the library's | no longer an obligation | — | — |
-| V2 | Refuse a format_kind absent from the target product's format_options[] (the per-product closed set — a rule PR #1415 is at pains to say did not move to the seller, and is still enforced by validate_format_kind_in_options / FormatKindNotInClosedSetError) | implemented | partly | `salesagent-ol033.20.27` |
+| V2 | Refuse a format_kind absent from the target product's format_options[] (the per-product closed set, enforced through the SDK's FormatKindNotInClosedSetError) | implemented | yes | `salesagent-ol033.20.27` |
 
-Totals: 14 implemented, 10 partial, 1 absent (M6), 5 not applicable, and V1 is no longer an
+Totals: 21 implemented, 4 partial (F3, M3, C2, L4), 5 not applicable, and V1 is no longer an
 obligation at the pin. C4, G1 and G2 are creative-agent obligations. C1 and C3 are not applicable
-by the owner's decision of 2026-10-29: this seller does not claim the creative protocol, and the
+by the owner's decision of 2026-10-29: this seller doesn't claim the creative protocol, and the
 pinned capabilities response carries the creative block only when creative is in
-`supported_protocols`. Ten obligations are graded "yes", twelve "partly", and three (S3, S5,
-M6) are not graded. S4, P1 and V2 are built, but a clause of each has no scenario: S4 is graded
-only for products with one option, P1 only for one filter value and a product-scoped ref, and V2's
-closed-set refusal only on products that also carry `format_ids`.
+`supported_protocols`. 18 obligations are graded "yes" and 7 "partly".
 
-E1 is met by construction: a canonical product's `format_ids` is derived from its declarations'
-`v1_format_ref`, so the reference-axis divergence the advisory reports cannot occur. M2 is
-partial: a ref-less manifest that fits several same-kind declarations is refused, but one that
-fits only one of them is assigned to it. `core/creative-asset.json` and
-`core/creative-manifest.json` (`format_option_ref`) and the normative routing rule in
-`canonical-formats.mdx` require the ref whenever the target product has two or more declarations
-of the kind, so that case should be refused with `CREATIVE_VALIDATION_FAILED_GENERIC` too.
+The remaining gaps:
 
-The largest remaining gaps, by the re-grade:
-
-- **The legacy arm still feeds some readers (S1, F4).** No data migration moves existing
-  legacy-only products; the mock, Kevel, Triton and Broadstreet adapters still receive the
-  deprecated projection as their only format channel; the GAM sizing readers read the product's
-  own columns instead of `Product.format_contract`; and `scripts/setup/storyboard_signing.py`
-  seeds a legacy-only product.
-- **`list_creative_formats` is a second catalogue (S5, F4).** It is composed from creative-agent
-  and adapter catalogues, not projected from product declarations. The owner kept it out of the
-  F4 change.
-- **Manifest validation beyond canonical images (M3).** A legacy creative's assets are not
-  graded; required disclosures, aspect ratios and multi-asset constraints are not read; video and
-  audio duration, codecs and containers are built but no scenario grades them.
-- **Placement coverage by the creative set (F3).** Package selectors are checked against every
-  included placement; the assigned creative set is not, and the multi-publisher product without
-  `placements[]` is not handled.
-- **Legacy-key matching on three readers (L4) and resolution steps 4–5 (L2).** The get_products
-  and list_creatives `format_ids` filters, and sync_creatives' check against the creative agent's
-  deprecated catalogue, still match on the legacy key.
-- **A ref-less manifest on a product with several declarations of its kind (M2).** It is
-  accepted when its assets fit one of them; the pin requires the ref there.
-- **Publishing options in adagents.json (S3)** and **representation_selection (M6)** are unbuilt.
+- **Authoring has one graded path (S1).** `@T-UC-GET-PRODUCTS-format-options-operator-authored`
+  grades the admin product form. Inventory-profile authoring and the seed paths have no
+  scenario, and the rows the data migration leaves on the legacy arm are named only in its log.
+- **Placement-level options on the get_products wire (S4).** A placement's inline
+  `format_options` are not graded on the response.
+- **Author-side intersection (F3).** The admin saves accept a publisher-scoped option on a
+  multi-publisher product without `placements[]` (salesagent-ol033.20.8.2). The owner's
+  decision is to refuse the save and migrate existing rows.
+- **Manifest validation beyond what is graded (M3).** A legacy manifest's assets are not
+  graded against its named format. `cta_values`, card media constraints, `responsive_creative`'s
+  video duration, logo aspect ratios and file-size caps, and `image_carousel`'s card bounds are
+  not read. `om_sdk_required` cannot be graded on a manifest.
+- **Inline creatives on update (C2).** `update_media_buy` doesn't upload inline creatives to the
+  ad server, while `create_media_buy` does. At `813ee8dff` no scenario states this: the two
+  `update_media_buy` inline scenarios in `BR-UC-FORMAT-SATISFACTION.feature` grade placement
+  coverage, not the upload. Following the rule in Part 10, it gets a BDD scenario marked xfail
+  against #2483, which is in progress. The capability flag is hardcoded in
+  `src/services/seller_capabilities.py`.
+- **A foreign declaration without `canonical` (L2).** At `813ee8dff` such a declaration still
+  reaches the registry glob through the SDK. The reference-origin rule in Part 10 refuses it.
+  The `list_creatives` fail-closed Given also runs in process: `CreativeListEnv` cannot serve an
+  unprojectable format, so fail-closed on the wire is graded only on the creative write
+  (`@T-UC-FORMAT-SATISFACTION-upsert-unprojectable`).
+- **Legacy-only products and density (L4).** These are the two accepted ceilings in Part 10, and
+  are not graded.
+- **SDK-side narrowing.** This is not a seller obligation:
+  [adcp-client-python#1749](https://github.com/adcontextprotocol/adcp-client-python/issues/1749).
 
 Creative format identity underpins creative, media buy, packages and delivery, so a change to
 what business logic keys on is graded in all four areas, not only in the creative features.
@@ -823,8 +1006,13 @@ Grading it only on the creative side is how a regression reaches a media buy.
 
 | Claim | Where to check it |
 |---|---|
-| Pinned schema text, every Part 10 quotation | The installed SDK's schema tree, or the spec repository at the tag the SDK reports (`docs/adcp-spec-version.md`): `core/product.json`, `core/product-format-declaration.json`, `registries/v1-canonical-mapping.json`, `enums/error-code.json` |
+| Pinned schema text, every Part 10 quotation | The installed SDK's schema tree, or the spec repository at the tag the SDK reports (`docs/adcp-spec-version.md`): `core/product.json`, `core/product-format-declaration.json`, `registries/v1-canonical-mapping.json`, `enums/error-code.json`, `docs/creative/canonical-formats.mdx`, `docs/media-buy/specification.mdx`, `docs/creative/template-format-ids.mdx` |
 | The SDK helpers Part 10 names | `adcp.canonical_formats`, in the pinned SDK |
+| The SDK's narrowing check against the pinned vectors | [adcp-client-python#1749](https://github.com/adcontextprotocol/adcp-client-python/issues/1749), and `narrowing_vectors` in `static/test-vectors/v1-canonical-mapping.json` at the pinned tag |
+| The derived projection, the resolution order and the reference-origin rule | `src/core/format_resolver.py` (`CanonicalFormats`, `NamedFormats`, `linked_format_contract`, `canonical_kind_for`, `canonical_projection`, `names_reference_agent`), `src/core/format_satisfaction.py` (`declaration_narrows`, `_legacy_route`, `publisher_slice_layers`) |
+| The `list_creative_formats` projection | `src/core/tools/creative_formats.py` (`_declared_formats`), `CreativeAgentRegistry.lists_format`, `ToolSpec.advertised_description` |
+| The data migration | `alembic/versions/ddb20e636cee_move_legacy_format_ids_into_format_options.py` |
+| Per-nodeid outcomes behind Part 11 | Box run `innet_301026_1301` (`bdd_inprocess.json`, `bdd_e2e.json`), which ran `813ee8dff` on a clean tree |
 | The per-obligation status in Part 11 | `docs/audits/creative-rfc-status.html`, and the beads under `salesagent-ol033.20` |
 | The grading surface in Part 11 | The scenarios each obligation's bead names, under `tests/bdd/features`, and their routing in `tests/bdd/conftest.py` |
 | 3.1.1 schema text | The vendored `_schemas/3.1` set inside `adcp==6.6.0` |
