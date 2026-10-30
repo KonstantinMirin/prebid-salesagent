@@ -65,6 +65,8 @@ __all__ = [
     "EntityRefDetails",
     "ErrorDetails",
     "ErrorProblem",
+    "FormatDeclarationDivergenceDetails",
+    "FormatOptionDivergenceSummary",
     "OutboundDeliveryDetails",
     "ProblemsDetails",
     "ProductRefDetails",
@@ -245,9 +247,8 @@ class PlatformExtensionCollisionDetails(ErrorDetails):
     overlap on a single declaration SHOULD use the same code with ``error.details: {
     collision_kind: "platform_extension_field", target, overlapping_fields,
     winning_extension_uri }``" -- these four keys, which is the whole of this class. The
-    code's other details shape, for two dual-emitted arms that disagree, has no producer
-    here: a canonical product's ``format_ids`` is derived from its declarations
-    (``format_resolver.CanonicalFormats``), so the two arms cannot disagree on the reference.
+    code's other details shape, a declaration asserting a ``v1_format_ref`` it does not
+    narrow, is :class:`FormatDeclarationDivergenceDetails`.
 
     ``collision_kind`` is a one-member ``Literal`` rather than a free string because it is the
     DISCRIMINATOR between the details shapes: a recipient reads it to know which set of keys it has.
@@ -271,6 +272,42 @@ class PlatformExtensionCollisionDetails(ErrorDetails):
     target: str
     overlapping_fields: list[str]
     winning_extension_uri: str
+
+
+class FormatOptionDivergenceSummary(BaseModel):
+    """One canonical declaration, as the divergence advisory summarizes it.
+
+    ``v1_format_ref`` holds RENDERED format identities (``format_display``'s
+    ``<canonical agent_url>/<id>``), not the stored reference objects: the identity is the
+    only part of a reference the divergence is about.
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    format_kind: str
+    v1_format_ref: list[str]
+
+
+class FormatDeclarationDivergenceDetails(ErrorDetails):
+    """``FORMAT_DECLARATION_DIVERGENT``'s details for a declaration that does not narrow its ref.
+
+    ``enums/error-code.json`` (3.2.7): "``error.details`` SHOULD carry ``{ product_id,
+    format_ids, format_options_summary, divergence_reason }``" -- these four keys.
+    ``format_ids`` names the references a declaration asserts and does not narrow, which are
+    the ones the seller omitted from the product's legacy arm (canonical-formats.mdx, Producer
+    rules: "A producer that cannot guarantee agreement MUST omit the legacy compatibility
+    projection"). They are rendered as identities for the reason the summary's are.
+
+    ``divergence_reason`` is a ``Literal``: the one axis this seller detects is a declaration's
+    ``params`` or kind falling outside what its ``v1_format_ref`` normalizes to
+    (``core/product-format-declaration.json``: "The v2 declaration's ``params`` MUST narrow
+    ... each referenced v1 format's ``requirements``"). A second axis is a second member.
+    """
+
+    product_id: str
+    format_ids: list[str]
+    format_options_summary: list[FormatOptionDivergenceSummary]
+    divergence_reason: Literal["v1_format_ref_not_narrowed"] = "v1_format_ref_not_narrowed"
 
 
 class SelectorRouteSummary(BaseModel):

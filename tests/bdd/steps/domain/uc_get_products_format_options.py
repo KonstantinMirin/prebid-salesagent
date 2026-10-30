@@ -27,6 +27,18 @@ from tests.factories.inventory_profile import InventoryProfileFactory
 #: substituted defaults for what the seller stored is visible rather than plausible.
 _STORED_IMAGE_PARAMS: dict[str, Any] = {"width": 300, "height": 250}
 
+#: The params an "image" declaration asserting each v1 id stores: the ones that NARROW it.
+#: core/product-format-declaration.json on ``v1_format_ref`` (3.2.7): "The v2 declaration's
+#: `params` MUST narrow (be compatible with) each referenced v1 format's `requirements`". A
+#: 300x250 declaration asserting display_728x90_image is the divergence a scenario stores on
+#: purpose, with its params in the scenario text; every other fixture asserts a ref its params
+#: narrow. Written out rather than parsed from the id, so the fixture does not share the
+#: projection it grades.
+_NARROWING_IMAGE_PARAMS: dict[str, dict[str, Any]] = {
+    "display_300x250_image": {"width": 300, "height": 250},
+    "display_728x90_image": {"width": 728, "height": 90},
+}
+
 
 def _store_product(
     ctx: dict,
@@ -60,6 +72,8 @@ def _store_product(
     product = ProductFactory(tenant=ctx["tenant"], **overrides)
     PricingOptionFactory(product=product)
     ctx["product"] = product
+    if format_options:
+        ctx["stored_declaration_params"] = format_options[0].get("params")
 
 
 def _ids(listed: str) -> list[str]:
@@ -72,9 +86,19 @@ def _ref(format_id: str) -> dict[str, str]:
     return {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": format_id}
 
 
-def _image_declaration(*asserted_ids: str) -> dict[str, Any]:
-    """An "image" declaration with the stored params, asserting *asserted_ids* as v1 refs."""
-    declaration: dict[str, Any] = {"format_kind": "image", "params": dict(_STORED_IMAGE_PARAMS)}
+def _image_declaration(*asserted_ids: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    """An "image" declaration asserting *asserted_ids* as v1 refs.
+
+    Its params NARROW what it asserts unless the caller passes *params*: the ones
+    ``_NARROWING_IMAGE_PARAMS`` names for the asserted ids, or the stored 300x250 when it
+    asserts none. Ids needing different params cannot share one declaration, so that is
+    refused rather than resolved by picking one.
+    """
+    if params is None:
+        narrowing = {tuple(sorted(_NARROWING_IMAGE_PARAMS[format_id].items())) for format_id in asserted_ids}
+        assert len(narrowing) <= 1, f"no one image declaration narrows all of {asserted_ids!r}"
+        params = dict(narrowing.pop()) if narrowing else dict(_STORED_IMAGE_PARAMS)
+    declaration: dict[str, Any] = {"format_kind": "image", "params": dict(params)}
     if asserted_ids:
         declaration["v1_format_ref"] = [_ref(format_id) for format_id in asserted_ids]
     return declaration
@@ -129,6 +153,25 @@ def given_canonical_only_product_with_ref(ctx: dict, format_kind: str, legacy_id
     _store_product(
         ctx,
         [{**_image_declaration(legacy_id), "format_kind": format_kind}],
+        with_legacy_arm=False,
+    )
+
+
+@given(
+    parsers.parse(
+        'the seller stores a canonically-authored product whose "image" declaration of {width:d}x{height:d} '
+        'asserts v1_format_refs to "{asserted_ids}"'
+    )
+)
+def given_canonical_product_with_stated_params(ctx: dict, width: int, height: int, asserted_ids: str) -> None:
+    """A canonical-only product whose one image declaration states its dimensions and its refs.
+
+    Both come from the scenario, so whether the declaration narrows each ref is decided by
+    the scenario's text and not by a fixture default.
+    """
+    _store_product(
+        ctx,
+        [_image_declaration(*_ids(asserted_ids), params={"width": width, "height": height})],
         with_legacy_arm=False,
     )
 
@@ -297,15 +340,14 @@ def then_declaration_announced(ctx: dict, format_kind: str) -> None:
     # A SUBSET check, because the model fills a canonical shape's own defaults (slots,
     # asset_source, ...) in alongside what the seller stored. What is graded is that the
     # seller's values survived, not that nothing was added.
-    lost = {
-        name: (value, params.get(name)) for name, value in _STORED_IMAGE_PARAMS.items() if params.get(name) != value
-    }
+    stored = ctx["stored_declaration_params"]
+    lost = {name: (value, params.get(name)) for name, value in stored.items() if params.get(name) != value}
     assert not lost, f"params the seller stored came back changed or absent (expected, got): {lost}"
 
 
-@then(parsers.parse('the announced format option carries v1_format_ref naming "{legacy_id}"'))
-def then_v1_format_ref_announced(ctx: dict, legacy_id: str) -> None:
-    """The asserted legacy projection reaches the buyer, whole.
+@then(parsers.parse('the announced format option carries v1_format_ref naming "{legacy_ids}"'))
+def then_v1_format_ref_announced(ctx: dict, legacy_ids: str) -> None:
+    """The asserted legacy projection reaches the buyer, whole, every ref in declared order.
 
     Graded as the full reference rather than the id alone: a v1 format_id is an OBJECT
     (core/format-id.json requires agent_url and id), and a projection carrying only the id
@@ -317,7 +359,7 @@ def then_v1_format_ref_announced(ctx: dict, legacy_id: str) -> None:
         "the announced declaration carries no v1_format_ref, so a legacy peer would have "
         f"nothing to look up: {sorted(option)}"
     )
-    assert refs == [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": legacy_id}], (
+    assert refs == [_ref(legacy_id) for legacy_id in _ids(legacy_ids)], (
         f"the announced v1_format_ref is not the reference the seller asserted: {refs!r}"
     )
 
@@ -367,9 +409,9 @@ def then_format_ids_exactly(ctx: dict, format_ids: str) -> None:
 def then_no_format_advisory(ctx: dict) -> None:
     """Nothing on the advisory channel about this product's format declarations.
 
-    A canonical product's legacy arm is derived from its declarations, so the two arms
-    cannot disagree on the reference and no ``FORMAT_DECLARATION_DIVERGENT`` is owed. An
-    advisory here would report a disagreement the buyer was never shown.
+    Every ref these fixtures assert is narrowed by its declaration, and the legacy arm is
+    derived from those refs, so the two shapes agree and no ``FORMAT_DECLARATION_DIVERGENT``
+    is owed. An advisory here would report a disagreement that does not exist.
 
     Scoped to the format-declaration codes rather than asserting an empty ``errors[]``: the
     array is get_products' task-level channel and another obligation is free to use it, so
@@ -377,3 +419,70 @@ def then_no_format_advisory(ctx: dict) -> None:
     """
     advised = [error for error in wire_advisory_errors(ctx) if str(error.get("code", "")).startswith("FORMAT_")]
     assert not advised, f"the response advises about format declarations it derived itself: {advised!r}"
+
+
+@then(
+    parsers.parse('the response carries one FORMAT_DECLARATION_DIVERGENT advisory from the producer naming "{field}"')
+)
+def then_divergence_advised(ctx: dict, field: str) -> None:
+    """The advisory, first on ``errors[]`` of a SUCCESS, attributed to the producer, at the product.
+
+    ``enums/error-code.json`` (3.2.7) on the code: a "Non-fatal advisory", ``errors[]`` the
+    single surface, "``error.field`` MUST point at the offending product", and a seller that
+    "self-detect[s] on emit" is the producer. The pin's ``get_seeded_divergent_product`` step
+    reads ``errors[0].code`` and ``errors[0].source``, so the position is asserted too.
+
+    ``recovery`` is derived from the pinned ``enumMetadata`` (``correctable``), never
+    authored, so reading it back shows the advisory went through the code table.
+
+    Exactly one entry: the multi-hop rule deduplicates by ``(code, field)``. The product the
+    field names is asserted to be the stored one, still served on the populated success.
+    """
+    errors = wire_advisory_errors(ctx)
+    advised = [error for error in errors if error.get("code") == "FORMAT_DECLARATION_DIVERGENT"]
+    assert len(advised) == 1, f"expected exactly one FORMAT_DECLARATION_DIVERGENT advisory, got: {errors!r}"
+    advisory = advised[0]
+    assert errors[0] is advisory, f"the advisory is not errors[0]: {errors!r}"
+    assert advisory.get("source") == "producer", f"the advisory is not the producer's: {advisory.get('source')!r}"
+    assert advisory.get("field") == field, f"the advisory does not point at {field!r}: {advisory.get('field')!r}"
+    assert advisory.get("recovery") == "correctable", (
+        f"the advisory's recovery is not the pinned enumMetadata's: {advisory.get('recovery')!r}"
+    )
+    announced = _announced_product(ctx).get("product_id")
+    assert announced == ctx["product"].product_id, (
+        f"the advised product is not the one the seller stored and served: {announced!r}"
+    )
+    ctx["format_divergence_advisory"] = advisory
+
+
+@then(parsers.parse('the advisory details name the product and the unnarrowed "{omitted_ids}" of "{asserted_ids}"'))
+def then_divergence_details(ctx: dict, omitted_ids: str, asserted_ids: str) -> None:
+    """The four ``details`` keys the pin asks of this code, naming the refs left out.
+
+    ``enums/error-code.json`` (3.2.7): "``error.details`` SHOULD carry ``{ product_id,
+    format_ids, format_options_summary, divergence_reason }``". ``format_ids`` names exactly
+    the refs the declaration does not narrow -- the ones omitted from the product's legacy
+    arm -- and the summary names every ref the declaration asserts, so a recipient sees both
+    the declaration and which of its links is broken. References are rendered as
+    ``<agent_url>/<id>`` identities.
+    """
+    details = ctx["format_divergence_advisory"].get("details")
+    assert isinstance(details, dict), f"the advisory carries no details object: {details!r}"
+    omitted = _rendered(omitted_ids)
+    assert details.get("product_id") == ctx["product"].product_id, (
+        f"the details do not name the stored product: {details.get('product_id')!r}"
+    )
+    assert details.get("format_ids") == omitted, (
+        f"the details do not name exactly the unnarrowed refs {omitted!r}: {details.get('format_ids')!r}"
+    )
+    assert details.get("format_options_summary") == [
+        {"format_kind": "image", "v1_format_ref": _rendered(asserted_ids)}
+    ], f"the details do not summarize the stored declaration: {details.get('format_options_summary')!r}"
+    assert details.get("divergence_reason") == "v1_format_ref_not_narrowed", (
+        f"the details name another divergence: {details.get('divergence_reason')!r}"
+    )
+
+
+def _rendered(listed: str) -> list[str]:
+    """The listed ids as the ``<agent_url>/<id>`` identities an advisory's details carry."""
+    return [f"{DEFAULT_CREATIVE_AGENT_URL.rstrip('/')}/{format_id}" for format_id in _ids(listed)]

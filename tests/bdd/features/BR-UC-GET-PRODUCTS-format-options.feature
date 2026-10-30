@@ -26,10 +26,22 @@ Feature: Canonical format options a seller stores are announced to buyers on the
   # format_ids MUST be derived from them rather than maintained as a second authored
   # catalog." So a product with declarations is announced with format_ids equal to the
   # v1_format_ref values they assert, and with no format_ids key when none asserts one; a
-  # stored format_ids column beside the declarations is never served. A derived arm cannot
-  # disagree with its declarations on the reference, so no FORMAT_DECLARATION_DIVERGENT
-  # advisory is owed for one. A product with no declarations at all (the deprecated
-  # "Named-format product" branch the 3.x window still admits) serves the arm it authored.
+  # stored format_ids column beside the declarations is never served. A product with no
+  # declarations at all (the deprecated "Named-format product" branch the 3.x window still
+  # admits) serves the arm it authored.
+  #
+  # A derived arm can still disagree with its declarations when a declaration asserts a ref
+  # its params do not narrow. core/product-format-declaration.json on v1_format_ref: "The v2
+  # declaration's `params` MUST narrow (be compatible with) each referenced v1 format's
+  # `requirements`". Every fixture below therefore asserts a ref its params narrow (a
+  # 728x90 declaration for display_728x90_image), except the two not-narrowed scenarios,
+  # which store the divergence on purpose: the ref is omitted from format_ids
+  # (canonical-formats.mdx Producer rules, "A producer that cannot guarantee agreement MUST
+  # omit the legacy compatibility projection") and FORMAT_DECLARATION_DIVERGENT is advised
+  # on errors[] with source "producer". Emitting the advisory is the seller's choice: the
+  # enum says "a SELLER may self-detect on emit"; this seller does, because the declaration
+  # still carries the ref on the wire.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/FORMAT_DECLARATION_DIVERGENT
   #
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-format-declaration.json
@@ -118,6 +130,11 @@ Feature: Canonical format options a seller stores are announced to buyers on the
     # independently authored legacy constraints back into the canonical catalog. That
     # creates two sources of truth". Serving the profile's arm here, with an advisory naming
     # the profile, was salesagent-ym571's resolution of a disagreement the seller authored.
+    #
+    # The declaration is a 728x90 image, the params that narrow display_728x90_image. It
+    # used to store 300x250 for that ref, a divergent dual emission this scenario graded as
+    # correct; the outcomes are unchanged because the declaration now agrees with its ref.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-format-declaration.json pointer=/properties/v1_format_ref
 
   @T-UC-GET-PRODUCTS-format-options-profile-canonical @format_option_announcement @requires_db
   Scenario: a product linked to a profile with canonical declarations is announced from the profile
@@ -129,7 +146,10 @@ Feature: Canonical format options a seller stores are announced to buyers on the
     # A linked profile supplies the product's format contract, as it supplies its publisher
     # properties. The product's own columns hold a different declaration and a different
     # legacy arm (both "display_300x250_image"), so a seller that read the product's columns,
-    # or served a stored column beside the profile's declarations, fails an outcome.
+    # or served a stored column beside the profile's declarations, fails an outcome. Each
+    # declaration's params narrow the ref it asserts (728x90 on the profile, 300x250 on the
+    # product), so no divergence is stored.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-format-declaration.json pointer=/properties/v1_format_ref
 
   @T-UC-GET-PRODUCTS-format-options-authored-arm-not-served @format_option_announcement @requires_db
   Scenario Outline: a stored format_ids column the declarations do not assert is not served - <case>
@@ -145,15 +165,62 @@ Feature: Canonical format options a seller stores are announced to buyers on the
     # announced arm is exactly what the declaration asserts, whatever the column holds.
     #
     # The superset row is the case a one-way containment check passed: every asserted ref is
-    # in the column, so the column used to be served whole, extra entry included. The
-    # disagreeing row used to be answered by omitting the arm and advising
-    # FORMAT_DECLARATION_DIVERGENT; derived, the two arms agree by construction and there
-    # is nothing to advise.
+    # in the column, so the column used to be served whole, extra entry included. In the
+    # disagreeing row the COLUMN disagrees with the declaration, which is a 728x90 image
+    # narrowing the display_728x90_image it asserts: the column is not served, the derived
+    # arm agrees with the declaration, and there is nothing to advise. The declaration used
+    # to store 300x250 for that ref, which is the divergence the not-narrowed scenarios
+    # below grade, not this one.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-format-declaration.json pointer=/properties/v1_format_ref
 
     Examples:
       | case        | authored                                    | asserted             |
       | superset    | display_300x250_image, display_728x90_image | display_300x250_image |
       | disagreeing | display_300x250_image                       | display_728x90_image  |
+
+  @T-UC-GET-PRODUCTS-format-options-not-narrowed @format_option_announcement @requires_db
+  Scenario: a v1_format_ref its declaration does not narrow is left out of format_ids and advised
+    Given the seller stores a canonically-authored product whose "image" declaration of 300x250 asserts v1_format_refs to "display_728x90_image"
+    When the buyer requests products
+    Then the announced format option declares format_kind "image" and params the seller stored
+    And the announced format option carries v1_format_ref naming "display_728x90_image"
+    And the announced product carries no format_ids key at all
+    And the response carries one FORMAT_DECLARATION_DIVERGENT advisory from the producer naming "products[0]"
+    And the advisory details name the product and the unnarrowed "display_728x90_image" of "display_728x90_image"
+    # A 300x250 image asserting display_728x90_image breaks the MUST on v1_format_ref ("The
+    # v2 declaration's `params` MUST narrow ... each referenced v1 format's
+    # `requirements`"): the ref normalizes to an image of 728x90, and canonical-formats.mdx
+    # § "Narrows" calls a v2 value outside the v1 constraint "a conflict, not narrowing".
+    # Projected, the legacy arm would name a format the declaration is not, so it is
+    # omitted ("A producer that cannot guarantee agreement MUST omit the legacy
+    # compatibility projection"). The product is still served, whole, on a populated
+    # success: "Hard-failing the entire get_products response is discouraged". The
+    # declaration is served as stored, ref included, so the advisory is what tells a buyer
+    # why the two shapes differ; error-code.json makes errors[] its single surface, field
+    # the offending product, and details { product_id, format_ids, format_options_summary,
+    # divergence_reason }. errors[0] is asserted because the pin's
+    # get_seeded_divergent_product step reads errors[0].code and errors[0].source; that
+    # storyboard requires the comply controller, so it grades nothing here and this
+    # scenario is the grader.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-format-declaration.json pointer=/properties/v1_format_ref
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx section="Producer rules"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/FORMAT_DECLARATION_DIVERGENT
+
+  @T-UC-GET-PRODUCTS-format-options-not-narrowed-partial @format_option_announcement @requires_db
+  Scenario: only the v1_format_ref a declaration does not narrow is left out of format_ids
+    Given the seller stores a canonically-authored product whose "image" declaration of 300x250 asserts v1_format_refs to "display_300x250_image, display_728x90_image"
+    When the buyer requests products
+    Then the announced format option carries v1_format_ref naming "display_300x250_image, display_728x90_image"
+    And the announced product's format_ids name exactly "display_300x250_image"
+    And the response carries one FORMAT_DECLARATION_DIVERGENT advisory from the producer naming "products[0]"
+    And the advisory details name the product and the unnarrowed "display_728x90_image" of "display_300x250_image, display_728x90_image"
+    # SELLER CHOICE, recorded: the omission is per reference. The pin's MUST omits "the
+    # legacy compatibility projection" a producer cannot guarantee agreement for, and the
+    # ref the declaration narrows still names the same underlying format, so it is
+    # projected; only display_728x90_image, which it does not narrow, is dropped. A seller
+    # that dropped the whole arm fails the second outcome, and one that kept the divergent
+    # ref fails it too.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx section="Producer rules"
 
   @T-UC-GET-PRODUCTS-format-options-absent @format_option_announcement @requires_db
   Scenario: a product declaring no format options omits the key and keeps its authored format_ids

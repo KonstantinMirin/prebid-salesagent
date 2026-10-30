@@ -10,7 +10,7 @@ creative agent-based format discovery per AdCP v2.4.
 
 import json
 import logging
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,6 +31,8 @@ from src.core.database.database_session import get_db_session
 from src.core.errors.details import (
     CapabilityRefusalDetails,
     EntityRefDetails,
+    FormatDeclarationDivergenceDetails,
+    FormatOptionDivergenceSummary,
     PlatformExtensionCollisionDetails,
 )
 from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPFormatNotFoundError, AdCPSalesAgentError
@@ -551,7 +553,7 @@ def resolved_uri_of(key: str) -> str:
 
 def _reference_member(reference: Any, name: str) -> str | None:
     """One member of a platform-extension reference, as an object or as a document."""
-    value = reference.get(name) if isinstance(reference, Mapping) else getattr(reference, name, None)
+    value = _member(reference, name)
     return str(value) if value is not None else None
 
 
@@ -653,10 +655,11 @@ class CanonicalFormats:
     ``v1_format_ref``". A product whose declarations assert none has no legacy projection,
     which is the pin's MAY declined for that product.
 
-    A derived arm cannot disagree with the declarations it is derived from on the reference,
-    so ``FORMAT_DECLARATION_DIVERGENT`` has no reference-axis case to report for this
-    product. A stored ``format_ids`` column beside the declarations (a row authored before
-    the canonical arm existed, then given one) is not consulted at all.
+    An asserted reference the declaration does not NARROW is left out ("A producer that
+    cannot guarantee agreement MUST omit the legacy compatibility projection"), and
+    :func:`format_declaration_divergence` reports it as ``FORMAT_DECLARATION_DIVERGENT``. A
+    stored ``format_ids`` column beside the declarations (a row authored before the canonical
+    arm existed, then given one) is not consulted at all.
     """
 
     format_options: tuple[Mapping[str, Any], ...]
@@ -848,25 +851,89 @@ def _asserted_refs(holders: Iterable[Any]) -> tuple[tuple[Any, LibraryFormatId],
     exclusive ("a declaration can EITHER assert no v1 projection OR link to v1 named
     formats, never both"), so a document carrying both is malformed and its opt-out is the
     half that is safe to honour: treating it as asserting nothing cannot invent a link.
+
+    A reference its declaration does not NARROW is not projected (:func:`_referenced`), so
+    none of the three consumers can name a format the declaration is not.
     """
-    seen: set[FormatKey] = set()
-    pairs: list[tuple[Any, LibraryFormatId]] = []
+    return _unique((holder, ref) for holder, ref, narrows in _referenced(holders) if narrows)
+
+
+def _referenced(holders: Iterable[Any]) -> Iterator[tuple[Any, LibraryFormatId, bool]]:
+    """Each usable ``v1_format_ref`` entry, its declaration, and whether the declaration narrows it.
+
+    ``core/product-format-declaration.json`` on ``v1_format_ref`` (3.2.7): "The v2
+    declaration's ``params`` MUST narrow (be compatible with) each referenced v1 format's
+    ``requirements``". A declaration of a 300x250 image asserting ``display_728x90_image``
+    breaks that MUST, and serving the reference would be the dual emission
+    canonical-formats.mdx calls "a contract violation": "A producer that cannot guarantee
+    agreement MUST omit the legacy compatibility projection." The verdict is
+    ``format_satisfaction.declaration_narrows``, the rule the legacy selector route applies.
+    """
+    from src.core.format_satisfaction import declaration_narrows
+
     for holder in holders:
-        if isinstance(holder, Mapping):
-            opted_out, refs = holder.get("canonical_formats_only"), holder.get("v1_format_ref")
-        else:
-            opted_out, refs = getattr(holder, "canonical_formats_only", None), getattr(holder, "v1_format_ref", None)
-        if opted_out or not isinstance(refs, Iterable) or isinstance(refs, str | bytes | Mapping):
+        refs = _member(holder, "v1_format_ref")
+        if (
+            _member(holder, "canonical_formats_only")
+            or not isinstance(refs, Iterable)
+            or isinstance(refs, str | bytes | Mapping)
+        ):
             continue
         for entry in refs:
             ref = format_reference_or_none(entry)
-            if ref is None:
-                continue
-            identity = format_id_identity(ref)
-            if identity not in seen:
-                seen.add(identity)
-                pairs.append((holder, ref))
-    return tuple(pairs)
+            if ref is not None:
+                yield holder, ref, declaration_narrows(_member(holder, "format_kind"), _member(holder, "params"), ref)
+
+
+def _member(holder: Any, name: str) -> Any:
+    """One member of a declaration held as a stored document or as a validated model."""
+    return holder.get(name) if isinstance(holder, Mapping) else getattr(holder, name, None)
+
+
+def _unique(pairs: Iterable[tuple[Any, LibraryFormatId]]) -> tuple[tuple[Any, LibraryFormatId], ...]:
+    """*pairs* deduplicated on the reference's canonical ``(agent_url, id)`` identity, in order."""
+    seen: set[FormatKey] = set()
+    unique: list[tuple[Any, LibraryFormatId]] = []
+    for holder, ref in pairs:
+        identity = format_id_identity(ref)
+        if identity not in seen:
+            seen.add(identity)
+            unique.append((holder, ref))
+    return tuple(unique)
+
+
+def format_declaration_divergence(
+    product_id: str, format_options: Iterable[Any] | None
+) -> FormatDeclarationDivergenceDetails | None:
+    """The ``FORMAT_DECLARATION_DIVERGENT`` details for a product, or ``None`` when it has none.
+
+    The references its declarations assert and do not narrow -- the ones
+    :class:`CanonicalFormats` left out of the legacy arm. ``enums/error-code.json`` (3.2.7):
+    "a SELLER may self-detect on emit (own producer bug; rare)", and the declaration still
+    carries the reference on the wire, so a buyer's SDK comparing the two shapes finds the
+    same disagreement; saying so on ``errors[]`` is what keeps it observable rather than
+    "silently picked-one-and-dropped-other".
+
+    *format_options* are the declarations as served, models or stored documents alike.
+    """
+    declarations = tuple(format_options or ())
+    referenced = tuple(_referenced(declarations))
+    divergent = _unique((holder, ref) for holder, ref, narrows in referenced if not narrows)
+    if not divergent:
+        return None
+    return FormatDeclarationDivergenceDetails(
+        product_id=product_id,
+        format_ids=[format_display(format_id_identity(ref)) for _holder, ref in divergent],
+        format_options_summary=[
+            FormatOptionDivergenceSummary(
+                format_kind=str(_member(declaration, "format_kind")),
+                v1_format_ref=[
+                    format_display(format_id_identity(ref)) for holder, ref, _ in referenced if holder is declaration
+                ],
+            )
+            for declaration in declarations
+        ],
+    )
 
 
 def resolved_dimensions(

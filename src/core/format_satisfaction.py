@@ -1217,8 +1217,7 @@ def _legacy_route(
     narrowing = [
         declaration
         for declaration in declarations
-        if (kind is None or str(declaration.format_kind) == kind)
-        and not _unsatisfied_params(projected, _stated_constraints(_declared_params(declaration), projected))
+        if _narrows(str(declaration.format_kind), _declared_params(declaration), kind, projected)
     ]
     if narrowing:
         return _selecting(narrowing, params, exact=True, manifest=manifest)
@@ -1228,6 +1227,56 @@ def _legacy_route(
         rejected_value=assertion.id,
         accepted_values=tuple(sorted(_declaration_label(d) for d in declarations)),
         summary=(f"named format {assertion.id!r} normalizes to a canonical declaration this product does not publish"),
+    )
+
+
+def _narrows(
+    declared_kind: str, declared_params: Mapping[str, Any], kind: str | None, projected: Mapping[str, Any]
+) -> bool:
+    """Whether a declaration narrows a legacy reference that normalized to *kind* + *projected*.
+
+    canonical-formats.mdx § "Narrows" -- formal definition (normative): every v2 parameter
+    must fall inside the matching v1 requirement, and "any v2 parameter value that falls
+    outside the corresponding v1 constraint is a *conflict*, not narrowing". A kind the
+    reference does not project to (``None``) and a parameter it does not state are open: the
+    v1 baseline says nothing there, so the declaration narrows into it.
+    """
+    return (kind is None or declared_kind == kind) and not _unsatisfied_params(
+        projected, _stated_constraints(declared_params, projected)
+    )
+
+
+def declaration_narrows(format_kind: Any, params: Any, reference: LibraryFormatId) -> bool:
+    """Whether a declaration of *format_kind* with *params* narrows the v1 format *reference* names.
+
+    ``core/product-format-declaration.json`` on ``v1_format_ref`` (3.2.7): "The v2
+    declaration's ``params`` MUST narrow (be compatible with) each referenced v1 format's
+    ``requirements``". A declaration asserting a reference it does not narrow is the
+    divergence ``enums/error-code.json`` names ``FORMAT_DECLARATION_DIVERGENT`` ("different
+    canonical, different dimensions"), and canonical-formats.mdx's producer rules answer it:
+    "A producer that cannot guarantee agreement MUST omit the legacy compatibility
+    projection." ``format_resolver`` asks this of every asserted reference before projecting it.
+
+    The same rule the legacy selector route applies (:func:`_narrows`), so a reference the
+    product would not project is one the route would not select through the registry either.
+    The reference is normalized v1 -> v2 only, the direction the registry makes authoritative;
+    a reference that normalizes to nothing (a seller-bespoke id) states no constraint and is
+    taken as asserted.
+
+    *format_kind* and *params* are read off a stored document or a validated model alike.
+    """
+    from src.core.format_resolver import canonical_kind_for
+
+    try:
+        kind: str | None = canonical_kind_for(reference)
+    except ValueError:
+        kind = None
+    declared = _plain(params)
+    return _narrows(
+        str(_plain(format_kind)),
+        declared if isinstance(declared, Mapping) else {},
+        kind,
+        _legacy_projection(reference),
     )
 
 
