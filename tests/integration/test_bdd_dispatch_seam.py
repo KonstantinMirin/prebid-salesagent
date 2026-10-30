@@ -42,10 +42,9 @@ class TestCallViaForwardsReqWholeAndTheEnvUnpacksIt:
         with CreativeFormatsEnv() as env:
             # The list projects the seller's product declarations, so the product declares
             # the filtered format AND one more: a dropped filter then returns both.
-            filtered = FormatId(agent_url=DEFAULT_AGENT_URL, id=FILTERED_FORMAT_ID)
-            env.declare_formats([filtered, FormatId(agent_url=DEFAULT_AGENT_URL, id=OTHER_FORMAT_ID)])
+            env.declare_reference_formats(FILTERED_FORMAT_ID, OTHER_FORMAT_ID)
             ctx: dict = {"env": env}
-            req = ListCreativeFormatsRequest(format_ids=[filtered])
+            req = ListCreativeFormatsRequest(format_ids=[FormatId(agent_url=DEFAULT_AGENT_URL, id=FILTERED_FORMAT_ID)])
             _call_via(ctx, transport, req=req)
 
             assert "error" not in ctx, f"{transport}: dispatch failed: {ctx.get('error')!r}"

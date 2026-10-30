@@ -130,6 +130,19 @@ class CreativeFormatsEnv(PeerCreativeAgentMixin, IntegrationEnv):
             self._declaring_product.format_ids = references
         self._commit_factory_data()
 
+    def declare_reference_formats(self, *format_ids: str) -> None:
+        """The tenant's product declares the reference creative agent's formats named *format_ids*.
+
+        The standard creative agent stays federated and publishes these definitions from the
+        committed capture, so the seller lists exactly them: a scenario that needs real
+        ``Format`` bodies on the wire, or more than one entry for a filter to remove, names
+        them here.
+        """
+        from src.core.creative_agent_registry import PUBLIC_DEFAULT_AGENT_URL
+        from src.core.schemas import FormatId
+
+        self.declare_formats([FormatId(agent_url=PUBLIC_DEFAULT_AGENT_URL, id=fid) for fid in format_ids])
+
     def adapter_served_format_ids(self) -> list[Any]:
         """The ids the tenant's ad-server adapter serves its own formats under, as it states them."""
         from src.core.helpers.adapter_helpers import adapter_served_creative_formats

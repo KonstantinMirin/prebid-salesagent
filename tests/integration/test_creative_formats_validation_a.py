@@ -216,13 +216,22 @@ class TestInvalidFormatCategoryEnum:
 
         The type filter was removed in adcp 3.12. Verify the MCP wrapper
         handles remaining valid filters (e.g., name_search) without error.
+
+        The list projects the seller's product declarations, so the product declares two
+        formats and the unfiltered call must list both: a wrapper that dropped name_search
+        would then return entries instead of none.
         """
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
+            env.declare_reference_formats("display_300x250_image", "video_vast")
 
+            unfiltered = env.call_mcp()
             # Pass a valid filter — name_search for nonexistent name → empty result
             response = env.call_mcp(name_search="nonexistent_format_xyz")
 
+        assert sorted(f.format_id.id for f in unfiltered.formats) == ["display_300x250_image", "video_vast"], (
+            "the declared formats are not listed, so an empty filtered answer proves nothing"
+        )
         assert isinstance(response, ListCreativeFormatsResponse)
         assert len(response.formats) == 0
 
