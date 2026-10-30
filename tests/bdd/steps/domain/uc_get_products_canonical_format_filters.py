@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from adcp.types.canonical_creative import CanonicalFormatKind
 from pytest_bdd import given, then, when
 
 from tests.bdd.steps._outcome_helpers import wire_field
@@ -29,8 +30,12 @@ _NAMED_KIND = "image"
 _OTHER_KIND = "video_hosted"
 
 #: A third kind, for the multi-value filter: named alongside ``_NAMED_KIND`` while
-#: ``_OTHER_KIND`` stays unnamed. ``audio`` is a member of the pinned vocabulary.
-_SECOND_NAMED_KIND = "audio"
+#: ``_OTHER_KIND`` stays unnamed. ``html5`` is a member of the pinned vocabulary
+#: (core/canonical-format-kind.json) whose params accept ``_PARAMS``. There is no bare
+#: ``audio`` member -- the audio kinds are ``audio_hosted``, ``audio_vast`` and
+#: ``audio_daast`` -- and a product declaring a non-member fails conversion, which
+#: get_products answers with INTERNAL_ERROR for the whole catalogue.
+_SECOND_NAMED_KIND = "html5"
 
 #: The one member of that vocabulary that names a format OUTSIDE the IAB standard set,
 #: which is what ``standard_formats_only`` has to exclude. Written from the member list
@@ -125,8 +130,12 @@ def given_two_canonical_products_with_different_kinds(ctx: dict) -> None:
 @given("the seller stores three canonical products declaring three different format kinds")
 def given_three_canonical_products_with_different_kinds(ctx: dict) -> None:
     """Store two products the multi-value filter names and the one it must not select."""
-    assert len({_NAMED_KIND, _SECOND_NAMED_KIND, _OTHER_KIND}) == 3, (
-        "two of the three products declare one kind, so the filter cannot tell them apart"
+    kinds = {_NAMED_KIND, _SECOND_NAMED_KIND, _OTHER_KIND}
+    assert len(kinds) == 3, "two of the three products declare one kind, so the filter cannot tell them apart"
+    unpinned = kinds - {kind.value for kind in CanonicalFormatKind}
+    assert not unpinned, (
+        f"{sorted(unpinned)} not in the pinned CanonicalFormatKind; a product declaring one fails "
+        "conversion and get_products answers INTERNAL_ERROR instead of filtering"
     )
     tenant = ctx["tenant"]
     ctx["named_products"] = [
