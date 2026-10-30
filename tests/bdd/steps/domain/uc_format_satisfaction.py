@@ -254,14 +254,21 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "params": {"min_width": 600, "max_width": 1200, "aspect_ratio": "1.91:1"},
         }
     ],
-    # A hosted-video option narrowing the file it takes: one codec, one container and a
-    # 10 MB cap. formats/canonical/video_hosted.json's ``max_file_size_mb``: "1 MB is
-    # exactly 1,000,000 bytes".
+    # A hosted-video option narrowing the file it takes: one codec, one container, a 10 MB
+    # cap, a bitrate ceiling of 8,000 kbps and 25 or 30 frames per second.
+    # formats/canonical/video_hosted.json's ``max_file_size_mb``: "1 MB is exactly 1,000,000
+    # bytes".
     "mp4_h264_10mb_video": [
         {
             "format_kind": "video_hosted",
             "format_option_id": "satisfaction_video_mp4",
-            "params": {"video_codecs": ["h264"], "containers": ["mp4"], "max_file_size_mb": 10},
+            "params": {
+                "video_codecs": ["h264"],
+                "containers": ["mp4"],
+                "max_file_size_mb": 10,
+                "max_bitrate_kbps": 8000,
+                "frame_rates": [25, 30],
+            },
         }
     ],
     # A VERTICAL hosted video stating no aspect_ratio. video_hosted.json: "Vertical = 9:16",
@@ -273,13 +280,19 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "params": {"orientation": "vertical"},
         }
     ],
-    # A hosted-audio spot fixed at 30 seconds, mp3 only, capped at 1 MB. audio_hosted.json's
-    # ``max_file_size_mb`` is in "decimal megabytes".
+    # A hosted-audio spot fixed at 30 seconds, mp3 only, capped at 1 MB, sampled at 44.1 or
+    # 48 kHz, in stereo. audio_hosted.json's ``max_file_size_mb`` is in "decimal megabytes".
     "mp3_30s_audio": [
         {
             "format_kind": "audio_hosted",
             "format_option_id": "satisfaction_audio_30s",
-            "params": {"duration_ms_exact": 30000, "audio_codecs": ["mp3"], "max_file_size_mb": 1},
+            "params": {
+                "duration_ms_exact": 30000,
+                "audio_codecs": ["mp3"],
+                "max_file_size_mb": 1,
+                "audio_sample_rates": [44100, 48000],
+                "audio_channels": ["stereo"],
+            },
         }
     ],
     # A video option fixed at 15 seconds. ``duration_ms_exact`` is the declaration's
@@ -387,10 +400,18 @@ def _manifest(name: str) -> dict[str, Any]:
     )
 
     mrec = manifest_image_spec("image_main")
-    # A 30-second mp4/h264 video of 8 MB and a 30-second mp3 of 900 KB: what the video and
-    # audio declarations accept, each other manifest of its kind differing in one member.
+    # A 30-second mp4/h264 video of 8 MB at 5,000 kbps and 30 fps, and a 30-second stereo mp3
+    # of 900 KB at 44.1 kHz: what the video and audio declarations accept, each other manifest
+    # of its kind differing in one member. The frame rate is a string, as video-asset.json
+    # types it ("to preserve precision").
     clip = video_spec(
-        "video_main", duration_ms=30000, video_codec="h264", container_format="mp4", file_size_bytes=8_000_000
+        "video_main",
+        duration_ms=30000,
+        video_codec="h264",
+        container_format="mp4",
+        file_size_bytes=8_000_000,
+        video_bitrate_kbps=5000,
+        frame_rate="30",
     )
     spot = asset_spec(
         "audio_main",
@@ -399,6 +420,8 @@ def _manifest(name: str) -> dict[str, Any]:
         duration_ms=30000,
         codec="mp3",
         file_size_bytes=900_000,
+        sampling_rate_hz=44100,
+        channels="stereo",
     )
 
     def headlined(*specs: Any, headlines: tuple[str, ...] = ("Trail Pro boots",)) -> dict[str, Any]:
@@ -485,6 +508,10 @@ def _manifest(name: str) -> dict[str, Any]:
         "video_30s_webm": lambda: build_assets(clip.with_fields(container_format="webm")),
         "video_30s_10mb": lambda: build_assets(clip.with_fields(file_size_bytes=10_000_000)),
         "video_30s_10_4mb": lambda: build_assets(clip.with_fields(file_size_bytes=10_400_000)),
+        # The clip at the bitrate ceiling and over it, and at 60 fps.
+        "video_30s_8000kbps": lambda: build_assets(clip.with_fields(video_bitrate_kbps=8000)),
+        "video_30s_12000kbps": lambda: build_assets(clip.with_fields(video_bitrate_kbps=12000)),
+        "video_30s_60fps": lambda: build_assets(clip.with_fields(frame_rate="60")),
         # The clip at 1080x1920, 9:16, beside its 640x360 (16:9) self.
         "video_30s_1080x1920": lambda: build_assets(clip.with_fields(width=1080, height=1920)),
         # AUDIO: the spot at another duration or codec, and over the 1 MB cap by 40,000 bytes.
@@ -492,6 +519,10 @@ def _manifest(name: str) -> dict[str, Any]:
         "audio_15s": lambda: build_assets(spot.with_fields(duration_ms=15000)),
         "audio_30s_aac": lambda: build_assets(spot.with_fields(codec="aac")),
         "audio_30s_1_04mb": lambda: build_assets(spot.with_fields(file_size_bytes=1_040_000)),
+        # The spot at the other accepted sample rate, at one outside the set, and in mono.
+        "audio_30s_48khz": lambda: build_assets(spot.with_fields(sampling_rate_hz=48000)),
+        "audio_30s_22khz": lambda: build_assets(spot.with_fields(sampling_rate_hz=22050)),
+        "audio_30s_mono": lambda: build_assets(spot.with_fields(channels="mono")),
     }
     assert name in manifests, f"no manifest named {name!r}; have {sorted(manifests)}"
     return manifests[name]()

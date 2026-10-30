@@ -761,13 +761,26 @@ _ASSET_FACTS: Mapping[str, tuple[tuple[str, str], ...]] = {
         ("video_codecs", "video_codec"),
         ("audio_codecs", "audio_codec"),
         ("containers", "container_format"),
+        ("min_bitrate_kbps", "video_bitrate_kbps"),
+        ("max_bitrate_kbps", "video_bitrate_kbps"),
+        ("frame_rates", "frame_rate"),
     ),
     "audio": (
         ("duration_ms_exact", "duration_ms"),
         ("max_file_size_mb", "file_size_bytes"),
         ("audio_codecs", "codec"),
+        ("min_bitrate_kbps", "bitrate_kbps"),
+        ("max_bitrate_kbps", "bitrate_kbps"),
+        ("audio_sample_rates", "sampling_rate_hz"),
+        ("audio_channels", "channels"),
     ),
 }
+
+#: The asset members a pinned asset schema types as a STRING holding a number, read as the
+#: number the declaration states: video-asset.json ``frame_rate`` is "Frame rate as string to
+#: preserve precision (e.g., '23.976', '29.97', '30')", and video_hosted.json ``frame_rates``
+#: is an array of numbers.
+_NUMERIC_STRING_MEMBERS: frozenset[str] = frozenset({"frame_rate"})
 
 #: Bytes per unit of a file-size cap, for an asset that states ``file_size_bytes``. The
 #: megabyte is DECIMAL because the pin says so for both kinds that declare it:
@@ -895,6 +908,8 @@ def _asset_claim(asset: Mapping[str, Any], ratio: float = 1) -> tuple[dict[str, 
     claim: dict[str, Any] = {}
     for constraint, member in facts:
         value = _plain(asset.get(member))
+        if member in _NUMERIC_STRING_MEMBERS and isinstance(value, str):
+            value = _number_or_text(value)
         divisor = _BYTES_PER_UNIT.get(constraint) or (ratio if member in _INTRINSIC_MEMBERS else 1)
         claim[constraint] = value / divisor if divisor != 1 and _is_number(value) else value
     if "pixel_ratios" in members:
@@ -906,6 +921,14 @@ def _asset_claim(asset: Mapping[str, Any], ratio: float = 1) -> tuple[dict[str, 
     if "duration_ms_exact" in members:
         members["duration_ms_range"] = members["duration_ms_exact"]
     return claim, members
+
+
+def _number_or_text(value: str) -> float | str:
+    """*value* as a number when it reads as one, else unchanged, so it fails a numeric set."""
+    try:
+        return float(value)
+    except ValueError:
+        return value
 
 
 def _candidate_ratios(asset: Mapping[str, Any], declared: Mapping[str, Any]) -> tuple[float, ...]:

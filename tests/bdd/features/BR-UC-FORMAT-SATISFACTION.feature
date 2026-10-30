@@ -2129,8 +2129,10 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | exact_duration      | video_hosted | video_30s      |
       | duration_range      | video_hosted | video_30s      |
       | mp4_h264_10mb_video | video_hosted | video_30s      |
-      | mp4_h264_10mb_video | video_hosted | video_30s_10mb |
-      | mp3_30s_audio       | audio_hosted | audio_30s      |
+      | mp4_h264_10mb_video | video_hosted | video_30s_10mb     |
+      | mp4_h264_10mb_video | video_hosted | video_30s_8000kbps |
+      | mp3_30s_audio       | audio_hosted | audio_30s          |
+      | mp3_30s_audio       | audio_hosted | audio_30s_48khz    |
 
   @T-UC-FORMAT-SATISFACTION-manifest-sync-media-refused @format_satisfaction_sync @requires_db
   Scenario Outline: sync_creatives refuses an assignment whose video or audio manifest fails the selected declaration - <declaration> <manifest>
@@ -2141,25 +2143,34 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     And the refusal names "<path>" stating "<stated>" where "<accepted>" is accepted
 
     Examples:
-      | declaration         | kind         | manifest         | path                               | stated   | accepted    |
-      | exact_duration      | video_hosted | video_15s        | assets.video_main.duration_ms      | 15000    | 30000       |
-      | duration_range      | video_hosted | video_90s        | assets.video_main.duration_ms      | 90000    | 5000, 60000 |
-      | mp4_h264_10mb_video | video_hosted | video_30s_vp9    | assets.video_main.video_codec      | vp9      | h264        |
-      | mp4_h264_10mb_video | video_hosted | video_30s_webm   | assets.video_main.container_format | webm     | mp4         |
-      | mp4_h264_10mb_video | video_hosted | video_30s_10_4mb | assets.video_main.file_size_bytes  | 10400000 | 10          |
-      | mp3_30s_audio       | audio_hosted | audio_15s        | assets.audio_main.duration_ms      | 15000    | 30000       |
-      | mp3_30s_audio       | audio_hosted | audio_30s_aac    | assets.audio_main.codec            | aac      | mp3         |
-      | mp3_30s_audio       | audio_hosted | audio_30s_1_04mb | assets.audio_main.file_size_bytes  | 1040000  | 1           |
+      | declaration         | kind         | manifest            | path                                 | stated   | accepted     |
+      | exact_duration      | video_hosted | video_15s           | assets.video_main.duration_ms        | 15000    | 30000        |
+      | duration_range      | video_hosted | video_90s           | assets.video_main.duration_ms        | 90000    | 5000, 60000  |
+      | mp4_h264_10mb_video | video_hosted | video_30s_vp9       | assets.video_main.video_codec        | vp9      | h264         |
+      | mp4_h264_10mb_video | video_hosted | video_30s_webm      | assets.video_main.container_format   | webm     | mp4          |
+      | mp4_h264_10mb_video | video_hosted | video_30s_10_4mb    | assets.video_main.file_size_bytes    | 10400000 | 10           |
+      | mp4_h264_10mb_video | video_hosted | video_30s_12000kbps | assets.video_main.video_bitrate_kbps | 12000    | 8000         |
+      | mp4_h264_10mb_video | video_hosted | video_30s_60fps     | assets.video_main.frame_rate         | 60       | 25, 30       |
+      | mp3_30s_audio       | audio_hosted | audio_15s           | assets.audio_main.duration_ms        | 15000    | 30000        |
+      | mp3_30s_audio       | audio_hosted | audio_30s_aac       | assets.audio_main.codec              | aac      | mp3          |
+      | mp3_30s_audio       | audio_hosted | audio_30s_1_04mb    | assets.audio_main.file_size_bytes    | 1040000  | 1            |
+      | mp3_30s_audio       | audio_hosted | audio_30s_22khz     | assets.audio_main.sampling_rate_hz   | 22050    | 44100, 48000 |
+      | mp3_30s_audio       | audio_hosted | audio_30s_mono      | assets.audio_main.channels           | mono     | stereo       |
 
-    # STEP 4 ON THE TWO OTHER MEDIA KINDS: "Check fixed dimensions, durations, codecs,
+    # STEPS 3 AND 4 ON THE TWO OTHER MEDIA KINDS: "Validate each asset against its declared
+    # type and technical constraints" and "Check fixed dimensions, durations, codecs,
     # file-size limits". Each refusal row has an accept row against the same declaration that
     # differs in the one member under test: a 30-second clip against exact_duration (30000)
-    # and duration_range ([5000, 60000]), h264 in mp4 at 8 MB and at exactly 10 MB against
-    # mp4_h264_10mb_video, and a 30-second mp3 of 900 KB against mp3_30s_audio. The asset
+    # and duration_range ([5000, 60000]); h264 in mp4 at 8 MB, 5,000 kbps and 30 fps, at
+    # exactly 10 MB and at exactly 8,000 kbps against mp4_h264_10mb_video; and a 30-second
+    # stereo mp3 of 900 KB at 44.1 kHz and at 48 kHz against mp3_30s_audio. The asset
     # members are the pinned asset schemas' own (core/assets/video-asset.json duration_ms,
-    # video_codec, container_format, file_size_bytes; audio-asset.json codec), graded against
-    # the declaration params that constrain them (duration_ms_exact, duration_ms_range,
-    # video_codecs, containers, audio_codecs, max_file_size_mb).
+    # video_codec, container_format, file_size_bytes, video_bitrate_kbps, frame_rate;
+    # audio-asset.json codec, sampling_rate_hz, channels), graded against the declaration
+    # params that constrain them (duration_ms_exact, duration_ms_range, video_codecs,
+    # containers, max_file_size_mb, max_bitrate_kbps, frame_rates, audio_codecs,
+    # audio_sample_rates, audio_channels). video-asset.json types frame_rate as a string "to
+    # preserve precision", so "30" is read as the 30 frame_rates lists.
     #
     # A MEGABYTE IS 1,000,000 BYTES: video_hosted.json says "1 MB is exactly 1,000,000 bytes"
     # and audio_hosted.json "decimal megabytes". The 10,400,000-byte clip and the
