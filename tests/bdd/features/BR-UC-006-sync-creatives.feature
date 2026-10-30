@@ -536,13 +536,23 @@ Feature: BR-UC-006 Sync Creative Assets
     And the creative should have generated content
 
   @T-UC-006-rule-036-inv2 @invariant @BR-RULE-036
-  Scenario: INV-2 — prompt from assets (message role)
+  Scenario: INV-2 — the build's prompt is the generation_prompt its format declares, ahead of any other prompt role
     Given the Buyer is authenticated
-    And a generative creative with an asset of role "message" containing "Create summer vibes"
+    And a generative creative whose "message" asset carrying "Make it look wintry" comes before its generation_prompt carrying "Create summer vibes"
     And GEMINI_API_KEY is configured
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
     And the generative build should use "Create summer vibes" as the prompt
+
+  # THE PROMPT IS THE ASSET THE FORMAT DECLARES FOR IT. display_300x250_generative, as the
+  # reference agent serves it, requires one asset, generation_prompt (text), and
+  # core/canonical-projection-ref.json names "a generative entry whose input is
+  # generation_prompt: text". So a conformant generative creative always carries it, and a
+  # message asset beside it is not the input. The message comes FIRST in the payload and says
+  # something else, so a seller that reads the first prompt role in the buyer's key order builds
+  # from "Make it look wintry" and the Then reddens.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/canonical-projection-ref.json
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json pointer=/$defs/baseIndividualAsset/properties/required
 
   @T-UC-006-rule-036-inv3 @invariant @BR-RULE-036
   Scenario: INV-3 — a generative creative carrying no prompt asset is refused, inputs notwithstanding
@@ -978,7 +988,7 @@ Feature: BR-UC-006 Sync Creative Assets
     Examples: Generative partitions
       | partition                       | format_type                        | prompt_source                          | expected                                                          |
       | static_creative                 | no output_format_ids               | any assets                             | the creative should be processed without generative build         |
-      | generative_with_prompt          | output_format_ids present          | message asset with prompt text         | the generative build should use the message asset as the prompt   |
+      | generative_with_prompt          | output_format_ids present          | a message asset ahead of the generation_prompt | the generative build should use the generation_prompt asset as the prompt |
       | generative_without_prompt_asset | output_format_ids present (create) | no prompt assets or inputs             | the creatives entry carries error code "CREATIVE_VALIDATION_FAILED_GENERIC" |
       | generative_no_gemini_key        | output_format_ids present          | message asset but no GEMINI_API_KEY    | the creatives entry carries error code "CONFIGURATION_ERROR"      |
 

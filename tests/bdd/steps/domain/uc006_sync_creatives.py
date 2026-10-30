@@ -89,15 +89,14 @@ _CATALOG_GENERATIVE_FORMAT_ID = "display_300x250_generative"
 _CATALOG_TEXT_ONLY_FORMAT_ID = "display_generative"
 
 
-def _with_prompt_assets(ctx: dict, creative: dict, content: str) -> None:
-    """Add to *creative* the assets its named format requires, its prompt carrying *content*.
+def _with_prompt_assets(creative: dict, content: str) -> None:
+    """Add to *creative* the assets the format it names requires, its prompt carrying *content*.
 
     A legacy manifest is held to its named format's required assets (``_validation.py``),
-    and the reference generative formats require ``generation_prompt``. Writing it with the
-    same text as the scenario's own prompt asset keeps the creative conformant without
-    changing which text the build is asked to use.
+    and the reference generative formats require ``generation_prompt``, the asset the
+    build's prompt is read from.
     """
-    creative.setdefault("assets", {}).update(named_format_assets(ctx["creative_format_id"], prompt=content))
+    creative.setdefault("assets", {}).update(named_format_assets(creative["format_id"]["id"], prompt=content))
 
 
 def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
@@ -5014,7 +5013,7 @@ def given_creative_output_format_ids_present(ctx: dict) -> None:
     chosen later. NOT declared ``malformed``, and that is measured rather than
     assumed — the pin does reject an absent ``assets``, but every scenario using
     this sentence follows it with a step that writes the key
-    (``message asset with prompt text``, ``no prompt assets or inputs``,
+    (``a message asset ahead of the generation_prompt``, ``no prompt assets or inputs``,
     ``message asset but no GEMINI_API_KEY``; feature lines 894-896), so the
     DISPATCHED item is conformant. ``malformed(..., pin_rejects=True)`` here would
     be graded against the dispatched bytes and reported as REPAIRED.
@@ -5069,18 +5068,19 @@ def given_any_assets(ctx: dict) -> None:
     last_creative.setdefault("assets", {}).update(build_assets(image_spec("image")))
 
 
-@given("message asset with prompt text")
+@given("a message asset ahead of the generation_prompt")
 def given_message_asset_with_prompt(ctx: dict) -> None:
-    """Add a message asset with prompt text to the last creative.
+    """Give the last creative a ``message`` asset, then the ``generation_prompt`` its format requires.
 
-    Production extracts prompt from assets with role "message", "brief",
-    or "prompt" (BR-RULE-036 INV-2).
+    The two carry DIFFERENT text and the message comes first in the payload, so a seller
+    that takes the first prompt role in the buyer's order builds from the message and the
+    Then reddens (BR-RULE-036 INV-2). The prompt's text is recorded as
+    ``expected_asset_prompt``.
     """
     creatives = ctx.get("creatives", [])
-    assert creatives, "No creative in context to add message asset to"
+    assert creatives, "No creative in context to add prompt assets to"
     last_creative = creatives[-1]
-    _with_prompt_assets(ctx, last_creative, "Generate a banner ad for summer sale")
-    last_creative["assets"].update(build_assets(text_spec("message", content="Generate a banner ad for summer sale")))
+    _prompt_behind_message(ctx, last_creative, "message", "Generate a banner ad for summer sale")
 
 
 @given("no prompt assets or inputs")
@@ -5111,7 +5111,7 @@ def given_message_asset_no_gemini_key(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     assert creatives, "No creative in context to add message asset to"
     last_creative = creatives[-1]
-    _with_prompt_assets(ctx, last_creative, "Generate a banner ad for summer sale")
+    _with_prompt_assets(last_creative, "Generate a banner ad for summer sale")
     last_creative["assets"].update(build_assets(text_spec("message", content="Generate a banner ad for summer sale")))
     ctx["env"].set_gemini_api_key(None)
 
@@ -5229,15 +5229,10 @@ def then_processed_without_generative_build(ctx: dict) -> None:
     _assert_standard_processing(ctx)
 
 
-@then("the generative build should use the message asset as the prompt")
-def then_generative_build_uses_message_asset(ctx: dict) -> None:
-    """The build ran, and its prompt came from the request's message asset.
-
-    The outline row that says this does not record the prompt text the way the
-    INV-2 scenario's Given does, so it grades the prompt's SOURCE rather than its
-    exact value; the exact-value form is the sentence below.
-    """
-    _assert_generative_build(ctx, prompt_source="assets")
+@then("the generative build should use the generation_prompt asset as the prompt")
+def then_generative_build_uses_generation_prompt(ctx: dict) -> None:
+    """The build ran, and its prompt is exactly the text of the creative's generation_prompt."""
+    then_generative_build_uses_prompt(ctx, ctx["expected_asset_prompt"])
 
 
 @then("the system should invoke generative build with the asset prompt")
@@ -5301,11 +5296,16 @@ def given_gemini_api_key_configured(ctx: dict) -> None:
     ctx["env"].set_gemini_api_key("test-gemini-key")
 
 
-@given(parsers.parse('a generative creative with an asset of role "{role}" containing "{content}"'))
-def given_generative_creative_with_asset_role(ctx: dict, role: str, content: str) -> None:
-    """Set up a generative creative with a specific asset role containing prompt text.
+@given(
+    parsers.parse(
+        'a generative creative whose "{role}" asset carrying "{other}" comes before its generation_prompt carrying "{prompt}"'
+    )
+)
+def given_generative_creative_with_asset_role(ctx: dict, role: str, other: str, prompt: str) -> None:
+    """A generative creative carrying another prompt role AHEAD of its format's generation_prompt.
 
-    INV-2: prompt found in assets (message/brief/prompt role) -> that text used as build prompt.
+    INV-2: the build's prompt is the generation_prompt the named format declares, whatever
+    other prompt role the manifest also carries and wherever it sits in the payload.
 
     The asset goes through ``text_spec`` rather than being written as
     ``{role: {"content": content}}``: that hand-built form carries no
@@ -5318,16 +5318,28 @@ def given_generative_creative_with_asset_role(ctx: dict, role: str, content: str
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id=_CATALOG_GENERATIVE_FORMAT_ID, gemini_api_key="test-gemini-key")
-    # The named format's required assets carry the same text, so the creative is conformant
-    # (a legacy manifest is held to them) and the build's prompt is the scenario's text.
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-inv2-001",
         name="Generative Prompt From Assets",
         format_id=fmt,
-        assets={**named_format_assets(fmt["id"], prompt=content), **build_assets(text_spec(role, content=content))},
+        assets=OMIT,
     )
+    _prompt_behind_message(ctx, creative_payload, role, prompt, other=other)
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
+
+
+def _prompt_behind_message(ctx: dict, creative: dict, role: str, prompt: str, *, other: str | None = None) -> None:
+    """Write *creative*'s *role* asset FIRST, then its format's required assets with *prompt*.
+
+    *role* carries *other* (by default a sentence that is not *prompt*), so the build's prompt
+    tells which asset it was read from. *prompt* is recorded as ``expected_asset_prompt``.
+    """
+    other = other or f"Not the prompt: {prompt}"
+    assert other != prompt, "the two prompt roles must differ, or the build cannot tell them apart"
+    creative["assets"] = build_assets(text_spec(role, content=other))
+    _with_prompt_assets(creative, prompt)
+    ctx["expected_asset_prompt"] = prompt
 
 
 @given(

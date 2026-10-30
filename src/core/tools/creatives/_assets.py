@@ -61,23 +61,22 @@ def _extract_text_from_asset_value(asset: Any) -> str | None:
 
 
 def _extract_message_from_assets(creative: CreativeAsset) -> str | None:
-    """Extract message/brief/prompt from creative assets using role priority.
+    """The generative build's prompt: the first of the prompt roles that carries text.
 
-    Checks 'generation_prompt', 'message', 'brief', 'prompt' roles in priority order.
-    ``generation_prompt`` is the asset a generative named format declares for its prompt --
+    The roles are read in THIS order, whatever order the buyer's ``assets`` map is in:
+    'generation_prompt', then 'message', 'brief', 'prompt'. ``generation_prompt`` is the
+    asset a generative named format declares for its prompt --
     core/canonical-projection-ref.json (v3.2.7) names it as "a generative entry whose input
-    is ``generation_prompt: text``" -- and since a legacy manifest is held to its named
-    format's required assets (``_validation.py``), it is where a conformant generative item
-    carries the prompt.
+    is ``generation_prompt: text``" -- and a legacy manifest is held to its named format's
+    required assets (``_validation.py``), so a conformant generative item always carries it
+    and another prompt role beside it does not displace it.
     Falls through to inputs[0].context_description if no asset role matches.
     Returns None when no message is found.
     """
     if creative.assets:
-        for role, asset in creative.assets.items():
-            if role in ["generation_prompt", "message", "brief", "prompt"]:
-                text = _extract_text_from_asset_value(asset)
-                if text:
-                    return text
+        for role in ("generation_prompt", "message", "brief", "prompt"):
+            if text := _extract_text_from_asset_value(creative.assets.get(role)):
+                return text
 
     if creative.inputs:
         inputs = creative.inputs or []
