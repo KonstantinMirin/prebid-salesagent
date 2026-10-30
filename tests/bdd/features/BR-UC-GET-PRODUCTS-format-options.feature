@@ -193,6 +193,35 @@ Feature: Canonical format options a seller stores are announced to buyers on the
     # whose legacy arm was absent -- so the canonical shape was unstorable and then
     # unservable.
 
+  @T-UC-GET-PRODUCTS-format-options-several @format_option_announcement @requires_db
+  Scenario: a product declaring several format options announces every one of them
+    Given the seller stores a canonically-authored product declaring three format options
+    When the buyer requests products
+    Then the announced format options are exactly the three declarations the seller stored
+    And the announced product's format_ids name exactly "display_300x250_image, display_728x90_image"
+    And the response carries no format-declaration advisory
+    # canonical-formats-migration.mdx § Seller migration, step 4 (v3.2.7): "Return the
+    # applicable options from get_products". core/product.json format_options: "one or more
+    # inline format declarations the product accepts". Every other scenario here stores ONE
+    # declaration, so a seller that announced only the first, or collapsed declarations of
+    # one kind into one, passed them all.
+    #
+    # The three options are product-local, share format_kind "image" and differ in
+    # format_option_id and size:
+    #
+    #   * announcing only the first option fails the count;
+    #   * collapsing same-kind options into one fails the count;
+    #   * dropping format_option_id fails the identity comparison, and it is the member a
+    #     buyer names in format_option_refs to select an option;
+    #   * deriving format_ids from the first declaration only fails the second outcome,
+    #     which needs refs from two declarations and none from the third, which asserts
+    #     no v1_format_ref.
+    #
+    # The pin gives format_options no order, so options are compared by format_option_id.
+    # The derived format_ids are compared in declared order. That order is this seller's
+    # choice (src/core/format_resolver.py, CanonicalFormats.format_ids); the pin does not
+    # order format_ids either.
+
   @T-UC-GET-PRODUCTS-format-options-unannounceable @format_option_announcement @requires_db
   Scenario Outline: a stored declaration the seller cannot announce is refused, not half-announced
     # core/product-format-declaration.json puts format_kind and params in `required`. A
