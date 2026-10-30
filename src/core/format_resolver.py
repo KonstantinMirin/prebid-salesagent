@@ -27,6 +27,12 @@ from adcp.types.domains.core.package_format_snapshot import PackageFormatSnapsho
 from adcp.types.domains.core.product_format_declaration import (
     ProductFormatDeclaration as LibraryFormatDeclaration,
 )
+from adcp.types.domains.core.requirements.daast_asset_requirements import (
+    DaastAssetRequirements as LibraryDaastAssetRequirements,
+)
+from adcp.types.domains.core.requirements.vast_asset_requirements import (
+    VastAssetRequirements as LibraryVastAssetRequirements,
+)
 from pydantic import TypeAdapter, ValidationError
 
 from src.core.database.database_session import get_db_session
@@ -247,8 +253,12 @@ def _agent_declared_projection(ref: FormatRef, spec: Format) -> CanonicalProject
     The SDK's ``project_v1_format_to_declaration`` runs step 3 between the two and reads no
     ``agent_url``, so it cannot be asked for this order. Steps 2 and 4 are therefore read
     here, with the SDK's own ``structural_match`` over its bundled registry, in the
-    registry's entry order as the SDK takes them. The params are only what the reference
-    states: every compared param a registry entry derives (``width``, ``height``,
+    registry's entry order as the SDK takes them. Every constraint a structural entry
+    declares is handed over -- the slot's asset types and its VAST and DAAST versions
+    (:func:`_declared_versions`) -- because the registry matches that mode "against the
+    format's slot shape, asset types, and version constraints", and three of its seven
+    structural entries require a version. The params are only what the reference states:
+    every compared param a registry entry derives (``width``, ``height``,
     ``duration_ms_exact``) comes from a glob entry, never a structural one.
 
     Raises:
@@ -263,14 +273,43 @@ def _agent_declared_projection(ref: FormatRef, spec: Format) -> CanonicalProject
             name for asset in spec.assets or [] if isinstance(name := getattr(asset, "asset_type", None), str)
         )
     )
+    vast_versions, daast_versions = _declared_versions(spec)
     for mapping in load_default_registry().mappings:
         structural = getattr(mapping.v1_pattern, "structural", None)
-        if structural is not None and structural_match(asset_types=asset_types, pattern=structural):
+        if structural is not None and structural_match(
+            asset_types=asset_types,
+            vast_versions=vast_versions or None,
+            daast_versions=daast_versions or None,
+            pattern=structural,
+        ):
             return CanonicalProjection(kind=str(mapping.v2.canonical), params=params)
     raise ValueError(
         f"no canonical projection for legacy format_id {format_ref_id(ref)!r}: the agent's declaration carries no "
         "canonical and its slots match no structural entry"
     )
+
+
+def _declared_versions(spec: Format) -> tuple[list[str], list[str]]:
+    """The VAST and DAAST versions *spec*'s slots declare, for the structural entries that require one.
+
+    The pinned ``Format`` carries a version only in a slot's ``requirements``
+    (``vast_version`` / ``vast_versions``, ``daast_version`` / ``daast_versions``); it
+    declares no top-level version member, so a slot is the only place to read one. The SDK's
+    own step 4 collects the same keys, but only from a dict, so handed this model it finds
+    none and its VAST and DAAST structural entries never match
+    (adcontextprotocol/adcp-client-python#1750).
+    """
+    vast: list[str] = []
+    daast: list[str] = []
+    for asset in spec.assets or []:
+        requirements = getattr(asset, "requirements", None)
+        if isinstance(requirements, LibraryVastAssetRequirements):
+            stated = [requirements.vast_version, *(requirements.vast_versions or [])]
+            vast.extend(str(version) for version in stated if version is not None)
+        elif isinstance(requirements, LibraryDaastAssetRequirements):
+            listed = requirements.daast_versions.root if requirements.daast_versions is not None else []
+            daast.extend(str(version) for version in [requirements.daast_version, *listed] if version is not None)
+    return vast, daast
 
 
 def _stated_shape_params(reference: LibraryFormatId) -> dict[str, Any]:

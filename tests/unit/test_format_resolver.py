@@ -730,6 +730,43 @@ class TestCanonicalKindForSizeEncodedIds:
 
         assert canonical_kind_for(format_id, spec=declaration) == kind
 
+    @pytest.mark.parametrize(
+        ("asset_type", "requirements", "kind"),
+        [
+            ("vast", {"vast_version": "4.2"}, "video_vast"),
+            ("vast", {"vast_versions": ["3.0"]}, "video_vast"),
+            ("daast", {"daast_version": "1.0"}, "audio_daast"),
+            ("vast", None, None),
+        ],
+        ids=["vast-4-singular", "vast-3-listed", "daast-1-singular", "vast-no-version-fails-closed"],
+    )
+    def test_a_peer_slot_declaring_its_version_reaches_the_versioned_structural_entry(
+        self, asset_type, requirements, kind
+    ):
+        """Step 4 at a peer reads the slot's VAST/DAAST version, not only its asset type.
+
+        registries/v1-canonical-mapping.json at the pin matches a structural entry "against
+        the format's slot shape, asset types, and version constraints", and its ``vast`` and
+        ``daast`` entries each require a version (``>=4.0``, ``3.x``/``2.x``, ``1.0``/``1.1``).
+        A peer's id reaches a kind only through its declaration, so a matcher handed the asset
+        types alone refused every peer VAST and DAAST format. The version-less row is the
+        control: with no version stated no versioned entry matches, and nothing else does.
+        """
+        from src.core.format_resolver import canonical_kind_for
+        from tests.factories.format import FormatFactory, FormatIdFactory, make_asset
+
+        format_id = FormatIdFactory(agent_url="https://peer-agent.example.com", id="acme_preroll")
+        slot = {"requirements": requirements} if requirements is not None else {}
+        declaration = FormatFactory(
+            format_id=format_id, assets=[make_asset(asset_type, asset_id="slot_0", **slot)], canonical=None
+        )
+
+        if kind is None:
+            with pytest.raises(ValueError, match="no canonical projection"):
+                canonical_kind_for(format_id, spec=declaration)
+        else:
+            assert canonical_kind_for(format_id, spec=declaration) == kind
+
     def test_an_id_the_registry_cannot_reach_at_all_still_fails_closed(self):
         """The fallback must not become a guess: an unknown slug has no kind to project to."""
         from src.core.format_resolver import canonical_kind_for

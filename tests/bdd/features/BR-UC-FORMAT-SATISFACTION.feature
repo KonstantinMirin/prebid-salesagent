@@ -1415,6 +1415,22 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     When the Buyer Agent syncs it into the library
     Then the creative is stored carrying canonical kind "video_hosted"
 
+  # STEP 4 READS THE SLOT'S VERSION, NOT ONLY ITS ASSET TYPE. The registry matches a
+  # structural entry "against the format's slot shape, asset types, and version
+  # constraints", and its one `vast` entry for VAST 4 is {"asset_types": ["vast"],
+  # "vast_versions": [">=4.0"]}. A publisher format with one VAST slot stating
+  # vast_version 4.2 and no canonical therefore projects to video_vast. A seller that
+  # matches the asset types alone finds no unversioned `vast` entry and refuses the
+  # creative, which reddens this row.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json
+  @T-UC-FORMAT-SATISFACTION-upsert-structural-versioned @creative_library_upsert @requires_db
+  Scenario: a creative whose format only a versioned structural entry matches is stored with that family's kind
+    Given a packaged product declaring only the deprecated format_ids
+    And the seller's creative agent serves "publisher_preroll" with one "vast" slot requiring version "4.2" and no canonical kind
+    And the buyer syncs a creative identified by that served format
+    When the Buyer Agent syncs it into the library
+    Then the creative is stored carrying canonical kind "video_vast"
+
   # STEP 2 AT A PEER WHOSE ID A GLOB NAMES. The publisher calls its HTML5 banner
   # `display_300x250`, an id the registry's literal glob maps to image at the reference
   # agent, and its own declaration says html5. Step 2 -- "if the v1 format declaration
