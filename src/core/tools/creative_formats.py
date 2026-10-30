@@ -16,7 +16,7 @@ from adcp.utils.format_assets import get_format_assets
 
 # Format subclass preserved through backward-compatibility helper (PEP 695 type param below).
 from src.core.exceptions import AdCPSalesAgentError, AdCPServiceUnavailableError
-from src.core.format_resolver import FormatKey, format_identity, product_format_identities
+from src.core.format_resolver import product_format_references
 from src.core.helpers import enum_value
 from src.core.helpers.adapter_helpers import adapter_served_creative_formats
 
@@ -72,7 +72,12 @@ from src.core.schemas import Error as AdCPResponseError
 
 if TYPE_CHECKING:
     from src.core.creative_agent_registry import FormatFetchResult
-from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse, format_id_identity
+from src.core.schemas import (
+    ListCreativeFormatsRequest,
+    ListCreativeFormatsResponse,
+    canonical_agent_url,
+    format_id_identity,
+)
 
 
 def _list_creative_formats_impl(
@@ -143,12 +148,14 @@ def _list_creative_formats_impl(
     # resolved: the dialled agents' formats PLUS the ones its own ad-server adapter serves
     # in process (Broadstreet acting as both sales and creative agent), read through
     # ``adapter_served_creative_formats`` as ``seller_format_catalogue`` reads them. Which of
-    # them are LISTED is the products' answer alone (see the docstring).
+    # them are LISTED is the products' answer alone (see the docstring), matched by the
+    # registry's own rule for whether an entry is the format a reference names, so a format
+    # ``get_format`` resolves for a declaration is the format this lists for it.
     declared = _declared_formats(tenant.tenant_id)
     formats = [
         f
         for f in [*fetch_result.formats, *adapter_served_creative_formats(tenant.tenant_id)]
-        if format_identity(f.format_id) in declared
+        if any(registry.lists_format(f, agent_url, f.format_id.id) for agent_url in declared.get(f.format_id.id, ()))
     ]
     agent_errors = _route_agent_failures(fetch_result, req)
 
@@ -449,15 +456,18 @@ def _list_creative_formats_impl(
     return response
 
 
-def _declared_formats(tenant_id: str) -> set[FormatKey]:
-    """The identities of the named formats the tenant's products declare.
+def _declared_formats(tenant_id: str) -> dict[str, set[str]]:
+    """The named formats the tenant's products declare: each id, to the canonical agent URLs declaring it.
 
     Each product's served contract (``Product.format_contract``), so the set is exactly the
     ``format_ids`` the same products carry on ``get_products``: derived from the canonical
     declarations' ``v1_format_ref`` for a canonical product (canonical-formats.mdx §
     Deprecated named-format compatibility projection: "Compatibility ``format_ids`` MUST be
-    derived from them"), the authored arm for a legacy-only one. Keyed on the federation
-    identity, so a reference that pins a template's parameters names the template.
+    derived from them"), the authored arm for a legacy-only one. The parameters a reference
+    pins are dropped, so a reference that pins a template's parameters names the template.
+    The agent half stays a URL rather than a :data:`FormatKey` because a catalogue entry is
+    matched to it by ``CreativeAgentRegistry.lists_format``, which compares the operator
+    agent by origin and accepts the entries of the agent that answers in its place.
 
     KNOWN CEILING: every product of the tenant, with no principal or account scoping. The
     pin lets a seller with one shared list ignore the request's ``account``
@@ -469,11 +479,11 @@ def _declared_formats(tenant_id: str) -> set[FormatKey]:
 
     with ProductUoW(tenant_id) as uow:
         assert uow.products is not None
-        return {
-            identity
-            for product in uow.products.list_all()
-            for identity in product_format_identities(product.format_contract.format_ids)
-        }
+        declared: dict[str, set[str]] = {}
+        for product in uow.products.list_all():
+            for ref in product_format_references(product.format_contract.format_ids):
+                declared.setdefault(ref.id, set()).add(canonical_agent_url(ref.agent_url))
+        return declared
 
 
 def _route_agent_failures(

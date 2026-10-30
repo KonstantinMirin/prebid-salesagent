@@ -999,9 +999,18 @@ class CreativeAgentRegistry:
         # canonical URL. The operator agent's catalogue is answered by another agent when
         # one stands in for it, and that agent's own entries are the operator's.
         requested = canonical_agent_url(agent_url)
-        stand_in = self._operator_catalog_agent() if is_operator_agent(requested) else None
-        stand_in_origin = agent_origin(stand_in) if stand_in else None
-        return next((fmt for fmt in formats if _lists_as(fmt, requested, format_id, stand_in_origin)), None)
+        return next((fmt for fmt in formats if self.lists_format(fmt, requested, format_id)), None)
+
+    def lists_format(self, fmt: Format, agent_url: str, format_id: str) -> bool:
+        """Whether catalogue entry *fmt* is the format *format_id* of the agent at canonical *agent_url*.
+
+        The one answer to "is this entry the format that reference names", read by
+        :meth:`get_format` and by ``list_creative_formats`` when it lists the formats the
+        seller's products declare: :func:`_lists_as`, with the agent that answers in the
+        operator agent's place (:meth:`_operator_catalog_agent`) when *agent_url* names it.
+        """
+        stand_in = self._operator_catalog_agent() if is_operator_agent(agent_url) else None
+        return _lists_as(fmt, agent_url, format_id, agent_origin(stand_in) if stand_in else None)
 
     def _operator_catalog_agent(self) -> str | None:
         """The agent whose catalogue answers for the operator agent in its place, or None.
