@@ -5,7 +5,7 @@
 
 Feature: Canonical format filters on get_products narrow the catalogue the buyer receives
   As a Buyer Agent
-  I want filters.format_kinds and standard_formats_only to decide which products come back
+  I want filters.format_kinds, format_option_refs and standard_formats_only to decide which products come back
   So that a product I excluded is never in the answer
 
   # core/product-filters.json, root: "Filters decide which products MAY BE RETURNED based
@@ -24,7 +24,9 @@ Feature: Canonical format filters on get_products narrow the catalogue the buyer
   # is the trap the sibling format_id feature documents at length.
   #
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-filters.json property=format_kinds
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-filters.json property=format_option_refs
   # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-filters.json property=standard_formats_only
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-option-ref.json
 
   Background:
     Given a tenant is configured for product discovery
@@ -77,6 +79,58 @@ Feature: Canonical format filters on get_products narrow the catalogue the buyer
     # The two products are otherwise identical — same option id, same kind, same params,
     # same pricing, both canonical-only — so a failing row is reporting on the scope
     # comparison and on nothing else.
+
+  @T-UC-GET-PRODUCTS-format-kinds-filter-any-of @canonical_format_filter @requires_db
+  Scenario: a format_kinds filter naming two kinds selects every product declaring either
+    Given the seller stores three canonical products declaring three different format kinds
+    When the buyer requests products filtering format_kinds by two of the three products' kinds
+    Then the announced products are exactly the two products declaring a named kind
+    And the announced products do not include the product declaring the other kind
+    # "Filter to products accepting ANY OF these canonical format kinds"
+    # (core/product-filters.json#/properties/format_kinds at v3.2.7). The single-kind
+    # scenario above cannot tell OR from AND or from reading only the first item, because
+    # with one item all three readings agree. Here each product declares exactly one kind
+    # and the filter names two:
+    #
+    #   * OR over the named kinds returns both named products -- the pin's reading;
+    #   * AND returns neither, because no product declares both kinds;
+    #   * reading only the first item returns one product;
+    #   * an ignored filter returns all three.
+    #
+    # Each of the three wrong readings fails the exact-set outcome.
+
+  @T-UC-GET-PRODUCTS-format-option-refs-filter-publisher-scope @canonical_format_filter @requires_db
+  Scenario: a publisher-scoped format_option_refs filter selects the option under that publisher only
+    Given the seller stores three products declaring one option id under product scope, under the named publisher and under another publisher
+    When the buyer requests products filtering format_option_refs by the named publisher's option only
+    Then the announced products are exactly the product declaring the option under the named publisher
+    And the announced products do not include the products declaring that id under product scope or another publisher
+    # core/format-option-ref.json at v3.2.7, publisher arm: `scope: "publisher"` "identifies
+    # a publisher-declared catalog option by { publisher_domain, format_option_id }". The
+    # product-scope scenario above never selects anything with this arm, so a filter that
+    # dropped every publisher-scoped ref, or compared the id and ignored the domain, passed
+    # it. The three stored products share one option id, kind and params and differ only
+    # in identity:
+    #
+    #   * comparing the whole identity returns the named publisher's product only;
+    #   * ignoring publisher_domain also returns the other publisher's product;
+    #   * comparing the id alone returns all three;
+    #   * dropping publisher-scoped refs returns nothing.
+
+  @T-UC-GET-PRODUCTS-format-option-refs-filter-any-of @canonical_format_filter @requires_db
+  Scenario: a format_option_refs filter naming two refs selects every product declaring either
+    Given the seller stores three products declaring one option id under product scope, under the named publisher and under another publisher
+    When the buyer requests products filtering format_option_refs by the product-scoped option and the named publisher's option
+    Then the announced products are exactly the products declaring either named option
+    And the announced products do not include the product declaring that id under another publisher
+    # "Filter to products accepting ANY OF these exact publisher- or product-scoped
+    # canonical format options" (core/product-filters.json#/properties/format_option_refs
+    # at v3.2.7). Two refs, one per arm of core/format-option-ref.json, so the answer is the
+    # union of two exact matches:
+    #
+    #   * OR over exact identities returns the two named products;
+    #   * reading only the first ref returns the product-scoped one alone;
+    #   * comparing ids alone returns all three, including the other publisher's.
 
   @T-UC-GET-PRODUCTS-standard-formats-only-canonical @canonical_format_filter @requires_db
   Scenario: standard_formats_only excludes a canonical product declaring a custom format
