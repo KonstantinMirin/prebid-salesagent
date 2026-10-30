@@ -297,7 +297,8 @@ Feature: BR-UC-005 Discover Creative Formats
     # nested in a repeatable group are assets the format includes, so they are read
     # (@T-UC-005-inv-049-3-group); reading them must not admit a format whose group holds
     # none of the requested types. "video-ad" is the control: the same request returns it,
-    # so the exclusion is the filter's and not an empty listing.
+    # so the exclusion is the filter's and not an empty listing. The outcome is the same
+    # whether or not group members count, which the pin leaves unstated (adcp#8630).
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json pointer=/properties/asset_types
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json pointer=/properties/assets
 
@@ -319,8 +320,12 @@ Feature: BR-UC-005 Discover Creative Formats
     # all three types, so it is kept by a request for a type held only in the group (image)
     # and by one for the type held only in the individual slot (video), and dropped by a
     # request for a type it holds nowhere (html), which keeps "html-banner" and only it.
-    # Every row requests ONE type, so none of them depends on how several requested types
-    # combine.
+    # Every row requests ONE type, so none of them depends on whether several requested
+    # types combine as any-of or all-of. The image row reads a type held only inside the
+    # group as one the format "includes"; the pin does not say so in words, which
+    # adcp#8630 asks it to, and core/format.json lists the group among the "array of all
+    # assets supported for this format". That is also the reading
+    # @T-UC-005-inv-049-3-group grades.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/list-creative-formats-request.json pointer=/properties/asset_types
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json pointer=/properties/assets
     # --- INV-4: dimension ANY render match ---
