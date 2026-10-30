@@ -2027,6 +2027,8 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | declaration          | manifest                  | code                               | path                              | stated | accepted |
       | fixed_300x250        | image_728x90              | CREATIVE_SIZE_MISMATCH             | assets.image_main.width           | 728    | 300      |
       | fixed_300x250        | image_300x250_500kb       | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main.file_size_bytes | 512000 | 200      |
+      | fixed_300x250        | image_300x250_200_001b    | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main.file_size_bytes | 200001 | 200      |
+      | fixed_300x250        | image_300x250_200kib      | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main.file_size_bytes | 204800 | 200      |
       | fixed_300x250        | image_300x250_gif         | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main.format          | gif    | jpg, png |
       | fixed_300x250        | image_main_as_text        | CREATIVE_VALIDATION_FAILED_GENERIC | assets.image_main.asset_type      | text   | image    |
       | two_image_options    | image_160x600             | CREATIVE_SIZE_MISMATCH             | assets.image_main.width           | 160    | 300      |
@@ -2037,7 +2039,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
 
     # THE PAIRS. Against fixed_300x250 (image 300x250, max_file_size_kb 200, image_formats
     # jpg/png): 728x90 against 300x250 is the creative half of formats.mdx's fifth rule; 500
-    # KB against 200 KB exactly; gif against png; the image_main slot holding a text asset
+    # binary KB, 200,001 bytes and 204,800 bytes against 200 KB exactly (200,000 bytes); gif against png; the image_main slot holding a text asset
     # against holding an image (step 3, "against its declared type"). The file-size and
     # format rows are not size failures, so they take the generic code -- the code split is
     # graded, not only the refusal. Against two_image_options (300x250 and 728x90), 160x600
@@ -2071,9 +2073,16 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # to inference from 300x250 and 600x500 -- and once more with the optional 1.5x, which
     # "Other accepted ratios remain optional" permits.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image.json pointer=/properties/pixel_ratios
+    #
+    # A KILOBYTE IS 1,000 BYTES. canonical-formats.mdx: "a field ending in _kb uses 1 KB =
+    # 1,000 bytes ... Implementations MUST NOT substitute binary KiB/MiB units for these
+    # fields". The 200,001-byte and 204,800-byte images are over 200 KB and under 200 binary
+    # kilobytes, so a seller dividing by 1024 accepts both; the 200,000-byte accept row is the
+    # boundary.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/image-asset.json pointer=/properties/pixel_ratio
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/_base.json pointer=/properties/slots/items/properties/required_pixel_ratios
     # @source repo=adcp ref=v3.2.7 path=static/examples/products/canonical/acme_retina_mrec.json
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx section="Technical completeness and file-size units"
 
   @T-UC-FORMAT-SATISFACTION-manifest-sync-rendition-missing @format_satisfaction_sync @requires_db
   Scenario: sync_creatives refuses an assignment whose rendition set lacks a required pixel ratio

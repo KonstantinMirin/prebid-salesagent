@@ -443,8 +443,12 @@ def _manifest(name: str) -> dict[str, Any]:
         "image_300x250": lambda: build_assets(mrec),
         "image_728x90": lambda: build_assets(manifest_image_spec("image_main", width=728, height=90)),
         "image_160x600": lambda: build_assets(manifest_image_spec("image_main", width=160, height=600)),
-        # 200 KB exactly, the cap ``fixed_300x250`` declares, and 500 KB over it.
-        "image_300x250_200kb": lambda: build_assets(mrec.with_fields(file_size_bytes=200 * 1024)),
+        # 200 KB exactly, the cap ``fixed_300x250`` declares, one byte over it, 200 binary
+        # kilobytes (204,800 bytes), and 500 binary kilobytes, over the cap however it is read.
+        # canonical-formats.mdx: "1 KB = 1,000 bytes".
+        "image_300x250_200kb": lambda: build_assets(mrec.with_fields(file_size_bytes=200_000)),
+        "image_300x250_200_001b": lambda: build_assets(mrec.with_fields(file_size_bytes=200_001)),
+        "image_300x250_200kib": lambda: build_assets(mrec.with_fields(file_size_bytes=200 * 1024)),
         "image_300x250_500kb": lambda: build_assets(mrec.with_fields(file_size_bytes=500 * 1024)),
         # The 300x250 image silent about its file size -- the member a capped declaration needs.
         "image_300x250_unsized": lambda: build_assets(image_spec("image_main")),

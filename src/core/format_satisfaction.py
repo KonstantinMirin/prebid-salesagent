@@ -782,13 +782,12 @@ _ASSET_FACTS: Mapping[str, tuple[tuple[str, str], ...]] = {
 #: is an array of numbers.
 _NUMERIC_STRING_MEMBERS: frozenset[str] = frozenset({"frame_rate"})
 
-#: Bytes per unit of a file-size cap, for an asset that states ``file_size_bytes``. The
-#: megabyte is DECIMAL because the pin says so for both kinds that declare it:
-#: ``formats/canonical/video_hosted.json`` "1 MB is exactly 1,000,000 bytes" and
-#: ``audio_hosted.json`` "decimal megabytes". The image kilobyte is binary: ``image.json``
-#: says only "Maximum file size in kilobytes", and binary is the reading that refuses less
-#: where the pin does not say which it means.
-_BYTES_PER_UNIT: Mapping[str, int] = {"max_file_size_kb": 1024, "max_file_size_mb": 1_000_000}
+#: Bytes per unit of a file-size cap, for an asset that states ``file_size_bytes``. Both are
+#: DECIMAL. ``docs/creative/canonical-formats.mdx``: "a field ending in ``_kb`` uses 1 KB =
+#: 1,000 bytes, a field ending in ``_mb`` uses 1 MB = 1,000,000 bytes ... Implementations MUST
+#: NOT substitute binary KiB/MiB units for these fields"; ``core/product-format-declaration.json``
+#: says the same of ``_kb``, and ``video_hosted.json`` / ``audio_hosted.json`` of ``_mb``.
+_BYTES_PER_UNIT: Mapping[str, int] = {"max_file_size_kb": 1000, "max_file_size_mb": 1_000_000}
 
 
 def manifest_document(assets: Any) -> dict[str, Any]:
