@@ -270,11 +270,10 @@ _REAL_ADAPTER_APPROVAL_OPERATIONS = frozenset({"create_media_buy", "update_media
 def _configure_adapter_manual_approval(env: Any, *, required: bool, operations: frozenset[str] | None = None) -> None:
     """Set manual-approval config on EVERY adapter mock the env exposes.
 
-    MediaBuyCreateEnv patches the create-module adapter as ``env.mock['adapter']``;
-    MediaBuyDualEnv additionally patches the update-module adapter as
-    ``env.mock['update_adapter']``. The production create/update manual-approval
+    ``env.adapter_mocks()`` lists them: the create module's on MediaBuyCreateEnv, and the
+    update module's as well on MediaBuyDualEnv. The production create/update manual-approval
     gate reads ``manual_approval_required`` + ``'<op>' in manual_approval_operations``
-    from its OWN module's adapter, so both must be configured (guarded on presence).
+    from its OWN module's adapter, so each must be configured.
 
     ``operations`` defaults to the two media-buy operations when ``required`` and to none
     otherwise. A Given that wants the adapter to act as a real one with its flag off passes
@@ -282,10 +281,7 @@ def _configure_adapter_manual_approval(env: Any, *, required: bool, operations: 
     """
     if operations is None:
         operations = frozenset({"create_media_buy", "update_media_buy"}) if required else frozenset()
-    for name in ("adapter", "update_adapter"):
-        if name not in env.mock:
-            continue
-        adapter_mock = env.mock[name].return_value
+    for adapter_mock in env.adapter_mocks():
         adapter_mock.manual_approval_required = required
         adapter_mock.manual_approval_operations = set(operations)
 

@@ -79,6 +79,10 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         super()._configure_mocks()
         self._configure_update_mocks()
 
+    def adapter_mocks(self) -> list[MagicMock]:
+        """The create module's adapter, then the update module's (``_UPDATE_PATCHES``)."""
+        return [*super().adapter_mocks(), self.mock["update_adapter"].return_value]
+
     def _configure_update_mocks(self) -> None:
         mock_adapter = MagicMock()
         mock_adapter.manual_approval_required = False
