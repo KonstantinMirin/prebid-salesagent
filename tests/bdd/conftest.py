@@ -2141,9 +2141,44 @@ _UC002_UC003_VACUOUS_PARKS: tuple[_CatchallXfail, ...] = (
     ),
 )
 
+_NO_UPDATE_WITHOUT_ID_ON_REST = (
+    "the REST binding carries media_buy_id as the resource path (PUT /media-buys/{media_buy_id}, "
+    "src/core/tools/registry.py), so an update_media_buy that names no media_buy_id has no REST "
+    "request to send; the row grades on a2a and mcp, which carry the id in the body"
+)
+
+#: Examples rows a transport cannot express: its binding has no request for the state the row
+#: names, so there is nothing to send and nothing to grade on that transport. This is neither a
+#: failure (the ledger) nor a pass that grades nothing (the parks); nothing is wrong on either
+#: side. Each entry names its rows and its transports, the row is xfail(run=False) on exactly
+#: those transports with the reason below, and it runs and grades on every other transport.
+#: Pinned by tests/unit/test_architecture_route_xfail_census.py with the two lists above.
+_TRANSPORT_INEXPRESSIBLE_ROWS: tuple[_CatchallXfail, ...] = (
+    _X(
+        "T-UC-003-partition-media-buy-identification",
+        _NO_UPDATE_WITHOUT_ID_ON_REST,
+        rows=("neither_provided",),
+        transports=("rest", "e2e_rest"),
+    ),
+    _X(
+        "T-UC-003-boundary-media-buy-identification",
+        _NO_UPDATE_WITHOUT_ID_ON_REST,
+        rows=("neither identifier (missing)",),
+        transports=("rest", "e2e_rest"),
+    ),
+)
+
 
 def _catchall_ledger_marker(marker_names: set[str], nodeid: str) -> pytest.MarkDecorator | None:
-    """The marker the UC-002 / UC-003 ledger assigns, or None. A ledger entry wins over a park."""
+    """The marker the explicit row lists assign, or None.
+
+    A row a transport cannot express is not run there, whatever else names it; then a ledger
+    entry wins over a park.
+    """
+    for entry in _TRANSPORT_INEXPRESSIBLE_ROWS:
+        if entry.matches(marker_names, nodeid):
+            reason = f"not applicable on {_transport_of(nodeid)}: {entry.reason}"
+            return pytest.mark.xfail(reason=reason, run=False, strict=True)
     for entry in _UC002_UC003_LEDGER:
         if entry.matches(marker_names, nodeid):
             return pytest.mark.xfail(reason=f"{entry.reason} ({_CATCHALL_RUN})", strict=True)

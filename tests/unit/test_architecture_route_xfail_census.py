@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -127,7 +128,15 @@ _LEDGER_CEILINGS: dict[str, tuple[int, int]] = {
     # by this file's derivation over the merged tree.
     "_UC002_UC003_LEDGER": (42, 192),
     "_UC002_UC003_VACUOUS_PARKS": (3, 16),
+    # The two UC-003 missing-identifier rows on rest and e2e_rest: 2 rows x 2 transports.
+    "_TRANSPORT_INEXPRESSIBLE_ROWS": (2, 4),
 }
+
+#: The one list whose entries run (strict xfail). Every other list is xfail(run=False), so an
+#: entry there that names no rows would silently claim an Examples row added later.
+_RUNNING_LIST = "_UC002_UC003_LEDGER"
+#: The list whose entries a transport cannot express: each must leave a transport that grades.
+_INEXPRESSIBLE_LIST = "_TRANSPORT_INEXPRESSIBLE_ROWS"
 
 _LEDGER_TRANSPORTS = ("a2a", "mcp", "rest", "e2e_rest")
 
@@ -303,20 +312,22 @@ def _with_transport(combination: str, transport: str) -> str:
 
 def _ledger_violations(
     rows: tuple[dict[str, Any], ...],
-    ledger: tuple[Any, ...],
-    parks: tuple[Any, ...],
+    lists: dict[str, tuple[Any, ...]],
     ceilings: dict[str, tuple[int, int]],
 ) -> list[str]:
-    """Every way the UC-002 / UC-003 ledger and parks break their rules, as messages.
+    """Every way the explicit row lists (the ledger, the parks, the inexpressible rows) break
+    their rules, as messages.
 
-    Three rules, resolved with the entries' own ``matches`` over the collected marker names
+    Four rules, resolved with the entries' own ``matches`` over the collected marker names
     (the names ``pytest_collection_modifyitems`` matches on):
 
     * each list stays at or under its (entries, nodeids) ceiling, and matches something;
-    * no nodeid is matched by both lists -- the ledger would win, so the park is a dormant
-      claim that swallows the row the day its ledger entry is graduated;
-    * a park that names no rows matches no Examples row, so a row added to an outline later
-      runs instead of being parked unseen.
+    * no nodeid is matched by two lists -- only the first would apply, so the other is a
+      dormant claim that swallows the row the day the first entry is graduated;
+    * a run=False entry (every list but the ledger) that names no rows on an outline would
+      claim a row added to it later, so it must name its rows;
+    * an inexpressible entry names the transports it is inexpressible on and leaves at least
+      one transport that grades the row; on every transport it would be a skip.
     """
     names_by_combination: dict[str, set[str]] = {}
     for row in rows:
@@ -330,13 +341,15 @@ def _ledger_violations(
 
     violations: list[str] = []
     matched: dict[str, set[str]] = {}
-    for name, entries in (("_UC002_UC003_LEDGER", ledger), ("_UC002_UC003_VACUOUS_PARKS", parks)):
+    for name, entries in lists.items():
         matched[name] = set()
         for entry in entries:
             hits = {nodeid for nodeid, names in nodeids if entry.matches(names, nodeid)}
             matched[name] |= hits
-            if entries is parks and not entry.rows and any(_example_row(nodeid) for nodeid in hits):
+            if name != _RUNNING_LIST and not entry.rows and any(_example_row(nodeid) for nodeid in hits):
                 violations.append(f"{name}: {entry.tag} parks a Scenario Outline without naming its rows")
+            if name == _INEXPRESSIBLE_LIST and set(entry.transports or _LEDGER_TRANSPORTS) >= set(_LEDGER_TRANSPORTS):
+                violations.append(f"{name}: {entry.tag} leaves no transport that grades the row")
         max_entries, max_nodeids = ceilings[name]
         if len(entries) > max_entries:
             violations.append(f"{name} grew to {len(entries)} entries (ceiling {max_entries})")
@@ -344,21 +357,25 @@ def _ledger_violations(
             violations.append(f"{name} matches {len(matched[name])} nodeids (ceiling {max_nodeids})")
         if not matched[name]:
             violations.append(f"{name} matches no collected nodeid: the derivation is grading nothing")
-    for nodeid in sorted(matched["_UC002_UC003_LEDGER"] & matched["_UC002_UC003_VACUOUS_PARKS"]):
-        violations.append(f"{nodeid} is matched by both the ledger and a park")
+    for first, second in combinations(matched, 2):
+        for nodeid in sorted(matched[first] & matched[second]):
+            violations.append(f"{nodeid} is matched by both {first} and {second}")
     return violations
 
 
 @pytest.mark.arch_guard
 def test_the_uc002_uc003_ledger_only_shrinks() -> None:
-    """The explicit ledger and its parks are held to their measured size and shape."""
-    from tests.bdd.conftest import _UC002_UC003_LEDGER, _UC002_UC003_VACUOUS_PARKS
+    """The explicit ledger, its parks and the inexpressible rows are held to their measured size and shape."""
+    from tests.bdd.conftest import _TRANSPORT_INEXPRESSIBLE_ROWS, _UC002_UC003_LEDGER, _UC002_UC003_VACUOUS_PARKS
 
-    violations = _ledger_violations(
-        collect_bdd_items_with_markers(), _UC002_UC003_LEDGER, _UC002_UC003_VACUOUS_PARKS, _LEDGER_CEILINGS
-    )
+    lists = {
+        "_UC002_UC003_LEDGER": _UC002_UC003_LEDGER,
+        "_UC002_UC003_VACUOUS_PARKS": _UC002_UC003_VACUOUS_PARKS,
+        "_TRANSPORT_INEXPRESSIBLE_ROWS": _TRANSPORT_INEXPRESSIBLE_ROWS,
+    }
+    violations = _ledger_violations(collect_bdd_items_with_markers(), lists, _LEDGER_CEILINGS)
     assert not violations, (
-        "the UC-002 / UC-003 ledger broke its rules. A failing scenario is fixed or measured, "
+        "the explicit row lists broke their rules. A failing scenario is fixed or measured, "
         "not added; a park names the rows it parks; never raise a ceiling:\n  " + "\n  ".join(violations)
     )
 
@@ -371,14 +388,21 @@ def test_the_ledger_rules_refuse_growth_overlap_and_a_rowless_outline_park() -> 
     rows = (
         {"nodeid": "t.py::test_outline[mcp-row_a-x]", "markers": ["T-A"]},
         {"nodeid": "t.py::test_outline[mcp-row_b-y]", "markers": ["T-A"]},
+        {"nodeid": "t.py::test_outline[mcp-row_c-z]", "markers": ["T-A"]},
         {"nodeid": "t.py::test_plain[mcp]", "markers": ["T-B"]},
     )
     ledger = (_CatchallXfail("T-A", "fails", rows=("row_a",)),)
     parks = (_CatchallXfail("T-A", "vacuous", rows=("row_b",)), _CatchallXfail("T-B", "vacuous"))
-    ceilings = {"_UC002_UC003_LEDGER": (1, 4), "_UC002_UC003_VACUOUS_PARKS": (2, 8)}
+    inexpressible = (_CatchallXfail("T-A", "no request", rows=("row_c",), transports=("rest", "e2e_rest")),)
+    ceilings = {
+        "_UC002_UC003_LEDGER": (1, 4),
+        "_UC002_UC003_VACUOUS_PARKS": (2, 8),
+        "_TRANSPORT_INEXPRESSIBLE_ROWS": (1, 2),
+    }
 
-    def check(led: tuple[Any, ...], prk: tuple[Any, ...]) -> list[str]:
-        return _ledger_violations(rows, led, prk, ceilings)
+    def check(led: tuple[Any, ...], prk: tuple[Any, ...], inx: tuple[Any, ...] = inexpressible) -> list[str]:
+        lists = {"_UC002_UC003_LEDGER": led, "_UC002_UC003_VACUOUS_PARKS": prk, "_TRANSPORT_INEXPRESSIBLE_ROWS": inx}
+        return _ledger_violations(rows, lists, ceilings)
 
     assert check(ledger, parks) == []
     extra = _CatchallXfail("T-B", "fails")
@@ -388,5 +412,12 @@ def test_the_ledger_rules_refuse_growth_overlap_and_a_rowless_outline_park() -> 
     assert any("matched by both" in v for v in check(widened, parks))
     rowless = (_CatchallXfail("T-A", "vacuous"), parks[1])
     assert any("without naming its rows" in v for v in check(ledger, rowless))
+    # The inexpressible rows are held to the same rules, and must leave a transport that grades.
+    rowless_inexpressible = (_CatchallXfail("T-A", "no request", transports=("rest",)),)
+    assert any("without naming its rows" in v for v in check(ledger, parks, rowless_inexpressible))
+    everywhere = (_CatchallXfail("T-A", "no request", rows=("row_c",)),)
+    assert any("leaves no transport that grades the row" in v for v in check(ledger, parks, everywhere))
+    overlapping = (_CatchallXfail("T-A", "no request", rows=("row_a",), transports=("rest",)),)
+    assert any("matched by both" in v for v in check(ledger, parks, overlapping))
     # A row name is matched whole: row_a does not also claim row_ab.
     assert not _CatchallXfail("T-A", "x", rows=("row_a",)).matches({"T-A"}, "t.py::f[mcp-row_ab-x]")
