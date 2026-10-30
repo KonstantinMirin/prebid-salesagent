@@ -217,6 +217,43 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "params": {"width": 300, "height": 250, "image_formats": ["gif"]},
         },
     ],
+    # A 300x250 image whose OTHER slots carry their own limits (formats/canonical/_base.json
+    # ``slots[]``): a required headline of at most 25 characters and at most two of them, a
+    # body text the declaration caps at 90 characters (the flat ``body_text_max_chars``), and
+    # an optional logo capped at 50 KB -- "1 KB = 1,000 bytes" -- at 1x or 2x.
+    "slot_limited_300x250": [
+        {
+            "format_kind": "image",
+            "format_option_id": _PRODUCT_OPTION_ID,
+            "params": {
+                "width": 300,
+                "height": 250,
+                "body_text_max_chars": 90,
+                "slots": [
+                    {"asset_group_id": "image_main", "asset_type": "image", "required": True},
+                    {"asset_group_id": "headline", "asset_type": "text", "required": True, "max_chars": 25, "max": 2},
+                    {"asset_group_id": "body_text", "asset_type": "text", "required": False},
+                    {
+                        "asset_group_id": "logo",
+                        "asset_type": "image",
+                        "required": False,
+                        "max_size_kb": 50,
+                        "pixel_ratios": [1, 2],
+                    },
+                ],
+            },
+        }
+    ],
+    # A RESPONSIVE image (600 to 1200 wide) held to a 1.91:1 aspect ratio. image.json: the
+    # ratio, "When used with sizes[] or responsive ranges, narrows accepted entries to those
+    # matching the aspect ratio".
+    "responsive_1_91": [
+        {
+            "format_kind": "image",
+            "format_option_id": "satisfaction_image_landscape",
+            "params": {"min_width": 600, "max_width": 1200, "aspect_ratio": "1.91:1"},
+        }
+    ],
     # A hosted-video option narrowing the file it takes: one codec, one container and a
     # 10 MB cap. formats/canonical/video_hosted.json's ``max_file_size_mb``: "1 MB is
     # exactly 1,000,000 bytes".
@@ -355,6 +392,17 @@ def _manifest(name: str) -> dict[str, Any]:
         file_size_bytes=900_000,
     )
 
+    def headlined(*specs: Any, headlines: tuple[str, ...] = ("Trail Pro boots",)) -> dict[str, Any]:
+        """The 300x250 plus *headlines* in ``headline`` (an array when several) and *specs*.
+
+        ``slot_limited_300x250`` requires the headline, so each of its manifests carries one
+        and differs from ``image_headlined`` in the one slot under test.
+        """
+        several = len(headlines) > 1
+        return build_assets(mrec, *(text_spec("headline", content=h, multiple=several) for h in headlines), *specs)
+
+    logo = image_spec("logo", width=100, height=100).with_fields(file_size_bytes=40_000)
+
     def rendition(width: int, height: int, **fields: object) -> Any:
         """One rendition of the 300x250 in an ``image_main`` array, at *width* x *height* intrinsic."""
         return manifest_image_spec("image_main", width=width, height=height, multiple=True).with_fields(**fields)
@@ -399,6 +447,26 @@ def _manifest(name: str) -> dict[str, Any]:
         # The required slot holding the wrong asset type, and the media keyed by no slot.
         "image_main_as_text": lambda: build_assets(text_spec("image_main", content="Trail Pro")),
         "image_unnamed": lambda: build_assets(image_spec("banner")),
+        # SLOT LIMITS, against ``slot_limited_300x250``: each limit at its bound and one past
+        # it. A headline of 25 and 26 characters, two and three headlines, a body text of 90
+        # and 91 characters, and a logo of 50,000 and 51,000 bytes -- 51 decimal kilobytes and
+        # 49.8 binary ones -- or silent about its size, or at a density outside 1x and 2x.
+        "image_headlined": lambda: headlined(),
+        "image_headline_25_chars": lambda: headlined(headlines=("x" * 25,)),
+        "image_headline_26_chars": lambda: headlined(headlines=("x" * 26,)),
+        "image_two_headlines": lambda: headlined(headlines=("Trail Pro boots", "Built for the summit")),
+        "image_three_headlines": lambda: headlined(headlines=("Trail Pro boots", "Built for the summit", "Shop now")),
+        "image_body_text_90_chars": lambda: headlined(text_spec("body_text", content="x" * 90)),
+        "image_body_text_91_chars": lambda: headlined(text_spec("body_text", content="x" * 91)),
+        "image_logo_50kb": lambda: headlined(logo.with_fields(file_size_bytes=50_000)),
+        "image_logo_51kb": lambda: headlined(logo.with_fields(file_size_bytes=51_000)),
+        "image_logo_unsized": lambda: headlined(image_spec("logo", width=100, height=100)),
+        "image_logo_2x": lambda: headlined(logo.with_fields(pixel_ratio=2)),
+        "image_logo_3x": lambda: headlined(logo.with_fields(pixel_ratio=3)),
+        # ASPECT RATIO, against ``responsive_1_91``: 1200x628 is 1.91:1 to two places, and
+        # 1200x1200 is inside the width range at 1:1.
+        "image_1200x628": lambda: build_assets(manifest_image_spec("image_main", width=1200, height=628)),
+        "image_1200x1200": lambda: build_assets(manifest_image_spec("image_main", width=1200, height=1200)),
         # VIDEO: the clip at another duration, codec or container, and over the 10 MB cap by
         # 400,000 bytes -- 10.4 decimal megabytes, 9.92 binary ones.
         "video_30s": lambda: build_assets(clip),

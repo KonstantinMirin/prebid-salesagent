@@ -69,10 +69,16 @@ WHAT THIS MODULE DOES NOT DO, deliberately:
   declaration's ``params.slots[]`` on the canonical branch (creative-manifests.mdx § Basic
   structure), while a creative naming a ``format_id`` keys its assets by that named format's
   own asset ids, so grading them against a canonical slot list would refuse every legacy
-  creative for a vocabulary it never used.
-* Required disclosures, aspect ratios and the per-kind multi-asset constraints (carousel
-  cards, responsive asset counts) are not read: no asset member states them in the
-  declaration's vocabulary.
+  creative for a vocabulary it never used. creative-manifests.mdx § Deprecated compatibility
+  branch says a 3.2 implementation "may read it, normalize it to a canonical declaration";
+  the reference's own parameters are graded (:func:`_legacy_shortfalls`).
+* Required disclosures are not read here: no image, video or audio declaration param states
+  one. A seller's disclosure requirement is its ``creative_policy`` (core/creative-policy.json
+  ``require_disclosure_metadata``), enforced on the provenance at sync.
+* The per-kind constraints whose params name no slot (carousel card shape, a responsive
+  creative's per-role counts stated outside ``slots``) are not read. Every slot's own
+  constraints are (:func:`_slot_constraint_shortfalls`), and so is a declared
+  ``aspect_ratio`` (:func:`_aspect_shortfall`).
 """
 
 from __future__ import annotations
@@ -81,9 +87,10 @@ import logging
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
+from decimal import Decimal, InvalidOperation
 from enum import Enum, StrEnum
 from functools import lru_cache
-from typing import Any, get_args
+from typing import Any, TypeGuard, get_args
 
 from adcp.canonical_formats import formats_are_equivalent, upgrade_legacy_format_id
 from adcp.canonical_formats.format_options import FormatKindNotInClosedSetError
@@ -186,9 +193,22 @@ _RESOLUTION_FAILURES: frozenset[FormatRefusal] = frozenset(
 #: size it does not accept -- "an accepted asset's intrinsic width is ``width x pixel_ratio``"
 #: (formats/canonical/image.json). ``pixel_ratio`` is the same axis on a deprecated reference:
 #: core/format-id.json's ``{width: 300, height: 250, pixel_ratio: 2}`` "identifies a 300x250
-#: logical render supplied by a 600x500 image".
+#: logical render supplied by a 600x500 image". ``aspect_ratio`` is the shape of the same
+#: dimensions: an asset whose width and height disagree with the declared ratio matches no
+#: size the declaration accepts (image.json: the ratio "narrows accepted entries").
 _DIMENSION_CONSTRAINTS: frozenset[str] = frozenset(
-    {"width", "height", "min_width", "max_width", "min_height", "max_height", "sizes", "pixel_ratios", "pixel_ratio"}
+    {
+        "width",
+        "height",
+        "min_width",
+        "max_width",
+        "min_height",
+        "max_height",
+        "sizes",
+        "pixel_ratios",
+        "pixel_ratio",
+        "aspect_ratio",
+    }
 )
 
 
@@ -410,7 +430,7 @@ def _declaration_label(declaration: LibraryFormatDeclaration) -> str:
     return declaration.format_option_id or str(declaration.format_kind)
 
 
-def _is_number(value: Any) -> bool:
+def _is_number(value: Any) -> TypeGuard[int | float]:
     """Numeric for the params rules -- ``int``/``float`` but NOT ``bool``.
 
     ``bool`` is an ``int`` subclass in Python, so ``ssl_required: True`` would otherwise be
@@ -954,6 +974,7 @@ def _manifest_shortfalls(declaration: LibraryFormatDeclaration, manifest: Mappin
     slots = tuple(slot for slot in declared.get("slots") or () if isinstance(slot, Mapping))
     shortfalls = _manifest_slot_shortfalls(slots, manifest)
     primary = _primary_media_slot(slots)
+    shortfalls.extend(_slot_constraint_shortfalls(slots, manifest, declared, primary))
     value = manifest.get(primary) if primary is not None else None
     renditions = [
         (f"{primary}[{index}]" if isinstance(value, list) else str(primary), item)
@@ -968,6 +989,147 @@ def _manifest_shortfalls(declaration: LibraryFormatDeclaration, manifest: Mappin
     graded = [(path, *_graded_rendition(path, asset, declared)) for path, asset in renditions]
     shortfalls.extend(shortfall for _path, _ratio, failed in graded for shortfall in failed)
     shortfalls.extend(_coverage_shortfalls(str(primary), slot.get("required_pixel_ratios"), graded))
+    shortfalls.extend(
+        shortfall
+        for path, asset in renditions
+        if (shortfall := _aspect_shortfall(path, asset, declared.get("aspect_ratio"))) is not None
+    )
+    return shortfalls
+
+
+def _ratio_agrees(width: Any, height: Any, ratio: str) -> bool:
+    """Whether a *width* x *height* asset has the ``"W:H"`` aspect *ratio* a declaration states.
+
+    ``formats/canonical/image.json`` ``aspect_ratio`` ("e.g., '1.91:1', '1:1'") and
+    ``video_hosted.json``'s state the ratio and no tolerance, so the comparison is made AT THE
+    RATIO'S OWN PRECISION: exactly for whole terms (``9:16`` takes 1080x1920 and nothing
+    else), and to the decimals the ratio is written in otherwise (``1.91:1`` takes 1200x628,
+    whose 1.9108 is 1.91 to two places). That precision is this seller's reading of a ratio
+    the pin writes to two decimals and never as an exact fraction.
+    """
+    numerator, _, denominator = ratio.partition(":")
+    try:
+        terms = (Decimal(numerator), Decimal(denominator))
+    except InvalidOperation:
+        return True
+    if not (_is_number(width) and _is_number(height)) or not all(terms) or not height:
+        return True
+    if all(term == term.to_integral_value() for term in terms):
+        return Decimal(width) * terms[1] == Decimal(height) * terms[0]
+    places = max(-min(int(term.as_tuple().exponent), 0) for term in terms)
+    return round(Decimal(width) / Decimal(height), places) == round(terms[0] / terms[1], places)
+
+
+def _aspect_shortfall(path: str, asset: Mapping[str, Any], ratio: Any) -> ManifestShortfall | None:
+    """The main media asset in *path* against the declaration's ``aspect_ratio``, if it states one.
+
+    Step 4 of creative-manifests.mdx § Validation checks "fixed dimensions", and image.json
+    says a declared ratio narrows every size mode: "When provided alongside width/height, must
+    agree. When used with sizes[] or responsive ranges, narrows accepted entries to those
+    matching the aspect ratio." An asset that states no width or height is not graded here;
+    a fixed size it is silent about already fails.
+    """
+    if not isinstance(ratio, str) or _ratio_agrees(asset.get("width"), asset.get("height"), ratio):
+        return None
+    return ManifestShortfall(
+        field=f"assets.{path}",
+        constraint="aspect_ratio",
+        rejected_value=f"{_shown(asset.get('width'))}:{_shown(asset.get('height'))}",
+        accepted_values=(ratio,),
+    )
+
+
+#: The asset types a slot's ``max_size_kb`` is answered by, through ``file_size_bytes``:
+#: ``formats/canonical/_base.json`` makes the cap valid for image, video, audio and zip, and
+#: the first three state the member (core/assets/*-asset.json). A zip states none, so a cap
+#: on a zip slot is a fact no member answers and is not graded.
+_SIZED_ASSET_TYPES: frozenset[str] = frozenset({"image", "video", "audio"})
+
+#: The asset types a slot's ``max_chars`` counts, through ``content``: _base.json makes the
+#: limit valid for text, markdown and brief, and text-asset.json and markdown-asset.json
+#: carry the characters in ``content``. A brief asset carries none.
+_CHARACTER_ASSET_TYPES: frozenset[str] = frozenset({"text", "markdown"})
+
+
+def _slot_constraint_shortfalls(
+    slots: Sequence[Mapping[str, Any]],
+    manifest: Mapping[str, Any],
+    declared: Mapping[str, Any],
+    primary: str | None,
+) -> list[ManifestShortfall]:
+    """What each filled slot fails of the constraints stated FOR THAT SLOT, every slot alike.
+
+    ``formats/canonical/_base.json``: "per-slot constraints (a specific slot's ``max_chars``
+    or ``max_size_kb``) live on the slot entry", and "Format-level narrowing parameters that
+    apply across all slots (e.g., flat ``headline_max_chars``...) may also live on the format
+    declaration". The declaration's other params describe the main media asset and are
+    graded on it (:func:`_manifest_shortfalls`); these are the ones that reach the rest:
+
+    * ``min`` / ``max`` -- "count for repeatable / pool slots", the number of assets the slot
+      holds (one for a single object);
+    * ``max_chars`` on the slot and ``<asset_group_id>_max_chars`` on the declaration -- the
+      length of a text or markdown asset's ``content``;
+    * ``max_size_kb`` -- "exact kilobytes, where 1 KB = 1,000 bytes", against
+      ``file_size_bytes``. Silence fails, as it does for the declaration's own cap
+      (:data:`_MANIFEST_MUST_BE_STATED`): a cap the manifest does not answer cannot be checked;
+    * ``pixel_ratios`` on a slot other than the main one -- a STATED ``pixel_ratio`` outside
+      the set. An unstated one is not graded: the pin infers it from "the matched logical
+      size", and only the main slot has one. The main slot's set is graded with its size.
+
+    An empty slot is :func:`_manifest_slot_shortfalls`' to report; a slot holding an array
+    is graded item by item, its path indexed as a rendition set's is.
+    """
+    shortfalls: list[ManifestShortfall] = []
+    for slot in slots:
+        group = str(slot.get("asset_group_id") or "")
+        if group not in manifest:
+            continue
+        value = manifest[group]
+        count = len(value) if isinstance(value, list) else 1
+        for bound, failed in ((slot.get("min"), "min"), (slot.get("max"), "max")):
+            if _is_number(bound) and (count < bound if failed == "min" else count > bound):
+                shortfalls.append(ManifestShortfall(f"assets.{group}", failed, str(count), (_shown(bound),)))
+        items = value if isinstance(value, list) else [value]
+        for index, asset in enumerate(items):
+            if isinstance(asset, Mapping):
+                path = f"{group}[{index}]" if isinstance(value, list) else group
+                shortfalls.extend(_slot_asset_shortfalls(path, asset, slot, declared, main=group == primary))
+    return shortfalls
+
+
+def _slot_asset_shortfalls(
+    path: str, asset: Mapping[str, Any], slot: Mapping[str, Any], declared: Mapping[str, Any], *, main: bool
+) -> list[ManifestShortfall]:
+    """One asset of a slot against that slot's own constraints (:func:`_slot_constraint_shortfalls`)."""
+    asset_type = str(asset.get("asset_type"))
+    group = str(slot.get("asset_group_id"))
+    shortfalls: list[ManifestShortfall] = []
+    if asset_type in _CHARACTER_ASSET_TYPES and isinstance(content := asset.get("content"), str):
+        for constraint, bound in (
+            ("max_chars", slot.get("max_chars")),
+            (f"{group}_max_chars", declared.get(f"{group}_max_chars")),
+        ):
+            if _is_number(bound) and len(content) > bound:
+                shortfalls.append(
+                    ManifestShortfall(f"assets.{path}.content", constraint, str(len(content)), (_shown(bound),))
+                )
+    size_cap = slot.get("max_size_kb")
+    if asset_type in _SIZED_ASSET_TYPES and _is_number(size_cap):
+        size = _plain(asset.get("file_size_bytes"))
+        if not _is_number(size) or size / 1000 > size_cap:
+            shortfalls.append(
+                ManifestShortfall(
+                    f"assets.{path}.file_size_bytes",
+                    "max_size_kb",
+                    None if size is None else _shown(size),
+                    (_shown(size_cap),),
+                )
+            )
+    ratios, stated = slot.get("pixel_ratios"), _plain(asset.get("pixel_ratio"))
+    if not main and asset_type == "image" and ratios and _is_number(stated) and stated not in ratios:
+        shortfalls.append(
+            ManifestShortfall(f"assets.{path}.pixel_ratio", "pixel_ratios", _shown(stated), _shown_all(ratios))
+        )
     return shortfalls
 
 

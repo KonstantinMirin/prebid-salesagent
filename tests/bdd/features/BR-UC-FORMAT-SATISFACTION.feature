@@ -2171,6 +2171,97 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/video-asset.json
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/audio-asset.json
 
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-slot-limits-accepted @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives accepts an assignment whose every slot meets its own limits - <manifest>
+    Given a packaged product declaring canonical format options "slot_limited_300x250"
+    And the buyer syncs a canonical "image" creative carrying the "<manifest>" manifest
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+    Examples:
+      | manifest                 |
+      | image_headlined          |
+      | image_headline_25_chars  |
+      | image_two_headlines      |
+      | image_body_text_90_chars |
+      | image_logo_50kb          |
+      | image_logo_2x            |
+
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-slot-limits-refused @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives refuses an assignment whose slot other than the main media fails its own limit - <manifest>
+    Given a packaged product declaring canonical format options "slot_limited_300x250"
+    And the buyer syncs a canonical "image" creative carrying the "<manifest>" manifest
+    When the Buyer Agent assigns it to that package
+    Then the creative is refused <code>
+    And the refusal names "<path>" stating "<stated>" where "<accepted>" is accepted
+
+    Examples:
+      | manifest                 | code                               | path                        | stated | accepted |
+      | image_headline_26_chars  | CREATIVE_VALIDATION_FAILED_GENERIC | assets.headline.content     | 26     | 25       |
+      | image_three_headlines    | CREATIVE_VALIDATION_FAILED_GENERIC | assets.headline             | 3      | 2        |
+      | image_body_text_91_chars | CREATIVE_VALIDATION_FAILED_GENERIC | assets.body_text.content    | 91     | 90       |
+      | image_logo_51kb          | CREATIVE_VALIDATION_FAILED_GENERIC | assets.logo.file_size_bytes | 51000  | 50       |
+      | image_logo_3x            | CREATIVE_SIZE_MISMATCH             | assets.logo.pixel_ratio     | 3      | 1, 2     |
+
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-slot-size-unstated @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives refuses an assignment whose capped slot is silent about its file size
+    Given a packaged product declaring canonical format options "slot_limited_300x250"
+    And the buyer syncs a canonical "image" creative carrying the "image_logo_unsized" manifest
+    When the Buyer Agent assigns it to that package
+    Then the creative is refused CREATIVE_VALIDATION_FAILED_GENERIC
+    And the refusal names "assets.logo.file_size_bytes" missing where "50" is accepted
+
+    # EVERY SLOT, NOT ONLY THE MAIN MEDIA. formats/canonical/_base.json: "per-slot
+    # constraints (a specific slot's max_chars or max_size_kb) live on the slot entry", and
+    # "Format-level narrowing parameters that apply across all slots (e.g., flat
+    # headline_max_chars ...) may also live on the format declaration". slot_limited_300x250
+    # puts four of them on the slots beside image_main: the headline's max_chars 25 and max 2
+    # ("Maximum count for repeatable / pool slots"), the flat body_text_max_chars 90, and the
+    # logo's max_size_kb 50 and pixel_ratios [1, 2]. Every refusal row has an accept row
+    # differing in that one slot: the limit met exactly, or the logo at 2x.
+    #
+    # THE KILOBYTE HERE IS 1,000 BYTES: max_size_kb is "exact kilobytes, where 1 KB = 1,000
+    # bytes". The 51,000-byte logo is 51 decimal kilobytes and 49.8 binary ones, so a seller
+    # dividing by 1024 accepts it. Silence about a capped slot's size fails as silence about
+    # the declaration's own cap does (the file-size-unstated scenario above): a cap the
+    # manifest does not answer cannot be checked.
+    #
+    # The logo's density is a size, so that row alone is CREATIVE_SIZE_MISMATCH; the image
+    # canonical's pixel_ratios: "an accepted asset's intrinsic width is width x pixel_ratio".
+    # A character count, a count of assets and a file size are not sizes, so the others take
+    # the generic code.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/_base.json pointer=/properties/slots
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image.json pointer=/properties/pixel_ratios
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/text-asset.json pointer=/properties/content
+
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-aspect-ratio @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives refuses a manifest whose shape disagrees with the declaration's aspect ratio
+    Given a packaged product declaring canonical format options "responsive_1_91"
+    And the buyer syncs a canonical "image" creative carrying the "image_1200x1200" manifest
+    When the Buyer Agent assigns it to that package
+    Then the creative is refused CREATIVE_SIZE_MISMATCH
+    And the refusal names "assets.image_main" stating "1200:1200" where "1.91:1" is accepted
+
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-aspect-ratio-accepted @format_satisfaction_sync @requires_db
+  Scenario: sync_creatives accepts a manifest at the declaration's aspect ratio
+    Given a packaged product declaring canonical format options "responsive_1_91"
+    And the buyer syncs a canonical "image" creative carrying the "image_1200x628" manifest
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+    # STEP 4's "fixed dimensions" include the declared shape. formats/canonical/image.json
+    # aspect_ratio: "When provided alongside width/height, must agree. When used with sizes[]
+    # or responsive ranges, narrows accepted entries to those matching the aspect ratio."
+    # responsive_1_91 accepts 600 to 1200 wide at 1.91:1, so 1200x1200 is inside the width
+    # range and refused for its shape, and 1200x628 differs from it only in height. A ratio
+    # mismatch is a size the declaration does not accept, so it is CREATIVE_SIZE_MISMATCH.
+    #
+    # The pin states the ratio and no tolerance. This seller compares at the ratio's own
+    # precision: exactly for whole terms (9:16 takes 1080x1920), and to the decimals the ratio
+    # is written in otherwise, so 1200x628 (1.9108) is 1.91:1.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image.json pointer=/properties/aspect_ratio
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
+
   @T-UC-FORMAT-SATISFACTION-manifest-ambiguous @format_satisfaction_sync @requires_db
   Scenario: an assignment whose manifest fits two same-kind declarations and names no option ref is refused
     Given a packaged product declaring canonical format options "two_mrec_options"
