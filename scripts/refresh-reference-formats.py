@@ -12,21 +12,9 @@ The capture uses the PRODUCTION fetch path (CreativeAgentRegistry.get_formats_fo
 with ADCP_TESTING off), so it exercises the same tolerant-validation pipeline the
 server uses at runtime — no duplicated fetch logic.
 
-Usage -- inside the e2e compose network, where the agent is reached through the shared TLS
-front at a public-range address, so the egress gateway accepts it on its own terms (the
-host-published ``agent.localhost`` front resolves to loopback, which the gateway refuses)::
-
-    scripts/creative-agent-stack.sh build                    # the pinned agent image
-    scripts/dev/ensure-test-tls.sh                           # the CA the front serves
-    export E2E_NETWORK_SUBNET=$(scripts/dev/alloc-e2e-subnet.sh | cut -d= -f2)
-    dc="docker compose -f docker-compose.e2e.yml -p refresh-formats"
-    $dc up -d --no-deps creative-pg creative-agent tls-proxy
-    $dc --profile runner build tests
-    docker run --rm --network refresh-formats_default -v "$PWD":/app -w /app \
-        -e SSL_CERT_FILE=/app/.test-tls/combined-ca.pem refresh-formats-tests \
-        python scripts/refresh-reference-formats.py \
-        --url https://creative-agent.adcp.test:8443/api/creative-agent/mcp
-    $dc down -v
+Usage: ``make creative-formats-refresh``. It runs this script inside the e2e compose network
+(scripts/dev/refresh-reference-formats.sh), where the agent is reached through the shared TLS
+front at a public-range address that the egress gateway accepts.
 
 Guard: refuses the live public host (creative.adcontextprotocol.org) unless
 ALLOW_LIVE_CREATIVE_AGENT=1, mirroring tests/integration/test_creative_agent_live.py.
@@ -78,9 +66,8 @@ def _check_url_guard(url: str) -> None:
     if not url or PUBLIC_CREATIVE_AGENT_HOST in url:
         sys.exit(
             f"Refusing to capture from {url!r}: the fixture must be captured from the pinned "
-            "reference agent, never the live public host (its catalog drifts). Run it inside the e2e "
-            "network as this script's docstring shows, against "
-            "https://creative-agent.adcp.test:8443/api/creative-agent/mcp. "
+            "reference agent, never the live public host (its catalog drifts). Run "
+            "`make creative-formats-refresh`. "
             "Deliberate prod capture: ALLOW_LIVE_CREATIVE_AGENT=1."
         )
 
@@ -170,7 +157,7 @@ def main() -> None:
 
     url = args.url.strip()
     if not url:
-        sys.exit("No --url given and CREATIVE_AGENT_URL unset. See this script's docstring.")
+        sys.exit("No --url given and CREATIVE_AGENT_URL unset. Run `make creative-formats-refresh`.")
     _check_url_guard(url)
 
     from src.core.format_cache import CACHE_FILE
