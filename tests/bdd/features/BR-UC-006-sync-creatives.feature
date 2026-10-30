@@ -545,33 +545,45 @@ Feature: BR-UC-006 Sync Creative Assets
     And the generative build should use "Create summer vibes" as the prompt
 
   @T-UC-006-rule-036-inv3 @invariant @BR-RULE-036
-  Scenario: INV-3 — prompt fallback to inputs context_description
+  Scenario: INV-3 — a generative creative carrying no prompt asset is refused, inputs notwithstanding
     Given the Buyer is authenticated
     And a generative creative with no prompt assets but inputs[0].context_description = "Holiday theme"
     And GEMINI_API_KEY is configured
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
-    And the generative build should use "Holiday theme" as the prompt
+    And the creative is reported failed with CREATIVE_VALIDATION_FAILED_GENERIC at "creatives[0]" and nothing is stored
 
   @T-UC-006-rule-036-inv4 @invariant @BR-RULE-036
-  Scenario: INV-4 — create fallback to creative name as prompt
+  Scenario: INV-4 — a new generative creative carrying no prompt asset is refused, not built from its name
     Given the Buyer is authenticated
     And a generative creative named "Summer Sale Banner" with no prompt assets or inputs
     And GEMINI_API_KEY is configured
     When the Buyer Agent creates the creative
     Then the response is compliant with the sync_creatives success spec
-    And the generative build should use "Create a creative for: Summer Sale Banner" as the prompt
+    And the creative is reported failed with CREATIVE_VALIDATION_FAILED_GENERIC at "creatives[0]" and nothing is stored
 
   @T-UC-006-rule-036-inv5 @invariant @BR-RULE-036
-  Scenario: INV-5 — update without prompt preserves existing data
+  Scenario: INV-5 — an update carrying no prompt asset is refused and the existing data kept
     Given the Buyer is authenticated
     And a generative creative that already exists with generated content
     And no prompt assets or inputs
     And GEMINI_API_KEY is configured
     When the Buyer Agent updates the creative
     Then the response is compliant with the sync_creatives success spec
-    And the generative build should be skipped
+    And the creatives entry for "creative-gen-inv5-001" carries error code "CREATIVE_VALIDATION_FAILED_GENERIC"
     And the existing creative data should be preserved
+
+  # INV-3 TO INV-5 USED TO GRADE A PROMPT FALLBACK (inputs, then the creative's name, then a
+  # skipped build on update) for a generative creative carrying no prompt asset. The format
+  # every one of them names, the reference agent's display_300x250_generative, declares its
+  # prompt as a REQUIRED asset (generation_prompt, text), and core/format.json says each
+  # asset's asset_id "must be used as the key in creative manifests" and that "Required
+  # assets must be provided for a valid creative". creative-manifests.mdx § Validation puts
+  # final acceptance at sync_creatives: "Confirm all required slots are present". So the
+  # creative is refused per item, before any fallback, and an update leaves the stored
+  # creative as it was.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json pointer=/$defs/baseIndividualAsset/properties/required
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-manifests.mdx section="Validation"
 
   @T-UC-006-rule-036-inv6 @invariant @BR-RULE-036
   Scenario: INV-6 — user assets take priority over generative output
@@ -967,7 +979,7 @@ Feature: BR-UC-006 Sync Creative Assets
       | partition                       | format_type                        | prompt_source                          | expected                                                          |
       | static_creative                 | no output_format_ids               | any assets                             | the creative should be processed without generative build         |
       | generative_with_prompt          | output_format_ids present          | message asset with prompt text         | the generative build should use the message asset as the prompt   |
-      | generative_create_name_fallback | output_format_ids present (create) | no prompt assets or inputs             | the system should use the creative name as prompt fallback        |
+      | generative_without_prompt_asset | output_format_ids present (create) | no prompt assets or inputs             | the creatives entry carries error code "CREATIVE_VALIDATION_FAILED_GENERIC" |
       | generative_no_gemini_key        | output_format_ids present          | message asset but no GEMINI_API_KEY    | the creatives entry carries error code "CONFIGURATION_ERROR"      |
 
   @T-UC-006-partition-assignment-pkg @partition @assignment-package
@@ -1262,7 +1274,7 @@ Feature: BR-UC-006 Sync Creative Assets
       | boundary_point                         | creative_state                                                        | expected                                                          |
       | static creative (no output_format_ids) | a creative with a static format (no output_format_ids)                | the creative should be processed without generative build         |
       | generative with prompt from assets     | a creative with a generative format and prompt in assets              | the system should invoke generative build with the asset prompt   |
-      | generative create, name fallback       | a new creative with a generative format and no prompt but a name      | the system should use the creative name as prompt fallback        |
+      | generative create, no prompt asset     | a new creative with a generative format and no prompt but a name      | the creatives entry carries error code "CREATIVE_VALIDATION_FAILED_GENERIC" |
       | generative, no GEMINI_API_KEY          | a creative with a generative format but GEMINI_API_KEY not configured | the creatives entry carries error code "CONFIGURATION_ERROR"      |
 
   @T-UC-006-boundary-creative-scope @boundary @creative-scope

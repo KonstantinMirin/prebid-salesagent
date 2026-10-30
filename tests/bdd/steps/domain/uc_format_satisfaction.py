@@ -35,6 +35,7 @@ from tests.bdd.steps._outcome_helpers import (
     stored_package_config,
     wire_absent,
     wire_entry,
+    wire_entry_errors,
     wire_envelope_errors,
     wire_field,
 )
@@ -2158,7 +2159,7 @@ def given_canonical_creative_in_library(ctx: dict, kind: str, status: str) -> No
     _seed_canonical_creative(ctx, kind=kind, status=status, creative_id=_SYNC_CREATIVE_ID)
 
 
-def _sync_legacy_claim(ctx: dict, format_id: str, **parameters: int) -> None:
+def _sync_legacy_claim(ctx: dict, format_id: str, *, assets: dict[str, Any] | None = None, **parameters: int) -> None:
     """ONE legacy claim on the wire, against the catalog that answers it.
 
     The three Givens below differ only in which of the reference's own parameterizing
@@ -2191,7 +2192,13 @@ def _sync_legacy_claim(ctx: dict, format_id: str, **parameters: int) -> None:
     and the capture is the default. A catalogue a scenario needs narrowed says so with
     ``set_served_catalogue``, which seeds a real peer agent rather than the registry and
     so works on the real-registry env too.
+
+    THE ASSETS ARE WHAT THE NAMED FORMAT REQUIRES (``named_format_assets``) unless *assets*
+    says otherwise: the seller holds a legacy manifest to its named format's required assets
+    (creative-manifests.mdx § Validation), so a claim on a video format carrying the factory's
+    display assets is refused for its manifest before any lane is graded.
     """
+    from tests.factories.creative_asset import named_format_assets
     from tests.factories.format import resolvable_format_ref
     from tests.factories.request import CreativeAssetRequestFactory
 
@@ -2199,6 +2206,7 @@ def _sync_legacy_claim(ctx: dict, format_id: str, **parameters: int) -> None:
         CreativeAssetRequestFactory.payload(
             creative_id=_SYNC_CREATIVE_ID,
             format_id=resolvable_format_ref(format_id, **parameters),
+            assets=named_format_assets(format_id) if assets is None else assets,
         )
     ]
     # The creative a refusal names, as the canonical claim records it: a legacy reference the
@@ -2229,16 +2237,43 @@ def given_sync_legacy_creative(ctx: dict, format_id: str) -> None:
 
     The ONE difference from its canonical sibling is which identifier arm the creative
     carries, which is what decides the lane -- so the lenient asymmetry's two rows differ in
-    the creative's arm and the product's arm and nothing else.
-
-    The factory's default asset -- one 300x250 image -- is kept DELIBERATELY under a video
-    claim, and is left inconsistent rather than tidied. Nothing validates a creative's assets
-    against the format it claims: ``creatives/_validation.py`` carries ``TODO(#767)`` exactly
-    where that comparison would go, and this row passing with a mismatched asset is the
-    evidence. Authoring a video asset here would make the fixture look right and remove the
-    only thing in the suite that shows the check is missing.
+    the creative's arm and the product's arm and nothing else. Its assets are the ones the
+    named format requires (:func:`_sync_legacy_claim`).
     """
     _sync_legacy_claim(ctx, format_id)
+
+
+@given(
+    parsers.parse('the buyer syncs a creative identified by format_id "{format_id}" carrying the "{manifest}" manifest')
+)
+def given_sync_legacy_creative_with_manifest(ctx: dict, format_id: str, manifest: str) -> None:
+    """The legacy claim with the named manifest (:func:`_legacy_manifest`)."""
+    _sync_legacy_claim(ctx, format_id, assets=_legacy_manifest(format_id, manifest))
+
+
+def _legacy_manifest(format_id: str, manifest: str) -> dict[str, Any]:
+    """A manifest for named format *format_id*, by name, derived from what the format requires.
+
+    ``complete`` is every required asset of the format as the capture serves it
+    (``named_format_assets``). ``<asset_id>_missing`` drops one of them, and
+    ``<asset_id>_as_text`` fills it with a text asset instead of the type the format declares.
+    The asset id must be one the format requires, so a row cannot name an asset whose absence
+    the format would not notice.
+    """
+    from tests.factories.creative_asset import build_assets, named_format_assets, text_spec
+
+    assets = named_format_assets(format_id)
+    if manifest == "complete":
+        return assets
+    for suffix in ("_missing", "_as_text"):
+        if manifest.endswith(suffix):
+            asset_id = manifest.removesuffix(suffix)
+            assert asset_id in assets, f"{format_id!r} requires no asset {asset_id!r}; it requires {sorted(assets)}"
+            del assets[asset_id]
+            if suffix == "_as_text":
+                assets.update(build_assets(text_spec(asset_id, content="not the declared type")))
+            return assets
+    raise AssertionError(f"unknown legacy manifest {manifest!r}: complete, <asset_id>_missing or <asset_id>_as_text")
 
 
 @given(parsers.parse('the buyer syncs a creative identified by format_id "{format_id}" sized {width:d}x{height:d}'))
@@ -2284,7 +2319,8 @@ def _serve_publisher_format(ctx: dict, format_id: str, asset_types: str, kind: s
     served for real by the tenant's peer agent (``set_served_catalogue``), so every
     transport resolves the creative against the same served declaration.
     """
-    ctx["env"].set_served_catalogue([_publisher_format(format_id, asset_types, kind)])
+    ctx["served_format"] = _publisher_format(format_id, asset_types, kind)
+    ctx["env"].set_served_catalogue([ctx["served_format"]])
 
 
 def _publisher_format(format_id: str, asset_types: str, kind: str | None, **format_id_fields: str) -> Any:
@@ -2344,6 +2380,7 @@ def given_relisted_publisher_format(ctx: dict, format_id: str, asset_types: str)
     from src.core.schemas import canonical_agent_url
 
     fmt = _publisher_format(format_id, asset_types, "image", agent_url=_RELISTING_AGENT_URL)
+    ctx["served_format"] = fmt
     peer_url = ctx["env"].seed_own_creative_agent([fmt], rehome=False)
     assert canonical_agent_url(peer_url) != canonical_agent_url(_RELISTING_AGENT_URL), (
         "the seller's creative agent IS the agent the entry declares, so the entry is its own format "
@@ -2354,13 +2391,19 @@ def given_relisted_publisher_format(ctx: dict, format_id: str, asset_types: str)
 
 @given("the buyer syncs a creative naming that format at the seller's creative agent")
 def given_sync_relisted_format_creative(ctx: dict) -> None:
-    """The legacy claim names the relisted id at the URL the seller's creative agent is dialled at."""
+    """The legacy claim names the relisted id at the URL the seller's creative agent is dialled at.
+
+    Its assets are the ones the relisted entry requires (``format_manifest``), so the only
+    thing that can refuse it is the agent the entry declares.
+    """
+    from tests.factories.creative_asset import format_manifest
     from tests.factories.request import CreativeAssetRequestFactory
 
     ctx["creatives"] = [
         CreativeAssetRequestFactory.payload(
             creative_id=_SYNC_CREATIVE_ID,
             format_id={"agent_url": ctx["env"].peer_agent_url(), "id": ctx["relisted_format_id"]},
+            assets=format_manifest(ctx["served_format"]),
         )
     ]
 
@@ -2452,6 +2495,7 @@ def given_sync_served_format_creative(ctx: dict) -> None:
     format is the peer's own. The identity is the one the env hands over, so no step spells
     an agent URL for a seeded format.
     """
+    from tests.factories.creative_asset import format_manifest
     from tests.factories.request import CreativeAssetRequestFactory
 
     (served,) = ctx["env"].seeded_format_ids()
@@ -2459,6 +2503,8 @@ def given_sync_served_format_creative(ctx: dict) -> None:
         CreativeAssetRequestFactory.payload(
             creative_id=_SYNC_CREATIVE_ID,
             format_id={"agent_url": str(served.agent_url), "id": served.id},
+            # What the served format requires, so the manifest is not what these rows grade.
+            assets=format_manifest(ctx["served_format"]),
         )
     ]
 
@@ -2972,12 +3018,42 @@ def _assert_creative_refused(ctx: dict, code: str, *, field: str | None) -> None
 
 def _refusal_problem(ctx: dict, path: str) -> dict[str, Any]:
     """The ``problems[]`` entry for manifest *path* in the refusal a prior Then asserted."""
-    details = ctx["result"].wire_error_details(ctx["refused_code"])
+    return _problem_at(ctx["result"].wire_error_details(ctx["refused_code"]), path, ctx["manifest_creative_id"])
+
+
+def _entry_refusal_problem(ctx: dict, path: str) -> dict[str, Any]:
+    """The ``problems[]`` entry for manifest *path* on the synced creative's FAILED batch entry.
+
+    The library-only sync refuses per item: the request completes and the error rides the
+    creative's own entry (``creatives[].errors``), not the envelope, so it is read there.
+    """
+    creative_id = ctx["manifest_creative_id"]
+    errors = wire_entry_errors(ctx, "creatives", creative_id=creative_id)
+    assert len(errors) == 1, f"expected exactly one error on {creative_id!r}'s entry, got {errors!r}"
+    return _problem_at(errors[0].get("details") or {}, path, creative_id)
+
+
+def _problem_at(details: dict[str, Any], path: str, subject_id: str) -> dict[str, Any]:
+    """The ``problems[]`` entry at manifest *path* in *details*, about creative *subject_id*."""
     problems = {problem.get("field"): problem for problem in details.get("problems") or []}
     assert path in problems, f"the refusal names no problem at {path!r}; it names {sorted(problems)}"
     problem = problems[path]
-    assert problem.get("subject_id") == ctx["manifest_creative_id"], f"the problem is about another subject: {problem}"
+    assert problem.get("subject_id") == subject_id, f"the problem is about another subject: {problem}"
     return dict(problem)
+
+
+def _assert_states(problem: dict[str, Any], path: str, rejected: str, accepted: str) -> None:
+    """*problem* states *rejected* where the comma-separated *accepted* is accepted."""
+    assert problem.get("rejected_value") == rejected, f"{path}: stated {problem.get('rejected_value')!r}"
+    assert problem.get("accepted_values") == [value.strip() for value in accepted.split(",")], (
+        f"{path}: accepted {problem.get('accepted_values')!r}"
+    )
+
+
+def _assert_missing(problem: dict[str, Any], path: str, accepted: str) -> None:
+    """*problem* states nothing where *accepted* is required."""
+    assert "rejected_value" not in problem, f"{path} is reported as stating {problem.get('rejected_value')!r}"
+    assert problem.get("accepted_values") == [accepted], f"{path}: accepted {problem.get('accepted_values')!r}"
 
 
 @then(parsers.parse('the refusal names "{path}" stating "{rejected}" where "{accepted}" is accepted'))
@@ -2988,11 +3064,7 @@ def then_refusal_names_stated_value(ctx: dict, path: str, rejected: str, accepte
     accepted dimensions in buyer-safe error.details". ``accepted`` is the declaration's set
     or bound, comma-separated in the feature.
     """
-    problem = _refusal_problem(ctx, path)
-    assert problem.get("rejected_value") == rejected, f"{path}: stated {problem.get('rejected_value')!r}"
-    assert problem.get("accepted_values") == [value.strip() for value in accepted.split(",")], (
-        f"{path}: accepted {problem.get('accepted_values')!r}"
-    )
+    _assert_states(_refusal_problem(ctx, path), path, rejected, accepted)
 
 
 @then(parsers.parse('the refusal names "{path}" missing where "{accepted}" is accepted'))
@@ -3002,9 +3074,19 @@ def then_refusal_names_missing_slot(ctx: dict, path: str, accepted: str) -> None
     A required slot left empty (its asset type accepted), an asset silent about a capped member
     (the cap accepted), or a rendition set lacking a required pixel ratio (that ratio accepted).
     """
-    problem = _refusal_problem(ctx, path)
-    assert "rejected_value" not in problem, f"{path} is reported as stating {problem.get('rejected_value')!r}"
-    assert problem.get("accepted_values") == [accepted], f"{path}: accepted {problem.get('accepted_values')!r}"
+    _assert_missing(_refusal_problem(ctx, path), path, accepted)
+
+
+@then(parsers.parse('the entry names "{path}" stating "{rejected}" where "{accepted}" is accepted'))
+def then_entry_names_stated_value(ctx: dict, path: str, rejected: str, accepted: str) -> None:
+    """The per-item twin of the envelope step above, read off the creative's failed entry."""
+    _assert_states(_entry_refusal_problem(ctx, path), path, rejected, accepted)
+
+
+@then(parsers.parse('the entry names "{path}" missing where "{accepted}" is accepted'))
+def then_entry_names_missing(ctx: dict, path: str, accepted: str) -> None:
+    """The per-item twin of the envelope step above, read off the creative's failed entry."""
+    _assert_missing(_entry_refusal_problem(ctx, path), path, accepted)
 
 
 @then(parsers.parse('the refusal names the compatible options "{options}"'))
