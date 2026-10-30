@@ -29,6 +29,7 @@ from src.core.exceptions import (
 from src.core.format_resolver import (
     bundled_extension_definitions,
     declaration_platform_extensions,
+    format_declaration_divergence,
     platform_extension_collisions,
     product_format_identities,
     product_format_kinds,
@@ -796,15 +797,19 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         for product in eligible_products:
             product.pricing_options = []
 
-    # FORMAT_DECLARATION_DIVERGENT, on a POPULATED SUCCESS, for the one divergence this seller
-    # can still produce. The pinned enum calls the code a "Non-fatal advisory", says
-    # "Hard-failing the entire get_products response is discouraged", and makes errors[] the
-    # single surface; `source` is producer because the SELLER self-detects on emit, and
-    # `field` is built from the RESPONSE order so it names the product the buyer sees.
+    # FORMAT_DECLARATION_DIVERGENT, on a POPULATED SUCCESS. The pinned enum calls the code a
+    # "Non-fatal advisory", says "Hard-failing the entire get_products response is
+    # discouraged", and makes errors[] the single surface; `source` is producer because the
+    # SELLER self-detects on emit, and `field` is built from the RESPONSE order so it names
+    # the product the buyer sees.
     #
-    # The reference-axis divergence (a stored format_ids arm disagreeing with the declarations'
-    # v1_format_ref) is no longer producible: a canonical product's format_ids is DERIVED from
-    # those refs (`CanonicalFormats`), so the two arms agree by construction.
+    # Two divergences, one advisory each. A declaration asserting a v1_format_ref its params
+    # or kind do not narrow (core/product-format-declaration.json: "The v2 declaration's
+    # `params` MUST narrow ... each referenced v1 format's `requirements`"): the reference is
+    # already left out of the derived format_ids (`CanonicalFormats`), as the producer rule
+    # "MUST omit the legacy compatibility projection" requires, and the declaration still
+    # names it on the wire, so the advisory says why the two shapes differ.
+    #
     # `formats/canonical/_base.json` asks for the same code when "a producer-self-emitted
     # overlap on a single declaration" happens, with
     # `details: { collision_kind, target, overlapping_fields, winning_extension_uri }` --
@@ -831,6 +836,17 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         )
     ]
 
+    divergence_advisories = [
+        Error.of(  # structural-guard: advisory per-product divergence in GetProductsResponse.errors[]
+            ErrorCode.FORMAT_DECLARATION_DIVERGENT,
+            field=f"products[{index}]",
+            details=divergence,
+            source=LibraryErrorSource.producer,
+        )
+        for index, product in enumerate(eligible_products)
+        if (divergence := format_declaration_divergence(product.product_id, product.format_options)) is not None
+    ]
+
     # Our Product extends LibraryProduct - cast for type safety since list is invariant
     # When serialized, Pydantic automatically uses library Product fields
     # Internal-only fields (implementation_config) excluded by model_dump()
@@ -841,7 +857,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     # but mypy still needs cast() due to list invariance in static typing
     resp = GetProductsResponse(
         products=cast(list[LibraryProduct], eligible_products),
-        errors=collision_advisories or None,
+        errors=(divergence_advisories + collision_advisories) or None,
         message=_products_message(len(eligible_products), anonymous=principal_id is None),
     )
 
