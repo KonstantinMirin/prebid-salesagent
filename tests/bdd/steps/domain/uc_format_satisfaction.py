@@ -1306,9 +1306,7 @@ def given_canonical_creatives_with_manifests(ctx: dict, kind: str, manifests: st
     scenario's parameter: one creative per manifest, each eligible for every placement
     (a create package routes no creative to a placement).
     """
-    ctx["request_kwargs"]["packages"][0]["creative_ids"] = [
-        creative.creative_id for creative in _seed_canonical_creatives(ctx, kind, manifests)
-    ]
+    _assign_canonical_creatives(ctx, kind, manifests)
 
 
 @given(
@@ -1324,6 +1322,11 @@ def given_canonical_creatives_with_manifests_and_options(ctx: dict, kind: str, m
     ``format_options`` contains two or more declarations sharing the same ``format_kind``".
     *options* is comma-separated and aligned with *manifests*.
     """
+    _assign_canonical_creatives(ctx, kind, manifests, options)
+
+
+def _assign_canonical_creatives(ctx: dict, kind: str, manifests: str, options: str | None = None) -> None:
+    """Seed :func:`_seed_canonical_creatives` and put every one on the package being built."""
     ctx["request_kwargs"]["packages"][0]["creative_ids"] = [
         creative.creative_id for creative in _seed_canonical_creatives(ctx, kind, manifests, options)
     ]
