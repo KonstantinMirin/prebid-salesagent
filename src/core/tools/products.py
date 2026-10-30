@@ -6,6 +6,7 @@ shared implementation pattern from CLAUDE.md.
 
 import logging
 import time
+from collections.abc import Iterator
 from typing import Any, cast
 
 from adcp.types import PropertyListReference
@@ -18,7 +19,7 @@ from adcp.types.legacy import LegacyProduct as LibraryProduct
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
 from src.core.errors.codes import ErrorCode
-from src.core.errors.details import PolicyViolationDetails
+from src.core.errors.details import ErrorDetails, PolicyViolationDetails
 from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPInternalError,
@@ -186,6 +187,24 @@ def _products_message(count: int, *, anonymous: bool) -> str:
     if anonymous:
         return f"{base} Please connect through an authorized buying agent for pricing data."
     return base
+
+
+def _format_declaration_findings(products: list[Product]) -> Iterator[tuple[int, ErrorDetails]]:
+    """Each product's ``FORMAT_DECLARATION_DIVERGENT`` details, keyed by its response index.
+
+    A product's v1_format_ref divergence comes first, then each platform-extension collision
+    on its declarations, so every advisory for the code is built in one place.
+    """
+    for index, product in enumerate(products):
+        divergence = format_declaration_divergence(product.product_id, product.format_options)
+        if divergence is not None:
+            yield index, divergence
+    for index, product in enumerate(products):
+        for declaration in product.format_options or ():
+            for collision in platform_extension_collisions(
+                declaration_platform_extensions(declaration), bundled_extension_definitions()
+            ):
+                yield index, collision
 
 
 async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) -> GetProductsResponse:
@@ -822,29 +841,14 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     # definition and is left alone rather than guessed at. `bundled_extension_definitions` is
     # the one seam the deferred half of salesagent-hff54 fills; feeding it is what makes this
     # emit, and nothing else about this call site changes then.
-    collision_advisories = [
+    format_declaration_advisories = [
         Error.of(  # structural-guard: advisory per-product divergence in GetProductsResponse.errors[]
             ErrorCode.FORMAT_DECLARATION_DIVERGENT,
             field=f"products[{index}]",
-            details=collision,
+            details=details,
             source=LibraryErrorSource.producer,
         )
-        for index, product in enumerate(eligible_products)
-        for declaration in product.format_options or ()
-        for collision in platform_extension_collisions(
-            declaration_platform_extensions(declaration), bundled_extension_definitions()
-        )
-    ]
-
-    divergence_advisories = [
-        Error.of(  # structural-guard: advisory per-product divergence in GetProductsResponse.errors[]
-            ErrorCode.FORMAT_DECLARATION_DIVERGENT,
-            field=f"products[{index}]",
-            details=divergence,
-            source=LibraryErrorSource.producer,
-        )
-        for index, product in enumerate(eligible_products)
-        if (divergence := format_declaration_divergence(product.product_id, product.format_options)) is not None
+        for index, details in _format_declaration_findings(eligible_products)
     ]
 
     # Our Product extends LibraryProduct - cast for type safety since list is invariant
@@ -857,7 +861,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     # but mypy still needs cast() due to list invariance in static typing
     resp = GetProductsResponse(
         products=cast(list[LibraryProduct], eligible_products),
-        errors=(divergence_advisories + collision_advisories) or None,
+        errors=format_declaration_advisories or None,
         message=_products_message(len(eligible_products), anonymous=principal_id is None),
     )
 
