@@ -857,7 +857,7 @@ def _pre_validate_package_creatives(
 def _resolve_package_selectors(
     req: CreateMediaBuyRequest,
     declared_format_arms: dict[str, tuple[list[Any], list[Any]]],
-    declared_placements: dict[str, list[Any]],
+    declared_inventory: dict[str, tuple[list[Any], list[Any] | None]],
     tenant_id: str,
 ) -> dict[int, "SelectorResolution"]:
     """Resolve every package's format selector, and refuse before any state is persisted.
@@ -885,9 +885,12 @@ def _resolve_package_selectors(
         req: the buyer's request; its packages carry the selector arms.
         declared_format_arms: per product_id, the ``(format_options, format_ids)``
             documents the product AUTHORED, captured while its row was attached.
-        declared_placements: per product_id, the stored ``placements`` documents, for the
-            pin's coverage rule: the selected format set must cover every included
-            placement (``docs/creative/formats.mdx`` § Matching and satisfaction).
+        declared_inventory: per product_id, the stored ``placements`` documents and the
+            ``publisher_properties`` its coverage is sliced by
+            (``format_satisfaction.coverage_publishers``), for the pin's coverage rule: the
+            selected format set must cover every included placement, and for a
+            multi-publisher product without placements every publisher's slice
+            (``docs/creative/formats.mdx`` § Matching and satisfaction).
         tenant_id: whose catalogue a package's deprecated ``format_ids`` are looked up in,
             so their projection reads the served declaration as a creative's does. Fetched
             only when some package names one: no other route reads it.
@@ -916,6 +919,7 @@ def _resolve_package_selectors(
         # missing product -- it is a product the catalogue read excluded, which imposes no
         # declarations to grade against.
         declarations, legacy_catalog = declared_format_arms.get(pkg.product_id or "", ([], []))
+        placements, publishers = declared_inventory.get(pkg.product_id or "", ([], None))
         selector = resolve_routes(
             selector_routes(
                 format_kind=pkg.format_kind,
@@ -926,7 +930,8 @@ def _resolve_package_selectors(
             ),
             declarations,
             legacy_catalog=legacy_catalog,
-            placements=declared_placements.get(pkg.product_id or ""),
+            placements=placements,
+            publishers=publishers,
         )
         if selector.conflicting:
             raise conflicting_selectors(
@@ -2952,7 +2957,13 @@ async def _create_media_buy_impl(
             # reason: the gate's coverage rule reads them after this unit closes. They are the
             # stored documents ``get_products`` serves unchanged, and each states its ``mode``
             # (``ck_products_placements_explicit``), so the gate grades the mode the buyer was shown.
-            declared_placements = {product_id: list(row.placements or []) for product_id, row in product_map.items()}
+            # Beside them, the publishers a product WITHOUT placements is sliced by.
+            from src.core.format_satisfaction import coverage_publishers
+
+            declared_inventory = {
+                product_id: (list(row.placements or []), coverage_publishers(row))
+                for product_id, row in product_map.items()
+            }
 
             # AdCP spec (core/targeting.json): "Sellers SHOULD return a validation
             # error if the product has property_targeting_allowed: false."
@@ -3396,7 +3407,7 @@ async def _create_media_buy_impl(
         # persisted". The selector gate arrived later and did not follow suit; this is it
         # following suit.
         selector_resolutions = _resolve_package_selectors(
-            req, declared_format_arms, declared_placements, tenant.tenant_id
+            req, declared_format_arms, declared_inventory, tenant.tenant_id
         )
 
         # No tenant field declares auto-creation; the dict shim this replaced always
