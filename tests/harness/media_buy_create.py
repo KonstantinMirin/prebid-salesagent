@@ -16,7 +16,8 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 from src.adapters.base import AdapterCreateResult, ResponsePackage
-from src.core.schemas import CreateMediaBuyRequest
+from src.adapters.mock_ad_server import MockAdServer
+from src.core.schemas import CreateMediaBuyRequest, Principal
 from src.core.schemas._base import CreateMediaBuyResult
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv, json_safe
@@ -93,7 +94,6 @@ def _adapter_operation_receipts(self: MediaBuyCreateEnv, operation: str) -> list
     substring match would count that bookkeeping as an ad-server call. The adapter writes
     under its own ``adapter_name`` (``AdServerAdapter.__init__``), which is the prefix kept.
     """
-    from src.adapters.mock_ad_server import MockAdServer
     from src.core.database.repositories.audit_log import AuditLogRepository
 
     session = self.get_session()
@@ -449,7 +449,20 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
         mock_adapter.create_media_buy.side_effect = _adapter_create_response
         # Save original side_effect so Given steps can restore it after error injection
         mock_adapter._original_create_side_effect = _adapter_create_response
-        mock_adapter.validate_media_buy_request.return_value = None
+        # The pre-creation check is the REAL mock ad server's, not a constant. It is a
+        # production step: ``_create_media_buy_impl`` asks the adapter for its problems and
+        # refuses with VALIDATION_ERROR when there are any, and the e2e_rest server runs
+        # ``MockAdServer`` unpatched. A ``return_value = None`` here answered "no problems"
+        # for every request, so the three in-process transports accepted creates the live
+        # seller refuses -- a CPA package among them, which ``get_supported_pricing_models``
+        # does not list. Only the ad-server CALLS are faked; the seller's own rules are not.
+        # The check reads nothing off the principal or the config, so the env's own ids
+        # and an empty config are all it needs.
+        mock_adapter.validate_media_buy_request.side_effect = MockAdServer(
+            config={},
+            principal=Principal(principal_id=self._principal_id, name=self._principal_id, platform_mappings={}),
+            tenant_id=self._tenant_id,
+        ).validate_media_buy_request
         mock_adapter.add_creative_assets.return_value = None
         mock_adapter.associate_creatives.return_value = None
         mock_adapter.manual_approval_required = False

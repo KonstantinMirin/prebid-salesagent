@@ -23,7 +23,7 @@ OBLIGATION COVERAGE:
   UC-002-CC-ADAPTER-ATOMICITY-03, UC-002-CC-ATOMIC-RESPONSE-SEMANTICS-03
   UC-002-CC-CREATIVE-ASSIGNMENT-VALIDATION-03
   UC-002-EXT-D-02, UC-002-EXT-F-01, -02, UC-002-EXT-H-02, -03
-  UC-002-EXT-I-03, UC-002-EXT-J-02, UC-002-EXT-K-03
+  UC-002-EXT-I-03, UC-002-EXT-J-02
   UC-002-EXT-L-01, -02, -03, UC-002-EXT-M-01, -03
   UC-002-EXT-N-02, UC-002-EXT-O-01, UC-002-EXT-Q-01, -02
   UC-002-MAIN-01, -03, -04, -05, -09, -10, -14, -15, -17, -20, -22
@@ -240,30 +240,16 @@ class TestMaxDailySpendExceeded:
 
             assert exc_info.value.error_code == "BUDGET_EXCEEDED"
 
-    def test_max_daily_spend_no_cap_configured(self, integration_db):
-        """When max_daily_package_spend is None, no daily spend check is applied.
-
-        Anchors: media_buy_create.py:1698
-        """
-        # Large budget, no cap -> should pass daily spend check
-        req = _make_request(
-            packages=[
-                {
-                    "product_id": "prod_1",
-                    "budget": 999999.0,
-                    "pricing_option_id": "cpm_usd_fixed",
-                },
-            ]
-        )
-
-        with MediaBuyCreateEnv() as env:
-            tenant, _principal = env.setup_default_data()
-            tenant.currency_limits[0].max_daily_package_spend = None
-            env.setup_product_chain(tenant)
-            # No cap -> daily-spend check skipped -> pipeline reaches success.
-            result = env.call_impl(req=req)
-
-        assert isinstance(result, CreateMediaBuySuccess)
+    # test_max_daily_spend_no_cap_configured is DELETED, and so is its twin
+    # TestExtensionObligations.test_no_max_daily_spend_configured_check_skipped. Both sent a
+    # 999,999 budget with no cap and expected success, which held only while
+    # MediaBuyCreateEnv stubbed the adapter's pre-creation check: at the $10 CPM the create
+    # path assumes that is 99,999,900 impressions, and the real mock ad server refuses
+    # anything over 1,000,000 (VALIDATION_ERROR on packages[0].impressions). The obligation,
+    # "no cap configured means the daily spend check is skipped", is graded on a2a, mcp, rest
+    # and e2e_rest by @T-UC-002-partition-daily-spend-cap (cap_not_configured) and by
+    # @T-UC-002-boundary-daily-spend-cap ("cap not configured (skipped)", daily 9999 over a
+    # one-day flight, which breaches every cap those outlines use).
 
 
 class TestCreativeMissingUrl:
@@ -1689,23 +1675,8 @@ class TestExtensionObligations:
         with MediaBuyUoW(tenant_id) as uow:
             assert uow.media_buys.list_all() == [], "an adapter failure must persist no media buy"
 
-    def test_no_max_daily_spend_configured_check_skipped(self, integration_db):
-        """No max_daily_package_spend -> daily spend check is skipped.
-
-        Covers: UC-002-EXT-K-03
-        """
-        req = _make_request(
-            packages=[{"product_id": "prod_1", "budget": 999999.0, "pricing_option_id": "cpm_usd_fixed"}]
-        )
-
-        with MediaBuyCreateEnv() as env:
-            tenant, _principal = env.setup_default_data()
-            tenant.currency_limits[0].max_daily_package_spend = None
-            env.setup_product_chain(tenant)
-            # No cap -> the very large budget passes the daily-spend check.
-            result = env.call_impl(req=req)
-
-        assert isinstance(result, CreateMediaBuySuccess)
+    # test_no_max_daily_spend_configured_check_skipped (UC-002-EXT-K-03) is DELETED; see the
+    # note in TestMaxDailySpendExceeded for why and for the BDD scenarios that grade it.
 
     def test_proposal_not_found_error_code(self):
         """PROPOSAL_NOT_FOUND error code is used for missing proposals.
