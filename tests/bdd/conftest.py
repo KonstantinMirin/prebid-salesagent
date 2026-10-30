@@ -1874,10 +1874,6 @@ _LEDGER_DEVICE_OVERLAP_E2E = (
     "on e2e_rest production answers UNSUPPORTED_FEATURE for the overlapping device_type overlay, where "
     "the row expects INVALID_REQUEST"
 )
-_LEDGER_CPA_SERVICE_UNAVAILABLE = (
-    "production answers SERVICE_UNAVAILABLE for a create on a CPA pricing option, where the row "
-    "expects the create to succeed"
-)
 _LEDGER_NO_ADD_PACKAGES = (
     "the seeded buy does not advertise add_packages in valid_actions (this seller refuses "
     "new_packages), so the scenario stops at its own precondition"
@@ -1935,6 +1931,11 @@ _X = _CatchallXfail
 #: What FAILED in measure_innet_291026_1202 once the catch-alls were lifted. Strict xfails.
 # Graduated in wave 5 (integrate/wave1 a3687d971): w5b01, w5b02, w5b03, w5b04, w5b06, w5b07,
 # w5b08, w5b09, w5b10, w5b11, w5b13, w5b14, w5b15, w5b16, w5b17, w5b18, w5b19, w5b20, w5b21.
+# Graduated: T-UC-002-partition-pricing-option-xor cpa_model. Strict XPASS on a2a/mcp/rest in
+# innet_291026_2322 because MediaBuyCreateEnv stubbed the adapter's pre-creation check to "no
+# problems"; e2e_rest answered VALIDATION_ERROR (UNSUPPORTED_FEATURE on
+# packages[0].pricing_option_id). The harness now runs MockAdServer's real check and the row
+# expects that refusal.
 _UC002_UC003_LEDGER: tuple[_CatchallXfail, ...] = (
     _X("T-UC-002-alt-manual-reject-override", _LEDGER_SEED_MEDIA_BUY),
     _X(
@@ -2010,7 +2011,6 @@ _UC002_UC003_LEDGER: tuple[_CatchallXfail, ...] = (
         ),
     ),
     _X("T-UC-002-partition-optimization-goals", _LEDGER_OPT_UNVALIDATED, rows=("unregistered_event_source",)),
-    _X("T-UC-002-partition-pricing-option-xor", _LEDGER_CPA_SERVICE_UNAVAILABLE, rows=("cpa_model",)),
     _X(
         "T-UC-002-partition-targeting-overlay",
         _LEDGER_DEVICE_OVERLAP,

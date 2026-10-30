@@ -125,8 +125,9 @@ _MIN_ROUTED_COMBINATIONS = 15
 #: features at the commit that named each park's rows (measure_innet_291026_1202).
 _LEDGER_CEILINGS: dict[str, tuple[int, int]] = {
     # Wave 5 graduated 65 ledger and 52 park entries (integrate/wave1 a3687d971), measured
-    # by this file's derivation over the merged tree.
-    "_UC002_UC003_LEDGER": (42, 192),
+    # by this file's derivation over the merged tree. 42/192 -> 41/188 when the
+    # T-UC-002-partition-pricing-option-xor cpa_model row graduated (lane w7-cpa-stub).
+    "_UC002_UC003_LEDGER": (41, 188),
     "_UC002_UC003_VACUOUS_PARKS": (3, 16),
     # The two UC-003 missing-identifier rows on rest and e2e_rest: 2 rows x 2 transports.
     "_TRANSPORT_INEXPRESSIBLE_ROWS": (2, 4),

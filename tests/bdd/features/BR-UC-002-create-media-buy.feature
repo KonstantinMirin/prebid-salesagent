@@ -1459,7 +1459,6 @@ Feature: BR-UC-002 Create Media Buy
       | partition         | outcome                         |
       | fixed_pricing     | pricing validation passes       |
       | auction_pricing   | pricing validation passes       |
-      | cpa_model         | pricing validation passes       |
       | both_set          | pricing validation passes       |
 
     # both_set: the XOR is a constraint on the PUBLISHED option -- floor_price is "mutually
@@ -1471,9 +1470,22 @@ Feature: BR-UC-002 Create Media Buy
     # floor), so what a buyer can send is a pricing_option_id that resolves to no option.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/pricing-options/cpm-option.json pointer=/properties/floor_price/description
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/INVALID_PRICING_OPTION
+    # cpa_model: the XOR holds for a fixed CPA option, but this seller's ad server does not
+    # sell CPA. The pin lets a seller support a subset of pricing models
+    # ("Pricing models this seller supports across its product portfolio"), and the mock ad
+    # server lists no cpa in get_supported_pricing_models, which is what get_adcp_capabilities
+    # advertises. Production refuses the package before the ad server is called:
+    # VALIDATION_ERROR, "violates business rules beyond schema validation", with one
+    # details.problems[] entry (UNSUPPORTED_FEATURE on packages[0].pricing_option_id,
+    # rejected_value "cpa", accepted_values the supported set). The row was "pricing
+    # validation passes", which only the in-process harness answered, because its adapter
+    # double returned no problems for every request; e2e_rest refused it all along.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/supported_pricing_models/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/VALIDATION_ERROR
     Examples: Invalid partitions
       | partition         | outcome                                                                     |
       | neither_set       | error INVALID_PRICING_OPTION on packages[0].pricing_option_id with suggestion |
+      | cpa_model         | error VALIDATION_ERROR with suggestion                                      |
 
   @T-UC-002-partition-currency-consistency @partition @currency-consistency
   Scenario Outline: Currency consistency partition validation - <partition>
