@@ -612,7 +612,7 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | two_image_options | unnarrowed                   | product_option_ref |
       | fixed_300x250     | narrowed_file_size           | product_option_ref |
       | two_image_options | publisher_ref_targetable     | product_option_ref |
-      | two_image_options | publisher_ref_included       | no_selector        |
+      | two_image_options | publisher_ref_targetable     | no_selector        |
 
     # both_option_refs is the spec-valid way to cover `split` explicitly: two
     # format_option_refs on ONE arm select a SET (package-request.json: "require each route
@@ -702,11 +702,30 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # placement cannot be shown to accept anything a package selects, and the package is
     # refused until a resolver exists. The seller-inline placement beside it accepts the
     # 300x250 both rows select, so the refusal is the publisher placement's. The accept
-    # controls are in the covered outline: the same placement TARGETABLE (not bought), and
-    # the same placements with no selector ("omitting both selects all formats supported by
-    # the product", which the product set covers by construction).
+    # controls are in the covered outline: the same placement TARGETABLE (not bought), with
+    # each of these selectors and with none.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/placement.json pointer=/properties/format_options/description
+
+  @T-UC-FORMAT-SATISFACTION-placements-unresolved-no-selector @format_satisfaction @requires_db
+  Scenario: an included publisher-referenced placement fails closed for a package naming no selector
+    Given the seller declares canonical format options "two_image_options" across placements "publisher_ref_included"
+    And the buyer's package selects "no_selector"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the package's product for the unresolved publisher placement "satisfaction_publisher_slot"
+
+    # A package naming no selector "selects all formats supported by the product"
+    # (media-buy/package-request.json), and that set is still graded against an included
+    # placement's EFFECTIVE set, which for a publisher_ref placement includes layer (3), the
+    # publisher's adagents.json narrowing. This seller cannot resolve that layer, so the
+    # product's whole set cannot be shown to cover the placement either, and core/product.json
+    # leaves no exemption for the selector-less package: "an unresolved publisher placement or
+    # format-option reference MUST fail closed". It is refused exactly as a selecting package
+    # is, with the same capability and rejected value; the pointer names the product, because
+    # the buyer selected nothing to name. The accept control is publisher_ref_targetable |
+    # no_selector in the covered outline, which differs only in the placement's mode.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product.json pointer=/properties/format_options/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
 
   # ── Coverage of a multi-publisher product WITHOUT placements: publisher slices ─────────
   #

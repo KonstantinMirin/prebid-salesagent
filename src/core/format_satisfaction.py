@@ -2773,9 +2773,7 @@ class SelectorResolution:
         declaration applies to, and refuses one none does: an empty publisher slice
         (:func:`publisher_slice_layers`), whose only cure is another product. The refusal
         names the uncovered unit at ``product_id``, because the buyer selected nothing to
-        name. An unresolved ``publisher_ref`` placement is not refused for such a package:
-        no selection is graded against it, as the feature's ``publisher_ref_included |
-        no_selector`` accept row records.
+        name.
 
         The SET is the winning arm's, because the pin states the rule over a set: each
         included placement must accept at least one declaration the arm selected. Two refs
@@ -2787,20 +2785,22 @@ class SelectorResolution:
         Read off :attr:`_winning_arm` and never through :attr:`selection`, which asks
         ``bool(self)`` and so this property: the winning arm is the first, as there.
 
-        AN UNRESOLVED PLACEMENT is reported first, whatever a selector selected: a
-        ``publisher_ref`` placement's effective set cannot be computed here, so no selection
-        can be shown to cover it, and ``core/product.json`` says "an unresolved publisher
-        placement or format-option reference MUST fail closed" (:class:`PlacementLayer`).
+        AN UNRESOLVED PLACEMENT is reported first, whatever a selector selected -- and when
+        the package selected nothing, at ``product_id``: a ``publisher_ref`` placement's
+        effective set cannot be computed here, so no selection, the product's whole set
+        included, can be shown to cover it, and ``core/product.json`` says "an unresolved
+        publisher placement or format-option reference MUST fail closed"
+        (:class:`PlacementLayer`).
         """
         if not self.placements:
             return None
         if self.unresolved is not None or self.conflicting or self.unsatisfied is not None:
             return None
+        field = self.routes[0][0].field if self.routes else "product_id"
+        unresolved = _unresolved_placement(self.placements, field)
+        if unresolved is not None:
+            return unresolved
         if self.routes:
-            field = self.routes[0][0].field
-            unresolved = _unresolved_placement(self.placements, field)
-            if unresolved is not None:
-                return unresolved
             chosen = self._winning_arm
             # The selection as the buyer can recognise it: the option ids a product published,
             # or on the deprecated lane -- whose declarations are the SDK's projection, carrying
@@ -2811,7 +2811,7 @@ class SelectorResolution:
                 else sorted({_route_selector(route) for route, _ in self._arms[0]})
             )
         else:
-            field, chosen, labels = "product_id", self.declarations, []
+            chosen, labels = self.declarations, []
         if not chosen:
             return None
         sets = _placement_sets(self.placements, self.declarations)
