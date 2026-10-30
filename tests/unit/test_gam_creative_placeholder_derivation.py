@@ -113,6 +113,24 @@ def test_a_legacy_format_id_states_its_size_in_the_id_and_that_resolves():
     ]
 
 
+@pytest.mark.parametrize(
+    "agent_url",
+    [f"{CREATIVE_AGENT}./", f"{CREATIVE_AGENT}/a/../", f"{CREATIVE_AGENT}/mcp"],
+    ids=["root-label-dot", "dot-segment", "mounted-path"],
+)
+def test_a_respelled_reference_agent_still_states_the_size_in_its_id(agent_url):
+    """The reference agent in another spelling is the same agent, so its id still upgrades.
+
+    The SDK upgrades a size-encoded id only for the reference agent, and recognizes it by a
+    comparison applying four of the eight steps of docs/reference/url-canonicalization and
+    the whole path. Handed the raw stored entry, each of these spellings produced no
+    placeholder at all.
+    """
+    assert _placeholders(formats=[{"agent_url": agent_url, "id": "display_728x90_image"}]) == [
+        {"width": 728, "height": 90, "expected_creative_count": 1, "is_native": False}
+    ]
+
+
 def test_a_bare_string_format_entry_still_resolves():
     """The docstring's second storage pattern, kept working rather than assumed gone."""
     assert _placeholders(formats=["display_728x90_image"]) == [

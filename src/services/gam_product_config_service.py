@@ -5,10 +5,10 @@ import logging
 from collections.abc import Iterable, Sequence
 from typing import Any
 
-from adcp.canonical_formats import upgrade_legacy_format_id
 from adcp.canonical_formats.compat_helpers import FormatIdInput
 from pydantic import ValidationError
 
+from src.core.format_resolver import upgraded_reference
 from src.core.format_satisfaction import product_declarations
 
 logger = logging.getLogger(__name__)
@@ -137,7 +137,8 @@ def declared_gam_slots(declarations: Iterable[Any]) -> list[dict[str, Any]]:
 def _legacy_placeholders(formats: Any) -> list[dict[str, Any]]:
     """The GAM slots a product's deprecated ``format_ids[]`` imply.
 
-    ONE call answers both halves of the question. ``upgrade_legacy_format_id`` keeps the
+    ONE call answers both halves of the question. ``upgrade_legacy_format_id`` (through
+    ``format_resolver.upgraded_reference``, which canonically addresses the entry) keeps the
     width and height a stored entry CARRIES (the format picker emits
     ``{agent_url, id: "display_image", width, height}`` for a parameterized selection, and
     ``_parse_format_entries`` stores it) and derives them from the id when the entry states
@@ -158,7 +159,11 @@ def _legacy_placeholders(formats: Any) -> list[dict[str, Any]]:
     placeholders: list[dict[str, Any]] = []
     for entry in formats or []:
         try:
-            upgraded = upgrade_legacy_format_id(entry)
+            # Addressed first (``format_resolver.upgraded_reference``): the SDK upgrades a
+            # size-encoded id only for the reference agent and recognizes it by a partial
+            # URL canonicalization, so a stored respelling (a trailing root-label dot, a dot
+            # segment, the agent at another path) produced no placeholder.
+            upgraded = upgraded_reference(entry)
         except (ValidationError, ValueError, TypeError, AttributeError):
             logger.warning("Unusable stored format reference, ignored: %r", entry)
             continue
