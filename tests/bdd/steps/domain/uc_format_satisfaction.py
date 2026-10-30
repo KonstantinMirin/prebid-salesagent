@@ -271,6 +271,56 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             },
         }
     ],
+    # FLAT PER-SLOT PARAMS, which formats/canonical/_base.json puts on the declaration: "flat
+    # ``headline_max_chars`` on responsive_creative". A responsive creative's ``headlines``
+    # pool limited by ``headline_max_chars`` and ``headlines_max`` (the param names the role
+    # in the singular and in the plural); a carousel's cards whose ``headline`` member
+    # ``card_headline_max_chars`` limits; an audio spot with a loudness target, a true-peak
+    # ceiling and a required square companion image capped at 100 KB; and a hosted video
+    # requiring captions, with a 300x250 companion banner. Each states its own slots where the
+    # kind's defaults would require more than the scenario sends.
+    "responsive_headlines": [
+        {
+            "format_kind": "responsive_creative",
+            "format_option_id": "satisfaction_responsive",
+            "params": {
+                "headline_max_chars": 30,
+                "headlines_max": 2,
+                "slots": [{"asset_group_id": "headlines", "asset_type": "text", "required": True, "min": 1, "max": 5}],
+            },
+        }
+    ],
+    "carousel_card_headlines": [
+        {
+            "format_kind": "image_carousel",
+            "format_option_id": "satisfaction_carousel",
+            "params": {
+                "card_headline_max_chars": 25,
+                "slots": [{"asset_group_id": "cards", "asset_type": "card", "required": True, "min": 2, "max": 10}],
+            },
+        }
+    ],
+    "audio_with_companion": [
+        {
+            "format_kind": "audio_hosted",
+            "format_option_id": "satisfaction_audio_companion",
+            "params": {
+                "loudness_lufs": -16,
+                "loudness_tolerance_db": 1,
+                "true_peak_dbfs": -2,
+                "companion_image_required": True,
+                "companion_image_aspect_ratio": "1:1",
+                "companion_image_max_file_size_kb": 100,
+            },
+        }
+    ],
+    "captioned_video_with_banner": [
+        {
+            "format_kind": "video_hosted",
+            "format_option_id": "satisfaction_video_captioned",
+            "params": {"captions": "required", "companion_banner_widths": [300], "companion_banner_heights": [250]},
+        }
+    ],
     # A VERTICAL hosted video stating no aspect_ratio. video_hosted.json: "Vertical = 9:16",
     # and aspect_ratio is "Inferred from orientation if omitted".
     "vertical_video": [
@@ -434,6 +484,19 @@ def _manifest(name: str) -> dict[str, Any]:
         return build_assets(mrec, *(text_spec("headline", content=h, multiple=several) for h in headlines), *specs)
 
     logo = image_spec("logo", width=100, height=100).with_fields(file_size_bytes=40_000)
+    mastered = spot.with_fields(loudness_lufs=-16.5, true_peak_dbfs=-2)
+    companion = image_spec("companion_image", width=250, height=250).with_fields(file_size_bytes=100_000)
+    captioned = clip.with_fields(captions_url="https://example.com/captions.vtt")
+    banner = image_spec("companion_banner", width=300, height=250)
+
+    def headline_pool(*headlines: str) -> Any:
+        """A responsive creative's ``headlines`` pool: one text asset per headline, as an array."""
+        return [text_spec("headlines", content=headline, multiple=True) for headline in headlines]
+
+    def card(headline: str) -> Any:
+        """One card-asset of a carousel's ``cards`` array: a square image and *headline*."""
+        media = {"asset_type": "image", "url": "https://example.com/card.png", "width": 1080, "height": 1080}
+        return asset_spec("cards", "card", multiple=True, media=media, headline=headline)
 
     def rendition(width: int, height: int, **fields: object) -> Any:
         """One rendition of the 300x250 in an ``image_main`` array, at *width* x *height* intrinsic."""
@@ -518,6 +581,28 @@ def _manifest(name: str) -> dict[str, Any]:
         "video_30s_60fps": lambda: build_assets(clip.with_fields(frame_rate="60")),
         # The clip at 1080x1920, 9:16, beside its 640x360 (16:9) self.
         "video_30s_1080x1920": lambda: build_assets(clip.with_fields(width=1080, height=1920)),
+        # FLAT PER-SLOT PARAMS. A responsive headline at 30 and 31 characters, two and three
+        # headlines; a carousel whose first card's headline is 25 and 26 characters; the
+        # spot at -16.5 LUFS and -2 dBFS with a 250x250 companion of 100,000 bytes, and with
+        # each of those one step past its limit or the companion left out; the clip with a
+        # caption track and a 300x250 banner, without the track, and with a 728x90 banner.
+        "responsive_headline_30_chars": lambda: build_assets(*headline_pool("x" * 30)),
+        "responsive_headline_31_chars": lambda: build_assets(*headline_pool("x" * 31)),
+        "responsive_two_headlines": lambda: build_assets(*headline_pool("Trail Pro boots", "Built for the summit")),
+        "responsive_three_headlines": lambda: build_assets(
+            *headline_pool("Trail Pro boots", "Built for the summit", "Shop now")
+        ),
+        "carousel_card_headline_25_chars": lambda: build_assets(card("x" * 25), card("Second card")),
+        "carousel_card_headline_26_chars": lambda: build_assets(card("x" * 26), card("Second card")),
+        "audio_mastered_with_companion": lambda: build_assets(mastered, companion),
+        "audio_too_loud_with_companion": lambda: build_assets(mastered.with_fields(loudness_lufs=-14.5), companion),
+        "audio_peaking_with_companion": lambda: build_assets(mastered.with_fields(true_peak_dbfs=-1), companion),
+        "audio_with_wide_companion": lambda: build_assets(mastered, companion.with_fields(width=300, height=250)),
+        "audio_with_heavy_companion": lambda: build_assets(mastered, companion.with_fields(file_size_bytes=100_001)),
+        "audio_without_companion": lambda: build_assets(mastered),
+        "video_captioned_with_banner": lambda: build_assets(captioned, banner),
+        "video_uncaptioned_with_banner": lambda: build_assets(clip, banner),
+        "video_captioned_with_leaderboard": lambda: build_assets(captioned, banner.with_fields(width=728, height=90)),
         # AUDIO: the spot at another duration or codec, and over the 1 MB cap by 40,000 bytes.
         "audio_30s": lambda: build_assets(spot),
         "audio_15s": lambda: build_assets(spot.with_fields(duration_ms=15000)),

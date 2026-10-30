@@ -2258,6 +2258,90 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image.json pointer=/properties/pixel_ratios
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/text-asset.json pointer=/properties/content
 
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-flat-slot-params-accepted @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives accepts an assignment whose slots meet the limits the declaration states flat - <declaration> <manifest>
+    Given a packaged product declaring canonical format options "<declaration>"
+    And the buyer syncs a canonical "<kind>" creative carrying the "<manifest>" manifest
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+    Examples:
+      | declaration                 | kind                | manifest                        |
+      | responsive_headlines        | responsive_creative | responsive_headline_30_chars    |
+      | responsive_headlines        | responsive_creative | responsive_two_headlines        |
+      | carousel_card_headlines     | image_carousel      | carousel_card_headline_25_chars |
+      | audio_with_companion        | audio_hosted        | audio_mastered_with_companion   |
+      | captioned_video_with_banner | video_hosted        | video_captioned_with_banner     |
+
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-flat-slot-params-refused @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives refuses an assignment whose slot fails a limit the declaration states flat - <declaration> <manifest>
+    Given a packaged product declaring canonical format options "<declaration>"
+    And the buyer syncs a canonical "<kind>" creative carrying the "<manifest>" manifest
+    When the Buyer Agent assigns it to that package
+    Then the creative is refused <code>
+    And the refusal names "<path>" stating "<stated>" where "<accepted>" is accepted
+
+    Examples:
+      | declaration                 | kind                | manifest                         | code                               | path                                    | stated  | accepted |
+      | responsive_headlines        | responsive_creative | responsive_headline_31_chars     | CREATIVE_VALIDATION_FAILED_GENERIC | assets.headlines[0].content             | 31      | 30       |
+      | responsive_headlines        | responsive_creative | responsive_three_headlines       | CREATIVE_VALIDATION_FAILED_GENERIC | assets.headlines                        | 3       | 2        |
+      | carousel_card_headlines     | image_carousel      | carousel_card_headline_26_chars  | CREATIVE_VALIDATION_FAILED_GENERIC | assets.cards[0].headline                | 26      | 25       |
+      | audio_with_companion        | audio_hosted        | audio_too_loud_with_companion    | CREATIVE_VALIDATION_FAILED_GENERIC | assets.audio_main.loudness_lufs         | -14.5   | -17, -15 |
+      | audio_with_companion        | audio_hosted        | audio_peaking_with_companion     | CREATIVE_VALIDATION_FAILED_GENERIC | assets.audio_main.true_peak_dbfs        | -1      | -2       |
+      | audio_with_companion        | audio_hosted        | audio_with_wide_companion        | CREATIVE_SIZE_MISMATCH             | assets.companion_image                  | 300:250 | 1:1      |
+      | audio_with_companion        | audio_hosted        | audio_with_heavy_companion       | CREATIVE_VALIDATION_FAILED_GENERIC | assets.companion_image.file_size_bytes  | 100001  | 100      |
+      | captioned_video_with_banner | video_hosted        | video_captioned_with_leaderboard | CREATIVE_SIZE_MISMATCH             | assets.companion_banner.width           | 728     | 300      |
+
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-flat-slot-params-missing @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives refuses an assignment missing what the declaration requires flat - <declaration> <manifest>
+    Given a packaged product declaring canonical format options "<declaration>"
+    And the buyer syncs a canonical "<kind>" creative carrying the "<manifest>" manifest
+    When the Buyer Agent assigns it to that package
+    Then the creative is refused CREATIVE_VALIDATION_FAILED_GENERIC
+    And the refusal names "<path>" missing where "<accepted>" is accepted
+
+    Examples:
+      | declaration                 | kind         | manifest                      | path                           | accepted |
+      | audio_with_companion        | audio_hosted | audio_without_companion       | assets.companion_image         | image    |
+      | captioned_video_with_banner | video_hosted | video_uncaptioned_with_banner | assets.video_main.captions_url | required |
+
+    # FLAT PER-SLOT PARAMS. formats/canonical/_base.json slots: "Format-level narrowing
+    # parameters that apply across all slots (e.g., flat headline_max_chars on
+    # responsive_creative) may also live on the format declaration". A flat param names its
+    # slot by role, in either number: responsive_creative.json's headlines pool is limited by
+    # headline_max_chars and headlines_max ("per-slot count/length narrowing lives in flat
+    # parameters"); image_carousel.json's card_headline_max_chars "Governs the headline field
+    # on each card-asset in the cards slot"; audio_hosted.json's companion_image_* params
+    # constrain the companion_image slot, and video_hosted.json's companion_banner_widths and
+    # companion_banner_heights ("Permitted companion banner widths") the companion_banner
+    # slot. A seller building the param name from the slot id reads headlines_max_chars,
+    # which no schema declares, and grades nothing.
+    #
+    # Every refusal row has an accept row against the same declaration that differs in the
+    # one fact under test: a headline of 30 characters, two headlines, a first card headline
+    # of 25, the spot at -16.5 LUFS and -2 dBFS with a 250x250 companion of 100,000 bytes
+    # ("1 KB = 1,000 bytes"), the clip with a caption track and a 300x250 banner. The missing
+    # rows differ from their accept rows in leaving out the companion image that
+    # companion_image_required requires, and the caption track that captions: required
+    # requires (video-asset.json captions_url).
+    #
+    # SELLER CHOICES the pin leaves open, recorded here: audio_hosted.json gives
+    # loudness_tolerance_db ("Permitted deviation from loudness_lufs in dB") no default, and
+    # this seller reads an absent tolerance as zero, the reading that does not relax the
+    # target; true_peak_dbfs is "Maximum true-peak level", so a peak at the ceiling is
+    # accepted. A loudness or peak the asset does not state is not graded: audio-asset.json
+    # makes both members optional, and creative-manifests.mdx names no silence rule for them.
+    # The companion's ratio and the banner's size are sizes, so those rows are
+    # CREATIVE_SIZE_MISMATCH; the others are not, and take the generic code.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/_base.json pointer=/properties/slots/description
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/responsive_creative.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image_carousel.json pointer=/properties/card_headline_max_chars
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/card-asset.json pointer=/properties/headline
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/audio_hosted.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/audio-asset.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/video_hosted.json pointer=/properties/captions
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/video-asset.json pointer=/properties/captions_url
+
   @T-UC-FORMAT-SATISFACTION-manifest-sync-aspect-ratio @format_satisfaction_sync @requires_db
   Scenario Outline: sync_creatives refuses a manifest whose shape disagrees with the declaration's aspect ratio - <declaration> <manifest>
     Given a packaged product declaring canonical format options "<declaration>"

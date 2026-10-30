@@ -75,10 +75,15 @@ WHAT THIS MODULE DOES NOT DO, deliberately:
 * Required disclosures are not read here: no image, video or audio declaration param states
   one. A seller's disclosure requirement is its ``creative_policy`` (core/creative-policy.json
   ``require_disclosure_metadata``), enforced on the provenance at sync.
-* The per-kind constraints whose params name no slot (carousel card shape, a responsive
-  creative's per-role counts stated outside ``slots``) are not read. Every slot's own
-  constraints are (:func:`_slot_constraint_shortfalls`), and so is a declared
-  ``aspect_ratio`` (:func:`_aspect_shortfall`).
+* Not every per-kind param is read. Every slot's own constraints are
+  (:func:`_slot_constraint_shortfalls`), including the ones a declaration states flat by the
+  slot's role (:func:`_effective_slot`), and so are a declared ``aspect_ratio``
+  (:func:`_aspect_shortfall`), an audio spot's loudness and true peak and a required caption
+  track (:func:`_level_shortfalls`). Not read: ``cta_values`` (the pin's code for it,
+  CREATIVE_VALUE_NOT_ALLOWED, has no subclass here), the constraints on a card's ``media``
+  (``card_aspect_ratio``, ``card_image_max_file_size_kb``, ``card_video_*``),
+  ``allowed_card_media_asset_types``, a responsive creative's ``video_*_duration_ms`` and
+  ``logo_aspect_ratios``, and ``om_sdk_required``, which no manifest member states.
 """
 
 from __future__ import annotations
@@ -993,10 +998,10 @@ def _manifest_shortfalls(declaration: LibraryFormatDeclaration, manifest: Mappin
     (:func:`_coverage_shortfalls`).
     """
     declared = dict(_declared_params(declaration))
-    slots = tuple(slot for slot in declared.get("slots") or () if isinstance(slot, Mapping))
+    slots = tuple(_effective_slot(slot, declared) for slot in declared.get("slots") or () if isinstance(slot, Mapping))
     shortfalls = _manifest_slot_shortfalls(slots, manifest)
     primary = _primary_media_slot(slots)
-    shortfalls.extend(_slot_constraint_shortfalls(slots, manifest, declared, primary))
+    shortfalls.extend(_slot_constraint_shortfalls(slots, manifest, primary))
     value = manifest.get(primary) if primary is not None else None
     renditions = [
         (f"{primary}[{index}]" if isinstance(value, list) else str(primary), item)
@@ -1015,6 +1020,48 @@ def _manifest_shortfalls(declaration: LibraryFormatDeclaration, manifest: Mappin
     shortfalls.extend(
         shortfall for path, asset in renditions if (shortfall := _aspect_shortfall(path, asset, ratio)) is not None
     )
+    shortfalls.extend(shortfall for path, asset in renditions for shortfall in _level_shortfalls(path, asset, declared))
+    return shortfalls
+
+
+def _level_shortfalls(path: str, asset: Mapping[str, Any], declared: Mapping[str, Any]) -> list[ManifestShortfall]:
+    """The main media asset against the declared constraints that are neither a set nor a bound.
+
+    Three, each read by its own rule because its name does not say its shape:
+
+    * ``loudness_lufs`` with ``loudness_tolerance_db`` -- formats/canonical/audio_hosted.json,
+      "Required integrated loudness in LUFS" and "Permitted deviation from loudness_lufs in
+      dB". The asset's ``loudness_lufs`` (core/assets/audio-asset.json, "Integrated loudness
+      in LUFS") must lie within the tolerance of the target. A declaration stating no
+      tolerance permits no deviation: the pin gives no default, and reading a missing
+      tolerance as zero is this seller's choice, the one that does not relax the target.
+    * ``true_peak_dbfs`` -- audio_hosted.json, "Maximum true-peak level in dBFS"; the asset's
+      ``true_peak_dbfs`` may not exceed it.
+    * ``captions: required`` -- formats/canonical/video_hosted.json ``captions`` (required,
+      recommended, not_required); a required caption track is the asset's ``captions_url``
+      (core/assets/video-asset.json), and a video without one is missing it.
+
+    A level the asset does not state is not graded: audio-asset.json makes both members
+    optional, and only the constraints in :data:`_MANIFEST_MUST_BE_STATED` fail on silence.
+    """
+    asset_type = str(asset.get("asset_type"))
+    shortfalls: list[ManifestShortfall] = []
+    target, stated = declared.get("loudness_lufs"), _plain(asset.get("loudness_lufs"))
+    if asset_type == "audio" and _is_number(target) and _is_number(stated):
+        tolerance = declared.get("loudness_tolerance_db")
+        tolerance = tolerance if _is_number(tolerance) else 0
+        if abs(stated - target) > tolerance:
+            window = (target,) if not tolerance else (target - tolerance, target + tolerance)
+            shortfalls.append(
+                ManifestShortfall(f"assets.{path}.loudness_lufs", "loudness_lufs", _shown(stated), _shown_all(window))
+            )
+    ceiling, peak = declared.get("true_peak_dbfs"), _plain(asset.get("true_peak_dbfs"))
+    if asset_type == "audio" and _is_number(ceiling) and _is_number(peak) and peak > ceiling:
+        shortfalls.append(
+            ManifestShortfall(f"assets.{path}.true_peak_dbfs", "true_peak_dbfs", _shown(peak), (_shown(ceiling),))
+        )
+    if asset_type == "video" and declared.get("captions") == "required" and not asset.get("captions_url"):
+        shortfalls.append(ManifestShortfall(f"assets.{path}.captions_url", "captions", None, ("required",)))
     return shortfalls
 
 
@@ -1070,6 +1117,90 @@ def _aspect_shortfall(path: str, asset: Mapping[str, Any], ratio: Any) -> Manife
     )
 
 
+#: The per-slot constraints a declaration may state FLAT, as ``<role>_<suffix>``, and the
+#: slot-entry constraint each suffix is. ``formats/canonical/_base.json`` ``slots``:
+#: "Format-level narrowing parameters that apply across all slots (e.g., flat
+#: ``headline_max_chars`` on responsive_creative) may also live on the format declaration",
+#: and the canonical schemas spell them so: responsive_creative.json ``headline_max_chars`` /
+#: ``headlines_min`` / ``images_landscape_aspect_ratio`` ("per-slot count/length narrowing lives
+#: in flat parameters"), audio_hosted.json ``companion_image_max_file_size_kb`` /
+#: ``companion_image_aspect_ratio`` / ``companion_image_required``, video_hosted.json
+#: ``companion_banner_widths`` / ``companion_banner_heights``. ``max_file_size_kb`` is the
+#: slot's ``max_size_kb`` in the same unit: canonical-formats.mdx, "a field ending in ``_kb``
+#: uses 1 KB = 1,000 bytes". The suffixes are tried longest first, so ``_max_chars`` is never
+#: read as ``_max``.
+_FLAT_SLOT_SUFFIXES: tuple[tuple[str, str], ...] = (
+    ("_max_file_size_kb", "max_size_kb"),
+    ("_aspect_ratio", "aspect_ratio"),
+    ("_max_chars", "max_chars"),
+    ("_required", "required"),
+    ("_heights", "heights"),
+    ("_widths", "widths"),
+    ("_min", "min"),
+    ("_max", "max"),
+)
+
+
+def _slot_roles(group: str) -> frozenset[str]:
+    """The role names a flat param may give slot *group*: its id, singular or plural.
+
+    The pin names a pool slot in the plural and its flat limits in either number:
+    responsive_creative.json's ``headlines`` slot takes ``headlines_min`` and
+    ``headline_max_chars``, and its ``video`` slot ``videos_min``.
+    """
+    return frozenset({group, group.removesuffix("s"), f"{group}s"})
+
+
+def _effective_slot(slot: Mapping[str, Any], declared: Mapping[str, Any]) -> dict[str, Any]:
+    """*slot* with the flat declaration params that name its role folded in (:data:`_FLAT_SLOT_SUFFIXES`).
+
+    A param is read as narrowing the slot, never as relaxing it: of a count or cap stated on
+    both, the stricter holds; a flat ``required`` can require an optional slot and cannot
+    release a required one; an aspect ratio or a width or height set stated on the slot entry
+    wins over the flat one.
+
+    ``<singular>_<member>_max_chars`` limits a STRING MEMBER of each asset the slot holds,
+    which is how image_carousel.json spells the card's text: ``card_headline_max_chars``
+    "Governs the ``headline`` field on each card-asset in the ``cards`` slot", and
+    ``card_description_max_chars`` its ``description``. Those land in ``member_max_chars``.
+    """
+    group = str(slot.get("asset_group_id") or "")
+    roles = _slot_roles(group)
+    effective: dict[str, Any] = dict(slot)
+    members: dict[str, Any] = {}
+    for key, bound in declared.items():
+        if bound is None:
+            continue
+        suffix, constraint = next(((sfx, c) for sfx, c in _FLAT_SLOT_SUFFIXES if key.endswith(sfx)), ("", ""))
+        role = key[: -len(suffix)] if suffix else ""
+        if role in roles:
+            effective[constraint] = _narrower(constraint, effective.get(constraint), bound)
+        elif constraint == "max_chars" and (member := _member_of(role, group)):
+            members[member] = bound
+    if members:
+        effective["member_max_chars"] = members
+    return effective
+
+
+def _member_of(role: str, group: str) -> str | None:
+    """The member a ``<singular>_<member>`` role names on slot *group*'s assets, if it names one."""
+    prefix = f"{group.removesuffix('s')}_"
+    if not role.startswith(prefix):
+        return None
+    return role.removeprefix(prefix) or None
+
+
+def _narrower(constraint: str, own: Any, flat: Any) -> Any:
+    """The stricter of a slot's own *constraint* and the flat declaration param stating it."""
+    if own is None:
+        return flat
+    if constraint == "required":
+        return bool(own) or bool(flat)
+    if _is_number(own) and _is_number(flat):
+        return max(own, flat) if constraint == "min" else min(own, flat)
+    return own
+
+
 #: The asset types a slot's ``max_size_kb`` is answered by, through ``file_size_bytes``:
 #: ``formats/canonical/_base.json`` makes the cap valid for image, video, audio and zip, and
 #: the first three state the member (core/assets/*-asset.json). A zip states none, so a cap
@@ -1083,10 +1214,7 @@ _CHARACTER_ASSET_TYPES: frozenset[str] = frozenset({"text", "markdown"})
 
 
 def _slot_constraint_shortfalls(
-    slots: Sequence[Mapping[str, Any]],
-    manifest: Mapping[str, Any],
-    declared: Mapping[str, Any],
-    primary: str | None,
+    slots: Sequence[Mapping[str, Any]], manifest: Mapping[str, Any], primary: str | None
 ) -> list[ManifestShortfall]:
     """What each filled slot fails of the constraints stated FOR THAT SLOT, every slot alike.
 
@@ -1098,14 +1226,19 @@ def _slot_constraint_shortfalls(
 
     * ``min`` / ``max`` -- "count for repeatable / pool slots", the number of assets the slot
       holds (one for a single object);
-    * ``max_chars`` on the slot and ``<asset_group_id>_max_chars`` on the declaration -- the
-      length of a text or markdown asset's ``content``;
+    * ``max_chars`` -- the length of a text or markdown asset's ``content``, and of a card's
+      ``headline`` or ``description`` (``member_max_chars``);
     * ``max_size_kb`` -- "exact kilobytes, where 1 KB = 1,000 bytes", against
       ``file_size_bytes``. Silence fails, as it does for the declaration's own cap
       (:data:`_MANIFEST_MUST_BE_STATED`): a cap the manifest does not answer cannot be checked;
     * ``pixel_ratios`` on a slot other than the main one -- a STATED ``pixel_ratio`` outside
       the set. An unstated one is not graded: the pin infers it from "the matched logical
-      size", and only the main slot has one. The main slot's set is graded with its size.
+      size", and only the main slot has one. The main slot's set is graded with its size;
+    * ``aspect_ratio``, ``widths`` and ``heights`` on a slot other than the main one
+      (:func:`_slot_dimension_shortfalls`).
+
+    *slots* are effective slots (:func:`_effective_slot`): each carries the flat declaration
+    params that name its role, so a limit stated either way is read here once.
 
     An empty slot is :func:`_manifest_slot_shortfalls`' to report; a slot holding an array
     is graded item by item, its path indexed as a rendition set's is.
@@ -1124,26 +1257,26 @@ def _slot_constraint_shortfalls(
         for index, asset in enumerate(items):
             if isinstance(asset, Mapping):
                 path = f"{group}[{index}]" if isinstance(value, list) else group
-                shortfalls.extend(_slot_asset_shortfalls(path, asset, slot, declared, main=group == primary))
+                shortfalls.extend(_slot_asset_shortfalls(path, asset, slot, main=group == primary))
     return shortfalls
 
 
 def _slot_asset_shortfalls(
-    path: str, asset: Mapping[str, Any], slot: Mapping[str, Any], declared: Mapping[str, Any], *, main: bool
+    path: str, asset: Mapping[str, Any], slot: Mapping[str, Any], *, main: bool
 ) -> list[ManifestShortfall]:
     """One asset of a slot against that slot's own constraints (:func:`_slot_constraint_shortfalls`)."""
     asset_type = str(asset.get("asset_type"))
-    group = str(slot.get("asset_group_id"))
     shortfalls: list[ManifestShortfall] = []
-    if asset_type in _CHARACTER_ASSET_TYPES and isinstance(content := asset.get("content"), str):
-        for constraint, bound in (
-            ("max_chars", slot.get("max_chars")),
-            (f"{group}_max_chars", declared.get(f"{group}_max_chars")),
-        ):
-            if _is_number(bound) and len(content) > bound:
-                shortfalls.append(
-                    ManifestShortfall(f"assets.{path}.content", constraint, str(len(content)), (_shown(bound),))
-                )
+    texts = [(member, asset.get(member), bound) for member, bound in (slot.get("member_max_chars") or {}).items()]
+    if asset_type in _CHARACTER_ASSET_TYPES:
+        texts.append(("content", asset.get("content"), slot.get("max_chars")))
+    shortfalls.extend(
+        ManifestShortfall(f"assets.{path}.{member}", "max_chars", str(len(text)), (_shown(bound),))
+        for member, text, bound in texts
+        if isinstance(text, str) and _is_number(bound) and len(text) > bound
+    )
+    if not main and asset_type in _DIMENSIONED_ASSET_TYPES:
+        shortfalls.extend(_slot_dimension_shortfalls(path, asset, slot))
     size_cap = slot.get("max_size_kb")
     if asset_type in _SIZED_ASSET_TYPES and _is_number(size_cap):
         size = _plain(asset.get("file_size_bytes"))
@@ -1161,6 +1294,31 @@ def _slot_asset_shortfalls(
         shortfalls.append(
             ManifestShortfall(f"assets.{path}.pixel_ratio", "pixel_ratios", _shown(stated), _shown_all(ratios))
         )
+    return shortfalls
+
+
+#: The asset types whose ``width`` and ``height`` a slot's aspect ratio and size sets are
+#: asked of (core/assets/image-asset.json, video-asset.json).
+_DIMENSIONED_ASSET_TYPES: frozenset[str] = frozenset({"image", "video"})
+
+
+def _slot_dimension_shortfalls(path: str, asset: Mapping[str, Any], slot: Mapping[str, Any]) -> list[ManifestShortfall]:
+    """A non-main slot's asset against the slot's aspect ratio and accepted widths and heights.
+
+    Both reach the slot only as flat params (:func:`_effective_slot`): audio_hosted.json
+    ``companion_image_aspect_ratio``, responsive_creative.json ``images_landscape_aspect_ratio``,
+    video_hosted.json ``companion_banner_widths`` ("Permitted companion banner widths") and
+    ``companion_banner_heights``. The ratio is graded as the main asset's is
+    (:func:`_aspect_shortfall`); a stated width or height outside its set is a size the slot
+    does not accept. An asset silent about a dimension is not graded on it.
+    """
+    shortfalls = [found] if (found := _aspect_shortfall(path, asset, slot.get("aspect_ratio"))) else []
+    for constraint, member in (("widths", "width"), ("heights", "height")):
+        accepted, stated = slot.get(constraint), _plain(asset.get(member))
+        if isinstance(accepted, (list, tuple)) and _is_number(stated) and stated not in accepted:
+            shortfalls.append(
+                ManifestShortfall(f"assets.{path}.{member}", member, _shown(stated), _shown_all(accepted))
+            )
     return shortfalls
 
 
