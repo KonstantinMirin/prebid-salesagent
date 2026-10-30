@@ -177,8 +177,6 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | declaration          | selector                         | arm                |
       | fixed_300x250        | bare_image_kind                  | format_kind        |
       | fixed_300x250        | mismatched_728x90                | format_kind        |
-      | fixed_300x250        | unpublished_video_kind           | format_kind        |
-      | fixed_300x250        | unpublished_option_ref           | format_option_refs |
       | duration_range       | overlapping_range                | format_kind        |
       | required_slots       | slot_missing                     | format_kind        |
       | publisher_300        | wrong_publisher_domain           | format_option_refs |
@@ -286,6 +284,61 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # before comparing co-present routes". Comparing first would answer
     # CONFLICTING_SELECTORS, the code the pin forbids for a resolution failure.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/properties/format_option_refs
+
+  # ── The closed set: a format the product does not publish is refused ──────────────────
+  #
+  # core/product-format-declaration.json (v3.2.7), "Closed-set semantics (normative)":
+  # "format_options[] is the closed set of accepted formats for this product. Sellers MUST
+  # reject create_media_buy requests targeting any format_kind (or format option reference)
+  # not present in this list -- typically with UNSUPPORTED_FEATURE or a seller-specific code;
+  # the rejection is structural, not negotiable."
+  #
+  # The two outlines below are the same rule on the two product shapes the 3.x window
+  # admits with declarations: dual-arm (format_ids beside format_options) and canonical-only
+  # (format_options alone, the shape 3.2 tells new products to author). A canonical-only
+  # product has no deprecated arm a seller could fall back to, so a closed set read from
+  # format_ids would accept everything there and refuse correctly on the dual-arm product.
+  #
+  # THE DETAILS ARE ASSERTED, not only the code and field. An unpublished kind and an
+  # unsatisfied params selector both answer UNSUPPORTED_FEATURE at packages[0].format_kind,
+  # so code and field alone cannot say which rule refused. details.capability names it, and
+  # core/error.json names rejected_value + accepted_values as the canonical rejection-set
+  # keys. accepted_values is this seller's choice of what to name back: the product's kinds
+  # for a kind refusal (the SDK's FormatKindNotInClosedSetError.accepted_kinds), and each
+  # declaration's format_option_id for an option refusal, since that is the value a buyer
+  # puts in format_option_refs. The pin requires only the rejection.
+  #
+  # The accept outline above is the control for both shapes: fixed_300x250 accepts
+  # exact_300x250 and product_option_ref, and so does the canonical-only purchasable outline
+  # further down, so a gate that refused everything reddens there.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/product-format-declaration.json pointer=/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/error.json
+
+  @T-UC-FORMAT-SATISFACTION-closed-set @format_satisfaction @requires_db
+  Scenario Outline: a selector naming a format the product does not publish is refused - <selector>
+    Given the seller declares a canonical format option "fixed_300x250"
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "<arm>" selector
+    And the refusal names the "<capability>" rule, rejecting "<rejected>" and accepting only "<accepted>"
+
+    Examples:
+      | selector               | arm                | capability           | rejected       | accepted                |
+      | unpublished_video_kind | format_kind        | kind_not_published   | video_hosted   | image                   |
+      | unpublished_option_ref | format_option_refs | option_not_published | no_such_option | satisfaction_image_mrec |
+
+  @T-UC-FORMAT-SATISFACTION-closed-set-canonical-only @format_satisfaction @requires_db
+  Scenario Outline: a canonical-only product refuses a format it does not publish - <selector>
+    Given the seller declares a canonical format option "fixed_300x250" and no format_ids
+    And the buyer's package selects "<selector>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the buyer is refused UNSUPPORTED_FEATURE naming the "<arm>" selector
+    And the refusal names the "<capability>" rule, rejecting "<rejected>" and accepting only "<accepted>"
+
+    Examples:
+      | selector               | arm                | capability           | rejected       | accepted                |
+      | unpublished_video_kind | format_kind        | kind_not_published   | video_hosted   | image                   |
+      | unpublished_option_ref | format_option_refs | option_not_published | no_such_option | satisfaction_image_mrec |
 
   @T-UC-FORMAT-SATISFACTION-conflicting @format_satisfaction @requires_db
   Scenario Outline: co-present selector routes that select different declarations are refused - <selector>

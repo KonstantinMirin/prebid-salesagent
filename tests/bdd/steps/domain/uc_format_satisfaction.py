@@ -2035,6 +2035,25 @@ def _assert_placement_refusal(ctx: dict, arm: str, capability: str, rejected: st
     )
 
 
+@then(
+    parsers.parse('the refusal names the "{capability}" rule, rejecting "{rejected}" and accepting only "{accepted}"')
+)
+def then_refusal_names_rule_and_sets(ctx: dict, capability: str, rejected: str, accepted: str) -> None:
+    """The refusal's details: which rule refused, the value refused, and the set offered back.
+
+    ``details.capability`` is what separates a closed-set refusal from an unsatisfied-params
+    one: both are UNSUPPORTED_FEATURE at the same arm, so the code and field the preceding
+    Then asserts cannot tell them apart. ``rejected_value`` and ``accepted_values`` are the
+    pair ``core/error.json`` names as the canonical rejection-set keys; ``accepted_values``
+    is compared whole, so a refusal offering the pinned sixteen-kind vocabulary instead of
+    the product's own closed set fails.
+    """
+    ctx["result"].assert_wire_error(
+        "UNSUPPORTED_FEATURE",
+        details={"capability": capability, "rejected_value": rejected, "accepted_values": [accepted]},
+    )
+
+
 @then("the update is accepted")
 def then_update_accepted(ctx: dict) -> None:
     """Assert the update answered on the wire and carries no error.
