@@ -196,9 +196,23 @@ def canonical_projection(ref: FormatRef, *, spec: Format | None = None) -> Canon
     ``duration_ms_exact: 30000`` on the DECLARATION. What the reference states wins over
     what the registry derives, since the reference is what the sender said.
 
+    THE ID ALONE PROJECTS ONLY AT THE REFERENCE AGENT (:func:`names_reference_agent`). The
+    registry's ``format_id_glob`` entries and the SDK's size upgrade are written in that
+    agent's id namespace, and the SDK matches the glob on the id without reading the
+    ``agent_url`` half, so handed ``display_300x250`` at any other agent it answered
+    ``image`` 300x250 for a format that agent never declared. Another agent's id is that
+    agent's own: it projects only through the agent's served declaration (*spec*), and with
+    none it has no projection. A URL the canonicalization refuses names no agent, so it has
+    none either.
+
     Raises:
         ValueError: when no step resolves, as :func:`canonical_kind_for` does.
     """
+    if spec is None and not names_reference_agent(ref):
+        raise ValueError(
+            f"no canonical projection for legacy format_id {format_ref_id(ref)!r}: the mapping registry projects "
+            "an id alone only at the reference creative agent"
+        )
     upgraded = upgraded_reference(ref)
     declaration = spec.model_copy(update={"format_id": upgraded}) if spec is not None else {"format_id": upgraded}
     projected = project_v1_format_to_declaration(declaration).declaration
@@ -278,7 +292,8 @@ def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
     where the normative order projects it (salesagent-ol033.20.24).
 
     The declaration is the fetched *spec* when the caller has one, else the reference alone,
-    so steps 2 and 4 have nothing to read and only the glob can answer. EITHER WAY THE SDK
+    so steps 2 and 4 have nothing to read and only the glob can answer -- which it does only
+    for a reference naming the reference agent (:func:`canonical_projection`). EITHER WAY THE SDK
     IS HANDED THE UPGRADED ID, once, before the order runs. ``display_300x250_image`` is not
     spelled like any glob, but it is a member of the ``display_image`` mapping: the SDK's
     ``upgrade_legacy_format_id`` rewrites it to that template (salesagent-iz7dm). Upgrading
@@ -1278,12 +1293,11 @@ def registry_projects(ref: FormatRef) -> bool:
 
 
 def _reference_agent_projection(ref: FormatRef) -> CanonicalProjection | None:
-    """The registry's projection of *ref* when it names the reference agent, else None.
+    """The registry's projection of *ref*, or None.
 
-    None too when the registry fails closed for the id.
+    The id alone, so None for any agent but the reference agent (:func:`canonical_projection`),
+    and None too when the registry fails closed for the id.
     """
-    if not names_reference_agent(ref):
-        return None
     try:
         return canonical_projection(ref)
     except ValueError:
