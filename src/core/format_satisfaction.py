@@ -125,6 +125,7 @@ from src.core.errors.details import (
 from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPConflictingSelectorsError,
+    AdCPCreativeMissingClickUrlError,
     AdCPCreativeSizeMismatchError,
     AdCPCreativeValidationFailedError,
 )
@@ -230,13 +231,15 @@ class ManifestShortfall:
     ``constraint`` the declaration key that refused it (``width``, ``slots``),
     ``rejected_value`` what the asset states and ``accepted_values`` what the declaration
     accepts -- the pin's canonical rejection-set keys, which the raise site carries into
-    ``problems[]`` unchanged.
+    ``problems[]`` unchanged. ``missing_destination`` marks a required click destination the
+    manifest leaves out, which the pin gives its own code (:func:`creative_refusal`).
     """
 
     field: str
     constraint: str
     rejected_value: str | None
     accepted_values: tuple[str, ...]
+    missing_destination: bool = False
 
     @property
     def dimensional(self) -> bool:
@@ -859,7 +862,14 @@ def _manifest_slot_shortfalls(
     type" also covers an OPTIONAL slot the manifest fills: a declared slot holding an asset of
     another type is refused whether or not the slot was required. An asset keyed by no
     declared slot is not graded: the declaration says nothing about it.
+
+    A missing slot is marked ``missing_destination`` when it is the click destination, by
+    the declaration's own signal (:func:`declared_slot_mechanism`): the url slot's ``role``,
+    else its ``asset_group_id`` in the vocabulary registry -- ``landing_page_url`` on a
+    canonical declaration, its alias ``click_url`` on a named format.
     """
+    from src.core.helpers.creative_helpers import declared_slot_mechanism  # the package init imports adapters
+
     offered = [
         {"asset_group_id": group, "asset_type": asset_type}
         for group, value in manifest.items()
@@ -871,6 +881,12 @@ def _manifest_slot_shortfalls(
             constraint="slots",
             rejected_value=None,
             accepted_values=tuple(str(slot.get("asset_type")) for slot in slots if slot.get("asset_group_id") == group),
+            missing_destination=any(
+                slot.get("asset_group_id") == group
+                and slot.get("asset_type") == "url"
+                and declared_slot_mechanism(group, slot.get("requirements")) == "clickthrough"
+                for slot in slots
+            ),
         )
         for group in _slot_shortfall(offered, slots)
         if group not in manifest
@@ -1463,7 +1479,12 @@ def named_format_manifest_verdict(spec: Format, assets: Any) -> FormatSatisfacti
       repetitions of a group, so there is no key to look a group's assets up by.
     """
     slots = tuple(
-        {"asset_group_id": asset.asset_id, "asset_type": str(asset.asset_type), "required": asset.required}
+        {
+            "asset_group_id": asset.asset_id,
+            "asset_type": str(asset.asset_type),
+            "required": asset.required,
+            "requirements": getattr(asset, "requirements", None),
+        }
         for asset in spec.assets or ()
         if isinstance(asset, LibraryIndividualAsset)
     )
@@ -3206,7 +3227,12 @@ def creative_refusal(
     field: str | None = None,
     creative_id: str | None = None,
     **entity: Any,
-) -> AdCPCapabilityNotSupportedError | AdCPCreativeSizeMismatchError | AdCPCreativeValidationFailedError:
+) -> (
+    AdCPCapabilityNotSupportedError
+    | AdCPCreativeMissingClickUrlError
+    | AdCPCreativeSizeMismatchError
+    | AdCPCreativeValidationFailedError
+):
     """The error to raise for a refused CREATIVE verdict. Every creative gate raises this.
 
     A selection outside the product's closed set, or an option ref it does not publish, is
@@ -3218,6 +3244,9 @@ def creative_refusal(
 
     * ``CREATIVE_SIZE_MISMATCH`` when every shortfall is a dimension -- "The submitted
       creative dimensions do not match any size accepted by the selected packages";
+    * ``CREATIVE_MISSING_CLICK_URL`` when every shortfall is a required click destination
+      left out -- "A submitted creative that requires a destination URL does not provide
+      one";
     * ``CREATIVE_VALIDATION_FAILED_GENERIC`` otherwise, including an ambiguous selection and
       a creative set that leaves an included placement uncovered (:func:`creatives_uncovered`)
       -- "the producer cannot classify the failure with a more specific standard code". No
@@ -3225,21 +3254,24 @@ def creative_refusal(
       is about a CreativeRepresentationSet and requires a rejection per representation id,
       which a plain manifest has none of.
 
+    The generic code's own text says producers "SHOULD prefer a specific creative code
+    whenever one applies", so the error takes a specific code when every shortfall shares
+    it. A refusal mixing kinds takes the generic code, and each ``problems[]`` entry still
+    carries the specific code of its own shortfall.
+
     ``problems[]`` carries each shortfall as values -- the manifest path, what the asset
     states, what the declaration accepts -- under the code it is an instance of.
     """
     if verdict.refusal not in _CREATIVE_REFUSALS and not verdict.shortfalls:
         return canonical_refusal(verdict, field=field, creative_id=creative_id, **entity)
-    sized = bool(verdict.shortfalls) and all(shortfall.dimensional for shortfall in verdict.shortfalls)
+    codes = {_shortfall_code(shortfall) for shortfall in verdict.shortfalls}
     details = CreativeManifestDetails(
         creative_id=creative_id,
         rejected_value=verdict.rejected_value,
         accepted_values=list(verdict.accepted_values),
         problems=[
             ErrorProblem(
-                code=ErrorCode.CREATIVE_SIZE_MISMATCH
-                if shortfall.dimensional
-                else ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC,
+                code=_shortfall_code(shortfall),
                 subject_type="creative",
                 subject_id=creative_id,
                 field=shortfall.field,
@@ -3251,9 +3283,20 @@ def creative_refusal(
         or None,
         **entity,
     )
-    if sized:
+    if codes == {ErrorCode.CREATIVE_SIZE_MISMATCH}:
         return AdCPCreativeSizeMismatchError(details=details, field=field)
+    if codes == {ErrorCode.CREATIVE_MISSING_CLICK_URL}:
+        return AdCPCreativeMissingClickUrlError(details=details, field=field)
     return AdCPCreativeValidationFailedError(details=details, field=field)
+
+
+def _shortfall_code(shortfall: ManifestShortfall) -> ErrorCode:
+    """The pinned creative code one shortfall is an instance of: specific where one applies."""
+    if shortfall.dimensional:
+        return ErrorCode.CREATIVE_SIZE_MISMATCH
+    if shortfall.missing_destination:
+        return ErrorCode.CREATIVE_MISSING_CLICK_URL
+    return ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC
 
 
 def require_covered(

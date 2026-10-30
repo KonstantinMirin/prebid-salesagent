@@ -695,16 +695,38 @@ def url_asset_identification(
             mechanisms[asset_id] = declared_mechanisms[asset_id]
         elif asset_id in declared_roles:
             continue  # a role with no safe fallback: identified, not invokable
-        elif (group := vocabulary.get(asset_id)) is not None:
-            # The registry names the slot's role; the pin's own role table says what may be
-            # invoked from it. A registry role with no entry in that table -- a privacy
-            # policy, a subtitle file -- is identified and simply not invoked.
-            mechanism = _SLOT_ROLE_TO_MECHANISM.get(_GROUP_ID_ROLE_OVERRIDES.get(group, group))
-            if mechanism:
+        elif asset_id in vocabulary:
+            # A registry role with no mechanism -- a privacy policy, a subtitle file -- is
+            # identified and simply not invoked.
+            if mechanism := _registry_mechanism(asset_id):
                 mechanisms[asset_id] = mechanism
         else:
             unidentified.append(asset_id)
     return mechanisms, unidentified
+
+
+def _registry_mechanism(asset_id: str) -> str | None:
+    """The mechanism the vocabulary registry's role for *asset_id* maps to, else ``None``.
+
+    The registry names the slot's role and the pin's own role table says what may be
+    invoked from it -- the third rung of :func:`url_asset_identification`.
+    """
+    group = _asset_group_vocabulary().get(asset_id)
+    return None if group is None else _SLOT_ROLE_TO_MECHANISM.get(_GROUP_ID_ROLE_OVERRIDES.get(group, group))
+
+
+def declared_slot_mechanism(asset_id: str, requirements: Any) -> str | None:
+    """How a receiver invokes the URL a declared url slot holds, from the declaration alone.
+
+    The format-side rungs of :func:`url_asset_identification`, asked of a SLOT rather than a
+    manifest asset: the slot's ``url-asset-requirements.role`` when it declares one, else
+    its ``asset_group_id`` resolved through the vocabulary registry (a canonical slot
+    carries no ``role``). A declared role with no safe mechanism stops here and answers
+    ``None``, as it does for an asset. ``"clickthrough"`` is the click destination, which
+    is how a missing required destination is told apart from any other missing slot.
+    """
+    role = str(_requirement_field(requirements, "role") or "")
+    return _SLOT_ROLE_TO_MECHANISM.get(role) if role else _registry_mechanism(asset_id)
 
 
 def unidentified_url_asset_reason(

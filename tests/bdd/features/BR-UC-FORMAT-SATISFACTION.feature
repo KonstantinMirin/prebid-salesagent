@@ -2875,13 +2875,13 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   Scenario Outline: sync_creatives refuses a legacy creative missing an asset its named format requires - <manifest>
     Given the buyer syncs a creative identified by format_id "display_300x250_image" carrying the "<manifest>" manifest
     When the Buyer Agent syncs it into the library
-    Then the creative is reported failed with CREATIVE_VALIDATION_FAILED_GENERIC at "creatives[0]" and nothing is stored
+    Then the creative is reported failed with <code> at "creatives[0]" and nothing is stored
     And the entry names "<path>" missing where "<accepted>" is accepted
 
     Examples:
-      | manifest             | path                | accepted |
-      | banner_image_missing | assets.banner_image | image    |
-      | click_url_missing    | assets.click_url    | url      |
+      | manifest             | code                               | path                | accepted |
+      | banner_image_missing | CREATIVE_VALIDATION_FAILED_GENERIC | assets.banner_image | image    |
+      | click_url_missing    | CREATIVE_MISSING_CLICK_URL         | assets.click_url    | url      |
 
   @T-UC-FORMAT-SATISFACTION-legacy-manifest-library-wrong-type @format_satisfaction_sync @requires_db
   Scenario: sync_creatives refuses a legacy creative filling a required asset with another asset type
@@ -2899,14 +2899,23 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # the agent serves: display_300x250_image declares banner_image (image) and click_url (url),
     # both required. Every refusal row differs from the accept row in one asset, so a seller
     # that does not read the named format's assets accepts all three. The refusal is per
-    # creative -- the batch completes and the entry fails -- and nothing is written. The code is
-    # the generic creative one, as for a canonical manifest that does not fill its kind's slots
-    # (@T-UC-FORMAT-SATISFACTION-manifest-library-slot-missing): the enum names no more specific
-    # code for a missing or mistyped asset.
+    # creative -- the batch completes and the entry fails -- and nothing is written.
+    #
+    # THE CODE is the most specific one enums/error-code.json gives the failure, because
+    # CREATIVE_VALIDATION_FAILED_GENERIC's own text says "Producers SHOULD prefer a specific
+    # creative code whenever one applies". click_url is the format's click destination -- the
+    # vocabulary registry (core/asset-group-vocabulary.json) lists it as an alias of
+    # landing_page_url, "Click-through destination URL for the ad" -- so leaving it out is
+    # CREATIVE_MISSING_CLICK_URL: "A submitted creative that requires a destination URL does
+    # not provide one". A missing image and a mistyped asset have no specific code and take the
+    # generic one, as a canonical manifest that does not fill its kind's slots does
+    # (@T-UC-FORMAT-SATISFACTION-manifest-library-slot-missing).
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json pointer=/$defs/baseIndividualAsset/properties/asset_id
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format.json pointer=/$defs/baseIndividualAsset/properties/required
     # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-manifests.mdx section="Validation"
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json property=CREATIVE_VALIDATION_FAILED_GENERIC
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json property=CREATIVE_MISSING_CLICK_URL
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/asset-group-vocabulary.json pointer=/vocabulary/landing_page_url
 
   @T-UC-FORMAT-SATISFACTION-manifest-legacy-only-product-accepted @format_satisfaction_sync @requires_db
   Scenario: a canonical creative filling its kind's slots is assigned to a product publishing no declaration
