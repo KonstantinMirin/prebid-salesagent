@@ -547,7 +547,7 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
 
     @realize_e2e(_uploaded_assets_from_the_audit_trail)
     def uploaded_adapter_assets(self) -> list[dict[str, Any]]:
-        """The asset dicts the create path handed the ad server, newest call last.
+        """The asset dicts the create or update path handed the ad server, newest call last.
 
         A NAMED SEAM instead of a step reaching into ``env.mock``: the escape-hatch guard
         refuses that reach in a step because it "works in-process, cannot work on e2e_rest,
@@ -565,12 +565,21 @@ class MediaBuyCreateEnv(PeerCreativeAgentMixin, IntegrationEnv):
         ``adapter.creatives_manager.add_creative_assets`` instead; a scenario wanting those
         needs its own seam rather than a widened one here, because which path ran is part of
         what it is asserting.
+
+        Every adapter mock the env patches is read, create-module first: ``MediaBuyDualEnv``
+        also patches the update module's ``get_adapter`` as ``update_adapter``, so an upload
+        the update path makes lands there and nowhere else. Reading only ``adapter`` would
+        report an empty list for every update, which is the answer the update scenarios
+        assert against. Within one mock the calls are in order; across the two, the create
+        module's come first, which matches every scenario that both creates and updates.
         """
-        adapter = self.mock["adapter"].return_value
         uploaded: list[dict[str, Any]] = []
-        for call in adapter.add_creative_assets.call_args_list:
-            assets = call.args[1] if len(call.args) > 1 else call.kwargs.get("assets")
-            uploaded.extend(assets or [])
+        for name in ("adapter", "update_adapter"):
+            if name not in self.mock:
+                continue
+            for call in self.mock[name].return_value.add_creative_assets.call_args_list:
+                assets = call.args[1] if len(call.args) > 1 else call.kwargs.get("assets")
+                uploaded.extend(assets or [])
         return uploaded
 
     def report_creative_deadline(self, deadline: datetime) -> None:

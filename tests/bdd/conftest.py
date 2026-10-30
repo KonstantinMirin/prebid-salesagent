@@ -470,6 +470,15 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME: UC-003 ext-t — invoice_recipient authorization (BR-RULE-214) not implemented;
     # production accepts the override without an authorization check, so no VALIDATION_ERROR is raised.
     "T-UC-003-ext-t": "invoice_recipient authorization not implemented (BR-RULE-214) — production gap",
+    # ── create_media_buy and update_media_buy disagree (#2483) ──
+    # Each scenario states, on update_media_buy, work create_media_buy already does. Neither
+    # tool is patched alone: #2483 moves both onto shared services, and each entry
+    # graduates (XPASS strict on all four transports) when it lands.
+    "T-UC-003-local-inline-creatives-ad-server-push": (
+        "update_media_buy syncs and assigns a package's inline creatives but never calls the "
+        "ad server's add_creative_assets, which create_media_buy does; create and update "
+        "disagree — prebid/salesagent#2483"
+    ),
     # Graduated: T-UC-003-ext-u (new_packages refused UNSUPPORTED_FEATURE). XPASS(strict) on
     # a2a, mcp, rest and e2e_rest in box run innet_291026_0131. Inspected per
     # .claude/rules/workflows/xpass-graduation.md: the scenario states the full obligation

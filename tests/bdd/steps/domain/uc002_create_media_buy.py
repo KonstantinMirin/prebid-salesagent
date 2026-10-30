@@ -2262,6 +2262,26 @@ def then_ad_server_receives_media_url(ctx: dict) -> None:
     assert asset.get("url"), f"the ad server received the creative with no media URL: {asset!r}"
 
 
+@then(parsers.parse('the ad server receives the inline creative "{creative_id}"'))
+def then_ad_server_receives_inline_creative(ctx: dict, creative_id: str) -> None:
+    """The inline creative reached the ad server, named by the id the buyer gave it.
+
+    A package's inline creatives are written to the library, assigned, and then pushed to
+    the ad server; a seller that stops after the first two answers the buyer success and
+    reads the assignment back, and the creative never serves. The push is observable only at
+    the adapter boundary, so this reads the same ``uploaded_adapter_assets`` seam as the
+    clickthrough Thens: the adapter mock's calls in process, the ad server's own audit
+    receipts on e2e_rest. The asset dict carries ``creative_id``
+    (``_build_adapter_asset_from_creative``), so the assertion names THIS creative rather
+    than accepting any upload.
+    """
+    received = [asset.get("creative_id") for asset in ctx["env"].uploaded_adapter_assets()]
+    assert creative_id in received, (
+        f"the ad server was never handed inline creative {creative_id!r}; it received {received!r}. "
+        f"The creative is in the library and assigned, but nothing pushed it to the ad server."
+    )
+
+
 @then("the ad server receives that creative with no clickthrough")
 def then_ad_server_receives_no_clickthrough(ctx: dict) -> None:
     """The MUST NOT as an outcome: a url the manifest never identified is not guessed at.
