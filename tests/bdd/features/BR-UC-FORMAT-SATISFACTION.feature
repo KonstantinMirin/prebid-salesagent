@@ -99,6 +99,18 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | fixed_300x250        | option_plus_equivalent_legacy_image |
       | two_image_options    | both_option_refs                    |
       | any_audio            | legacy_audio_standard_30s           |
+      | house_ref_300x250    | legacy_house_ref_only               |
+
+    # legacy_house_ref_only is the ONE row a package's legacy reference resolves through the
+    # seller's own v1_format_ref and nothing else. registries/v1-canonical-mapping.json (3.2.7)
+    # "Resolution order", step 1: the "Authoritative v2->v1 link" -- a declaration's
+    # v1_format_ref naming the id. The id is a house slug: no glob names it, it encodes no size
+    # for the SDK's upgrade, and no creative agent serves it, so steps 2 to 4 have nothing to
+    # read. A seller that skips step 1 finds no projection and no kind and refuses it
+    # UNSUPPORTED_FEATURE (package-request.json: "a legacy format_id that cannot be normalized
+    # through the canonical mapping path MUST be rejected"); every other legacy row here also
+    # resolves through the registry, so none of them could tell.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/media-buy/package-request.json pointer=/description
 
     # legacy_audio_standard_30s is the ONE row a package's legacy reference resolves through
     # the creative agent's own declaration and nothing else. registries/v1-canonical-mapping.json
@@ -1224,6 +1236,61 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # write gate: the kind actually reaches the column, which is the thing a NOT NULL
     # constraint alone would not show (a seller could satisfy NOT NULL by writing a wrong
     # kind, which is what the fire-probe for this change perturbs).
+
+  # THE AGENT'S CATALOGUE IS NOT THE SOURCE OF TRUTH. docs/creative/template-format-ids.mdx
+  # (3.2.7) § Compatibility: "Normalize them to canonical declarations immediately ... Do not
+  # ... treat a deprecated list_creative_formats response as a source of truth". The standard
+  # creative agent's catalogue does not list display_468x60_image, and the canonical mapping
+  # registry -- "authoritative for v1 -> v2 projection" -- upgrades it to display_image
+  # 468x60, kind image. So the creative is a creative in a real format and is stored with that
+  # kind; a seller asking the catalogue refuses it REFERENCE_NOT_FOUND on every row.
+  #
+  # THE SPELLINGS grade core/format-id.json's agent_url MUST ("canonicalize agent_url per the
+  # AdCP URL canonicalization rules before treating two formats as the same"): the registry's
+  # upgrade applies only in the standard agent's namespace, and docs/reference/
+  # url-canonicalization.mdx (3.2.7) makes the trailing root-label dot (step 2) and the
+  # removable dot segment (step 5) the same agent. The upper-cased host is the control: the
+  # SDK's own partial comparison already equates it, so it separates the catalogue rule from
+  # the canonicalization rule.
+  #
+  # Which agent's ids the registry projects is a SELLER CHOICE the pin leaves open: the
+  # registry's globs carry no agent_url, and this seller projects them only for references
+  # naming the standard creative agent, by origin (the owner's ruling: an agent's identity is
+  # its origin, and legacy v1 ids map to a kind only at the reference agent's origin).
+  # @source repo=adcp ref=v3.2.7 path=docs/creative/template-format-ids.mdx
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/registries/v1-canonical-mapping.json pointer=/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json pointer=/properties/agent_url/description
+  # @source repo=adcp ref=v3.2.7 path=docs/reference/url-canonicalization.mdx
+  @T-UC-FORMAT-SATISFACTION-upsert-registry-projects-unlisted @creative_library_upsert @requires_db
+  Scenario Outline: a legacy id the creative agent does not list is stored with the kind the mapping registry gives it - <variant>
+    Given a packaged product declaring only the deprecated format_ids
+    And the buyer syncs a creative identified by format_id "display_468x60_image" at the standard creative agent spelled with <variant>
+    When the Buyer Agent syncs it into the library
+    Then the creative is stored carrying canonical kind "image"
+
+    Examples:
+      | variant                   |
+      | an upper-cased host       |
+      | a trailing root-label dot |
+      | a removable dot segment   |
+
+  # A FORMAT IS ITS AGENT'S. core/format-id.json identifies a format by its declaring agent
+  # and its id, and requires canonicalizing agent_url before two references are treated as the
+  # same. The seller's creative agent lists a format under ANOTHER agent's URL, and the buyer
+  # names that id at the seller's agent: no format the seller's agent publishes is named, so
+  # the reference does not resolve -- REFERENCE_NOT_FOUND, enums/error-code.json's "referenced
+  # identifier ... that does not exist" -- and nothing is stored. A seller that matched the
+  # agent's catalogue on the id alone took the entry as the named format and refused the
+  # creative UNSUPPORTED_FEATURE for a projection it should never have attempted.
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json pointer=/properties/agent_url/description
+  # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json pointer=/enumDescriptions/REFERENCE_NOT_FOUND
+  @T-UC-FORMAT-SATISFACTION-upsert-relisted-format @creative_library_upsert @requires_db
+  Scenario: a format the seller's creative agent lists under another agent's URL is not that agent's format
+    Given a packaged product declaring only the deprecated format_ids
+    And the seller's creative agent lists "publisher_relisted_banner" with assets "image" under another agent's URL
+    And the buyer syncs a creative naming that format at the seller's creative agent
+    When the Buyer Agent syncs it into the library
+    Then the creative is reported failed with REFERENCE_NOT_FOUND and nothing is stored
 
     # The OTHER half of the asymmetry, and the control for the row above: same tool, same
     # lenient mode, same "this product will not take this creative" condition -- and the

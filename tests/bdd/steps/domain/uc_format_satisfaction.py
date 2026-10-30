@@ -101,6 +101,11 @@ def _agent_url_spelled(variant: str) -> str:
 _PRODUCT_OPTION_ID = "satisfaction_image_mrec"
 _PUBLISHER_DOMAIN = "shorts.streamhaus.example"
 
+#: A legacy id the SELLER names in a declaration's ``v1_format_ref`` and nothing else
+#: resolves: no registry glob, no size-encoded slug for the SDK to upgrade, absent from the
+#: reference capture. Named once so the declaration and the selector cannot drift.
+_HOUSE_LEGACY_ID = "satisfaction_house_mrec"
+
 #: What the seller STORES, per declaration name. Each is a
 #: ``core/product-format-declaration.json`` document.
 _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
@@ -282,6 +287,19 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
                     }
                 ],
             },
+        }
+    ],
+    # ``fixed_300x250`` asserting a HOUSE legacy id in its ``v1_format_ref`` instead of the
+    # registry's: an id no ``format_id_glob`` names, the SDK's upgrade does not rewrite and
+    # no creative agent serves. Step 1 of registries/v1-canonical-mapping.json's order -- the
+    # seller's own v2 -> v1 link -- is therefore the ONLY step that reaches this declaration
+    # from that id.
+    "house_ref_300x250": [
+        {
+            "format_kind": "image",
+            "format_option_id": _PRODUCT_OPTION_ID,
+            "v1_format_ref": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": _HOUSE_LEGACY_ID}],
+            "params": {"width": 300, "height": 250},
         }
     ],
     # ``fixed_300x250`` with the ``v1_format_ref`` assertion REMOVED, and nothing else
@@ -602,6 +620,10 @@ _SELECTORS: dict[str, dict[str, Any]] = {
     "legacy_audio_standard_30s": {
         "format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "audio_standard_30s"}]
     },
+    # The house id ``house_ref_300x250`` asserts. Only the declaration's own v1_format_ref
+    # reaches it, so a seller that skips step 1 of the registry's order finds no projection
+    # and no kind, and refuses it LEGACY_UNPROJECTABLE.
+    "legacy_house_ref_only": {"format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": _HOUSE_LEGACY_ID}]},
     # The storyboard's create_media_buy_with_equivalent_dual_emission: the product-local
     # option ref and ``display_300x250_image`` "normalize to the same declaration", so the
     # two routes agree and the buy is accepted.
@@ -1835,16 +1857,23 @@ def _serve_publisher_format(ctx: dict, format_id: str, asset_types: str, kind: s
     served for real by the tenant's peer agent (``set_served_catalogue``), so every
     transport resolves the creative against the same served declaration.
     """
+    ctx["env"].set_served_catalogue([_publisher_format(format_id, asset_types, kind)])
+
+
+def _publisher_format(format_id: str, asset_types: str, kind: str | None, **format_id_fields: str) -> Any:
+    """One publisher format: its id, its comma-separated asset types and its canonical kind, if any.
+
+    *format_id_fields* override the reference's other members (its ``agent_url``).
+    """
     from adcp.types import CanonicalProjectionReference
 
     from tests.factories.format import FormatFactory, FormatIdFactory, make_asset
 
-    fmt = FormatFactory(
-        format_id=FormatIdFactory(id=format_id),
+    return FormatFactory(
+        format_id=FormatIdFactory(id=format_id, **format_id_fields),
         assets=[make_asset(t, asset_id=f"{t}_{i}") for i, t in enumerate(asset_types.split(", "))],
         canonical=CanonicalProjectionReference(kind=kind) if kind is not None else None,
     )
-    ctx["env"].set_served_catalogue([fmt])
 
 
 @given(
@@ -1865,6 +1894,77 @@ def given_served_publisher_format(ctx: dict, format_id: str, asset_types: str, k
 def given_served_unannotated_publisher_format(ctx: dict, format_id: str, asset_types: str) -> None:
     """A publisher format that leaves its projection to the registry (steps 3 and 4)."""
     _serve_publisher_format(ctx, format_id, asset_types, None)
+
+
+#: The agent a relisted format is declared under: not the seller's creative agent, and not
+#: one any canonicalization makes equal to it.
+_RELISTING_AGENT_URL = "https://relisting-creatives.example"
+
+
+@given(
+    parsers.parse(
+        'the seller\'s creative agent lists "{format_id}" with assets "{asset_types}" under another agent\'s URL'
+    )
+)
+def given_relisted_publisher_format(ctx: dict, format_id: str, asset_types: str) -> None:
+    """The seller's creative agent serves a format whose ``format_id.agent_url`` names ANOTHER agent.
+
+    Served VERBATIM (``rehome=False``), so the entry keeps the agent it declares; that is
+    the whole fixture. It declares its canonical kind, so a seller that took it as the named
+    format would have a projection to store -- the refusal can only come from reading the
+    declared agent.
+    """
+    from src.core.schemas import canonical_agent_url
+
+    fmt = _publisher_format(format_id, asset_types, "image", agent_url=_RELISTING_AGENT_URL)
+    peer_url = ctx["env"].seed_own_creative_agent([fmt], rehome=False)
+    assert canonical_agent_url(peer_url) != canonical_agent_url(_RELISTING_AGENT_URL), (
+        "the seller's creative agent IS the agent the entry declares, so the entry is its own format "
+        "and this scenario grades nothing"
+    )
+    ctx["relisted_format_id"] = format_id
+
+
+@given("the buyer syncs a creative naming that format at the seller's creative agent")
+def given_sync_relisted_format_creative(ctx: dict) -> None:
+    """The legacy claim names the relisted id at the URL the seller's creative agent is dialled at."""
+    from tests.factories.request import CreativeAssetRequestFactory
+
+    ctx["creatives"] = [
+        CreativeAssetRequestFactory.payload(
+            creative_id=_SYNC_CREATIVE_ID,
+            format_id={"agent_url": ctx["env"].peer_agent_url(), "id": ctx["relisted_format_id"]},
+        )
+    ]
+
+
+@given(
+    parsers.parse(
+        'the buyer syncs a creative identified by format_id "{format_id}" '
+        "at the standard creative agent spelled with {variant}"
+    )
+)
+def given_sync_legacy_creative_respelled(ctx: dict, format_id: str, variant: str) -> None:
+    """A legacy claim at the standard creative agent, its URL in the named spelling.
+
+    Not through ``resolvable_format_ref``: that door admits only ids the reference capture
+    lists, and this scenario's id is one the capture does NOT list, which is its subject. The
+    guard here is the opposite one -- the id must stay absent, or the agent's catalogue
+    answers and the registry is never asked.
+    """
+    from src.core.format_cache import load_reference_formats
+    from tests.factories.request import CreativeAssetRequestFactory
+
+    assert format_id not in {fmt.format_id.id for fmt in load_reference_formats()}, (
+        f"{format_id!r} is in the reference capture, so the agent's catalogue resolves it and the "
+        "registry's projection is not what this scenario grades; pick an id the capture lacks"
+    )
+    ctx["creatives"] = [
+        CreativeAssetRequestFactory.payload(
+            creative_id=_SYNC_CREATIVE_ID,
+            format_id={"agent_url": _agent_url_spelled(variant), "id": format_id},
+        )
+    ]
 
 
 @given("the buyer syncs a creative identified by that served format")
