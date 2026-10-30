@@ -71,11 +71,18 @@ _AGENT_HOST = urlsplit(DEFAULT_CREATIVE_AGENT_URL).netloc
 #: scenario can pass. The last names a DIFFERENT agent, because "canonicalization removes
 #: only dot segments, never real path segments" -- it is the row a seller that collapsed
 #: too much would fail.
+#:
+#: "a mounted path" is the standard creative agent served at ``/mcp``. It is a different
+#: FORMAT IDENTITY by the same rule ``a different path`` is, and the same AGENT for the
+#: registry's projection: the owner's ruling is that an agent's identity is its origin and
+#: that legacy v1 ids map to a kind at the reference agent's origin, whatever path it is
+#: mounted at (``format_resolver.registry_addressed``).
 _AGENT_URL_SPELLINGS: dict[str, str] = {
     "an upper-cased host": f"https://{_AGENT_HOST.upper()}",
     "a trailing root-label dot": f"https://{_AGENT_HOST}.",
     "a removable dot segment": f"https://{_AGENT_HOST}/x/..",
     "a different path": f"https://{_AGENT_HOST}/other-agent",
+    "a mounted path": f"https://{_AGENT_HOST}/mcp",
 }
 
 
@@ -301,6 +308,26 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "v1_format_ref": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": _HOUSE_LEGACY_ID}],
             "params": {"width": 300, "height": 250},
         }
+    ],
+    # TWO 300x250 images, each asserting a DIFFERENT legacy id in its ``v1_format_ref``, the
+    # house one FIRST. ``display_300x250_image`` reaches the second by step 1 of
+    # registries/v1-canonical-mapping.json's order (its own v1_format_ref) and reaches BOTH by
+    # step 3 (the registry's projection to an image at 300x250, which both narrow). Step 1
+    # first selects the second alone; a seller that skipped it, or ran the projection first,
+    # selects both, and a package records the first of a selection -- the house option.
+    "house_mrec_then_asserted_mrec": [
+        {
+            "format_kind": "image",
+            "format_option_id": "satisfaction_image_mrec_house",
+            "v1_format_ref": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": _HOUSE_LEGACY_ID}],
+            "params": {"width": 300, "height": 250},
+        },
+        {
+            "format_kind": "image",
+            "format_option_id": _PRODUCT_OPTION_ID,
+            "v1_format_ref": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250_image"}],
+            "params": {"width": 300, "height": 250},
+        },
     ],
     # ``fixed_300x250`` with the ``v1_format_ref`` assertion REMOVED, and nothing else
     # changed. That one difference decides whether the accepted package's deprecated
@@ -1952,19 +1979,69 @@ def given_sync_legacy_creative_respelled(ctx: dict, format_id: str, variant: str
     guard here is the opposite one -- the id must stay absent, or the agent's catalogue
     answers and the registry is never asked.
     """
-    from src.core.format_cache import load_reference_formats
     from tests.factories.request import CreativeAssetRequestFactory
 
-    assert format_id not in {fmt.format_id.id for fmt in load_reference_formats()}, (
-        f"{format_id!r} is in the reference capture, so the agent's catalogue resolves it and the "
-        "registry's projection is not what this scenario grades; pick an id the capture lacks"
-    )
+    _assert_unlisted_by_the_agent(format_id)
     ctx["creatives"] = [
         CreativeAssetRequestFactory.payload(
             creative_id=_SYNC_CREATIVE_ID,
             format_id={"agent_url": _agent_url_spelled(variant), "id": format_id},
         )
     ]
+
+
+def _assert_unlisted_by_the_agent(format_id: str) -> None:
+    """Refuse a row whose id the reference capture lists: the agent's catalogue would answer it.
+
+    The scenarios that use this grade the canonical mapping registry answering for an id the
+    standard creative agent's deprecated catalogue does NOT list, so an id the capture holds
+    would pass for the catalogue's reason and grade nothing.
+    """
+    from src.core.format_cache import load_reference_formats
+
+    assert format_id not in {fmt.format_id.id for fmt in load_reference_formats()}, (
+        f"{format_id!r} is in the reference capture, so the agent's catalogue resolves it and the "
+        "registry's projection is not what this scenario grades; pick an id the capture lacks"
+    )
+
+
+@given(parsers.parse('the seller publishes only the deprecated format "{format_id}" at the standard creative agent'))
+def given_legacy_only_named_product(ctx: dict, format_id: str) -> None:
+    """Store a LEGACY-ONLY product whose one deprecated entry names *format_id* at the standard agent."""
+    _store_product(
+        ctx,
+        f"satisfaction_legacy_{format_id}",
+        format_ids=[{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": format_id}],
+        format_options=None,
+    )
+
+
+@given(
+    parsers.parse(
+        'the buyer assigns a stored creative identified by format_id "{format_id}" sized {width:d}x{height:d} '
+        "at the standard creative agent"
+    )
+)
+def given_stored_legacy_creative_assigned(ctx: dict, format_id: str, width: int, height: int) -> None:
+    """A library creative on a legacy id the agent does not list, named in the package's creative_ids.
+
+    Seeded through ``CreativeFactory``, which derives the stored identity with the production
+    accessor the sync path writes through, so the row is what a sync of that id stores. Its
+    one media asset carries the URL and the size the create path's asset gate reads.
+    """
+    from tests.factories.creative import CreativeFactory
+
+    _assert_unlisted_by_the_agent(format_id)
+    creative = CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        format=format_id,
+        agent_url=DEFAULT_CREATIVE_AGENT_URL,
+        approved=True,
+        data={"assets": {"banner_image": {"url": "https://example.com/banner.png", "width": width, "height": height}}},
+    )
+    ctx["env"]._commit_factory_data()
+    ctx["request_kwargs"]["packages"][0]["creative_ids"] = [creative.creative_id]
 
 
 @given("the buyer syncs a creative identified by that served format")
