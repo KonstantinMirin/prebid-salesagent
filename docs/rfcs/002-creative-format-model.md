@@ -983,8 +983,10 @@ The remaining gaps:
   video duration, logo aspect ratios and file-size caps, and `image_carousel`'s card bounds are
   not read. `om_sdk_required` cannot be graded on a manifest.
 - **Inline creatives on update (C2).** `update_media_buy` doesn't upload inline creatives to the
-  ad server, while `create_media_buy` does. Following the rule in Part 10, the shared behaviour
-  is stated by a BDD scenario marked xfail against #2483. The capability flag is hardcoded in
+  ad server, while `create_media_buy` does. At `813ee8dff` no scenario states this: the two
+  `update_media_buy` inline scenarios in `BR-UC-FORMAT-SATISFACTION.feature` grade placement
+  coverage, not the upload. Following the rule in Part 10, it gets a BDD scenario marked xfail
+  against #2483, which is in progress. The capability flag is hardcoded in
   `src/services/seller_capabilities.py`.
 - **A foreign declaration without `canonical` (L2).** At `813ee8dff` such a declaration still
   reaches the registry glob through the SDK. The reference-origin rule in Part 10 refuses it.
