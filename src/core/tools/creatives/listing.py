@@ -18,6 +18,7 @@ from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails, EntityRefDetails, ValidationDetails
 from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPInvalidRequestError
+from src.core.format_resolver import equivalent_formats
 from src.core.helpers import enum_value, log_tool_activity
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
@@ -27,7 +28,6 @@ from src.core.schemas import (
     Error,
     ListCreativesRequest,
     ListCreativesResponse,
-    format_id_identity,
 )
 from src.core.tools.creatives._assets import ASSET_MAP
 
@@ -411,13 +411,7 @@ def _list_creatives_impl(
             field="filters.has_served",
         )
     creative_ids = req_filters.creative_ids if req_filters else None
-    # format_id is an object (core/format-id.json), and the identity it names is the pair
-    # ``format_id_identity`` builds — which is also where the agent_url canonicalization the
-    # spec makes a MUST is applied. The repository matches the stored comparison key against
-    # these, so both sides come from the ONE builder rather than from a tuple assembled here.
-    format_ids = (
-        [format_id_identity(f) for f in req_filters.format_ids] if req_filters and req_filters.format_ids else None
-    )
+    requested_format_ids = req_filters.format_ids if req_filters and req_filters.format_ids else None
     # The canonical kind is handed through as the buyer sent it: the pin's items are bare
     # strings from a closed vocabulary, the stored identity is the same vocabulary in a
     # column, and the comparison is therefore equality with no identity to build. Nothing is
@@ -466,6 +460,23 @@ def _list_creatives_impl(
 
     with CreativeUoW(tenant.tenant_id) as uow:
         assert uow.creatives is not None
+        # The deprecated format_ids filter is answered on the CANONICAL shape:
+        # docs/creative/template-format-ids.mdx § Compatibility (v3.2.7), "Normalize them to
+        # canonical declarations immediately and do all matching on the canonical shape". A
+        # creative synced on display_300x250_image IS a display_300x250 creative
+        # (canonical-formats.mdx: the two are "equivalent even though their wire identifiers
+        # differ"), so a stored reference matches when it is equivalent to one the filter
+        # names (``equivalent_formats``, agent canonicalized), and the page query is handed
+        # those references' keys. Equality of the raw key answered that creative "no match".
+        format_ids = (
+            [
+                key
+                for key, stored in uow.creatives.legacy_format_references(principal_id)
+                if any(equivalent_formats(stored, wanted) for wanted in requested_format_ids)
+            ]
+            if requested_format_ids is not None
+            else None
+        )
         result = uow.creatives.get_by_principal(
             principal_id,
             statuses=statuses,

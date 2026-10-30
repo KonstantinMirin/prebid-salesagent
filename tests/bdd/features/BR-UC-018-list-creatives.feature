@@ -1048,6 +1048,30 @@ Feature: BR-UC-018 List Creatives
     # genuinely different agent that no canonicalization makes equal and must not.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/format-id.json property=agent_url
 
+  @T-UC-018-format-id-filter-matches-the-canonical-shape @schema-v3.2 @list-filter @format-id-object
+  Scenario: A format_id filter returns the creative whose legacy reference normalizes to the filtered one
+    Given the buyer's library holds creatives on legacy format_ids "display_300x250_image" and "display_728x90_image"
+    When the Buyer Agent sends list_creatives with filters.format_ids naming "display_300x250" at the standard creative agent
+    Then the response is compliant with the list_creatives spec
+    And the creatives array should contain exactly the creative synced on "display_300x250_image"
+    # docs/creative/template-format-ids.mdx (3.2.7) § Compatibility: legacy ids are normalized
+    # "to canonical declarations immediately and do all matching on the canonical shape", and
+    # canonical-formats.mdx § Format matching vs product satisfaction calls display_300x250
+    # and an image at 300x250 "equivalent even though their wire identifiers differ". The
+    # registry upgrades display_300x250 and display_300x250_image to that one shape, and
+    # display_728x90_image to another. So the filter returns the first creative and not the
+    # second; a filter comparing the raw (agent_url, id) key returns neither and fails the
+    # exact set.
+    #
+    # The relation is EQUIVALENCE, which is the seller's choice for this filter: the pin's
+    # creative-filters.json says only "Filter legacy named-format creatives", and a creative
+    # is a format, not a product accepting one. Equivalence leaves a parameter one side does
+    # not state open, so a filter naming the display_image template returns every display
+    # image creative.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/template-format-ids.mdx
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/creative-filters.json pointer=/properties/format_ids
+
   @T-UC-018-filter-by-format-kinds @schema-v3.2 @list-filter @format-kind
   Scenario Outline: List creatives filtered by filters.format_kinds "<wanted>" returns only the creatives of that canonical kind
     Given the buyer synced creatives on canonical format_kinds "video_hosted" and "image"
