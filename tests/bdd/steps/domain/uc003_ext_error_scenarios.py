@@ -433,10 +433,23 @@ def given_package_update_inline_creatives_bare(ctx: dict) -> None:
 
 @given("the creative upload/sync process fails")
 def given_creative_sync_fails(ctx: dict) -> None:
-    """Configure the mock adapter to fail on creative sync/upload."""
-    env = ctx["env"]
-    mock_adapter = env.mock["adapter"].return_value
-    mock_adapter.add_creative_assets.side_effect = Exception("Creative sync failed: upload timeout")
+    """The creative agent the inline creatives' format names does not answer.
+
+    update_media_buy syncs inline creatives into the library (``sync_creatives``) and
+    calls no ad-server upload, so the sync is the process that can fail, and the agent
+    the format names is what it dials. The agent being down is a transient failure the
+    seller reports as SERVICE_UNAVAILABLE on every transport.
+
+    This step used to set ``add_creative_assets`` on the CREATE module's adapter mock: a
+    method the update path never calls, on a mock it never reads, and nothing at all on
+    e2e. The scenario passed only while the seller refused the creative's legacy
+    ``display_300x250`` for an unrelated reason, which the canonical mapping registry
+    now resolves.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    agent_url = ctx["env"].unreachable_creative_agent_url()
+    for creative in kwargs["packages"][0]["creatives"]:
+        creative["format_id"] = {**creative["format_id"], "agent_url": agent_url}
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -82,11 +82,6 @@ _CATALOG_FORMAT_ID = "display_300x250_image"
 #: ``canonical_kind_for`` refuses both outright ("no canonical projection for legacy
 #: format_id"), so the scenarios naming them were refused before reaching their subject.
 _CATALOG_GENERATIVE_FORMAT_ID = "display_300x250_generative"
-# A creative agent that does not answer, on the wire: the TLS front's own name (so the
-# egress gate resolves it and lets the dial through) at a port nothing listens on. A
-# made-up host fails DNS inside the gate instead, which is a VALIDATION_ERROR on the
-# buyer's agent_url -- a different outcome from an agent that is down.
-_E2E_UNREACHABLE_AGENT_URL = "https://creative-agent.adcp.test:8444/api/creative-agent"
 
 
 def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
@@ -2122,40 +2117,25 @@ def given_creative_with_unknown_format(ctx: dict) -> None:
 
 @given("a creative with a format_id whose agent_url is unreachable")
 def given_creative_with_unreachable_agent(ctx: dict) -> None:
-    """Set up a creative whose format agent returns a connection error.
+    """Set up a creative whose format names a creative agent that does not answer.
 
-    Configures the registry mock's ``get_format`` coroutine to raise a
-    ConnectionError so ``_validate_creative_input`` wraps it into a
-    'Cannot validate format ... is unreachable' ValueError, producing
-    a failed SyncCreativeResult (POST-F2/F3).
+    The same creative on every transport: the env's unreachable agent
+    (``unreachable_creative_agent_url``), whose dial fails as the egress seam fails an
+    undelivered request -- ``OutboundDeliveryFailed``, which IS an
+    AdCPServiceUnavailableError. The sync re-raises it as the request's answer
+    (SERVICE_UNAVAILABLE, transient) rather than as a per-item failure (POST-F2/F3).
     """
-    from unittest.mock import AsyncMock
-
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
 
     format_id, _, _ = _format_payload(ctx, env)
-    creative_id = "creative-unreachable-001"
-    # In-process the mock below is what does not answer; on e2e_rest the wire itself
-    # must, so the creative names a resolvable agent at a closed port.
-    agent_url = _E2E_UNREACHABLE_AGENT_URL if is_e2e(ctx) else env.DEFAULT_AGENT_URL
     creative_payload = CreativeAssetRequestFactory.payload(
-        creative_id=creative_id,
+        creative_id="creative-unreachable-001",
         name="Unreachable Agent Creative",
-        format_id={"id": format_id, "agent_url": agent_url},
+        format_id={"id": format_id, "agent_url": env.unreachable_creative_agent_url()},
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
-
-    # What the registry actually raises when the agent does not answer: the egress
-    # seam types every undelivered request as OutboundDeliveryFailed, which IS an
-    # AdCPServiceUnavailableError, and _processing.py re-raises it as the request's
-    # answer (SERVICE_UNAVAILABLE, transient). A raw ConnectionError modelled a leak
-    # production's registry never has, and landed in the generic per-item branch.
-    from src.core.security.egress.attempts import OutboundDeliveryFailed
-
-    registry = env.mock["registry"].return_value
-    registry.get_format = AsyncMock(side_effect=OutboundDeliveryFailed(attempts=1, http_status=None))
 
 
 # "the request has an empty principal_id" is a sentence of the generic
