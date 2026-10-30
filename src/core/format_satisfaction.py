@@ -82,7 +82,7 @@ WHAT THIS MODULE DOES NOT DO, deliberately:
 * Not every per-kind param is read. Every slot's own constraints are
   (:func:`_slot_constraint_shortfalls`), including the ones a declaration states flat by the
   slot's role (:func:`_effective_slot`), and so are a declared ``aspect_ratio``
-  (:func:`_aspect_shortfall`), an audio spot's loudness and true peak and a required caption
+  (:func:`_aspect_shortfalls`), an audio spot's loudness and true peak and a required caption
   track (:func:`_level_shortfalls`). So are ``cta_values`` (:func:`_closed_value_shortfalls`,
   CREATIVE_VALUE_NOT_ALLOWED), a carousel's card count and what it states about each card's
   ``media`` (:func:`_card_media_shortfalls`), and a responsive creative's video duration
@@ -1048,9 +1048,7 @@ def _manifest_shortfalls(declaration: LibraryFormatDeclaration, manifest: Mappin
     shortfalls.extend(shortfall for _path, _ratio, failed in graded for shortfall in failed)
     shortfalls.extend(_coverage_shortfalls(str(primary), slot.get("required_pixel_ratios"), graded))
     ratio = declared.get("aspect_ratio") or _ORIENTATION_RATIOS.get(str(declared.get("orientation")))
-    shortfalls.extend(
-        shortfall for path, asset in renditions if (shortfall := _aspect_shortfall(path, asset, ratio)) is not None
-    )
+    shortfalls.extend(shortfall for path, asset in renditions for shortfall in _aspect_shortfalls(path, asset, ratio))
     shortfalls.extend(shortfall for path, asset in renditions for shortfall in _level_shortfalls(path, asset, declared))
     return shortfalls
 
@@ -1126,11 +1124,13 @@ def _ratio_agrees(width: Any, height: Any, ratio: str) -> bool:
     return round(Decimal(width) / Decimal(height), places) == round(terms[0] / terms[1], places)
 
 
-def _aspect_shortfall(path: str, asset: Mapping[str, Any], ratio: Any) -> ManifestShortfall | None:
-    """The main media asset in *path* against the declaration's aspect *ratio*, if it has one.
+def _aspect_shortfalls(path: str, asset: Mapping[str, Any], ratio: Any) -> list[ManifestShortfall]:
+    """The image or video asset in *path* against the aspect ratio its declaration accepts.
 
-    *ratio* is the declared ``aspect_ratio``, or the one a video ``orientation`` names when
-    the declaration omits it (:data:`_ORIENTATION_RATIOS`).
+    *ratio* is one declared ``"W:H"`` ratio -- the declared ``aspect_ratio``, or the one a
+    video ``orientation`` names when the declaration omits it (:data:`_ORIENTATION_RATIOS`) --
+    or a SET of them, responsive_creative.json ``logo_aspect_ratios``, which an asset agrees
+    with by agreeing with any one. No ratio stated is no constraint.
 
     Step 4 of creative-manifests.mdx § Validation checks "fixed dimensions", and image.json
     says a declared ratio narrows every size mode: "When provided alongside width/height, must
@@ -1138,14 +1138,25 @@ def _aspect_shortfall(path: str, asset: Mapping[str, Any], ratio: Any) -> Manife
     matching the aspect ratio." An asset that states no width or height is not graded here;
     a fixed size it is silent about already fails.
     """
-    if not isinstance(ratio, str) or _ratio_agrees(asset.get("width"), asset.get("height"), ratio):
-        return None
-    return ManifestShortfall(
-        field=f"assets.{path}",
-        constraint="aspect_ratio",
-        rejected_value=f"{_shown(asset.get('width'))}:{_shown(asset.get('height'))}",
-        accepted_values=(ratio,),
-    )
+    ratios = (ratio,) if isinstance(ratio, str) else tuple(map(str, ratio)) if isinstance(ratio, (list, tuple)) else ()
+    width, height = asset.get("width"), asset.get("height")
+    if not ratios or any(_ratio_agrees(width, height, accepted) for accepted in ratios):
+        return []
+    return [ManifestShortfall(f"assets.{path}", "aspect_ratio", f"{_shown(width)}:{_shown(height)}", ratios)]
+
+
+def _set_shortfalls(path: str, member: str, constraint: str, stated: Any, accepted: Any) -> list[ManifestShortfall]:
+    """*stated*, the asset's ``member``, against the closed set *accepted* a declaration publishes.
+
+    The one membership check every such set goes through: a slot's accepted ``widths`` and
+    ``heights``, its ``pixel_ratios``, ``cta_values`` (:data:`_CLOSED_VALUE_CONSTRAINT`) and a
+    card's ``allowed_card_media_asset_types``. The failure is reported at
+    ``assets.<path>.<member>`` under *constraint*. A value the asset does not state, and a set
+    the declaration does not publish, are not graded here.
+    """
+    if stated is None or not isinstance(accepted, (list, tuple)) or stated in accepted:
+        return []
+    return [ManifestShortfall(f"assets.{path}.{member}", constraint, _shown(stated), _shown_all(accepted))]
 
 
 #: The per-slot constraints a declaration may state FLAT, as ``<role>_<suffix>``, and the
@@ -1378,7 +1389,10 @@ def _slot_asset_shortfalls(
     if not main and asset_type in _DIMENSIONED_ASSET_TYPES:
         shortfalls.extend(_slot_dimension_shortfalls(path, asset, slot))
     if asset_type in _DIMENSIONED_ASSET_TYPES:
-        shortfalls.extend(_aspect_set_shortfalls(path, asset, slot.get("aspect_ratios")))
+        # responsive_creative.json ``logo_aspect_ratios``, a SET of ratios. Graded on the main
+        # slot as well as the others: the main slot's own params state no such set, and a
+        # declaration whose only required media slot is the logo makes the logo the main slot.
+        shortfalls.extend(_aspect_shortfalls(path, asset, slot.get("aspect_ratios")))
     shortfalls.extend(_duration_bound_shortfalls(path, asset, slot))
     if asset_type == "card" and isinstance(media := _plain(asset.get("media")), Mapping):
         shortfalls.extend(_card_media_shortfalls(f"{path}.media", media, slot))
@@ -1394,10 +1408,9 @@ def _slot_asset_shortfalls(
                     (_shown(size_cap),),
                 )
             )
-    ratios, stated = slot.get("pixel_ratios"), _plain(asset.get("pixel_ratio"))
-    if not main and asset_type == "image" and ratios and _is_number(stated) and stated not in ratios:
-        shortfalls.append(
-            ManifestShortfall(f"assets.{path}.pixel_ratio", "pixel_ratios", _shown(stated), _shown_all(ratios))
+    if not main and asset_type == "image" and (ratios := slot.get("pixel_ratios")):
+        shortfalls.extend(
+            _set_shortfalls(path, "pixel_ratio", "pixel_ratios", _plain(asset.get("pixel_ratio")), ratios)
         )
     return shortfalls
 
@@ -1414,16 +1427,12 @@ def _slot_dimension_shortfalls(path: str, asset: Mapping[str, Any], slot: Mappin
     ``companion_image_aspect_ratio``, responsive_creative.json ``images_landscape_aspect_ratio``,
     video_hosted.json ``companion_banner_widths`` ("Permitted companion banner widths") and
     ``companion_banner_heights``. The ratio is graded as the main asset's is
-    (:func:`_aspect_shortfall`); a stated width or height outside its set is a size the slot
-    does not accept. An asset silent about a dimension is not graded on it.
+    (:func:`_aspect_shortfalls`); a stated width or height outside its set is a size the slot
+    does not accept (:func:`_set_shortfalls`). An asset silent about a dimension is not graded on it.
     """
-    shortfalls = [found] if (found := _aspect_shortfall(path, asset, slot.get("aspect_ratio"))) else []
+    shortfalls = _aspect_shortfalls(path, asset, slot.get("aspect_ratio"))
     for constraint, member in (("widths", "width"), ("heights", "height")):
-        accepted, stated = slot.get(constraint), _plain(asset.get(member))
-        if isinstance(accepted, (list, tuple)) and _is_number(stated) and stated not in accepted:
-            shortfalls.append(
-                ManifestShortfall(f"assets.{path}.{member}", member, _shown(stated), _shown_all(accepted))
-            )
+        shortfalls.extend(_set_shortfalls(path, member, member, _plain(asset.get(member)), slot.get(constraint)))
     return shortfalls
 
 
@@ -1444,28 +1453,9 @@ def _closed_value_shortfalls(path: str, asset: Mapping[str, Any], slot: Mapping[
     if asset.get("asset_type") == "text":
         checks.append(("content", asset.get("content"), slot.get(_CLOSED_VALUE_CONSTRAINT)))
     return [
-        ManifestShortfall(f"assets.{path}.{member}", _CLOSED_VALUE_CONSTRAINT, value, _shown_all(values))
+        shortfall
         for member, value, values in checks
-        if isinstance(value, str) and isinstance(values, (list, tuple)) and value not in values
-    ]
-
-
-def _aspect_set_shortfalls(path: str, asset: Mapping[str, Any], ratios: Any) -> list[ManifestShortfall]:
-    """An image or video whose shape matches none of the aspect ratios its slot accepts.
-
-    responsive_creative.json ``logo_aspect_ratios``: a SET of ``"W:H"`` ratios, each compared
-    as a single declared ratio is (:func:`_ratio_agrees`). Graded on the main media slot as
-    well as the others, because the main slot's own params state no such set: a declaration
-    whose only required media slot is the logo makes the logo the main slot. An asset silent
-    about a dimension is not graded on it.
-    """
-    if not isinstance(ratios, (list, tuple)) or not ratios:
-        return []
-    width, height = asset.get("width"), asset.get("height")
-    if any(_ratio_agrees(width, height, str(ratio)) for ratio in ratios):
-        return []
-    return [
-        ManifestShortfall(f"assets.{path}", "aspect_ratio", f"{_shown(width)}:{_shown(height)}", _shown_all(ratios))
+        for shortfall in _set_shortfalls(path, member, _CLOSED_VALUE_CONSTRAINT, value, values)
     ]
 
 
@@ -1479,21 +1469,17 @@ def _duration_bound_shortfalls(path: str, asset: Mapping[str, Any], slot: Mappin
 
     responsive_creative.json ``video_min_duration_ms`` / ``video_max_duration_ms`` on the
     ``video`` pool and image_carousel.json ``card_video_max_duration_ms`` on a card's video
-    media (:func:`_effective_slot`). A bound is inclusive, as every ``min_`` / ``max_`` bound
-    is (:func:`_constraint_unsatisfied`). An asset that states no duration is not graded:
-    only a fixed duration is among what a creative must state (:data:`_MUST_BE_STATED`).
+    media (:func:`_effective_slot`). Each bound is decided by :func:`_constraint_unsatisfied`,
+    which owns what a ``min_`` / ``max_`` bound means. An asset that states no duration is not
+    graded: only a fixed duration is among what a creative must state (:data:`_MUST_BE_STATED`).
     """
     duration = _plain(asset.get("duration_ms"))
     if asset.get("asset_type") not in _TIMED_ASSET_TYPES or not _is_number(duration):
         return []
-    low, high = slot.get("min_duration_ms"), slot.get("max_duration_ms")
     return [
-        ManifestShortfall(f"assets.{path}.duration_ms", constraint, _shown(duration), (_shown(bound),))
-        for constraint, bound, failed in (
-            ("min_duration_ms", low, _is_number(low) and duration < low),
-            ("max_duration_ms", high, _is_number(high) and duration > high),
-        )
-        if failed
+        ManifestShortfall(f"assets.{path}.duration_ms", constraint, _shown(duration), (_shown(slot[constraint]),))
+        for constraint in ("min_duration_ms", "max_duration_ms")
+        if _constraint_unsatisfied(constraint, slot.get(constraint), duration)
     ]
 
 
@@ -1509,13 +1495,9 @@ def _card_media_shortfalls(path: str, media: Mapping[str, Any], slot: Mapping[st
     every other slot's asset goes through.
     """
     media_type = str(media.get("asset_type"))
-    accepted = slot.get("media_asset_types") or ()
-    if media_type not in accepted:
-        return [
-            ManifestShortfall(
-                f"assets.{path}.asset_type", "allowed_card_media_asset_types", media_type, _shown_all(list(accepted))
-            )
-        ]
+    accepted = tuple(slot.get("media_asset_types") or ())
+    if refused := _set_shortfalls(path, "asset_type", "allowed_card_media_asset_types", media_type, accepted):
+        return refused
     media_slot = {"aspect_ratio": slot.get("aspect_ratio"), **(slot.get("media") or {}).get(media_type, {})}
     return _slot_asset_shortfalls(path, media, media_slot, main=False)
 
