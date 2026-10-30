@@ -264,6 +264,15 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "params": {"video_codecs": ["h264"], "containers": ["mp4"], "max_file_size_mb": 10},
         }
     ],
+    # A VERTICAL hosted video stating no aspect_ratio. video_hosted.json: "Vertical = 9:16",
+    # and aspect_ratio is "Inferred from orientation if omitted".
+    "vertical_video": [
+        {
+            "format_kind": "video_hosted",
+            "format_option_id": "satisfaction_video_vertical",
+            "params": {"orientation": "vertical"},
+        }
+    ],
     # A hosted-audio spot fixed at 30 seconds, mp3 only, capped at 1 MB. audio_hosted.json's
     # ``max_file_size_mb`` is in "decimal megabytes".
     "mp3_30s_audio": [
@@ -476,6 +485,8 @@ def _manifest(name: str) -> dict[str, Any]:
         "video_30s_webm": lambda: build_assets(clip.with_fields(container_format="webm")),
         "video_30s_10mb": lambda: build_assets(clip.with_fields(file_size_bytes=10_000_000)),
         "video_30s_10_4mb": lambda: build_assets(clip.with_fields(file_size_bytes=10_400_000)),
+        # The clip at 1080x1920, 9:16, beside its 640x360 (16:9) self.
+        "video_30s_1080x1920": lambda: build_assets(clip.with_fields(width=1080, height=1920)),
         # AUDIO: the spot at another duration or codec, and over the 1 MB cap by 40,000 bytes.
         "audio_30s": lambda: build_assets(spot),
         "audio_15s": lambda: build_assets(spot.with_fields(duration_ms=15000)),

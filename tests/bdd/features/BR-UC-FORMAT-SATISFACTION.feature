@@ -2239,19 +2239,29 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/text-asset.json pointer=/properties/content
 
   @T-UC-FORMAT-SATISFACTION-manifest-sync-aspect-ratio @format_satisfaction_sync @requires_db
-  Scenario: sync_creatives refuses a manifest whose shape disagrees with the declaration's aspect ratio
-    Given a packaged product declaring canonical format options "responsive_1_91"
-    And the buyer syncs a canonical "image" creative carrying the "image_1200x1200" manifest
+  Scenario Outline: sync_creatives refuses a manifest whose shape disagrees with the declaration's aspect ratio - <declaration> <manifest>
+    Given a packaged product declaring canonical format options "<declaration>"
+    And the buyer syncs a canonical "<kind>" creative carrying the "<manifest>" manifest
     When the Buyer Agent assigns it to that package
     Then the creative is refused CREATIVE_SIZE_MISMATCH
-    And the refusal names "assets.image_main" stating "1200:1200" where "1.91:1" is accepted
+    And the refusal names "<path>" stating "<stated>" where "<ratio>" is accepted
+
+    Examples:
+      | declaration     | kind         | manifest        | path              | stated    | ratio  |
+      | responsive_1_91 | image        | image_1200x1200 | assets.image_main | 1200:1200 | 1.91:1 |
+      | vertical_video  | video_hosted | video_30s       | assets.video_main | 640:360   | 9:16   |
 
   @T-UC-FORMAT-SATISFACTION-manifest-sync-aspect-ratio-accepted @format_satisfaction_sync @requires_db
-  Scenario: sync_creatives accepts a manifest at the declaration's aspect ratio
-    Given a packaged product declaring canonical format options "responsive_1_91"
-    And the buyer syncs a canonical "image" creative carrying the "image_1200x628" manifest
+  Scenario Outline: sync_creatives accepts a manifest at the declaration's aspect ratio - <declaration> <manifest>
+    Given a packaged product declaring canonical format options "<declaration>"
+    And the buyer syncs a canonical "<kind>" creative carrying the "<manifest>" manifest
     When the Buyer Agent assigns it to that package
     Then the assignment is recorded with no assignment error
+
+    Examples:
+      | declaration     | kind         | manifest            |
+      | responsive_1_91 | image        | image_1200x628      |
+      | vertical_video  | video_hosted | video_30s_1080x1920 |
 
     # STEP 4's "fixed dimensions" include the declared shape. formats/canonical/image.json
     # aspect_ratio: "When provided alongside width/height, must agree. When used with sizes[]
@@ -2260,10 +2270,16 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # range and refused for its shape, and 1200x628 differs from it only in height. A ratio
     # mismatch is a size the declaration does not accept, so it is CREATIVE_SIZE_MISMATCH.
     #
+    # A VIDEO'S ORIENTATION NAMES ITS RATIO. video_hosted.json: orientation "Vertical = 9:16
+    # (Reels, Stories, Shorts). Horizontal = 16:9 (instream, CTV). Square = 1:1", and
+    # aspect_ratio is "Inferred from orientation if omitted". vertical_video states only the
+    # orientation, so the 640x360 clip is refused and the same clip at 1080x1920 accepted.
+    #
     # The pin states the ratio and no tolerance. This seller compares at the ratio's own
     # precision: exactly for whole terms (9:16 takes 1080x1920), and to the decimals the ratio
     # is written in otherwise, so 1200x628 (1.9108) is 1.91:1.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image.json pointer=/properties/aspect_ratio
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/video_hosted.json pointer=/properties/orientation
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
 
   @T-UC-FORMAT-SATISFACTION-manifest-ambiguous @format_satisfaction_sync @requires_db

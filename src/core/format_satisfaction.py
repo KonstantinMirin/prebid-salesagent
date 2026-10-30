@@ -989,12 +989,18 @@ def _manifest_shortfalls(declaration: LibraryFormatDeclaration, manifest: Mappin
     graded = [(path, *_graded_rendition(path, asset, declared)) for path, asset in renditions]
     shortfalls.extend(shortfall for _path, _ratio, failed in graded for shortfall in failed)
     shortfalls.extend(_coverage_shortfalls(str(primary), slot.get("required_pixel_ratios"), graded))
+    ratio = declared.get("aspect_ratio") or _ORIENTATION_RATIOS.get(str(declared.get("orientation")))
     shortfalls.extend(
-        shortfall
-        for path, asset in renditions
-        if (shortfall := _aspect_shortfall(path, asset, declared.get("aspect_ratio"))) is not None
+        shortfall for path, asset in renditions if (shortfall := _aspect_shortfall(path, asset, ratio)) is not None
     )
     return shortfalls
+
+
+#: The aspect ratio each video ``orientation`` names. ``formats/canonical/video_hosted.json``
+#: (and ``video_vast.json``): "Vertical = 9:16 (Reels, Stories, Shorts). Horizontal = 16:9
+#: (instream, CTV). Square = 1:1 (in-feed)", and its ``aspect_ratio``: "Inferred from
+#: orientation if omitted".
+_ORIENTATION_RATIOS: Mapping[str, str] = {"vertical": "9:16", "horizontal": "16:9", "square": "1:1"}
 
 
 def _ratio_agrees(width: Any, height: Any, ratio: str) -> bool:
@@ -1021,7 +1027,10 @@ def _ratio_agrees(width: Any, height: Any, ratio: str) -> bool:
 
 
 def _aspect_shortfall(path: str, asset: Mapping[str, Any], ratio: Any) -> ManifestShortfall | None:
-    """The main media asset in *path* against the declaration's ``aspect_ratio``, if it states one.
+    """The main media asset in *path* against the declaration's aspect *ratio*, if it has one.
+
+    *ratio* is the declared ``aspect_ratio``, or the one a video ``orientation`` names when
+    the declaration omits it (:data:`_ORIENTATION_RATIOS`).
 
     Step 4 of creative-manifests.mdx § Validation checks "fixed dimensions", and image.json
     says a declared ratio narrows every size mode: "When provided alongside width/height, must
