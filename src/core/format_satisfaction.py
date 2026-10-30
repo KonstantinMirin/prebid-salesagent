@@ -2509,6 +2509,34 @@ def satisfies(
     return FormatSatisfaction(satisfied=True, selection=resolution.selection)
 
 
+def accepts_legacy_reference(
+    reference: LibraryFormatId,
+    declarations: Any,
+    legacy_catalog: Iterable[Any] | None,
+    *,
+    catalogue: Sequence[Format],
+) -> bool:
+    """Whether a product would accept a package naming *reference* as its only format selector.
+
+    The deprecated ``format_ids`` filter of ``get_products`` asks this of every product.
+    docs/creative/template-format-ids.mdx § Compatibility (v3.2.7): legacy ids are
+    normalized "to canonical declarations immediately and do all matching on the canonical
+    shape", so the filter is answered by the same normalization and satisfaction the package
+    route runs (:func:`selector_routes`, :func:`resolve_routes`) and never by comparing raw
+    ``(agent_url, id)`` pairs. A product that declares neither format arm imposes no
+    restriction on a package, but it does not ACCEPT any named format, so it does not
+    match a filter that names one.
+    """
+    from src.core.format_resolver import product_format_references
+
+    if not product_declarations(declarations) and not product_format_references(legacy_catalog):
+        return False
+    routes = selector_routes(
+        format_kind=None, format_option_refs=None, params=None, format_ids=[reference], catalogue=catalogue
+    )
+    return resolve_routes(routes, declarations, legacy_catalog=legacy_catalog).refused is None
+
+
 def creative_satisfies(creative: Any, contract: Any) -> FormatSatisfaction:
     """Whether a STORED creative satisfies a product's format contract. Every creative gate asks here.
 

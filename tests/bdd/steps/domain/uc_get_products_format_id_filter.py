@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pytest_bdd import given, then, when
+from pytest_bdd import given, parsers, then, when
 
 from src.core.schemas import canonical_agent_url
 from tests.bdd.steps._outcome_helpers import wire_field
@@ -35,8 +35,13 @@ _FIRST_AGENT = DEFAULT_CREATIVE_AGENT_URL
 _SECOND_AGENT = "https://other-creative-agent.example.com"
 
 
-def _product_declaring_shared_id_under(tenant: Any, agent_url: str) -> Any:
-    """Persist one product declaring ``_SHARED_FORMAT_ID`` under *agent_url*, and return it.
+def _product_declaring_shared_id_under(tenant: Any, agent_url: str, format_id: str = _SHARED_FORMAT_ID) -> Any:
+    """Persist one product declaring *format_id* under *agent_url*, and return it."""
+    return _priced_product(tenant, format_ids=[{"agent_url": agent_url, "id": format_id}])
+
+
+def _priced_product(tenant: Any, **format_arms: Any) -> Any:
+    """Persist one priced product declaring *format_arms* (``format_ids`` / ``format_options``).
 
     The pricing option is NOT incidental scaffolding, for the same measured reason its
     sibling in ``uc_get_products_format_options`` carries one: a product with none cannot
@@ -50,10 +55,7 @@ def _product_declaring_shared_id_under(tenant: Any, agent_url: str) -> Any:
     guard reads every same-named helper elsewhere -- measured: it made the sibling module's
     ``_store_product(ctx, <declaration list>)`` calls read as ctx keys and failed the guard.
     """
-    product = ProductFactory(
-        tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": _SHARED_FORMAT_ID}],
-    )
+    product = ProductFactory(tenant=tenant, **format_arms)
     PricingOptionFactory(product=product)
     return product
 
@@ -95,6 +97,83 @@ def when_request_products_filtered_by_foreign_format_id(ctx: dict) -> None:
     )
 
 
+@given(
+    parsers.parse(
+        'the seller stores a product declaring "{format_id}" under "{declared}" and another declaring it under "{other}"'
+    )
+)
+def given_product_and_path_sibling(ctx: dict, format_id: str, declared: str, other: str) -> None:
+    """The product the filter will name in another spelling, and its same-host sibling.
+
+    The sibling's agent must be a DIFFERENT agent after canonicalization, or a correct filter
+    returns both and the exact-set outcome asserts something false of a conformant seller.
+    """
+    assert canonical_agent_url(declared) != canonical_agent_url(other), (
+        f"{declared!r} and {other!r} canonicalize to one agent, so the sibling is no counter-example"
+    )
+    tenant = ctx["tenant"]
+    ctx["named_product"] = _product_declaring_shared_id_under(tenant, declared, format_id)
+    ctx["other_agent_product"] = _product_declaring_shared_id_under(tenant, other, format_id)
+    ctx["declared_agent_url"] = declared
+
+
+@when(parsers.parse('the buyer requests products filtering format_ids by "{format_id}" under "{requested}"'))
+def when_request_products_filtered_by_respelled_agent(ctx: dict, format_id: str, requested: str) -> None:
+    """Dispatch get_products whose one format_ids reference names the declaring agent in *requested*.
+
+    The spelling must DIFFER from the stored one byte-for-byte and be the SAME agent after
+    canonicalization; either half failing makes the row grade nothing.
+    """
+    declared = ctx["declared_agent_url"]
+    assert requested != declared, f"{requested!r} is the stored spelling, so the row respells nothing"
+    assert canonical_agent_url(requested) == canonical_agent_url(declared), (
+        f"{requested!r} is not the agent {declared!r} names under canonicalization, so a match would be wrong"
+    )
+    dispatch_request(
+        ctx, brief="format_id filter test", filters={"format_ids": [{"agent_url": requested, "id": format_id}]}
+    )
+
+
+@given(
+    parsers.parse(
+        'the seller stores products declaring a 300x250 image as "{same_shape_id}", as a canonical image option, '
+        'and a 728x90 image as "{other_shape_id}"'
+    )
+)
+def given_products_of_two_shapes(ctx: dict, same_shape_id: str, other_shape_id: str) -> None:
+    """Two products accepting a 300x250 image -- one by a legacy id, one canonically -- and a 728x90 one.
+
+    The legacy ids are the reference agent's, so the registry's normalization is what relates
+    them to the filter's id; no product spells the id the filter will send.
+    """
+    tenant = ctx["tenant"]
+    ctx["accepting_products"] = [
+        _product_declaring_shared_id_under(tenant, DEFAULT_CREATIVE_AGENT_URL, same_shape_id),
+        _priced_product(
+            tenant,
+            format_ids=None,
+            format_options=[
+                {
+                    "format_kind": "image",
+                    "format_option_id": "filter_image_mrec",
+                    "params": {"width": 300, "height": 250},
+                }
+            ],
+        ),
+    ]
+    ctx["other_agent_product"] = _product_declaring_shared_id_under(tenant, DEFAULT_CREATIVE_AGENT_URL, other_shape_id)
+
+
+@when(parsers.parse('the buyer requests products filtering format_ids by "{format_id}" at the standard creative agent'))
+def when_request_products_filtered_by_legacy_id(ctx: dict, format_id: str) -> None:
+    """Dispatch get_products whose one format_ids reference names *format_id* at the reference agent."""
+    dispatch_request(
+        ctx,
+        brief="format_id filter test",
+        filters={"format_ids": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": format_id}]},
+    )
+
+
 # ── Then steps ──────────────────────────────────────────────────────
 
 
@@ -133,4 +212,20 @@ def then_other_agent_product_excluded(ctx: dict) -> None:
     assert other not in announced, (
         f"product {other!r} declares {_SHARED_FORMAT_ID!r} under {_FIRST_AGENT!r}, which the "
         f"filter did not name, and the seller announced it anyway: {sorted(announced)}"
+    )
+
+
+@then("the announced products are exactly the two that accept a 300x250 image")
+def then_only_the_accepting_products_announced(ctx: dict) -> None:
+    """An EXACT set: both 300x250 products, and not the 728x90 one.
+
+    A raw-pair filter announces none of them (no product spells the filter's id), and a
+    filter that ignored the reference announces all three; each fails the equality.
+    """
+    announced = _announced_product_ids(ctx)
+    expected = {product.product_id for product in ctx["accepting_products"]}
+    assert announced == expected, (
+        f"the format_ids filter did not select exactly the products accepting its normalized shape: "
+        f"expected {sorted(expected)}, got {sorted(announced)} "
+        f"(the 728x90 product is {ctx['other_agent_product'].product_id!r})"
     )
