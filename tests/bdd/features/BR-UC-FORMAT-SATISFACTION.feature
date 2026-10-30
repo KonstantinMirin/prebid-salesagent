@@ -2113,6 +2113,64 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # format and a manifest is the creative.
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/image-asset.json pointer=/properties/file_size_bytes
 
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-media-accepted @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives accepts an assignment whose video or audio manifest satisfies the selected declaration - <declaration> <manifest>
+    Given a packaged product declaring canonical format options "<declaration>"
+    And the buyer syncs a canonical "<kind>" creative carrying the "<manifest>" manifest
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+    Examples:
+      | declaration         | kind         | manifest       |
+      | exact_duration      | video_hosted | video_30s      |
+      | duration_range      | video_hosted | video_30s      |
+      | mp4_h264_10mb_video | video_hosted | video_30s      |
+      | mp4_h264_10mb_video | video_hosted | video_30s_10mb |
+      | mp3_30s_audio       | audio_hosted | audio_30s      |
+
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-media-refused @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives refuses an assignment whose video or audio manifest fails the selected declaration - <declaration> <manifest>
+    Given a packaged product declaring canonical format options "<declaration>"
+    And the buyer syncs a canonical "<kind>" creative carrying the "<manifest>" manifest
+    When the Buyer Agent assigns it to that package
+    Then the creative is refused CREATIVE_VALIDATION_FAILED_GENERIC
+    And the refusal names "<path>" stating "<stated>" where "<accepted>" is accepted
+
+    Examples:
+      | declaration         | kind         | manifest         | path                               | stated   | accepted    |
+      | exact_duration      | video_hosted | video_15s        | assets.video_main.duration_ms      | 15000    | 30000       |
+      | duration_range      | video_hosted | video_90s        | assets.video_main.duration_ms      | 90000    | 5000, 60000 |
+      | mp4_h264_10mb_video | video_hosted | video_30s_vp9    | assets.video_main.video_codec      | vp9      | h264        |
+      | mp4_h264_10mb_video | video_hosted | video_30s_webm   | assets.video_main.container_format | webm     | mp4         |
+      | mp4_h264_10mb_video | video_hosted | video_30s_10_4mb | assets.video_main.file_size_bytes  | 10400000 | 10          |
+      | mp3_30s_audio       | audio_hosted | audio_15s        | assets.audio_main.duration_ms      | 15000    | 30000       |
+      | mp3_30s_audio       | audio_hosted | audio_30s_aac    | assets.audio_main.codec            | aac      | mp3         |
+      | mp3_30s_audio       | audio_hosted | audio_30s_1_04mb | assets.audio_main.file_size_bytes  | 1040000  | 1           |
+
+    # STEP 4 ON THE TWO OTHER MEDIA KINDS: "Check fixed dimensions, durations, codecs,
+    # file-size limits". Each refusal row has an accept row against the same declaration that
+    # differs in the one member under test: a 30-second clip against exact_duration (30000)
+    # and duration_range ([5000, 60000]), h264 in mp4 at 8 MB and at exactly 10 MB against
+    # mp4_h264_10mb_video, and a 30-second mp3 of 900 KB against mp3_30s_audio. The asset
+    # members are the pinned asset schemas' own (core/assets/video-asset.json duration_ms,
+    # video_codec, container_format, file_size_bytes; audio-asset.json codec), graded against
+    # the declaration params that constrain them (duration_ms_exact, duration_ms_range,
+    # video_codecs, containers, audio_codecs, max_file_size_mb).
+    #
+    # A MEGABYTE IS 1,000,000 BYTES: video_hosted.json says "1 MB is exactly 1,000,000 bytes"
+    # and audio_hosted.json "decimal megabytes". The 10,400,000-byte clip and the
+    # 1,040,000-byte spot are over the cap in decimal megabytes and under it in binary ones,
+    # so a seller reading the cap as binary accepts both refusal rows; the exactly-10 MB
+    # accept row is the boundary.
+    #
+    # None of these is a size, so the code is the generic one: CREATIVE_SIZE_MISMATCH is for
+    # "creative dimensions", and no specific code names a duration, codec or file size.
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/creative-manifests.mdx section="Validation"
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/video_hosted.json pointer=/properties/max_file_size_mb
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/audio_hosted.json pointer=/properties/max_file_size_mb
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/video-asset.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/audio-asset.json
+
   @T-UC-FORMAT-SATISFACTION-manifest-ambiguous @format_satisfaction_sync @requires_db
   Scenario: an assignment whose manifest fits two same-kind declarations and names no option ref is refused
     Given a packaged product declaring canonical format options "two_mrec_options"

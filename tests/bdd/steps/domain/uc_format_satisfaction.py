@@ -217,6 +217,25 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "params": {"width": 300, "height": 250, "image_formats": ["gif"]},
         },
     ],
+    # A hosted-video option narrowing the file it takes: one codec, one container and a
+    # 10 MB cap. formats/canonical/video_hosted.json's ``max_file_size_mb``: "1 MB is
+    # exactly 1,000,000 bytes".
+    "mp4_h264_10mb_video": [
+        {
+            "format_kind": "video_hosted",
+            "format_option_id": "satisfaction_video_mp4",
+            "params": {"video_codecs": ["h264"], "containers": ["mp4"], "max_file_size_mb": 10},
+        }
+    ],
+    # A hosted-audio spot fixed at 30 seconds, mp3 only, capped at 1 MB. audio_hosted.json's
+    # ``max_file_size_mb`` is in "decimal megabytes".
+    "mp3_30s_audio": [
+        {
+            "format_kind": "audio_hosted",
+            "format_option_id": "satisfaction_audio_30s",
+            "params": {"duration_ms_exact": 30000, "audio_codecs": ["mp3"], "max_file_size_mb": 1},
+        }
+    ],
     # A video option fixed at 15 seconds. ``duration_ms_exact`` is the declaration's
     # spelling of one fixed duration; a legacy reference spells it ``duration_ms``.
     "fixed_15s_video": [
@@ -312,9 +331,29 @@ def _manifest(name: str) -> dict[str, Any]:
     so a refusal row and its accept row differ in the fact under test and nothing else.
     Built per call because a scenario may mutate what it was handed.
     """
-    from tests.factories.creative_asset import build_assets, image_spec, manifest_image_spec, text_spec
+    from tests.factories.creative_asset import (
+        asset_spec,
+        build_assets,
+        image_spec,
+        manifest_image_spec,
+        text_spec,
+        video_spec,
+    )
 
     mrec = manifest_image_spec("image_main")
+    # A 30-second mp4/h264 video of 8 MB and a 30-second mp3 of 900 KB: what the video and
+    # audio declarations accept, each other manifest of its kind differing in one member.
+    clip = video_spec(
+        "video_main", duration_ms=30000, video_codec="h264", container_format="mp4", file_size_bytes=8_000_000
+    )
+    spot = asset_spec(
+        "audio_main",
+        "audio",
+        url="https://example.com/spot.mp3",
+        duration_ms=30000,
+        codec="mp3",
+        file_size_bytes=900_000,
+    )
 
     def rendition(width: int, height: int, **fields: object) -> Any:
         """One rendition of the 300x250 in an ``image_main`` array, at *width* x *height* intrinsic."""
@@ -360,6 +399,20 @@ def _manifest(name: str) -> dict[str, Any]:
         # The required slot holding the wrong asset type, and the media keyed by no slot.
         "image_main_as_text": lambda: build_assets(text_spec("image_main", content="Trail Pro")),
         "image_unnamed": lambda: build_assets(image_spec("banner")),
+        # VIDEO: the clip at another duration, codec or container, and over the 10 MB cap by
+        # 400,000 bytes -- 10.4 decimal megabytes, 9.92 binary ones.
+        "video_30s": lambda: build_assets(clip),
+        "video_15s": lambda: build_assets(clip.with_fields(duration_ms=15000)),
+        "video_90s": lambda: build_assets(clip.with_fields(duration_ms=90000)),
+        "video_30s_vp9": lambda: build_assets(clip.with_fields(video_codec="vp9")),
+        "video_30s_webm": lambda: build_assets(clip.with_fields(container_format="webm")),
+        "video_30s_10mb": lambda: build_assets(clip.with_fields(file_size_bytes=10_000_000)),
+        "video_30s_10_4mb": lambda: build_assets(clip.with_fields(file_size_bytes=10_400_000)),
+        # AUDIO: the spot at another duration or codec, and over the 1 MB cap by 40,000 bytes.
+        "audio_30s": lambda: build_assets(spot),
+        "audio_15s": lambda: build_assets(spot.with_fields(duration_ms=15000)),
+        "audio_30s_aac": lambda: build_assets(spot.with_fields(codec="aac")),
+        "audio_30s_1_04mb": lambda: build_assets(spot.with_fields(file_size_bytes=1_040_000)),
     }
     assert name in manifests, f"no manifest named {name!r}; have {sorted(manifests)}"
     return manifests[name]()

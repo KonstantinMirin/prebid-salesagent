@@ -749,9 +749,13 @@ _ASSET_FACTS: Mapping[str, tuple[tuple[str, str], ...]] = {
     ),
 }
 
-#: Bytes per unit of a file-size cap, for an asset that states ``file_size_bytes``. Binary
-#: units, which is the reading that refuses less where the pin does not say which it means.
-_BYTES_PER_UNIT: Mapping[str, int] = {"max_file_size_kb": 1024, "max_file_size_mb": 1024 * 1024}
+#: Bytes per unit of a file-size cap, for an asset that states ``file_size_bytes``. The
+#: megabyte is DECIMAL because the pin says so for both kinds that declare it:
+#: ``formats/canonical/video_hosted.json`` "1 MB is exactly 1,000,000 bytes" and
+#: ``audio_hosted.json`` "decimal megabytes". The image kilobyte is binary: ``image.json``
+#: says only "Maximum file size in kilobytes", and binary is the reading that refuses less
+#: where the pin does not say which it means.
+_BYTES_PER_UNIT: Mapping[str, int] = {"max_file_size_kb": 1024, "max_file_size_mb": 1_000_000}
 
 
 def manifest_document(assets: Any) -> dict[str, Any]:
