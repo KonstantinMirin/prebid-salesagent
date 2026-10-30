@@ -99,3 +99,26 @@ def revision_minimum() -> int:
     """
     schema = json.loads((_schema_root() / "media-buy" / "get-media-buys-response.json").read_text())
     return schema["properties"]["media_buys"]["items"]["properties"]["revision"]["minimum"]
+
+
+@cache
+def request_schema_description(sdk_request: type) -> str:
+    """The pinned request schema's own ``description`` for the SDK request model *sdk_request*.
+
+    The file is located from the model's module, which the SDK generates from the schema
+    tree: ``adcp.types.domains.media_buy.list_creative_formats_request`` is
+    ``media-buy/list-creative-formats-request.json``. Subscripted, so a model whose file
+    does not exist, or a schema without a description, fails loudly rather than answering
+    with a substitute.
+
+    Raises:
+        UnderivablePinnedSchema: *sdk_request* is not a generated ``adcp.types.domains``
+            request model, so no schema file can be named for it.
+    """
+    prefix = "adcp.types.domains."
+    module = sdk_request.__module__
+    if not module.startswith(prefix) or module.count(".") != 4:
+        raise UnderivablePinnedSchema(f"{sdk_request!r} is not a generated adcp.types.domains request model")
+    domain, name = module.removeprefix(prefix).split(".")
+    path = _schema_root() / domain.replace("_", "-") / f"{name.replace('_', '-')}.json"
+    return json.loads(path.read_text())["description"]

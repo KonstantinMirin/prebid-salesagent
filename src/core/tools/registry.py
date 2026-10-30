@@ -130,6 +130,12 @@ class ToolSpec[Req: BuyerRequest, Id: PublicIdentity]:
     impl: ToolImpl[Req, Id]
     rest: RestBinding | None
     a2a: bool = True
+    #: This seller serves the tool only as a deprecated compatibility surface beside the
+    #: canonical one that replaces it, so it is advertised as the pin describes it rather
+    #: than as the SDK does (:meth:`advertised_description`). A seller decision, not a
+    #: reading of ``deprecated``: create_media_buy and update_media_buy are deprecated at
+    #: the pin too, and this seller serves none of the tasks that replace them.
+    deprecated_compatibility: bool = False
 
     def __post_init__(self) -> None:
         """Refuse, at load, an identity annotation that disagrees with the DTO about the account.
@@ -152,6 +158,30 @@ class ToolSpec[Req: BuyerRequest, Id: PublicIdentity]:
                 f"{self.impl!r} declares identity: {declared.__name__} but {self.dto.__name__} "
                 f"{'requires' if self.requires_account() else 'does not require'} account; annotate {expected}"
             )
+
+    def advertised_description(self, sdk_description: str | None) -> str | None:
+        """The description every transport advertises for this tool: MCP's and the A2A skill's.
+
+        *sdk_description* is what the pinned SDK publishes for the tool, and it is the answer
+        unless the row is a :attr:`deprecated_compatibility` surface. Then it is the pinned
+        request schema's own description, which says the task is deprecated and names the
+        surfaces that replace it. The SDK's sentence for list_creative_formats ("Returns
+        format_ids needed for sync_creatives") presents the task as a prerequisite, where
+        creative/task-reference/list_creative_formats.mdx says "Sales agents MUST NOT use an
+        agent-global format list as a purchasability promise" and new implementations "MUST
+        use the canonical surfaces".
+        """
+        if not self.deprecated_compatibility:
+            return sdk_description
+        from src.core.schemas._pinned_fields import request_schema_description
+        from src.core.tools._announced_shape import sdk_grounding
+
+        if not issubclass(self.dto, BaseModel):
+            raise TypeError(f"{self.dto!r} is not a pydantic model")
+        grounding = sdk_grounding(self.dto)
+        if grounding is None:
+            raise TypeError(f"{self.dto.__name__} inherits no SDK request model to read a pinned description for")
+        return request_schema_description(grounding)
 
     def requires_account(self) -> bool:
         """Whether every request to this tool names an account: the DTO declares it required."""
@@ -239,10 +269,16 @@ _TOOLS: dict[str, ToolSpec] = {
     # definition an older peer. Do not "canonicalize" the comparison here; do not add a
     # ``format_kinds`` filter to it. New format work belongs on ``get_products``
     # (``salesagent-ol033.8``, S5).
+    #
+    # WHAT IT SERVES is a projection of the products, never a catalogue of its own
+    # (``_list_creative_formats_impl``), and every transport advertises it with the pinned
+    # request schema's own description (``deprecated_compatibility``), not the SDK sentence
+    # that calls its answer "format_ids needed for sync_creatives".
     "list_creative_formats": ToolSpec(
         dto=ListCreativeFormatsRequest,
         impl=_list_creative_formats_impl,
         rest=RestBinding("POST", "/creative-formats"),
+        deprecated_compatibility=True,
     ),
     "list_accounts": ToolSpec(
         dto=ListAccountsRequest,

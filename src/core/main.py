@@ -351,7 +351,7 @@ def _register_tool(tool_name: str, spec: Any) -> None:
         RegistryTool(
             name=tool_name,
             parameters=model.model_json_schema(),
-            description=sdk_def["description"] if sdk_def else None,
+            description=spec.advertised_description(sdk_def["description"] if sdk_def else None),
             annotations=ToolAnnotations(**sdk_def["annotations"]) if sdk_def and sdk_def.get("annotations") else None,
         )
     )
