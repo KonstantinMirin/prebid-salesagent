@@ -19,7 +19,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then
 
-from tests.bdd.steps._outcome_helpers import wire_advisory_errors, wire_entry
+from tests.bdd.steps._outcome_helpers import wire_advisory_errors, wire_entry, wire_field
 from tests.factories import PricingOptionFactory, ProductFactory
 from tests.factories.core import seed_property_tag_selection
 from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
@@ -351,17 +351,58 @@ def given_operator_authored_product(ctx: dict, format_kind: str) -> None:
     answers a refused form by re-rendering it with 200, and a scenario whose product was
     never created would then read an empty catalogue in its Then.
     """
-    tenant = ctx["tenant"]
-    form = minimal_product_create_form(
-        seed_property_tag_selection(tenant, ctx["env"]),
-        product_id="operator_authored",
-        format_options=json.dumps([{"format_kind": format_kind, "params": dict(_STORED_IMAGE_PARAMS)}]),
-    )
     ctx["stored_declaration_params"] = dict(_STORED_IMAGE_PARAMS)
-    response = ctx["env"].admin_request(tenant.tenant_id, "post", "products/add", data=form)
+    response = _post_operator_product(
+        ctx,
+        [seed_property_tag_selection(ctx["tenant"], ctx["env"])],
+        [{"format_kind": format_kind, "params": dict(_STORED_IMAGE_PARAMS)}],
+    )
     assert response.status_code == 302, (
         f"the admin product form did not create the product (status {response.status_code}); "
         "a refused form re-renders with 200"
+    )
+
+
+#: The product id every operator-authored scenario's form submits.
+_OPERATOR_PRODUCT_ID = "operator_authored"
+
+
+def _post_operator_product(ctx: dict, tag_selections: list[str], format_options: list[dict[str, Any]]) -> Any:
+    """Post the admin product-create form on the env's own transport and return its response."""
+    form = minimal_product_create_form(
+        tag_selections,
+        product_id=_OPERATOR_PRODUCT_ID,
+        format_options=json.dumps(format_options),
+    )
+    return ctx["env"].admin_request(ctx["tenant"].tenant_id, "post", "products/add", data=form)
+
+
+@given(
+    parsers.parse(
+        "the operator submits the admin product form for a product sold across two publishers "
+        'declaring a "{scope}" leaderboard option beside a product-local one'
+    )
+)
+def given_operator_product_across_two_publishers(ctx: dict, scope: str) -> None:
+    """The admin create form for a product of two publishers' inventory, with no placements.
+
+    Two property tags, each carried by an authorized property of a different publisher, so
+    the product's ``publisher_properties`` name two ``publisher_domain`` values; the form
+    authors no placements. Both declarations are complete image options. The 300x250 is
+    product-local in both rows; the 728x90 is product-local or scoped to the FIRST publisher,
+    which is the one difference between the two scenarios. Neither publisher is the tenant's
+    own, so the seller's publisher format catalog (RFC S3) is not consulted.
+
+    The response is kept, not asserted: whether the form accepts is the scenario's Then.
+    """
+    selections = [seed_property_tag_selection(ctx["tenant"], ctx["env"]) for _ in range(2)]
+    leaderboard = _sized_image_option("operator_leaderboard", 728, 90)
+    if scope == "publisher-scoped":
+        leaderboard["publisher_domain"] = selections[0].split(":", 1)[0]
+    else:
+        assert scope == "product-local", f"the scenario names an unknown scope: {scope!r}"
+    ctx["admin_response"] = _post_operator_product(
+        ctx, selections, [_sized_image_option("operator_mrec", 300, 250), leaderboard]
     )
 
 
@@ -587,6 +628,43 @@ def then_divergence_details(ctx: dict, omitted_ids: str, asserted_ids: str) -> N
     ], f"the details do not summarize the stored declaration: {details.get('format_options_summary')!r}"
     assert details.get("divergence_reason") == "v1_format_ref_not_narrowed", (
         f"the details name another divergence: {details.get('divergence_reason')!r}"
+    )
+
+
+def _announced_product_ids(ctx: dict) -> list[str]:
+    """The ``product_id`` of every product the buyer received, read off the wire."""
+    return [product.get("product_id") for product in wire_field(ctx, "products")]
+
+
+@then("the buyer is announced the operator's product with both options")
+def then_operator_product_announced(ctx: dict) -> None:
+    """The form stored the product, and get_products serves it with the two options authored."""
+    assert ctx["admin_response"].status_code == 302, (
+        f"the admin product form did not create the product (status {ctx['admin_response'].status_code}); "
+        "a refused form re-renders with 200"
+    )
+    product = wire_entry(ctx, "products", product_id=_OPERATOR_PRODUCT_ID)
+    announced = sorted(option.get("format_option_id") for option in product.get("format_options") or [])
+    assert announced == ["operator_leaderboard", "operator_mrec"], (
+        f"the announced product does not carry the two authored options: {announced!r}"
+    )
+
+
+@then("the admin form refuses the operator's product and the buyer is not announced it")
+def then_operator_product_refused(ctx: dict) -> None:
+    """The form re-rendered with the common-intersection refusal, and get_products has no such product.
+
+    The refusal sentence is matched by its rule clause, so a form refused for another reason
+    (a missing price, an unresolved catalog option) does not pass. The accept scenario is the
+    control that the same form is otherwise complete.
+    """
+    response = ctx["admin_response"]
+    assert response.status_code == 200, f"a refused form re-renders with 200, got {response.status_code}"
+    assert b"every format option must be accepted by all of them" in response.data, (
+        "the form was not refused for an option not every publisher accepts"
+    )
+    assert _OPERATOR_PRODUCT_ID not in _announced_product_ids(ctx), (
+        "the buyer was announced the product the admin form refused"
     )
 
 

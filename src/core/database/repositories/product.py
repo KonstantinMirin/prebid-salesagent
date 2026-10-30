@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from src.core.database.models import PricingOption, Product
+from src.core.format_satisfaction import refuse_outside_common_intersection
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,9 @@ class ProductRepository:
         """Persist a new product within this tenant.
 
         The product.tenant_id must match the repository's tenant_id.
-        Raises ValueError if there is a tenant mismatch.
+        Raises ValueError if there is a tenant mismatch, or if the product sells several
+        publishers without placements and declares an option not all of them accept
+        (:func:`~src.core.format_satisfaction.refuse_outside_common_intersection`).
 
         Does NOT commit — the UoW handles that.
         """
@@ -151,6 +154,7 @@ class ProductRepository:
             raise ValueError(
                 f"Tenant mismatch: product.tenant_id={product.tenant_id!r} != repository tenant_id={self._tenant_id!r}"
             )
+        refuse_outside_common_intersection(product)
         self._session.add(product)
         self._session.flush()
         return product
@@ -162,7 +166,7 @@ class ProductRepository:
         Returns the updated Product, or None if not found in this tenant.
         Raises ValueError if any kwarg is not a valid Product attribute or
         if the caller attempts to update an immutable field (tenant_id,
-        product_id).
+        product_id), and for the updated product :meth:`create` refuses.
         """
         blocked = self._IMMUTABLE_FIELDS & kwargs.keys()
         if blocked:
@@ -174,6 +178,7 @@ class ProductRepository:
             if not hasattr(product, key):
                 raise ValueError(f"Product has no attribute {key!r}")
             setattr(product, key, value)
+        refuse_outside_common_intersection(product)
         self._session.flush()
         return product
 

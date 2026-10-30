@@ -2862,6 +2862,21 @@ def then_refused_uncovered_slice_without_selector(ctx: dict, slice_id: str) -> N
     _assert_placement_refusal(ctx, "product_id", "placement_uncovered", slice_id)
 
 
+@then(
+    parsers.parse(
+        "the buyer is refused UNSUPPORTED_FEATURE naming the package's product "
+        'for the unresolved publisher placement "{placement_id}"'
+    )
+)
+def then_refused_unresolved_placement_without_selector(ctx: dict, placement_id: str) -> None:
+    """The unresolved-placement refusal for a package that named NO selector, at ``packages[0].product_id``.
+
+    The same rule and rejected value as the selecting package's refusal above; only the
+    pointer differs, because the buyer selected nothing and the product is what it chose.
+    """
+    _assert_placement_refusal(ctx, "product_id", "placement_unresolved", placement_id)
+
+
 def _assert_placement_refusal(ctx: dict, arm: str, capability: str, rejected: str) -> None:
     """A placement-rule UNSUPPORTED_FEATURE at the arm, naming the rule and the rejected value."""
     ctx["result"].assert_wire_error(

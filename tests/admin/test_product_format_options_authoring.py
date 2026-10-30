@@ -31,14 +31,20 @@ import json
 import pytest
 from sqlalchemy import select
 
-from src.core.database.models import Product, Tenant
+from src.core.database.models import InventoryProfile, Product, Tenant
 from src.core.product_conversion import convert_product_model_to_schema
 from tests.factories import (
     InventoryProfileFactory,
     ProductFactory,
+    StoredPlacementFactory,
     TenantFactory,
 )
 from tests.factories.core import seed_property_tag_selection
+from tests.factories.product import (
+    FIRST_PUBLISHER_LEADERBOARD,
+    PRODUCT_LOCAL_MREC,
+    TWO_PUBLISHER_PROPERTIES,
+)
 from tests.helpers.admin_product_form import minimal_product_create_form, minimal_product_edit_form
 from tests.helpers.admin_session import admin_auth_session, admin_test_app
 
@@ -563,3 +569,102 @@ def test_linking_a_profile_whose_own_option_the_catalog_withdrew_is_refused(
     else:
         assert b"publisher format catalog does not declare" in response.data
         assert row is None if route == "create" else row.inventory_profile_id is None
+
+
+# ── RFC F3, author side (salesagent-ol033.20.8.2): the common intersection ───────────────
+#
+# core/product.json format_options (v3.2.7): "If a product spans multiple publishers but
+# omits placements[], there is no public routing key for per-placement creatives: its
+# format_options MUST therefore be the common intersection accepted across every selected
+# publisher/property scope." An option scoped to one publisher is outside it. The product
+# create form is graded on the four transports by
+# @T-UC-GET-PRODUCTS-format-options-operator-common-intersection-accepted/-refused; the edit
+# form and the inventory-profile save have no buyer-facing step, so these grade them. Each
+# accept row differs from the refusal in one thing: one publisher, or placements published.
+
+_INTERSECTION_REFUSAL = b"every format option must be accepted by all of them"
+_INCLUDED_PLACEMENT = [StoredPlacementFactory(mode="included")]
+
+
+@pytest.mark.parametrize(
+    ("publishers", "placements", "accepted"),
+    [
+        (TWO_PUBLISHER_PROPERTIES, None, False),
+        (TWO_PUBLISHER_PROPERTIES[:1], None, True),
+        (TWO_PUBLISHER_PROPERTIES, _INCLUDED_PLACEMENT, True),
+    ],
+    ids=["two_publishers_no_placements", "one_publisher", "two_publishers_with_placements"],
+)
+def test_editing_in_an_option_scoped_to_one_publisher(
+    operator, seller, factory_session, publishers, placements, accepted
+):
+    """Stored, or refused with the stored declarations left as they were."""
+    tenant, _ = seller
+    ProductFactory(
+        tenant=tenant,
+        product_id="sliced",
+        format_ids=None,
+        format_options=[PRODUCT_LOCAL_MREC],
+        properties=publishers,
+        property_tags=None,
+        placements=placements,
+    )
+    factory_session.commit()
+
+    response = operator.post(
+        f"/tenant/{tenant.tenant_id}/products/sliced/edit",
+        data=minimal_product_edit_form(format_options=json.dumps([PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD])),
+        follow_redirects=True,
+    )
+
+    stored = _stored(factory_session, tenant.tenant_id, "sliced").format_options
+    if accepted:
+        assert stored == [PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD], response.data[:2000]
+    else:
+        assert _INTERSECTION_REFUSAL in response.data
+        assert stored == [PRODUCT_LOCAL_MREC]
+
+
+@pytest.mark.parametrize(
+    ("placements", "accepted"),
+    [(None, False), (_INCLUDED_PLACEMENT, True)],
+    ids=["linked_product_without_placements", "linked_product_with_placements"],
+)
+def test_a_profile_scoping_an_option_is_refused_for_a_linked_product_without_placements(
+    operator, seller, factory_session, placements, accepted
+):
+    """A profile supplies its linked products' contract and publishers, so its save is their save.
+
+    The profile sells two publishers' inventory in both rows; only the linked product's
+    placements differ, so the refusal is the product's rule and not a rule about profiles.
+    """
+    tenant, _ = seller
+    profile = InventoryProfileFactory(
+        tenant=tenant,
+        format_ids=None,
+        format_options=[PRODUCT_LOCAL_MREC],
+        publisher_properties=TWO_PUBLISHER_PROPERTIES,
+    )
+    ProductFactory(tenant=tenant, inventory_profile=profile, format_ids=None, placements=placements)
+    factory_session.commit()
+
+    response = operator.post(
+        f"/tenant/{tenant.tenant_id}/inventory-profiles/{profile.id}/edit",
+        data={
+            "name": profile.name,
+            "targeted_ad_unit_ids": "[]",
+            "targeted_placement_ids": "[]",
+            "format_options": json.dumps([PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD]),
+            "property_mode": "full",
+            "publisher_properties": json.dumps(TWO_PUBLISHER_PROPERTIES),
+        },
+        follow_redirects=True,
+    )
+
+    factory_session.expire_all()
+    stored = factory_session.get(InventoryProfile, profile.id).format_options
+    if accepted:
+        assert stored == [PRODUCT_LOCAL_MREC, FIRST_PUBLISHER_LEADERBOARD], response.data[:2000]
+    else:
+        assert _INTERSECTION_REFUSAL in response.data
+        assert stored == [PRODUCT_LOCAL_MREC]

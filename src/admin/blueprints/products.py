@@ -25,6 +25,7 @@ from src.core.database.product_pricing import get_product_pricing_options
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.format_resolver import linked_format_contract
+from src.core.format_satisfaction import refuse_outside_common_intersection
 from src.core.publisher_format_catalog import PublisherCatalog, format_declarations_type
 from src.core.schemas import Format
 from src.services.gam_product_config_service import GAMProductConfigService
@@ -1339,6 +1340,7 @@ def add_product(tenant_id):
                 # checked against the catalog when the profile was authored, not since.
                 try:
                     PublisherCatalog.of(tenant).refuse_unresolved(product.format_contract.format_options)
+                    refuse_outside_common_intersection(product)
                 except ValueError as e:
                     db_session.rollback()
                     flash(str(e), "error")
@@ -1928,6 +1930,14 @@ def edit_product(tenant_id, product_id):
                         logger.info("[DEBUG] format_ids attribute was modified")
                     else:
                         logger.info("[DEBUG] format_ids attribute NOT modified (flag_modified may be needed)")
+
+                # Asked here, not with the anyOf above: the publisher properties it reads are
+                # written after that check.
+                try:
+                    refuse_outside_common_intersection(product)
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
 
                 db_session.commit()
 

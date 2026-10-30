@@ -2476,6 +2476,44 @@ def publisher_slice_layers(
     )
 
 
+def outside_common_intersection(product: Any) -> tuple[LibraryFormatDeclaration, ...]:
+    """The declarations of a product's served contract that not every publisher slice accepts.
+
+    ``core/product.json`` ``format_options``, addressed to the product's AUTHOR: "If a product
+    spans multiple publishers but omits placements[], there is no public routing key for
+    per-placement creatives: its format_options MUST therefore be the common intersection
+    accepted across every selected publisher/property scope. A seller that needs a union of
+    publisher-specific formats MUST publish placements[] with publisher-scoped identities and
+    narrowing." The slices are :func:`publisher_slice_layers`' -- the ones the buy path covers
+    -- so the author is held to the set the buyer is graded against. Empty for a product with
+    placements, a single publisher, or only product-local options.
+    """
+    publishers = coverage_publishers(product)
+    if publishers is None:
+        return ()
+    declared = product_declarations(product.format_contract.format_options)
+    slices = publisher_slice_layers(publishers, declared)
+    return tuple(d for d in declared if any(d not in (layer.declarations or ()) for layer in slices))
+
+
+def refuse_outside_common_intersection(product: Any) -> None:
+    """``ValueError`` when a product's served contract is not the common intersection the pin requires of it.
+
+    Asked of every product save -- the admin product forms, an inventory profile's save for
+    each product it supplies the contract to, and :class:`ProductRepository`'s writes -- so
+    no write path stores what :func:`outside_common_intersection` finds.
+    """
+    outside = outside_common_intersection(product)
+    if outside:
+        raise ValueError(
+            f"Product {product.product_id!r} sells inventory of several publishers and publishes no "
+            f"placements, so every format option must be accepted by all of them. Scoped to one "
+            f"publisher: {', '.join(sorted({_declaration_label(d) for d in outside}))}. Declare "
+            f"them product-local by omitting publisher_domain, or publish placements with "
+            f"publisher-scoped identities."
+        )
+
+
 def _placement_projection(references: Iterable[LibraryFormatId]) -> tuple[LibraryFormatDeclaration, ...]:
     """A placement's deprecated ``format_ids``, projected by the SDK, as an id-less layer.
 
@@ -3023,9 +3061,7 @@ class SelectorResolution:
         declaration applies to, and refuses one none does: an empty publisher slice
         (:func:`publisher_slice_layers`), whose only cure is another product. The refusal
         names the uncovered unit at ``product_id``, because the buyer selected nothing to
-        name. An unresolved ``publisher_ref`` placement is not refused for such a package:
-        no selection is graded against it, as the feature's ``publisher_ref_included |
-        no_selector`` accept row records.
+        name.
 
         The SET is the winning arm's, because the pin states the rule over a set: each
         included placement must accept at least one declaration the arm selected. Two refs
@@ -3037,20 +3073,22 @@ class SelectorResolution:
         Read off :attr:`_winning_arm` and never through :attr:`selection`, which asks
         ``bool(self)`` and so this property: the winning arm is the first, as there.
 
-        AN UNRESOLVED PLACEMENT is reported first, whatever a selector selected: a
-        ``publisher_ref`` placement's effective set cannot be computed here, so no selection
-        can be shown to cover it, and ``core/product.json`` says "an unresolved publisher
-        placement or format-option reference MUST fail closed" (:class:`PlacementLayer`).
+        AN UNRESOLVED PLACEMENT is reported first, whatever a selector selected -- and when
+        the package selected nothing, at ``product_id``: a ``publisher_ref`` placement's
+        effective set cannot be computed here, so no selection, the product's whole set
+        included, can be shown to cover it, and ``core/product.json`` says "an unresolved
+        publisher placement or format-option reference MUST fail closed"
+        (:class:`PlacementLayer`).
         """
         if not self.placements:
             return None
         if self.unresolved is not None or self.conflicting or self.unsatisfied is not None:
             return None
+        field = self.routes[0][0].field if self.routes else "product_id"
+        unresolved = _unresolved_placement(self.placements, field)
+        if unresolved is not None:
+            return unresolved
         if self.routes:
-            field = self.routes[0][0].field
-            unresolved = _unresolved_placement(self.placements, field)
-            if unresolved is not None:
-                return unresolved
             chosen = self._winning_arm
             # The selection as the buyer can recognise it: the option ids a product published,
             # or on the deprecated lane -- whose declarations are the SDK's projection, carrying
@@ -3061,7 +3099,7 @@ class SelectorResolution:
                 else sorted({_route_selector(route) for route, _ in self._arms[0]})
             )
         else:
-            field, chosen, labels = "product_id", self.declarations, []
+            chosen, labels = self.declarations, []
         if not chosen:
             return None
         sets = _placement_sets(self.placements, self.declarations)

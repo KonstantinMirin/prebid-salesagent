@@ -31,6 +31,7 @@ from src.core.database.models import (
     Tenant,
 )
 from src.core.format_resolver import format_contract
+from src.core.format_satisfaction import refuse_outside_common_intersection
 from src.core.publisher_format_catalog import PublisherCatalog
 
 logger = logging.getLogger(__name__)
@@ -556,6 +557,11 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
                         )
                 else:
                     profile.targeting_template = None
+
+                # The profile supplies its linked products' contract and publisher properties,
+                # so each of them is held to the common-intersection rule as its own save is.
+                for linked in profile.products:
+                    refuse_outside_common_intersection(linked)
 
                 # Count products using this profile before commit
                 product_count = (

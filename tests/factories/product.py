@@ -66,6 +66,25 @@ class StoredPlacementFactory(factory.DictFactory):
     mode = "targetable"
 
 
+#: The data the common-intersection rule is graded on (``core/product.json``
+#: ``format_options``: a multi-publisher product without ``placements[]`` "MUST ... be the
+#: common intersection accepted across every selected publisher/property scope"): two
+#: publishers' ``publisher_properties``, a product-local option every scope accepts, and an
+#: option scoped to the first publisher, which the second does not.
+FIRST_PUBLISHER_DOMAIN = "first-publisher.example"
+TWO_PUBLISHER_PROPERTIES = [
+    {"publisher_domain": domain, "selection_type": "all"}
+    for domain in (FIRST_PUBLISHER_DOMAIN, "second-publisher.example")
+]
+PRODUCT_LOCAL_MREC = {"format_kind": "image", "format_option_id": "mrec", "params": {"width": 300, "height": 250}}
+FIRST_PUBLISHER_LEADERBOARD = {
+    "format_kind": "image",
+    "format_option_id": "leaderboard",
+    "params": {"width": 728, "height": 90},
+    "publisher_domain": FIRST_PUBLISHER_DOMAIN,
+}
+
+
 class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):
     """A ``PricingOption`` row. The ONLY way a test builds one.
 
