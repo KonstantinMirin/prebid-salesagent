@@ -334,6 +334,88 @@ _DECLARATIONS: dict[str, list[dict[str, Any]]] = {
             "params": {"captions": "required", "companion_banner_widths": [300], "companion_banner_heights": [250]},
         }
     ],
+    # THE REST OF THE CAROUSEL'S FLAT PARAMS (formats/canonical/image_carousel.json): three or
+    # four cards (``min_cards`` / ``max_cards`` narrowing the slot's own 2 to 10), square card
+    # media (``card_aspect_ratio``), image or video media (``allowed_card_media_asset_types``),
+    # an image card capped at 100 KB and a video card at 1,000 KB and 15 seconds
+    # (``card_image_max_file_size_kb``, ``card_video_max_file_size_kb``,
+    # ``card_video_max_duration_ms``), and two permitted per-card calls to action
+    # (``cta_values``, which core/assets/card-asset.json applies to each card's ``cta``).
+    "carousel_card_media": [
+        {
+            "format_kind": "image_carousel",
+            "format_option_id": "satisfaction_carousel_media",
+            "params": {
+                "min_cards": 3,
+                "max_cards": 4,
+                "card_aspect_ratio": "1:1",
+                "allowed_card_media_asset_types": ["image", "video"],
+                "card_image_max_file_size_kb": 100,
+                "card_video_max_file_size_kb": 1000,
+                "card_video_max_duration_ms": 15000,
+                "cta_values": ["SHOP_NOW", "LEARN_MORE"],
+                "slots": [{"asset_group_id": "cards", "asset_type": "card", "required": True, "min": 2, "max": 10}],
+            },
+        }
+    ],
+    # THE REST OF THE RESPONSIVE CREATIVE'S FLAT PARAMS (formats/canonical/responsive_creative.json):
+    # videos of 6 to 30 seconds (``video_min_duration_ms`` / ``video_max_duration_ms``), logos at
+    # 1:1 or 4:1 (``logo_aspect_ratios``), and every image the pool holds capped at 150 KB
+    # (``asset_image_max_file_size_kb``). The slots are stated so that only the headline is
+    # required and the media pools are optional, each manifest filling the one under test.
+    "responsive_pool_limits": [
+        {
+            "format_kind": "responsive_creative",
+            "format_option_id": "satisfaction_responsive_pool",
+            "params": {
+                "video_min_duration_ms": 6000,
+                "video_max_duration_ms": 30000,
+                "logo_aspect_ratios": ["1:1", "4:1"],
+                "asset_image_max_file_size_kb": 150,
+                "slots": [
+                    {"asset_group_id": "headlines", "asset_type": "text", "required": True, "min": 1, "max": 5},
+                    {"asset_group_id": "images_landscape", "asset_type": "image", "required": False, "max": 20},
+                    {"asset_group_id": "video", "asset_type": "video", "required": False, "max": 5},
+                    {"asset_group_id": "logo", "asset_type": "image", "required": False, "max": 5},
+                ],
+            },
+        }
+    ],
+    # A CLOSED SET OF CALLS TO ACTION on each kind that declares ``cta_values``: image.json
+    # ("Permitted CTA values for this product"), native_in_feed.json ("When set, narrows the cta
+    # slot to a closed enum") and video_hosted.json. Each kind's default slots are kept, so the
+    # ``cta`` slot is the canonical one and stays optional.
+    "image_cta_300x250": [
+        {
+            "format_kind": "image",
+            "format_option_id": _PRODUCT_OPTION_ID,
+            "params": {"width": 300, "height": 250, "cta_values": ["LEARN_MORE", "SHOP_NOW"]},
+        }
+    ],
+    "native_cta": [
+        {
+            "format_kind": "native_in_feed",
+            "format_option_id": "satisfaction_native_cta",
+            "params": {"cta_values": ["LEARN_MORE", "SIGN_UP"]},
+        }
+    ],
+    "video_cta": [
+        {
+            "format_kind": "video_hosted",
+            "format_option_id": "satisfaction_video_cta",
+            "params": {"cta_values": ["WATCH_MORE", "SHOP_NOW"]},
+        }
+    ],
+    # A native unit capping its images at 100 KB: native_in_feed.json ``max_image_file_size_kb``,
+    # "Maximum file size in kilobytes for main_image and icon". The default slots are kept, so
+    # both image slots are the canonical optional ones.
+    "native_image_cap": [
+        {
+            "format_kind": "native_in_feed",
+            "format_option_id": "satisfaction_native_image_cap",
+            "params": {"max_image_file_size_kb": 100},
+        }
+    ],
     # A VERTICAL hosted video stating no aspect_ratio. video_hosted.json: "Vertical = 9:16",
     # and aspect_ratio is "Inferred from orientation if omitted".
     "vertical_video": [
@@ -518,6 +600,7 @@ def _manifest(name: str) -> dict[str, Any]:
         image_spec,
         manifest_image_spec,
         text_spec,
+        url_spec,
         video_spec,
     )
 
@@ -565,10 +648,56 @@ def _manifest(name: str) -> dict[str, Any]:
         """A responsive creative's ``headlines`` pool: one text asset per headline, as an array."""
         return [text_spec("headlines", content=headline, multiple=True) for headline in headlines]
 
-    def card(headline: str) -> Any:
-        """One card-asset of a carousel's ``cards`` array: a square image and *headline*."""
-        media = {"asset_type": "image", "url": "https://example.com/card.png", "width": 1080, "height": 1080}
-        return asset_spec("cards", "card", multiple=True, media=media, headline=headline)
+    # A carousel card's media: a square image of 100,000 bytes, and a square 15-second video of
+    # 1,000,000 bytes -- each at every limit carousel_card_media states.
+    card_image = {
+        "asset_type": "image",
+        "url": "https://example.com/card.png",
+        "width": 1080,
+        "height": 1080,
+        "file_size_bytes": 100_000,
+    }
+    card_video = {
+        "asset_type": "video",
+        "url": "https://example.com/card.mp4",
+        "width": 1080,
+        "height": 1080,
+        "duration_ms": 15000,
+        "file_size_bytes": 1_000_000,
+    }
+
+    def card(headline: str = "Trail Pro", media: dict[str, Any] | None = None, **fields: object) -> Any:
+        """One card-asset of a carousel's ``cards`` array: *media* (the square image by default),
+        *headline*, and the per-card fields in *fields* (a ``cta``)."""
+        return asset_spec("cards", "card", multiple=True, media=dict(media or card_image), headline=headline, **fields)
+
+    def carousel(first: Any, count: int = 3) -> dict[str, Any]:
+        """*count* cards, the first one *first* and the rest the square image card."""
+        return build_assets(first, *(card() for _ in range(count - 1)))
+
+    # A responsive creative's media pools, each filled beside a headline pool of one (``pool``).
+    pool_video = video_spec("video", width=1080, height=1080, duration_ms=15000, multiple=True)
+    pool_logo = image_spec("logo", width=400, height=100, multiple=True).with_fields(file_size_bytes=20_000)
+    pool_image = image_spec("images_landscape", width=1200, height=628, multiple=True).with_fields(
+        file_size_bytes=150_000
+    )
+
+    def pool(*specs: Any) -> dict[str, Any]:
+        """A headline pool of one and *specs*."""
+        return build_assets(*headline_pool("Trail Pro boots"), *specs)
+
+    # The kinds' calls to action: the native unit's required title, advertiser name and
+    # landing page, beside a ``cta`` text asset.
+    native = (
+        text_spec("title", content="Trail Pro 3000"),
+        text_spec("advertiser_name", content="Acme Outdoor"),
+        url_spec("landing_page_url", url="https://example.com/trail-pro"),
+    )
+
+    def native_image(role: str, file_size_bytes: int) -> dict[str, Any]:
+        """The native unit's required assets beside one image in *role* of *file_size_bytes*."""
+        image = image_spec(role, width=1200, height=627).with_fields(file_size_bytes=file_size_bytes)
+        return build_assets(*native, image)
 
     def rendition(width: int, height: int, **fields: object) -> Any:
         """One rendition of the 300x250 in an ``image_main`` array, at *width* x *height* intrinsic."""
@@ -677,6 +806,51 @@ def _manifest(name: str) -> dict[str, Any]:
         "video_captioned_with_banner": lambda: build_assets(captioned, banner),
         "video_uncaptioned_with_banner": lambda: build_assets(clip, banner),
         "video_captioned_with_leaderboard": lambda: build_assets(captioned, banner.with_fields(width=728, height=90)),
+        # THE CAROUSEL'S CARDS, against ``carousel_card_media``: three and four cards beside two
+        # and five; the first card's media a square image or video at every limit, or one step
+        # past one -- 1200x628, 100,001 bytes (over 100 KB, under 100 binary kilobytes), a
+        # video of 1,000,001 bytes or 15,001 ms -- and its call to action in the set or not.
+        "carousel_three_cards": lambda: carousel(card()),
+        "carousel_four_cards": lambda: carousel(card(), count=4),
+        "carousel_two_cards": lambda: carousel(card(), count=2),
+        "carousel_five_cards": lambda: carousel(card(), count=5),
+        "carousel_wide_card": lambda: carousel(card(media={**card_image, "width": 1200, "height": 628})),
+        "carousel_heavy_image_card": lambda: carousel(card(media={**card_image, "file_size_bytes": 100_001})),
+        "carousel_video_card": lambda: carousel(card(media=card_video)),
+        "carousel_heavy_video_card": lambda: carousel(card(media={**card_video, "file_size_bytes": 1_000_001})),
+        "carousel_long_video_card": lambda: carousel(card(media={**card_video, "duration_ms": 15001})),
+        "carousel_card_cta_shop_now": lambda: carousel(card(cta="SHOP_NOW")),
+        "carousel_card_cta_buy_now": lambda: carousel(card(cta="BUY_NOW")),
+        # THE RESPONSIVE POOLS, against ``responsive_pool_limits``: a video at 6 and 30 seconds
+        # and one millisecond outside each; a 4:1 logo beside a 2:1 one; a landscape image and a
+        # logo at 150,000 bytes and one byte over.
+        "responsive_video_6s": lambda: pool(pool_video.with_fields(duration_ms=6000)),
+        "responsive_video_30s": lambda: pool(pool_video.with_fields(duration_ms=30000)),
+        "responsive_video_5999ms": lambda: pool(pool_video.with_fields(duration_ms=5999)),
+        "responsive_video_30001ms": lambda: pool(pool_video.with_fields(duration_ms=30001)),
+        "responsive_logo_4_1": lambda: pool(pool_logo),
+        "responsive_logo_2_1": lambda: pool(pool_logo.with_fields(width=200)),
+        "responsive_logo_150kb": lambda: pool(pool_logo.with_fields(file_size_bytes=150_000)),
+        "responsive_logo_150_001b": lambda: pool(pool_logo.with_fields(file_size_bytes=150_001)),
+        "responsive_image_150kb": lambda: pool(pool_image),
+        "responsive_image_150_001b": lambda: pool(pool_image.with_fields(file_size_bytes=150_001)),
+        # A CALL TO ACTION on each kind that closes it: one value the declaration lists and one
+        # it does not, each beside what the kind requires.
+        "image_cta_shop_now": lambda: build_assets(mrec, text_spec("cta", content="SHOP_NOW")),
+        "image_cta_explore_more": lambda: build_assets(mrec, text_spec("cta", content="EXPLORE_MORE")),
+        "image_cta_lowercase": lambda: build_assets(mrec, text_spec("cta", content="shop_now")),
+        "native_cta_sign_up": lambda: build_assets(*native, text_spec("cta", content="SIGN_UP")),
+        "native_cta_download": lambda: build_assets(*native, text_spec("cta", content="DOWNLOAD")),
+        # THE NATIVE IMAGE CAP, against ``native_image_cap``: the main image and the icon at
+        # 100,000 bytes and one byte over, and the main image at 102,400 bytes -- 100 binary
+        # kilobytes, over the cap only in the decimal kilobytes the pin states.
+        "native_main_image_100kb": lambda: native_image("main_image", 100_000),
+        "native_icon_100kb": lambda: native_image("icon", 100_000),
+        "native_main_image_100_001b": lambda: native_image("main_image", 100_001),
+        "native_icon_100_001b": lambda: native_image("icon", 100_001),
+        "native_main_image_102_400b": lambda: native_image("main_image", 102_400),
+        "video_cta_watch_more": lambda: build_assets(clip, text_spec("cta", content="WATCH_MORE")),
+        "video_cta_learn_more": lambda: build_assets(clip, text_spec("cta", content="LEARN_MORE")),
         # AUDIO: the spot at another duration or codec, and over the 1 MB cap by 40,000 bytes.
         "audio_30s": lambda: build_assets(spot),
         "audio_15s": lambda: build_assets(spot.with_fields(duration_ms=15000)),
@@ -2940,6 +3114,20 @@ def then_creative_refused(ctx: dict, code: str) -> None:
     _assert_creative_refused(ctx, code, field=None)
 
 
+@then(parsers.parse('the creative is refused CREATIVE_VALUE_NOT_ALLOWED at "{path}" allowing "{allowed}"'))
+def then_creative_value_not_allowed(ctx: dict, path: str, allowed: str) -> None:
+    """A value outside a closed set: the code, the manifest path, and the set the buyer may pick from.
+
+    enums/error-code.json on CREATIVE_VALUE_NOT_ALLOWED: "The seller MUST set ``error.field`` to
+    the offending asset's path within the manifest ... and SHOULD include the format's
+    ``allowed_values`` array in ``error.details.allowed_values``". So unlike the other creative
+    codes on this path, the pointer is the manifest path rather than absent, and the set is
+    graded where the entry puts it. *allowed* is comma-separated in the feature.
+    """
+    values = [value.strip() for value in allowed.split(",")]
+    _assert_creative_refused(ctx, "CREATIVE_VALUE_NOT_ALLOWED", field=path, details={"allowed_values": values})
+
+
 @then(
     parsers.parse(
         'the creatives are refused CREATIVE_VALIDATION_FAILED_GENERIC at "{field}" '
@@ -3005,10 +3193,14 @@ def then_refused_update_changed_no_creative(ctx: dict) -> None:
     assert stored == [], f"the refused update stored the creatives it uploaded: {stored}"
 
 
-def _assert_creative_refused(ctx: dict, code: str, *, field: str | None) -> None:
-    """The wire envelope carries *code* (its pinned recovery) and names the scenario's creative."""
+def _assert_creative_refused(ctx: dict, code: str, *, field: str | None, details: dict[str, Any] | None = None) -> None:
+    """The wire envelope carries *code* (its pinned recovery) and names the scenario's creative.
+
+    *details* is subset-checked against ``errors[0].details`` when a code's entry names keys of
+    its own (CREATIVE_VALUE_NOT_ALLOWED's ``allowed_values``).
+    """
     result = ctx["result"]
-    result.assert_wire_error(code, field=field)
+    result.assert_wire_error(code, field=field, details=details)
     details = result.wire_error_details(code)
     assert details.get("creative_id") == ctx["manifest_creative_id"], (
         f"the refusal names creative {details.get('creative_id')!r}, not {ctx['manifest_creative_id']!r}: {details}"

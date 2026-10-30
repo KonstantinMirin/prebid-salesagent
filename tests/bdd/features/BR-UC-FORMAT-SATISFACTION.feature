@@ -2618,6 +2618,16 @@ Feature: A format selector must satisfy the canonical declaration the product pu
       | carousel_card_headlines     | image_carousel      | carousel_card_headline_25_chars |
       | audio_with_companion        | audio_hosted        | audio_mastered_with_companion   |
       | captioned_video_with_banner | video_hosted        | video_captioned_with_banner     |
+      | carousel_card_media         | image_carousel      | carousel_three_cards            |
+      | carousel_card_media         | image_carousel      | carousel_four_cards             |
+      | carousel_card_media         | image_carousel      | carousel_video_card             |
+      | responsive_pool_limits      | responsive_creative | responsive_video_6s             |
+      | responsive_pool_limits      | responsive_creative | responsive_video_30s            |
+      | responsive_pool_limits      | responsive_creative | responsive_logo_4_1             |
+      | responsive_pool_limits      | responsive_creative | responsive_logo_150kb           |
+      | responsive_pool_limits      | responsive_creative | responsive_image_150kb          |
+      | native_image_cap            | native_in_feed      | native_main_image_100kb         |
+      | native_image_cap            | native_in_feed      | native_icon_100kb               |
 
   @T-UC-FORMAT-SATISFACTION-manifest-sync-flat-slot-params-refused @format_satisfaction_sync @requires_db
   Scenario Outline: sync_creatives refuses an assignment whose slot fails a limit the declaration states flat - <declaration> <manifest>
@@ -2629,14 +2639,29 @@ Feature: A format selector must satisfy the canonical declaration the product pu
 
     Examples:
       | declaration                 | kind                | manifest                         | code                               | path                                    | stated  | accepted |
-      | responsive_headlines        | responsive_creative | responsive_headline_31_chars     | CREATIVE_VALIDATION_FAILED_GENERIC | assets.headlines[0].content             | 31      | 30       |
-      | responsive_headlines        | responsive_creative | responsive_three_headlines       | CREATIVE_VALIDATION_FAILED_GENERIC | assets.headlines                        | 3       | 2        |
-      | carousel_card_headlines     | image_carousel      | carousel_card_headline_26_chars  | CREATIVE_VALIDATION_FAILED_GENERIC | assets.cards[0].headline                | 26      | 25       |
-      | audio_with_companion        | audio_hosted        | audio_too_loud_with_companion    | CREATIVE_VALIDATION_FAILED_GENERIC | assets.audio_main.loudness_lufs         | -14.5   | -17, -15 |
-      | audio_with_companion        | audio_hosted        | audio_peaking_with_companion     | CREATIVE_VALIDATION_FAILED_GENERIC | assets.audio_main.true_peak_dbfs        | -1      | -2       |
-      | audio_with_companion        | audio_hosted        | audio_with_wide_companion        | CREATIVE_SIZE_MISMATCH             | assets.companion_image                  | 300:250 | 1:1      |
-      | audio_with_companion        | audio_hosted        | audio_with_heavy_companion       | CREATIVE_VALIDATION_FAILED_GENERIC | assets.companion_image.file_size_bytes  | 100001  | 100      |
-      | captioned_video_with_banner | video_hosted        | video_captioned_with_leaderboard | CREATIVE_SIZE_MISMATCH             | assets.companion_banner.width           | 728     | 300      |
+      | responsive_headlines        | responsive_creative | responsive_headline_31_chars     | CREATIVE_VALIDATION_FAILED_GENERIC | assets.headlines[0].content                | 31       | 30       |
+      | responsive_headlines        | responsive_creative | responsive_three_headlines       | CREATIVE_VALIDATION_FAILED_GENERIC | assets.headlines                           | 3        | 2        |
+      | carousel_card_headlines     | image_carousel      | carousel_card_headline_26_chars  | CREATIVE_VALIDATION_FAILED_GENERIC | assets.cards[0].headline                   | 26       | 25       |
+      | audio_with_companion        | audio_hosted        | audio_too_loud_with_companion    | CREATIVE_VALIDATION_FAILED_GENERIC | assets.audio_main.loudness_lufs            | -14.5    | -17, -15 |
+      | audio_with_companion        | audio_hosted        | audio_peaking_with_companion     | CREATIVE_VALIDATION_FAILED_GENERIC | assets.audio_main.true_peak_dbfs           | -1       | -2       |
+      | audio_with_companion        | audio_hosted        | audio_with_wide_companion        | CREATIVE_SIZE_MISMATCH             | assets.companion_image                     | 300:250  | 1:1      |
+      | audio_with_companion        | audio_hosted        | audio_with_heavy_companion       | CREATIVE_VALIDATION_FAILED_GENERIC | assets.companion_image.file_size_bytes     | 100001   | 100      |
+      | captioned_video_with_banner | video_hosted        | video_captioned_with_leaderboard | CREATIVE_SIZE_MISMATCH             | assets.companion_banner.width              | 728      | 300      |
+      | carousel_card_media         | image_carousel      | carousel_two_cards               | CREATIVE_VALIDATION_FAILED_GENERIC | assets.cards                               | 2        | 3        |
+      | carousel_card_media         | image_carousel      | carousel_five_cards              | CREATIVE_VALIDATION_FAILED_GENERIC | assets.cards                               | 5        | 4        |
+      | carousel_card_media         | image_carousel      | carousel_wide_card               | CREATIVE_SIZE_MISMATCH             | assets.cards[0].media                      | 1200:628 | 1:1      |
+      | carousel_card_media         | image_carousel      | carousel_heavy_image_card        | CREATIVE_VALIDATION_FAILED_GENERIC | assets.cards[0].media.file_size_bytes      | 100001   | 100      |
+      | carousel_card_media         | image_carousel      | carousel_heavy_video_card        | CREATIVE_VALIDATION_FAILED_GENERIC | assets.cards[0].media.file_size_bytes      | 1000001  | 1000     |
+      | carousel_card_media         | image_carousel      | carousel_long_video_card         | CREATIVE_VALIDATION_FAILED_GENERIC | assets.cards[0].media.duration_ms          | 15001    | 15000    |
+      | carousel_card_headlines     | image_carousel      | carousel_video_card              | CREATIVE_VALIDATION_FAILED_GENERIC | assets.cards[0].media.asset_type           | video    | image    |
+      | responsive_pool_limits      | responsive_creative | responsive_video_5999ms          | CREATIVE_VALIDATION_FAILED_GENERIC | assets.video[0].duration_ms                | 5999     | 6000     |
+      | responsive_pool_limits      | responsive_creative | responsive_video_30001ms         | CREATIVE_VALIDATION_FAILED_GENERIC | assets.video[0].duration_ms                | 30001    | 30000    |
+      | responsive_pool_limits      | responsive_creative | responsive_logo_2_1              | CREATIVE_SIZE_MISMATCH             | assets.logo[0]                             | 200:100  | 1:1, 4:1 |
+      | responsive_pool_limits      | responsive_creative | responsive_logo_150_001b         | CREATIVE_VALIDATION_FAILED_GENERIC | assets.logo[0].file_size_bytes             | 150001   | 150      |
+      | responsive_pool_limits      | responsive_creative | responsive_image_150_001b        | CREATIVE_VALIDATION_FAILED_GENERIC | assets.images_landscape[0].file_size_bytes | 150001   | 150      |
+      | native_image_cap            | native_in_feed      | native_main_image_100_001b       | CREATIVE_VALIDATION_FAILED_GENERIC | assets.main_image.file_size_bytes          | 100001   | 100      |
+      | native_image_cap            | native_in_feed      | native_icon_100_001b             | CREATIVE_VALIDATION_FAILED_GENERIC | assets.icon.file_size_bytes                | 100001   | 100      |
+      | native_image_cap            | native_in_feed      | native_main_image_102_400b       | CREATIVE_VALIDATION_FAILED_GENERIC | assets.main_image.file_size_bytes          | 102400   | 100      |
 
   @T-UC-FORMAT-SATISFACTION-manifest-sync-flat-slot-params-missing @format_satisfaction_sync @requires_db
   Scenario Outline: sync_creatives refuses an assignment missing what the declaration requires flat - <declaration> <manifest>
@@ -2679,6 +2704,45 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # makes both members optional, and creative-manifests.mdx names no silence rule for them.
     # The companion's ratio and the banner's size are sizes, so those rows are
     # CREATIVE_SIZE_MISMATCH; the others are not, and take the generic code.
+    #
+    # THE CAROUSEL'S CARDS AND THEIR MEDIA. image_carousel.json's min_cards and max_cards
+    # ("Minimum card count", "Maximum card count") narrow the cards slot's own 2 to 10 to 3 to
+    # 4, and the rest of its flat params constrain each card's media, the image or video a
+    # card-asset carries (core/assets/card-asset.json): card_aspect_ratio ("Aspect ratio
+    # shared across all cards"), card_image_max_file_size_kb and card_video_max_file_size_kb,
+    # card_video_max_duration_ms, and allowed_card_media_asset_types ("Asset types each card's
+    # media field may carry. Default: ['image']"). carousel_card_media allows both types;
+    # carousel_card_headlines states none, so the default refuses the video card the other
+    # accepts. The 100,001-byte image and the 1,000,001-byte video are over the cap in decimal
+    # kilobytes and under it in binary ones (canonical-formats.mdx: "1 KB = 1,000 bytes").
+    #
+    # THE RESPONSIVE CREATIVE'S POOLS. responsive_creative.json's video_min_duration_ms and
+    # video_max_duration_ms bound each video the video pool holds, inclusively as every min_
+    # and max_ bound is; logo_aspect_ratios is a SET of ratios, so a 400x100 logo (4:1) is
+    # accepted and a 200x100 one (2:1) refused; and asset_image_max_file_size_kb caps every
+    # image the pool holds, whichever slot it fills, so the logo and the landscape image are
+    # both held to 150 KB. That last reading is this seller's: the pin describes none of the
+    # three, and "asset_image" names no slot, so the asset type is what it names. A logo's
+    # shape is a size, so that row is CREATIVE_SIZE_MISMATCH; a count, a duration, a file
+    # size and a media type are not.
+    #
+    # THE NATIVE UNIT'S IMAGES. native_in_feed.json's max_image_file_size_kb is "Maximum file
+    # size in kilobytes for main_image and icon", the two image slots the format declares, so
+    # each is held to it in decimal kilobytes: 100,000 bytes is accepted, 100,001 is refused,
+    # and so is 102,400, which is 100 binary kilobytes. It is the same cap
+    # asset_image_max_file_size_kb states on the responsive creative, spelled the other way.
+    #
+    # SELLER CHOICES the pin leaves open, recorded here and asked upstream in
+    # adcontextprotocol/adcp#8629: max_cards is a "narrowing" parameter (_base.json:
+    # "Format-level narrowing parameters"), so with the slot's own max of 10 the stricter of
+    # the two holds and a declaration stating max_cards above 10 still caps at 10 unless it
+    # restates the slot; and a declaration silent about allowed_card_media_asset_types takes
+    # the parameter's own "Default: ['image']", although the format description lists image
+    # and video as allowed.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image_carousel.json
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/card-asset.json pointer=/properties/media
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/native_in_feed.json pointer=/properties/max_image_file_size_kb
+    # @source repo=adcp ref=v3.2.7 path=docs/creative/canonical-formats.mdx section="Technical completeness and file-size units"
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/_base.json pointer=/properties/slots/description
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/responsive_creative.json
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image_carousel.json pointer=/properties/card_headline_max_chars
@@ -2731,6 +2795,70 @@ Feature: A format selector must satisfy the canonical declaration the product pu
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image.json pointer=/properties/aspect_ratio
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/video_hosted.json pointer=/properties/orientation
     # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
+
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-cta-accepted @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives accepts an assignment whose call to action is one the declaration permits - <declaration> <manifest>
+    Given a packaged product declaring canonical format options "<declaration>"
+    And the buyer syncs a canonical "<kind>" creative carrying the "<manifest>" manifest
+    When the Buyer Agent assigns it to that package
+    Then the assignment is recorded with no assignment error
+
+    Examples:
+      | declaration         | kind           | manifest                   |
+      | image_cta_300x250   | image          | image_cta_shop_now         |
+      | image_cta_300x250   | image          | image_300x250              |
+      | native_cta          | native_in_feed | native_cta_sign_up         |
+      | video_cta           | video_hosted   | video_cta_watch_more       |
+      | carousel_card_media | image_carousel | carousel_card_cta_shop_now |
+
+  @T-UC-FORMAT-SATISFACTION-manifest-sync-cta-refused @format_satisfaction_sync @requires_db
+  Scenario Outline: sync_creatives refuses an assignment whose call to action is outside the declared values - <declaration> <manifest>
+    Given a packaged product declaring canonical format options "<declaration>"
+    And the buyer syncs a canonical "<kind>" creative carrying the "<manifest>" manifest
+    When the Buyer Agent assigns it to that package
+    Then the creative is refused CREATIVE_VALUE_NOT_ALLOWED at "<path>" allowing "<allowed>"
+    And the refusal names "<path>" stating "<stated>" where "<allowed>" is accepted
+
+    Examples:
+      | declaration         | kind           | manifest                  | path                | stated       | allowed              |
+      | image_cta_300x250   | image          | image_cta_explore_more    | assets.cta.content  | EXPLORE_MORE | LEARN_MORE, SHOP_NOW |
+      | image_cta_300x250   | image          | image_cta_lowercase       | assets.cta.content  | shop_now     | LEARN_MORE, SHOP_NOW |
+      | native_cta          | native_in_feed | native_cta_download       | assets.cta.content  | DOWNLOAD     | LEARN_MORE, SIGN_UP  |
+      | video_cta           | video_hosted   | video_cta_learn_more      | assets.cta.content  | LEARN_MORE   | WATCH_MORE, SHOP_NOW |
+      | carousel_card_media | image_carousel | carousel_card_cta_buy_now | assets.cards[0].cta | BUY_NOW      | SHOP_NOW, LEARN_MORE |
+
+    # A CLOSED SET OF CALLS TO ACTION. image.json and video_hosted.json declare cta_values,
+    # "Permitted CTA values for this product", and native_in_feed.json adds "When set, narrows
+    # the cta slot to a closed enum"; core/assets/card-asset.json holds each card to it: "When
+    # the parent format declares cta_values (allowed CTA labels), the per-card cta MUST be one
+    # of those values". The value is a text asset's content (core/assets/text-asset.json).
+    #
+    # THE CODE IS ITS OWN. enums/error-code.json CREATIVE_VALUE_NOT_ALLOWED: "A submitted
+    # text-asset value is not in the format's declared allowed_values list ... a closed-set
+    # constraint violation that the buyer can resolve mechanically", and "The seller MUST set
+    # error.field to the offending asset's path within the manifest ... and SHOULD include the
+    # format's allowed_values array in error.details.allowed_values". So the refusal points at
+    # the manifest path, unlike the sync assignment's other creative refusals, and carries the
+    # declared set. The pinned native_in_feed storyboard's reject_cta_not_in_enum step grades
+    # this code for a CTA outside cta_values, which this seller cannot run (it requires the
+    # controller), so these rows grade it here.
+    #
+    # Every refusal row has an accept row against the same declaration differing only in the
+    # value; image_300x250 is the control that a declaration closing the cta slot does not
+    # require one (the slot stays optional). The values are matched exactly, so shop_now is
+    # not SHOP_NOW: "any value outside that list is rejected by definition".
+    #
+    # The pin reads two ways on the details key (the enum entry's allowed_values against
+    # core/error.json's canonical accepted_values) and on whether a card's cta, a string
+    # member rather than a text asset, takes this code. This seller follows the code's own
+    # entry for both: allowed_values at the top of details, and accepted_values on each
+    # problems[] entry as on every other creative refusal. Asked upstream in
+    # adcontextprotocol/adcp#8628.
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/image.json pointer=/properties/cta_values
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/formats/canonical/native_in_feed.json pointer=/properties/cta_values
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/core/assets/card-asset.json pointer=/properties/cta
+    # @source repo=adcp ref=v3.2.7 path=static/schemas/source/enums/error-code.json
+    # @source repo=adcp ref=v3.2.7 path=dist/compliance/3.2.7/protocols/creative/scenarios/native_in_feed.yaml step=reject_cta_not_in_enum
 
   @T-UC-FORMAT-SATISFACTION-manifest-ambiguous @format_satisfaction_sync @requires_db
   Scenario: an assignment whose manifest fits two same-kind declarations and names no option ref is refused

@@ -52,6 +52,7 @@ __all__ = [
     "ConfigurationDetails",
     "CreativeManifestDetails",
     "CreativeRefDetails",
+    "CreativeValueNotAllowedDetails",
     "CreativeRejectionDetails",
     "TimeWindowDetails",
     "RejectionReasonDetails",
@@ -631,6 +632,20 @@ class CreativeManifestDetails(EntityRefDetails, ValueRejectionDetails, ProblemsD
     No new field: the entity ids, the pin's canonical rejection-set keys and the problem list
     are all inherited, so nothing here can carry an authored sentence.
     """
+
+
+class CreativeValueNotAllowedDetails(CreativeManifestDetails):
+    """A manifest value outside the closed set the selected declaration publishes for it.
+
+    The pin publishes no details schema for ``CREATIVE_VALUE_NOT_ALLOWED``. Its enum entry
+    names the one key it adds: a seller "SHOULD include the format's ``allowed_values`` array
+    in ``error.details.allowed_values`` so the buyer agent can re-prompt its LLM with
+    constrained sampling". ``allowed_values`` is that array, under the spelling the entry
+    gives it; everything else is :class:`CreativeManifestDetails`', so ``problems[]`` still
+    names each offending manifest path with what it states and what is accepted.
+    """
+
+    allowed_values: list[str] | None = None
 
 
 class ConfigurationDetails(CapabilityRefusalDetails):

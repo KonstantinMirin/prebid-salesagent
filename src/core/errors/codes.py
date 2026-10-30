@@ -309,10 +309,10 @@ def _message_from_prose(description: str) -> str:
 #: backward-compatible alias"), and ``AUTHORIZATION_REQUIRED``'s states the
 #: failure in its first clause and then spends 700 more characters on "Typical
 #: use", "Distinct from", and which ``error-details`` document a seller SHOULD
-#: populate. ``CREATIVE_SIZE_MISMATCH``, ``CREATIVE_MISSING_CLICK_URL`` and
-#: ``CREATIVE_VALIDATION_FAILED_GENERIC`` state the failure in one sentence and then tell
-#: the seller what it SHOULD and MUST put in ``error.field`` and ``error.details`` or keep
-#: out of the message. ``BILLING_NOT_PERMITTED_FOR_AGENT``
+#: populate. ``CREATIVE_SIZE_MISMATCH``, ``CREATIVE_MISSING_CLICK_URL``,
+#: ``CREATIVE_VALIDATION_FAILED_GENERIC`` and ``CREATIVE_VALUE_NOT_ALLOWED`` state the failure
+#: in one sentence and then tell the seller what it SHOULD and MUST put in ``error.field`` and
+#: ``error.details`` or keep out of the message. ``BILLING_NOT_PERMITTED_FOR_AGENT``
 #: joined them when the per-buyer-agent billing gate started emitting it: its prose
 #: names the failure and then spends the rest on the identity rule and the details
 #: clamp the seller MUST honour. So these are authored here, and each one deletes
@@ -339,6 +339,7 @@ _AUTHORED_SPEC_MESSAGES: Final[Mapping[ErrorCode, str]] = MappingProxyType(
         ErrorCode.CREATIVE_MISSING_CLICK_URL: "The creative does not provide the destination URL its format requires",
         ErrorCode.CREATIVE_SIZE_MISMATCH: "The creative's dimensions match no size the selected format accepts",
         ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC: "The creative does not satisfy the selected format",
+        ErrorCode.CREATIVE_VALUE_NOT_ALLOWED: "A creative asset value is not one the selected format allows",
         ErrorCode.PERMISSION_DENIED: "Not authorized for this action",
         ErrorCode.UNSUPPORTED_PROVISIONING: "Settings-update entry matched no existing account",
         ErrorCode.VERSION_UNSUPPORTED: "Requested AdCP version is not supported",
@@ -416,6 +417,7 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
         ErrorCode.CREATIVE_MISSING_CLICK_URL: 422,
         ErrorCode.CREATIVE_SIZE_MISMATCH: 422,
         ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC: 422,
+        ErrorCode.CREATIVE_VALUE_NOT_ALLOWED: 422,
         ErrorCode.PROVENANCE_REQUIRED: 422,
         ErrorCode.PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING: 422,
         ErrorCode.PROVENANCE_DISCLOSURE_MISSING: 422,

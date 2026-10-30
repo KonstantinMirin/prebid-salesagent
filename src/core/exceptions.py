@@ -30,6 +30,7 @@ from src.core.errors.details import (
     CreativeManifestDetails,
     CreativeRefDetails,
     CreativeRejectionDetails,
+    CreativeValueNotAllowedDetails,
     EntityRefDetails,
     ErrorDetails,
     InvalidStateDetails,
@@ -1559,11 +1560,13 @@ class AdCPCreativeRejectedError(AdCPSalesAgentError[CreativeRejectionDetails]):
 
 # The manifest-against-declaration refusals of docs/creative/creative-manifests.mdx
 # § Validation ("Validate a manifest against the selected product or publisher declaration").
-# All three are correctable per the pinned enumMetadata. The size code is the specific one the
-# enum names for dimensions, and the click-URL code the one for a required destination URL left
-# out; every other buyer-correctable manifest failure (a missing required slot, a wrong asset
-# type, a duration, a codec, a file size, an ambiguous selection) takes the generic one, which
-# the enum reserves for exactly "cannot classify the failure with a more specific standard code".
+# All four are correctable per the pinned enumMetadata. The size code is the specific one the
+# enum names for dimensions, the click-URL code the one for a required destination URL left
+# out, and the value code the one it names for a text value outside a closed set the format
+# publishes (a call to action outside ``cta_values``); every other buyer-correctable manifest
+# failure (a missing required slot, a wrong asset type, a duration, a codec, a file size, an
+# ambiguous selection) takes the generic one, which the enum reserves for exactly "cannot
+# classify the failure with a more specific standard code".
 
 
 class AdCPCreativeSizeMismatchError(AdCPSalesAgentError[CreativeManifestDetails]):
@@ -1582,6 +1585,12 @@ class AdCPCreativeValidationFailedError(AdCPSalesAgentError[CreativeManifestDeta
     """The manifest fails the selected declaration on a non-size rule (422, CREATIVE_VALIDATION_FAILED_GENERIC)."""
 
     _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC
+
+
+class AdCPCreativeValueNotAllowedError(AdCPSalesAgentError[CreativeValueNotAllowedDetails]):
+    """A manifest value is outside the closed set the declaration publishes (422, CREATIVE_VALUE_NOT_ALLOWED)."""
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_VALUE_NOT_ALLOWED
 
 
 # The structural provenance rejections of core/creative-policy.json: "Sellers that publish a

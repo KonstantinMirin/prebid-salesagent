@@ -80,12 +80,13 @@ WHAT THIS MODULE DOES NOT DO, deliberately:
 * Not every per-kind param is read. Every slot's own constraints are
   (:func:`_slot_constraint_shortfalls`), including the ones a declaration states flat by the
   slot's role (:func:`_effective_slot`), and so are a declared ``aspect_ratio``
-  (:func:`_aspect_shortfall`), an audio spot's loudness and true peak and a required caption
-  track (:func:`_level_shortfalls`). Not read: ``cta_values`` (the pin's code for it,
-  CREATIVE_VALUE_NOT_ALLOWED, has no subclass here), the constraints on a card's ``media``
-  (``card_aspect_ratio``, ``card_image_max_file_size_kb``, ``card_video_*``),
-  ``allowed_card_media_asset_types``, a responsive creative's ``video_*_duration_ms`` and
-  ``logo_aspect_ratios``, and ``om_sdk_required``, which no manifest member states.
+  (:func:`_aspect_shortfalls`), an audio spot's loudness and true peak and a required caption
+  track (:func:`_level_shortfalls`). So are ``cta_values`` (:func:`_closed_value_shortfalls`,
+  CREATIVE_VALUE_NOT_ALLOWED), a carousel's card count and what it states about each card's
+  ``media`` (:func:`_card_media_shortfalls`), and a responsive creative's video duration
+  bounds, logo aspect ratios and image file-size cap, and a native unit's image file-size cap
+  (``max_image_file_size_kb``). Not read: ``om_sdk_required``, which no
+  manifest member states (adcontextprotocol/adcp#8627 asks how a seller is meant to validate it).
 """
 
 from __future__ import annotations
@@ -118,6 +119,7 @@ from pydantic import BaseModel, RootModel, TypeAdapter, ValidationError
 from src.core.errors.details import (
     CapabilityRefusalDetails,
     CreativeManifestDetails,
+    CreativeValueNotAllowedDetails,
     ErrorProblem,
     SelectorConflictDetails,
     SelectorRouteSummary,
@@ -128,6 +130,7 @@ from src.core.exceptions import (
     AdCPCreativeMissingClickUrlError,
     AdCPCreativeSizeMismatchError,
     AdCPCreativeValidationFailedError,
+    AdCPCreativeValueNotAllowedError,
 )
 from src.core.schemas import Format, FormatOptionIdentity, FormatSelector
 
@@ -222,6 +225,15 @@ _DIMENSION_CONSTRAINTS: frozenset[str] = frozenset(
     }
 )
 
+#: The constraint a text value fails by lying outside a CLOSED SET the declaration publishes:
+#: ``cta_values``, "Permitted CTA values for this product" (formats/canonical/image.json,
+#: video_hosted.json), which on native_in_feed.json "narrows the cta slot to a closed enum".
+#: Its own code is ``CREATIVE_VALUE_NOT_ALLOWED``: "A submitted text-asset value is not in the
+#: format's declared ``allowed_values`` list ... a closed-set constraint violation that the
+#: buyer can resolve mechanically" (enums/error-code.json), which the pinned native_in_feed
+#: storyboard's ``reject_cta_not_in_enum`` step grades for exactly this case.
+_CLOSED_VALUE_CONSTRAINT = "allowed_values"
+
 
 @dataclass(frozen=True, slots=True)
 class ManifestShortfall:
@@ -245,6 +257,25 @@ class ManifestShortfall:
     def dimensional(self) -> bool:
         """Whether this is a size failure (:data:`_DIMENSION_CONSTRAINTS`)."""
         return self.constraint in _DIMENSION_CONSTRAINTS
+
+    @property
+    def code(self) -> ErrorCode:
+        """The pinned creative code this one failure is an instance of.
+
+        ``CREATIVE_SIZE_MISMATCH`` for a size (:data:`_DIMENSION_CONSTRAINTS`),
+        ``CREATIVE_MISSING_CLICK_URL`` for a required click destination left out
+        (``missing_destination``), ``CREATIVE_VALUE_NOT_ALLOWED`` for a text value outside a closed set the declaration
+        publishes (:data:`_CLOSED_VALUE_CONSTRAINT`), and ``CREATIVE_VALIDATION_FAILED_GENERIC``
+        for anything else: "the producer cannot classify the failure with a more specific
+        standard code" (enums/error-code.json).
+        """
+        if self.dimensional:
+            return ErrorCode.CREATIVE_SIZE_MISMATCH
+        if self.missing_destination:
+            return ErrorCode.CREATIVE_MISSING_CLICK_URL
+        if self.constraint == _CLOSED_VALUE_CONSTRAINT:
+            return ErrorCode.CREATIVE_VALUE_NOT_ALLOWED
+        return ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC
 
 
 @dataclass(frozen=True, slots=True)
@@ -1038,9 +1069,7 @@ def _manifest_shortfalls(declaration: LibraryFormatDeclaration, manifest: Mappin
     shortfalls.extend(shortfall for _path, _ratio, failed in graded for shortfall in failed)
     shortfalls.extend(_coverage_shortfalls(str(primary), slot.get("required_pixel_ratios"), graded))
     ratio = declared.get("aspect_ratio") or _ORIENTATION_RATIOS.get(str(declared.get("orientation")))
-    shortfalls.extend(
-        shortfall for path, asset in renditions if (shortfall := _aspect_shortfall(path, asset, ratio)) is not None
-    )
+    shortfalls.extend(shortfall for path, asset in renditions for shortfall in _aspect_shortfalls(path, asset, ratio))
     shortfalls.extend(shortfall for path, asset in renditions for shortfall in _level_shortfalls(path, asset, declared))
     return shortfalls
 
@@ -1116,11 +1145,13 @@ def _ratio_agrees(width: Any, height: Any, ratio: str) -> bool:
     return round(Decimal(width) / Decimal(height), places) == round(terms[0] / terms[1], places)
 
 
-def _aspect_shortfall(path: str, asset: Mapping[str, Any], ratio: Any) -> ManifestShortfall | None:
-    """The main media asset in *path* against the declaration's aspect *ratio*, if it has one.
+def _aspect_shortfalls(path: str, asset: Mapping[str, Any], ratio: Any) -> list[ManifestShortfall]:
+    """The image or video asset in *path* against the aspect ratio its declaration accepts.
 
-    *ratio* is the declared ``aspect_ratio``, or the one a video ``orientation`` names when
-    the declaration omits it (:data:`_ORIENTATION_RATIOS`).
+    *ratio* is one declared ``"W:H"`` ratio -- the declared ``aspect_ratio``, or the one a
+    video ``orientation`` names when the declaration omits it (:data:`_ORIENTATION_RATIOS`) --
+    or a SET of them, responsive_creative.json ``logo_aspect_ratios``, which an asset agrees
+    with by agreeing with any one. No ratio stated is no constraint.
 
     Step 4 of creative-manifests.mdx § Validation checks "fixed dimensions", and image.json
     says a declared ratio narrows every size mode: "When provided alongside width/height, must
@@ -1128,14 +1159,25 @@ def _aspect_shortfall(path: str, asset: Mapping[str, Any], ratio: Any) -> Manife
     matching the aspect ratio." An asset that states no width or height is not graded here;
     a fixed size it is silent about already fails.
     """
-    if not isinstance(ratio, str) or _ratio_agrees(asset.get("width"), asset.get("height"), ratio):
-        return None
-    return ManifestShortfall(
-        field=f"assets.{path}",
-        constraint="aspect_ratio",
-        rejected_value=f"{_shown(asset.get('width'))}:{_shown(asset.get('height'))}",
-        accepted_values=(ratio,),
-    )
+    ratios = (ratio,) if isinstance(ratio, str) else tuple(map(str, ratio)) if isinstance(ratio, (list, tuple)) else ()
+    width, height = asset.get("width"), asset.get("height")
+    if not ratios or any(_ratio_agrees(width, height, accepted) for accepted in ratios):
+        return []
+    return [ManifestShortfall(f"assets.{path}", "aspect_ratio", f"{_shown(width)}:{_shown(height)}", ratios)]
+
+
+def _set_shortfalls(path: str, member: str, constraint: str, stated: Any, accepted: Any) -> list[ManifestShortfall]:
+    """*stated*, the asset's ``member``, against the closed set *accepted* a declaration publishes.
+
+    The one membership check every such set goes through: a slot's accepted ``widths`` and
+    ``heights``, its ``pixel_ratios``, ``cta_values`` (:data:`_CLOSED_VALUE_CONSTRAINT`) and a
+    card's ``allowed_card_media_asset_types``. The failure is reported at
+    ``assets.<path>.<member>`` under *constraint*. A value the asset does not state, and a set
+    the declaration does not publish, are not graded here.
+    """
+    if stated is None or not isinstance(accepted, (list, tuple)) or stated in accepted:
+        return []
+    return [ManifestShortfall(f"assets.{path}.{member}", constraint, _shown(stated), _shown_all(accepted))]
 
 
 #: The per-slot constraints a declaration may state FLAT, as ``<role>_<suffix>``, and the
@@ -1146,20 +1188,76 @@ def _aspect_shortfall(path: str, asset: Mapping[str, Any], ratio: Any) -> Manife
 #: ``headlines_min`` / ``images_landscape_aspect_ratio`` ("per-slot count/length narrowing lives
 #: in flat parameters"), audio_hosted.json ``companion_image_max_file_size_kb`` /
 #: ``companion_image_aspect_ratio`` / ``companion_image_required``, video_hosted.json
-#: ``companion_banner_widths`` / ``companion_banner_heights``. ``max_file_size_kb`` is the
+#: ``companion_banner_widths`` / ``companion_banner_heights``, responsive_creative.json
+#: ``video_min_duration_ms`` / ``video_max_duration_ms`` / ``logo_aspect_ratios``, and the
+#: ``cta_values`` image.json, native_in_feed.json and video_hosted.json state for the ``cta``
+#: slot ("When set, narrows the cta slot to a closed enum"). ``max_file_size_kb`` is the
 #: slot's ``max_size_kb`` in the same unit: canonical-formats.mdx, "a field ending in ``_kb``
 #: uses 1 KB = 1,000 bytes". The suffixes are tried longest first, so ``_max_chars`` is never
-#: read as ``_max``.
+#: read as ``_max`` and ``_aspect_ratios`` never as ``_aspect_ratio``.
 _FLAT_SLOT_SUFFIXES: tuple[tuple[str, str], ...] = (
     ("_max_file_size_kb", "max_size_kb"),
+    ("_min_duration_ms", "min_duration_ms"),
+    ("_max_duration_ms", "max_duration_ms"),
+    ("_aspect_ratios", "aspect_ratios"),
     ("_aspect_ratio", "aspect_ratio"),
     ("_max_chars", "max_chars"),
     ("_required", "required"),
     ("_heights", "heights"),
     ("_widths", "widths"),
+    ("_values", _CLOSED_VALUE_CONSTRAINT),
     ("_min", "min"),
     ("_max", "max"),
 )
+
+#: The same count limits spelled as a PREFIX: image_carousel.json ``min_cards`` ("Minimum card
+#: count") and ``max_cards`` ("Maximum card count"), which constrain the ``cards`` slot as its
+#: own ``min`` / ``max`` do ("``min`` / ``max`` constrain card count"). Tried only when no
+#: suffix matched, and read only when the rest of the name is the slot's role, so
+#: ``max_width`` or ``max_file_size_kb`` name no slot and stay the main media's params.
+_FLAT_SLOT_PREFIXES: tuple[tuple[str, str], ...] = (("min_", "min"), ("max_", "max"))
+
+#: A per-asset-type file-size cap spelled with the bound FIRST, ``max_<type>_file_size_kb``:
+#: native_in_feed.json ``max_image_file_size_kb``, "Maximum file size in kilobytes for
+#: main_image and icon" -- the two image slots that format declares. So it names the same
+#: role responsive_creative.json's ``asset_image_max_file_size_kb`` does, every slot holding
+#: an image (``asset_<type>``, :func:`_effective_slot`), and is that slot's ``max_size_kb``
+#: in decimal kilobytes (canonical-formats.mdx: "1 KB = 1,000 bytes"). Tried before the
+#: prefixes, so ``max_`` never reads it as a count; the main media's own ``max_file_size_kb``
+#: names no type and is left to them.
+_TYPED_FILE_SIZE_SUFFIX = "_file_size_kb"
+
+#: The two asset types a card's ``media`` may carry (core/assets/card-asset.json: "Either an
+#: ``image`` or ``video`` asset"), which is also how image_carousel.json names the per-type
+#: limits on it: ``card_image_max_file_size_kb``, ``card_video_max_file_size_kb``,
+#: ``card_video_max_duration_ms``.
+_CARD_MEDIA_TYPES: frozenset[str] = frozenset({"image", "video"})
+
+#: image_carousel.json ``allowed_card_media_asset_types``: "Asset types each card's ``media``
+#: field may carry. Default: ['image']." A declaration silent about it takes the image-only
+#: default the parameter states, the reading that does not relax the target contract. The
+#: format's own description ("Allowed asset types for a card's ``media`` field: ``image`` and
+#: ``video``") reads the other way; adcontextprotocol/adcp#8629 asks which is intended.
+_DEFAULT_CARD_MEDIA_TYPES: tuple[str, ...] = ("image",)
+
+
+def _flat_constraint(key: str) -> tuple[str, str]:
+    """The slot constraint flat declaration param *key* states, and the role it names.
+
+    ``("", "")`` when the name has neither a suffix (:data:`_FLAT_SLOT_SUFFIXES`), nor the
+    typed file-size spelling (:data:`_TYPED_FILE_SIZE_SUFFIX`), nor a prefix
+    (:data:`_FLAT_SLOT_PREFIXES`) this module reads.
+    """
+    for suffix, constraint in _FLAT_SLOT_SUFFIXES:
+        if key.endswith(suffix):
+            return constraint, key[: -len(suffix)]
+    if key.startswith("max_") and key.endswith(_TYPED_FILE_SIZE_SUFFIX):
+        if asset_type := key[len("max_") : -len(_TYPED_FILE_SIZE_SUFFIX)]:
+            return "max_size_kb", f"asset_{asset_type}"
+    for prefix, constraint in _FLAT_SLOT_PREFIXES:
+        if key.startswith(prefix):
+            return constraint, key[len(prefix) :]
+    return "", ""
 
 
 def _slot_roles(group: str) -> frozenset[str]:
@@ -1184,22 +1282,51 @@ def _effective_slot(slot: Mapping[str, Any], declared: Mapping[str, Any]) -> dic
     which is how image_carousel.json spells the card's text: ``card_headline_max_chars``
     "Governs the ``headline`` field on each card-asset in the ``cards`` slot", and
     ``card_description_max_chars`` its ``description``. Those land in ``member_max_chars``.
+
+    ``asset_<type>_<suffix>`` names every slot holding that asset type:
+    responsive_creative.json ``asset_image_max_file_size_kb`` caps each image the pool holds,
+    whichever slot it fills. That reading of a name the pin gives no description is this
+    seller's: the role is no slot's, and the asset type is the only thing it can name. The
+    pin's own description of the same cap on native_in_feed.json, ``max_image_file_size_kb``
+    (:data:`_TYPED_FILE_SIZE_SUFFIX`), names exactly the format's image slots, which is that
+    reading.
+
+    A CARD slot also carries what image_carousel.json states about each card's ``media``
+    (core/assets/card-asset.json: "Either an ``image`` or ``video`` asset, matching the parent
+    format's ``allowed_card_media_asset_types`` parameter"): the media types it accepts
+    (``media_asset_types``, :data:`_DEFAULT_CARD_MEDIA_TYPES` when unstated), the per-type
+    limits ``card_<type>_<suffix>`` (``media``), and ``card_aspect_ratio``, "Aspect ratio
+    shared across all cards", which lands on the slot as ``aspect_ratio`` and is asked of the
+    media because a card-asset states no dimensions of its own. A card's ``cta`` is held to
+    the declaration's ``cta_values``: card-asset.json, "When the parent format declares
+    ``cta_values`` (allowed CTA labels), the per-card ``cta`` MUST be one of those values".
     """
     group = str(slot.get("asset_group_id") or "")
-    roles = _slot_roles(group)
+    roles = _slot_roles(group) | {f"asset_{slot.get('asset_type')}"}
+    is_card = slot.get("asset_type") == "card"
     effective: dict[str, Any] = dict(slot)
     members: dict[str, Any] = {}
+    media: dict[str, dict[str, Any]] = {}
     for key, bound in declared.items():
         if bound is None:
             continue
-        suffix, constraint = next(((sfx, c) for sfx, c in _FLAT_SLOT_SUFFIXES if key.endswith(sfx)), ("", ""))
-        role = key[: -len(suffix)] if suffix else ""
+        constraint, role = _flat_constraint(key)
+        member = _member_of(role, group)
         if role in roles:
             effective[constraint] = _narrower(constraint, effective.get(constraint), bound)
-        elif constraint == "max_chars" and (member := _member_of(role, group)):
+        elif constraint == "max_chars" and member:
             members[member] = bound
+        elif is_card and constraint and member in _CARD_MEDIA_TYPES:
+            media.setdefault(member, {})[constraint] = bound
     if members:
         effective["member_max_chars"] = members
+    if is_card:
+        effective["media_asset_types"] = declared.get("allowed_card_media_asset_types") or list(
+            _DEFAULT_CARD_MEDIA_TYPES
+        )
+        effective["media"] = media
+        if declared.get("cta_values"):
+            effective["member_allowed_values"] = {"cta": declared["cta_values"]}
     return effective
 
 
@@ -1218,7 +1345,7 @@ def _narrower(constraint: str, own: Any, flat: Any) -> Any:
     if constraint == "required":
         return bool(own) or bool(flat)
     if _is_number(own) and _is_number(flat):
-        return max(own, flat) if constraint == "min" else min(own, flat)
+        return max(own, flat) if constraint.startswith("min") else min(own, flat)
     return own
 
 
@@ -1296,8 +1423,17 @@ def _slot_asset_shortfalls(
         for member, text, bound in texts
         if isinstance(text, str) and _is_number(bound) and len(text) > bound
     )
+    shortfalls.extend(_closed_value_shortfalls(path, asset, slot))
     if not main and asset_type in _DIMENSIONED_ASSET_TYPES:
         shortfalls.extend(_slot_dimension_shortfalls(path, asset, slot))
+    if asset_type in _DIMENSIONED_ASSET_TYPES:
+        # responsive_creative.json ``logo_aspect_ratios``, a SET of ratios. Graded on the main
+        # slot as well as the others: the main slot's own params state no such set, and a
+        # declaration whose only required media slot is the logo makes the logo the main slot.
+        shortfalls.extend(_aspect_shortfalls(path, asset, slot.get("aspect_ratios")))
+    shortfalls.extend(_duration_bound_shortfalls(path, asset, slot))
+    if asset_type == "card" and isinstance(media := _plain(asset.get("media")), Mapping):
+        shortfalls.extend(_card_media_shortfalls(f"{path}.media", media, slot))
     size_cap = slot.get("max_size_kb")
     if asset_type in _SIZED_ASSET_TYPES and _is_number(size_cap):
         size = _plain(asset.get("file_size_bytes"))
@@ -1310,10 +1446,9 @@ def _slot_asset_shortfalls(
                     (_shown(size_cap),),
                 )
             )
-    ratios, stated = slot.get("pixel_ratios"), _plain(asset.get("pixel_ratio"))
-    if not main and asset_type == "image" and ratios and _is_number(stated) and stated not in ratios:
-        shortfalls.append(
-            ManifestShortfall(f"assets.{path}.pixel_ratio", "pixel_ratios", _shown(stated), _shown_all(ratios))
+    if not main and asset_type == "image" and (ratios := slot.get("pixel_ratios")):
+        shortfalls.extend(
+            _set_shortfalls(path, "pixel_ratio", "pixel_ratios", _plain(asset.get("pixel_ratio")), ratios)
         )
     return shortfalls
 
@@ -1330,17 +1465,79 @@ def _slot_dimension_shortfalls(path: str, asset: Mapping[str, Any], slot: Mappin
     ``companion_image_aspect_ratio``, responsive_creative.json ``images_landscape_aspect_ratio``,
     video_hosted.json ``companion_banner_widths`` ("Permitted companion banner widths") and
     ``companion_banner_heights``. The ratio is graded as the main asset's is
-    (:func:`_aspect_shortfall`); a stated width or height outside its set is a size the slot
-    does not accept. An asset silent about a dimension is not graded on it.
+    (:func:`_aspect_shortfalls`); a stated width or height outside its set is a size the slot
+    does not accept (:func:`_set_shortfalls`). An asset silent about a dimension is not graded on it.
     """
-    shortfalls = [found] if (found := _aspect_shortfall(path, asset, slot.get("aspect_ratio"))) else []
+    shortfalls = _aspect_shortfalls(path, asset, slot.get("aspect_ratio"))
     for constraint, member in (("widths", "width"), ("heights", "height")):
-        accepted, stated = slot.get(constraint), _plain(asset.get(member))
-        if isinstance(accepted, (list, tuple)) and _is_number(stated) and stated not in accepted:
-            shortfalls.append(
-                ManifestShortfall(f"assets.{path}.{member}", member, _shown(stated), _shown_all(accepted))
-            )
+        shortfalls.extend(_set_shortfalls(path, member, member, _plain(asset.get(member)), slot.get(constraint)))
     return shortfalls
+
+
+def _closed_value_shortfalls(path: str, asset: Mapping[str, Any], slot: Mapping[str, Any]) -> list[ManifestShortfall]:
+    """A text value outside the closed set its slot accepts (:data:`_CLOSED_VALUE_CONSTRAINT`).
+
+    Two places carry one: a text asset's ``content`` in a slot the declaration closes
+    (``cta_values`` on the ``cta`` slot, core/assets/text-asset.json ``content``), and a
+    string member of each asset a slot holds (``member_allowed_values``, a card's ``cta``).
+    Matched exactly, as the pin's examples spell the values (``LEARN_MORE``, ``SHOP_NOW``):
+    no case folding, because "any value outside that list is rejected by definition"
+    (enums/error-code.json CREATIVE_VALUE_NOT_ALLOWED). A slot left empty is not graded here;
+    a closed set constrains a value, it does not require one.
+    """
+    checks = [
+        (member, asset.get(member), values) for member, values in (slot.get("member_allowed_values") or {}).items()
+    ]
+    if asset.get("asset_type") == "text":
+        checks.append(("content", asset.get("content"), slot.get(_CLOSED_VALUE_CONSTRAINT)))
+    return [
+        shortfall
+        for member, value, values in checks
+        for shortfall in _set_shortfalls(path, member, _CLOSED_VALUE_CONSTRAINT, value, values)
+    ]
+
+
+#: The asset types whose ``duration_ms`` a slot's duration bounds are asked of
+#: (core/assets/video-asset.json, audio-asset.json).
+_TIMED_ASSET_TYPES: frozenset[str] = frozenset({"video", "audio"})
+
+
+def _duration_bound_shortfalls(path: str, asset: Mapping[str, Any], slot: Mapping[str, Any]) -> list[ManifestShortfall]:
+    """A video or audio asset whose ``duration_ms`` lies outside its slot's duration bounds.
+
+    responsive_creative.json ``video_min_duration_ms`` / ``video_max_duration_ms`` on the
+    ``video`` pool and image_carousel.json ``card_video_max_duration_ms`` on a card's video
+    media (:func:`_effective_slot`). Each bound is decided by :func:`_constraint_unsatisfied`,
+    which owns what a ``min_`` / ``max_`` bound means. An asset that states no duration is not
+    graded: only a fixed duration is among what a creative must state (:data:`_MUST_BE_STATED`).
+    """
+    duration = _plain(asset.get("duration_ms"))
+    if asset.get("asset_type") not in _TIMED_ASSET_TYPES or not _is_number(duration):
+        return []
+    return [
+        ManifestShortfall(f"assets.{path}.duration_ms", constraint, _shown(duration), (_shown(slot[constraint]),))
+        for constraint in ("min_duration_ms", "max_duration_ms")
+        if _constraint_unsatisfied(constraint, slot.get(constraint), duration)
+    ]
+
+
+def _card_media_shortfalls(path: str, media: Mapping[str, Any], slot: Mapping[str, Any]) -> list[ManifestShortfall]:
+    """A card's ``media`` against what the declaration states about every card's media.
+
+    The asset type first: card-asset.json's ``media`` is an image or video "matching the parent
+    format's ``allowed_card_media_asset_types`` parameter", so a type outside it is refused and
+    nothing else about the media is graded. Then the media is graded as an asset of a slot
+    whose constraints are the card slot's ``aspect_ratio`` (``card_aspect_ratio``) and the
+    limits stated for its type (``card_image_max_file_size_kb``, ``card_video_max_file_size_kb``
+    -- "1 KB = 1,000 bytes" -- and ``card_video_max_duration_ms``), through the same reader
+    every other slot's asset goes through.
+    """
+    media_type = str(media.get("asset_type"))
+    accepted = tuple(slot.get("media_asset_types") or ())
+    if refused := _set_shortfalls(path, "asset_type", "allowed_card_media_asset_types", media_type, accepted):
+        return refused
+    media_slot = {"aspect_ratio": slot.get("aspect_ratio"), **(slot.get("media") or {}).get(media_type, {})}
+    return _slot_asset_shortfalls(path, media, media_slot, main=False)
 
 
 def _accepted_ratios(declared: Any, slot: Any) -> list[Any]:
@@ -3232,6 +3429,7 @@ def creative_refusal(
     | AdCPCreativeMissingClickUrlError
     | AdCPCreativeSizeMismatchError
     | AdCPCreativeValidationFailedError
+    | AdCPCreativeValueNotAllowedError
 ):
     """The error to raise for a refused CREATIVE verdict. Every creative gate raises this.
 
@@ -3240,19 +3438,25 @@ def creative_refusal(
     selections" (creative-manifests.mdx § Validation step 5). A manifest that does not
     satisfy the declaration it selected, or a deprecated reference that names a template the
     product takes at parameters it does not (:func:`_legacy_shortfalls`), takes a creative
-    code from the pinned enum:
+    code from the pinned enum (:attr:`ManifestShortfall.code`):
 
     * ``CREATIVE_SIZE_MISMATCH`` when every shortfall is a dimension -- "The submitted
       creative dimensions do not match any size accepted by the selected packages";
     * ``CREATIVE_MISSING_CLICK_URL`` when every shortfall is a required click destination
       left out -- "A submitted creative that requires a destination URL does not provide
       one";
-    * ``CREATIVE_VALIDATION_FAILED_GENERIC`` otherwise, including an ambiguous selection and
-      a creative set that leaves an included placement uncovered (:func:`creatives_uncovered`)
-      -- "the producer cannot classify the failure with a more specific standard code". No
-      code in the enum names a missing ``format_option_ref``; ``CREATIVE_REPRESENTATION_UNRESOLVED``
-      is about a CreativeRepresentationSet and requires a rejection per representation id,
-      which a plain manifest has none of.
+    * ``CREATIVE_VALUE_NOT_ALLOWED`` when every shortfall is a text value outside a closed set
+      the declaration publishes -- "A submitted text-asset value is not in the format's
+      declared ``allowed_values`` list". Its entry says the seller "MUST set ``error.field``
+      to the offending asset's path within the manifest" and "SHOULD include the format's
+      ``allowed_values`` array in ``error.details.allowed_values``", so *field* is replaced
+      by the first offending path and the set travels in ``allowed_values``;
+    * ``CREATIVE_VALIDATION_FAILED_GENERIC`` otherwise, including a mix of the kinds above, an
+      ambiguous selection and a creative set that leaves an included placement uncovered
+      (:func:`creatives_uncovered`) -- "the producer cannot classify the failure with a more
+      specific standard code". No code in the enum names a missing ``format_option_ref``;
+      ``CREATIVE_REPRESENTATION_UNRESOLVED`` is about a CreativeRepresentationSet and requires
+      a rejection per representation id, which a plain manifest has none of.
 
     The generic code's own text says producers "SHOULD prefer a specific creative code
     whenever one applies", so the error takes a specific code when every shortfall shares
@@ -3264,14 +3468,15 @@ def creative_refusal(
     """
     if verdict.refusal not in _CREATIVE_REFUSALS and not verdict.shortfalls:
         return canonical_refusal(verdict, field=field, creative_id=creative_id, **entity)
-    codes = {_shortfall_code(shortfall) for shortfall in verdict.shortfalls}
-    details = CreativeManifestDetails(
-        creative_id=creative_id,
-        rejected_value=verdict.rejected_value,
-        accepted_values=list(verdict.accepted_values),
-        problems=[
+    codes = {shortfall.code for shortfall in verdict.shortfalls}
+    common = next(iter(codes)) if len(codes) == 1 else None
+    values: dict[str, Any] = {
+        "creative_id": creative_id,
+        "rejected_value": verdict.rejected_value,
+        "accepted_values": list(verdict.accepted_values),
+        "problems": [
             ErrorProblem(
-                code=_shortfall_code(shortfall),
+                code=shortfall.code,
                 subject_type="creative",
                 subject_id=creative_id,
                 field=shortfall.field,
@@ -3282,21 +3487,19 @@ def creative_refusal(
         ]
         or None,
         **entity,
-    )
-    if codes == {ErrorCode.CREATIVE_SIZE_MISMATCH}:
+    }
+    if common is ErrorCode.CREATIVE_VALUE_NOT_ALLOWED:
+        offending = verdict.shortfalls[0]
+        return AdCPCreativeValueNotAllowedError(
+            details=CreativeValueNotAllowedDetails(**values, allowed_values=list(offending.accepted_values)),
+            field=offending.field,
+        )
+    details = CreativeManifestDetails(**values)
+    if common is ErrorCode.CREATIVE_SIZE_MISMATCH:
         return AdCPCreativeSizeMismatchError(details=details, field=field)
-    if codes == {ErrorCode.CREATIVE_MISSING_CLICK_URL}:
+    if common is ErrorCode.CREATIVE_MISSING_CLICK_URL:
         return AdCPCreativeMissingClickUrlError(details=details, field=field)
     return AdCPCreativeValidationFailedError(details=details, field=field)
-
-
-def _shortfall_code(shortfall: ManifestShortfall) -> ErrorCode:
-    """The pinned creative code one shortfall is an instance of: specific where one applies."""
-    if shortfall.dimensional:
-        return ErrorCode.CREATIVE_SIZE_MISMATCH
-    if shortfall.missing_destination:
-        return ErrorCode.CREATIVE_MISSING_CLICK_URL
-    return ErrorCode.CREATIVE_VALIDATION_FAILED_GENERIC
 
 
 def require_covered(
