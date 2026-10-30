@@ -299,7 +299,7 @@ def _message_from_prose(description: str) -> str:
 #: suggestion for these come from the pinned schema, which is authoritative for
 #: them.
 #:
-#: These eleven are the published codes that resolve to no buyer-shippable text on
+#: These are the published codes that resolve to no buyer-shippable text on
 #: their own: the pinned schema's prose for them is normative implementer text
 #: rather than a sentence for a buyer. Seven of them say nothing about the
 #: failure without also saying MUST/SHOULD about other codes and
@@ -311,9 +311,11 @@ def _message_from_prose(description: str) -> str:
 #: use", "Distinct from", and which ``error-details`` document a seller SHOULD
 #: populate. ``CREATIVE_SIZE_MISMATCH`` and ``CREATIVE_VALIDATION_FAILED_GENERIC``
 #: state the failure in one sentence and then tell the seller what it SHOULD and MUST
-#: put in ``error.field`` and ``error.details``. So all eleven are authored here, and
-#: each one deletes itself the moment the pin ships prose that reduces to a buyer
-#: sentence on its own.
+#: put in ``error.field`` and ``error.details``. ``BILLING_NOT_PERMITTED_FOR_AGENT``
+#: joined them when the per-buyer-agent billing gate started emitting it: its prose
+#: names the failure and then spends the rest on the identity rule and the details
+#: clamp the seller MUST honour. So these are authored here, and each one deletes
+#: itself the moment the pin ships prose that reduces to a buyer sentence on its own.
 #:
 #: There were eight until ``CREATIVE_NOT_FOUND`` was removed: the pinned prose
 #: resolves it to one clean sentence unaided, which is strictly better than a
@@ -328,6 +330,9 @@ _AUTHORED_SPEC_MESSAGES: Final[Mapping[ErrorCode, str]] = MappingProxyType(
         ErrorCode.AUTH_INVALID: "Credentials were presented but rejected",
         ErrorCode.AUTH_MISSING: "No credentials were presented",
         ErrorCode.AUTH_REQUIRED: "Authentication is required",
+        ErrorCode.BILLING_NOT_PERMITTED_FOR_AGENT: (
+            "Billing model is not permitted by this buyer agent's commercial relationship with the seller"
+        ),
         ErrorCode.BILLING_NOT_SUPPORTED: "Billing model is not supported by this seller",
         ErrorCode.CONFIGURATION_ERROR: "Configuration error",
         ErrorCode.CREATIVE_SIZE_MISMATCH: "The creative's dimensions match no size the selected format accepts",

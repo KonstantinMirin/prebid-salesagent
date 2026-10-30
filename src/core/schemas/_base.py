@@ -2793,6 +2793,9 @@ class Principal(SalesAgentBaseModel):
     #: choose which key set it is checked against. None means no key can be resolved for
     #: this counterparty, not that it is trusted.
     agent_url: str | None = None
+    #: Onboarded as passthrough-only: no payments relationship, so only the operator can be
+    #: invoiced. The per-buyer-agent billing gate reads it (BILLING_NOT_PERMITTED_FOR_AGENT).
+    billing_passthrough_only: bool = False
 
     @classmethod
     def from_row(cls, row: Any) -> "Principal":
@@ -2802,6 +2805,7 @@ class Principal(SalesAgentBaseModel):
             name=row.name,
             platform_mappings=row.platform_mappings,
             agent_url=row.agent_url,
+            billing_passthrough_only=row.billing_passthrough_only,
         )
 
     def get_adapter_id(self, adapter_name: str) -> str | None:

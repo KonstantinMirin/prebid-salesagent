@@ -439,18 +439,19 @@ def given_agent_passthrough_only(ctx: dict) -> None:
     capability ACCEPTS the requested value but the calling buyer agent's
     commercial relationship with the seller does not (e.g., the agent is
     onboarded as passthrough-only — no payments relationship — so ``agent`` and
-    ``advertiser`` reject)." The correct fixture therefore declares agent (and
-    advertiser) as *capability-supported* — the value is enum-valid AND in the
-    seller's supported_billing — so the ONLY thing that could reject it is the
-    per-buyer-agent commercial gate. Production has no such gate (GH #1772), so it
-    accepts the capability-supported value and provisions the account; that is
-    the gap these scenarios grade (strict xfail in conftest _XFAIL_TAGS).
+    ``advertiser`` reject)." The fixture therefore declares agent (and advertiser)
+    as *capability-supported* — the value is enum-valid AND in the seller's
+    supported_billing — so the ONLY thing that can reject it is the per-buyer-agent
+    commercial gate, and then records the agent's relationship where the seller
+    keeps it: the principal's onboarding row (``billing_passthrough_only``).
 
-    Real DB seeding via ``set_billing_policy`` (writes the tenant
-    ``supported_billing`` column) — NOT mock injection — so the setup is
-    e2e_rest-compatible.
+    Both writes are real DB state — the tenant ``supported_billing`` column and the
+    principal row — NOT mock injection, so the setup is the same on every transport,
+    e2e_rest included.
     """
+    _setup_tenant_and_principal(ctx)
     _set_billing_policy(ctx, ["operator", "agent", "advertiser"])
+    ctx["env"].register_agent_as_passthrough_only()
 
 
 def _set_approval_mode(ctx: dict, mode: str) -> None:
@@ -1733,11 +1734,11 @@ def then_operation_error_naming_field(ctx: dict, code: str, field: str) -> None:
 #     ``recovery`` and NO ``details`` (scope/supported_billing), and the rejected
 #     entry is NOT persisted (the loop ``continue``s), so a recovery retry with a
 #     supported value provisions a fresh account (action "created").
-#   - There is NO per-buyer-agent commercial gate anywhere in production: a
-#     capability-supported billing value ("agent" when the tenant declares it in
-#     supported_billing) is accepted and the account is provisioned. Production
-#     therefore never emits BILLING_NOT_PERMITTED_FOR_AGENT — the per-agent
-#     reject/recover scenarios stay strict tag-level xfails (conftest _XFAIL_TAGS).
+#   - The per-buyer-agent gate (_check_agent_billing_permission) runs after the
+#     capability gate: a capability-supported value the calling agent's onboarding
+#     record does not allow (passthrough-only: anything but "operator") is rejected
+#     with BILLING_NOT_PERMITTED_FOR_AGENT and the clamped details
+#     {rejected_billing, suggested_billing}, and the entry is not persisted.
 # ═══════════════════════════════════════════════════════════════════════
 
 
@@ -1790,18 +1791,19 @@ def when_retry_sync_with_billing(ctx: dict, billing: str) -> None:
     "the Buyer Agent retries the sync_accounts request with the seller's suggested_billing value and a fresh idempotency_key"
 )
 def when_retry_sync_with_suggested_billing(ctx: dict) -> None:
-    """Retry the prior request with the seller's suggested_billing value.
+    """Retry the prior request with the value the seller put in details.suggested_billing.
 
-    For a passthrough-only agent the single canonical retry value is
-    ``operator`` (error-details/billing-not-permitted-for-agent.json:
-    "Typically ``operator`` for passthrough-only agents"; examples[0] =
-    {"rejected_billing": "agent", "suggested_billing": "operator"}). Production
-    never emits ``suggested_billing`` (no per-agent gate, GH #1772), so this leg is
-    only reached after the scenario has already xfailed on the missing
-    BILLING_NOT_PERMITTED_FOR_AGENT error — the step exists so the scenario runs
-    non-dormant.
+    READ OFF THE PRIOR RESPONSE, the way the storyboard captures it
+    (billing-gate-dispatch.yaml per_agent_gate_reject ``context_outputs:
+    accounts[0].errors[0].details.suggested_billing``), never typed here: a retry that
+    hard-coded ``operator`` would pass the recover leg whatever the seller suggested,
+    or whether it suggested anything at all. An absent suggestion means
+    terminal-pending-onboarding (error-details/billing-not-permitted-for-agent.json),
+    so there is nothing to retry with and the step fails rather than inventing one.
     """
-    _retry_sync_with_billing(ctx, "operator")
+    suggested = _agent_gate_error_details(ctx).get("suggested_billing")
+    assert suggested, "the seller suggested no billing value to retry with (details.suggested_billing absent)"
+    _retry_sync_with_billing(ctx, suggested)
 
 
 def _last_account_errors(ctx: dict) -> list[Any]:

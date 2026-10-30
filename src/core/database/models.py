@@ -885,6 +885,12 @@ class Principal(Base, JSONValidatorMixin):
     # establishes (``_resolve_identity`` step 6). A second principal claiming one agent_url
     # would make that second lookup ambiguous, which is a silent authentication defect.
     agent_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # The agent's commercial relationship, from onboarding: TRUE when it is onboarded as
+    # passthrough-only (no payments relationship, so only the operator can be invoiced).
+    # sync_accounts answers BILLING_NOT_PERMITTED_FOR_AGENT from it (enums/error-code.json).
+    billing_passthrough_only: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()

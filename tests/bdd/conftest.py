@@ -965,22 +965,15 @@ _XFAIL_TAGS: dict[str, str] = {
     # Graduated: _check_billing_policy now emits recovery="correctable"
     # + details={scope, supported_billing} (conditionally, honest-absence on an empty
     # policy) on the per-account BILLING_NOT_SUPPORTED error. T-UC-011-ext-c-rejected removed.
-    # ── UC-011 per-buyer-agent commercial gate wiring (FIXME(#1772)) ──
-    # Steps now execute non-dormant on a2a/mcp/rest and grade the spec-pinned
-    # v3.1.1 shape (error-details/billing-not-permitted-for-agent.json); each
-    # fails because production (src/core/tools/accounts.py) has NO per-buyer-agent
-    # commercial gate. The passthrough-only Given declares agent as
-    # capability-supported (supported_billing), so _check_billing_policy accepts
-    # the value and production PROVISIONS the account (action "created") instead
-    # of rejecting it with BILLING_NOT_PERMITTED_FOR_AGENT — the code is never
-    # emitted anywhere in production.
-    "T-UC-011-billing-agent-gate-reject": "no per-buyer-agent commercial gate exists in production — agent billing is "
-    "capability-supported so _check_billing_policy accepts it and the account is provisioned (action 'created') "
-    "instead of rejected with BILLING_NOT_PERMITTED_FOR_AGENT + clamped rejected_billing/suggested_billing details — "
-    "#1772",
-    "T-UC-011-billing-agent-gate-recover": "no per-buyer-agent commercial gate exists in production — the first leg "
-    "never emits BILLING_NOT_PERMITTED_FOR_AGENT (capability-supported agent billing is provisioned), so the "
-    "autonomous suggested_billing recovery flow is unreachable — #1772",
+    # ── UC-011 per-buyer-agent commercial gate — GRADUATED (#1772) ──
+    # Graduated: T-UC-011-billing-agent-gate-reject and -recover removed.
+    # _check_agent_billing_permission (src/core/tools/accounts.py) runs after the
+    # capability gate and reads principals.billing_passthrough_only off the resolved
+    # identity; a passthrough-only agent asking for capability-supported "agent"
+    # billing gets BILLING_NOT_PERMITTED_FOR_AGENT with the clamped
+    # {rejected_billing, suggested_billing} details, and the recover leg retries with
+    # the suggested value read off that response. The passthrough-only Given now
+    # writes the principal row, so the state is the same on all four transports.
     # ── UC-011 account-level notification_configs + sandbox capability gate — ALL GRADUATED ──
     # Graduated (T2 increment F4a): T-UC-011-notif-register-paused,
     # -notif-replace-clear and -notif-omit-preserves removed. accounts.notification_configs now
