@@ -215,7 +215,7 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
     # VIDEO IS NOT FORKED. The env serves the in-process transports the same
     # committed capture the e2e server reads, so the rule this
     # docstring states -- name a format the agent SERVES -- now has one answer for all
-    # four. The in-process half named ``video_30s``, which the capture's 71 formats do
+    # four. The in-process half named ``video_30s``, which the capture does
     # not carry, so production refused it with AdCPFormatNotFoundError and the entry came
     # back action="failed" with no status: 3 regressed nodeids [a2a, mcp, rest] in box run
     # innet_181026_0202. ``video_file`` is the capture's one required slot for this format.

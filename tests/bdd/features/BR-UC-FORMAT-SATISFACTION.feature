@@ -1381,8 +1381,8 @@ Feature: A format selector must satisfy the canonical declaration the product pu
   # none. registries/v1-canonical-mapping.json (3.2.7) "Resolution order" projects a v1
   # format through (2) its own canonical, (3) a format_id_glob, (4) a structural entry --
   # "Set of asset_type values that must appear in the format's slots (in any order, any
-  # count)" -- and only then (6) fails closed. Every one of the 71 captured formats reaches
-  # one of those: 64 declare canonical, and the 7 card formats that do not all carry a `url`
+  # count)" -- and only then (6) fails closed. Every one of the 76 captured formats reaches
+  # one of those: 69 declare canonical, and the 7 card formats that do not all carry a `url`
   # asset, which the structural `url` entry maps to display_tag. `product_card_standard`
   # used to stand here as "unprojectable"; that was true only of a seller that stopped
   # after step 3. So the refused format is a publisher's own, served by the tenant's peer

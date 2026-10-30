@@ -742,7 +742,7 @@ def _legacy_placement(placement_id: str, *accepted: dict[str, Any]) -> dict[str,
 #: claiming one clears ``resolvable_format_ref`` and the sync's write gate; and
 #: ``project_legacy_format_id`` projects neither, so a gate that grades a legacy-only product
 #: through the projection alone sees an empty set. Measured against the capture with that
-#: function: 21 of its 71 ids do not project, these two among them. A reference naming a tenant's own creative
+#: function: 21 of its 76 ids do not project, these two among them. A reference naming a tenant's own creative
 #: agent fails the projection the same way, but no transport here serves such an agent.
 _UNPROJECTABLE_MREC = {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_300x250_image_2x"}
 _UNPROJECTABLE_LEADERBOARD = {"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": "display_728x90_image_2x"}
@@ -2174,7 +2174,7 @@ def _sync_legacy_claim(ctx: dict, format_id: str, **parameters: int) -> None:
     ``resolvable_format_ref`` guards asks whether the AGENT serves the id; the projection
     then asks the agent what canonical kind it declares, and both now read the committed
     capture on every env this step routes to -- ``CreativeSyncEnv`` installs production's
-    ``ReferenceFormatsRegistry`` serving all 71 formats (1883dedc4), and
+    ``ReferenceFormatsRegistry`` serving the whole capture (1883dedc4), and
     ``LibraryUpsertCreativeSyncEnv`` leaves ``get_creative_agent_registry`` unpatched, so
     the registry it reaches serves the same capture for itself. Measured:
     ``video_1280x720`` is in the capture and declares ``canonical.kind = video_hosted``,

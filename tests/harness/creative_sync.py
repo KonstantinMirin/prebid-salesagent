@@ -360,7 +360,7 @@ class HarnessCreativeAgentRegistry(ReferenceFormatsRegistry):
     whenever ``reference_formats_only`` is set, which is every test deployment and the
     e2e server (docker-compose.e2e.yml sets ``ADCP_TESTING``). Its
     ``_operator_formats_override`` answers an OPERATOR reference from the committed
-    capture (``tests/fixtures/creative_formats/reference_formats.json``, 71 formats) and
+    capture (``tests/fixtures/creative_formats/reference_formats.json``) and
     never dials. So the in-process catalogue and the e2e server's catalogue are THE SAME
     BYTES, which is the property a ``MagicMock`` registry destroyed: in-process
     transports were served a stand-in while e2e_rest was served the capture, and the same
@@ -965,7 +965,7 @@ class CreativeSyncEnv(PeerCreativeAgentMixin, IntegrationEnv):
 
         ``generative`` is the scenario's DECLARATION and is checked against the capture
         rather than imposed on it: ``served_format`` refuses when the two disagree. The
-        catalogue is not narrowed to this one format -- the capture carries all 71 and so
+        catalogue is not narrowed to this one format -- the capture carries every format and so
         does the server, so narrowing it would be the divergence this method exists to
         avoid.
         """

@@ -23,7 +23,7 @@ though that is the url the run can actually reach: it is an MCP endpoint, not an
 ``is_operator_agent`` never consults it. The operator agent is recognized by origin against
 ``CREATIVE_AGENT_ORIGIN``, which the e2e stack sets to the public agent's origin in the RUNNER
 and the SERVER alike, because its container stands in for the public agent. The catalog's own
-71 entries all declare the public identity too, so it is also what
+entries all declare the public identity too, so it is also what
 ``identity.legacy`` is keyed on when a product's arm and a creative's claim are compared. The
 fixture names the identity; production decides the transport.
 """

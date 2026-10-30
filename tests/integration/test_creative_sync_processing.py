@@ -713,7 +713,7 @@ class TestFormatChangeOnUpdate:
             # Update with format B. Both halves of the change must be formats the
             # reference agent SERVES, or the update is refused at validation and the
             # test reads 'failed' instead of grading the replacement: the bare
-            # ``display_728x90`` is not one of the capture's 71 ids, ``_image`` is.
+            # ``display_728x90`` is not one of the capture's ids, ``_image`` is.
             format_b = "display_728x90_image"
             result = env.call_impl(
                 creatives=[

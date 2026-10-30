@@ -68,7 +68,7 @@ if TYPE_CHECKING:
 # E2E format helpers — real creative agent data for Docker transport
 # ═══════════════════════════════════════════════════════════════════════
 
-#: The format every transport names. A CAPTURED id -- one of the 71 in
+#: The format every transport names. A CAPTURED id -- one of the formats in
 #: tests/fixtures/creative_formats/reference_formats.json, which both the in-process
 #: registry and the e2e server answer from. Paired with ``env.catalog_agent_url``, the
 #: agent that publishes it for this scenario; the pair is what ``find_format`` matches on,

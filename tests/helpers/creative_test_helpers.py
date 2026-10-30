@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 #:   every captured format carries ``https://creative.adcontextprotocol.org``. It is also
 #:   the only value ``is_operator_agent`` admits, so ``_validation.py``'s ``get_format``
 #:   reaches the capture instead of the egress seam.
-#: * the id must be one the capture carries. ``display_300x250`` is NOT one of the 71
+#: * the id must be one the capture carries. ``display_300x250`` is NOT one of them
 #:   (the captured 300x250 formats are ``_image``, ``_image_2x``, ``_image_1x_2x``,
 #:   ``_html`` and ``_generative``), and the previous default named it at
 #:   ``https://creative.test.example.com`` -- a format no agent serves at an agent no

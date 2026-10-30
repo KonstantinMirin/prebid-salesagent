@@ -44,7 +44,7 @@ AI_REASON = "Meets the tenant criteria"
 EXPECTED_DECISION = "approved"
 
 SLACK_WEBHOOK_URL = "https://hooks.slack.com/services/test"
-#: One of the 71 formats the reference agent serves
+#: One of the formats the reference agent serves
 #: (``tests/fixtures/creative_formats/reference_formats.json``). It said
 #: ``display_300x250`` — not in the capture, so ``_validation.py`` refused every creative
 #: here with ``AdCPFormatNotFoundError`` and the sync never reached the ai-powered branch

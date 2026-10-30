@@ -1022,7 +1022,7 @@ class TestCreateMediaBuyCreativeValidation:
         # ``output_format_ids`` on the SPEC below, not from the id. It must be an id the
         # registry glob can project, because the write gate refuses a creative whose
         # reference has no canonical kind and this helper has no catalog to resolve one
-        # with. Every real generative format in the pinned capture (7 of 71) declares
+        # with. Every real generative format in the pinned capture (7 of 76) declares
         # ``canonical.kind`` and so projects in production, where the spec IS passed.
         stamp_format_identity(mock_creative, format_id="display_300x250")
         mock_creative.data = {}  # No media_url -- but generative should skip validation
