@@ -188,7 +188,9 @@ def _assert_ledgered_or_live(scenarios: Mapping[str, dict], graded_ids: set[str]
             )
         else:
             assert record["ledgered"] is False, f"{scenario_id} unexpectedly reports ledgered=True"
-            assert all(o["outcome"] == "passed" for o in record["observations"])
+            assert all(o["outcome"] == "passed" for o in record["observations"]), (
+                f"{scenario_id} did not pass on every transport: {record['observations']}"
+            )
             assert all(o["reason_category"] == "live" for o in record["observations"])
 
 
