@@ -2926,7 +2926,18 @@ class BaseTestEnv:
                 )
 
         try:
-            # 0. Subclass setup that must precede the database and the mocks.
+            # 0. Compose the app before anything here patches the settings. ``src.app`` is
+            #    the composition root and calls ``load_settings()`` when it is imported,
+            #    which REPLACES the process's settings object; a patch an env made on the
+            #    old object (``set_egress_hatches``, ``FastOutboundBackoffMixin``, a
+            #    replaced ``_settings``) was silently discarded when the first REST
+            #    dispatch in the process imported it. A server process composes before it
+            #    serves, so this is the order production runs in. Not on e2e: the server
+            #    there is another process, and this one composes nothing it reaches.
+            if not self.is_e2e:
+                import src.app  # noqa: F401
+
+            # 0a. Subclass setup that must precede the database and the mocks.
             self._enter_pre()
 
             # 1. Database setup (integration mode only). INSIDE the try: the
