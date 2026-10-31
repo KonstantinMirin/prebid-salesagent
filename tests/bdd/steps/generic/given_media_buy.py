@@ -19,6 +19,7 @@ from adcp.types import ErrorCode
 from pytest_bdd import given, parsers
 
 from src.core.database.models import PricingOption
+from src.core.helpers import MEDIA_ASSET_TYPES
 from tests.bdd.steps.generic._create_request import (
     build_create_request_kwargs,
     pricing_option_id,
@@ -2114,6 +2115,21 @@ def inline_creative_payload(number: int, fmt_id: str = "display_300x250_image") 
     )
 
 
+def inline_creative_media_asset(creative: dict[str, Any]) -> dict[str, Any]:
+    """The asset carrying *creative*'s content URL: its one image, video or audio asset.
+
+    The named format requires more than one asset (``display_300x250_image``: ``banner_image``
+    image plus ``click_url`` url), so a step that breaks "the" asset has to say which. The
+    content asset is the media one (``MEDIA_ASSET_TYPES``); a ``url`` asset is a clickthrough
+    link, not the creative's content. Refuses a creative with no media asset, or with several,
+    because then the scenario has to name the asset itself.
+    """
+    assets = creative.get("assets") or {}
+    media = [a for a in assets.values() if isinstance(a, dict) and a.get("asset_type") in MEDIA_ASSET_TYPES]
+    assert len(media) == 1, f"expected exactly one media asset to break, got assets={assets}"
+    return media[0]
+
+
 @given(parsers.parse("the creative scenario is {partition}"))
 def given_creative_partition(ctx: dict, partition: str) -> None:
     """Set up creative configuration for partition scenarios (BR-RULE-015).
@@ -2303,13 +2319,13 @@ def given_request_with_inline_creatives(ctx: dict) -> None:
 
 @given("a creative is missing the required URL in assets")
 def given_inline_creative_missing_url(ctx: dict) -> None:
-    """ext-g: strip the content URL from the inline creative's primary asset.
+    """ext-g: strip the content URL from the inline creative's media asset.
 
     WHAT THIS ACTUALLY REACHES, measured rather than intended. The empty URL is
     refused at the REQUEST BOUNDARY, not by production's reference-creative
     validation: ``CreativeAssetRequest`` rejects ``url: ""`` as ``url_parsing``
     ("Input should be a valid URL, input is empty"), which the buyer receives at
-    ``packages[0].creatives[0].assets.primary.url``. So T-UC-002-ext-g grades an
+    ``packages[0].creatives[0].assets.banner_image.url``. So T-UC-002-ext-g grades an
     INVALID_REQUEST from the boundary and never gets as far as the
     reference-creative URL check its sentence names.
 
@@ -2332,37 +2348,21 @@ def given_inline_creative_missing_url(ctx: dict) -> None:
     assert creatives, "No inline creatives on package — wire the inline-creatives Given first"
     declared = []
     for creative in creatives:
-        # The asset the INLINE-CREATIVE Given actually seeded, found by looking for a url
-        # rather than by a hardcoded key. That key used to be ``primary`` -- the deleted
-        # harness stub's asset_id -- and is now ``banner_image``, which is what the pinned
-        # capture declares for display_300x250_image. Reading it off the seeded assets keeps
-        # this step correct across that move instead of pinning a second copy of the key: a
-        # hardcoded key here and the Given's key there are two places to change, and this
-        # step's assertion failing is how we learned they had diverged.
-        assets = creative.get("assets") or {}
-        bearing = [k for k, a in assets.items() if isinstance(a, dict) and "url" in a]
-        assert bearing, f"Inline creative has no url-bearing asset to clear the URL on; assets={list(assets)}"
-        # REFUSES rather than picking. A finder that silently chooses among candidates
-        # answers a different question than it was asked, and two url-bearing assets is not
-        # hypothetical here -- the pinned capture declares banner_image (image, with a url)
-        # AND click_url (url) for display_300x250_image, so a fixture that grows the second
-        # one would otherwise have this step blank whichever came first and still pass. The
-        # scenario is about ONE blanked URL; if there are two, the scenario has to say which.
-        assert len(bearing) == 1, (
-            f"Inline creative has {len(bearing)} url-bearing assets ({bearing}); this step "
-            f"blanks exactly one and will not choose for you — have the Given seed one, or "
-            f"name the asset in the scenario"
-        )
-        target = assets[bearing[0]]
+        # "The required URL" is the creative's CONTENT url, on its media asset. The named
+        # format requires two url-bearing assets (banner_image, an image, and click_url, a
+        # clickthrough), so the step names the asset by its role instead of by "the one that
+        # has a url". It is found by type rather than by a hardcoded key, so the key stays
+        # where the fixture puts it (the Then reads it as assets.banner_image.url).
+        target = inline_creative_media_asset(creative)
         # Empty, not absent: an absent url would fail as a MISSING field, and the
         # scenario is about a URL the buyer supplied and left blank.
         target["url"] = ""
         declared.append(
             malformed(
                 "empty_string",
-                "url='' on the primary asset is the scenario's whole subject: a URL the buyer "
+                "url='' on the media asset is the scenario's whole subject: a URL the buyer "
                 "supplied and left blank, not one they omitted. CreativeAssetRequest refuses the "
-                "bytes themselves — packages[0].creatives[0].assets.primary.url 'Input should be a "
+                "bytes themselves — packages[0].creatives[0].assets.banner_image.url 'Input should be a "
                 "valid URL, input is empty' [type=url_parsing] — so the obligation is INVALID_REQUEST "
                 "from the request boundary, not VALIDATION_ERROR from a seller rule.",
                 creative,

@@ -22,6 +22,7 @@ from tests.bdd.steps.generic.given_media_buy import (
     _ensure_request_defaults,
     _set_catalogs,
     _set_targeting_overlay,
+    inline_creative_media_asset,
     inline_creative_payload,
 )
 from tests.factories.creative_asset import AssetSpec, image_spec, text_spec
@@ -188,16 +189,16 @@ _ASSET_DISCRIMINATOR_BREAKS: dict[str, tuple[Callable[[dict], None], Callable[[d
 
 @given(parsers.parse('a create_media_buy request with an inline creative matching "{boundary_point}"'))
 def given_inline_creative_discriminator(ctx: dict, boundary_point: str) -> None:
-    """One inline creative whose single asset carries a broken ``asset_type`` (BR-RULE-015)."""
+    """One inline creative whose media asset carries a broken ``asset_type`` (BR-RULE-015)."""
     if boundary_point not in _ASSET_DISCRIMINATOR_BREAKS:
         raise ValueError(f"Unknown creative asset boundary point: {boundary_point!r}")
     breaks, mark = _ASSET_DISCRIMINATOR_BREAKS[boundary_point]
     _add_inline_creatives(ctx, count=1)
     pkg = ctx["request_kwargs"]["packages"][0]
     (creative,) = pkg["creatives"]
-    typed = [asset for asset in creative["assets"].values() if isinstance(asset, dict) and "asset_type" in asset]
-    assert len(typed) == 1, f"expected exactly one typed asset to break, got {list(creative['assets'])}"
-    breaks(typed[0])
+    # The named format requires more than one asset, so the broken slot is named: the
+    # creative's media asset, the one carrying its content. The click_url slot stays valid.
+    breaks(inline_creative_media_asset(creative))
     pkg["creatives"] = [mark(creative)]
 
 
