@@ -297,8 +297,8 @@ class TestAliasPreservesIdentity:
         assert second == first
 
     @pytest.mark.asyncio
-    async def test_env_unset_public_agent_dials_canonical_url(self, monkeypatch):
-        """Without the env var, even the public default agent is not rerouted."""
+    async def test_env_unset_public_agent_dials_its_mcp_endpoint(self, monkeypatch):
+        """Without the env var the public agent is dialled at its MCP endpoint, never at its identity origin."""
         from src.core.creative_agent_registry import CreativeAgent
 
         monkeypatch.delenv("ADCP_TESTING", raising=False)
@@ -308,4 +308,4 @@ class TestAliasPreservesIdentity:
 
         constructor, _fetch, _first, _second = await _fetch_formats_with_mocked_seam(registry, agent)
 
-        assert constructor.call_args.kwargs["agent_url"] == PUBLIC_DEFAULT_AGENT_URL
+        assert constructor.call_args.kwargs["agent_url"] == PUBLIC_DEFAULT_MCP_ENDPOINT
