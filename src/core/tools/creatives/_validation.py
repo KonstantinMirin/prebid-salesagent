@@ -7,6 +7,7 @@ from typing import Any
 
 from adcp.types import ErrorCode
 from adcp.types.canonical_creative import CanonicalFormatKindStr
+from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from adcp.types.legacy import LegacyCreativeAsset as CreativeAsset
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
@@ -180,6 +181,18 @@ def _validate_creative_input(
         # ``legacy`` is one indexable key that is compared whole and never taken apart.
         return validated_creative
 
+    _check_served_format(creative, assertion, index=index, creative_id=validated_creative.creative_id)
+
+    return validated_creative
+
+
+def _check_served_format(creative: CreativeAsset, assertion: LibraryFormatId, *, index: int, creative_id: str) -> None:
+    """Hold a creative's retained ``format_id`` to the format its creative agent serves.
+
+    A format no agent serves and the canonical mapping registry does not project is refused
+    with REFERENCE_NOT_FOUND; a served format grades the manifest against its required assets.
+    An adapter-provided format (non-HTTP ``agent_url``) is validated by the adapter itself.
+    """
     # The retained assertion names a format a creative agent must actually serve. Canonical
     # agent_url, because a comparison requires it and because this is the value that gets
     # dialled — the same form the identity's ``legacy`` key is built from.
@@ -230,11 +243,9 @@ def _validate_creative_input(
         if format_spec is not None:
             verdict = named_format_manifest_verdict(format_spec, creative.assets)
             if not verdict:
-                raise creative_refusal(verdict, field=f"creatives[{index}]", creative_id=validated_creative.creative_id)
+                raise creative_refusal(verdict, field=f"creatives[{index}]", creative_id=creative_id)
     else:
         logger.debug(f"Skipping external validation for adapter-provided format '{format_id}' (agent_url: {agent_url})")
-
-    return validated_creative
 
 
 def check_unassigned_manifest(creative: CreativeAsset, *, index: int, creative_id: str) -> None:
@@ -247,7 +258,7 @@ def check_unassigned_manifest(creative: CreativeAsset, *, index: int, creative_i
     its ``format_kind`` names: the canonical format's slots, required and typed
     (``kind_manifest_verdict``). Only the canonical arm: a legacy item keys its assets by its
     named format's own asset ids, and is held to that format whether or not it is assigned
-    (``named_format_manifest_verdict``, in :func:`_validate_creative_input`).
+    (``named_format_manifest_verdict``, in :func:`_check_served_format`).
 
     ``field`` names the item, which the pin's creative codes ask a seller to identify; the
     manifest paths that failed are in ``details.problems[]``.
