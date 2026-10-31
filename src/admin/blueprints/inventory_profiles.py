@@ -560,8 +560,16 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
 
                 # The profile supplies its linked products' contract and publisher properties,
                 # so each of them is held to the common-intersection rule as its own save is.
-                for linked in profile.products:
-                    refuse_outside_common_intersection(linked)
+                # Refused like the product form refuses it: flash and return to the form
+                # without committing, so nothing renders from a rolled-back row.
+                try:
+                    for linked in profile.products:
+                        refuse_outside_common_intersection(linked)
+                except ValueError as e:
+                    flash(str(e), "error")
+                    return redirect(
+                        url_for("inventory_profiles.edit_inventory_profile", tenant_id=tenant_id, profile_id=profile_id)
+                    )
 
                 # Count products using this profile before commit
                 product_count = (
@@ -604,8 +612,8 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             select(PropertyTag).where(PropertyTag.tenant_id == tenant_id).order_by(PropertyTag.tag_id)
         ).all()
 
-        # Rendered inside the session: a refused POST rolled back above, which expires
-        # ``profile``, and the form reads it back from the stored row.
+        # Rendered inside the session: a POST that failed in the handler above rolled back,
+        # which expires ``profile``, and the form reads it back from the stored row.
         return render_template(
             "edit_inventory_profile.html",
             tenant_id=tenant_id,
