@@ -307,6 +307,10 @@ def format_manifest(fmt: Any, *, media_url: str | None = None, prompt: str | Non
         "video": lambda asset_id: video_spec(asset_id, **media),
         "audio": lambda asset_id: asset_spec(asset_id, "audio", url=media_url or "https://example.com/spot.mp3"),
         "html": lambda asset_id: asset_spec(asset_id, "html", content="<div>ad</div>"),
+        "vast": lambda asset_id: asset_spec(asset_id, "vast", delivery_type="url", url="https://example.com/vast.xml"),
+        "daast": lambda asset_id: asset_spec(
+            asset_id, "daast", delivery_type="url", url="https://example.com/daast.xml"
+        ),
     }
     return build_assets(
         *(

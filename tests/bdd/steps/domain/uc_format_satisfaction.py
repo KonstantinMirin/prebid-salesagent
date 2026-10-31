@@ -2484,16 +2484,19 @@ def given_sync_legacy_creative_density(ctx: dict, format_id: str, width: int, he
     _sync_legacy_claim(ctx, format_id, width=width, height=height, pixel_ratio=pixel_ratio)
 
 
-def _serve_publisher_format(ctx: dict, format_id: str, asset_types: str, kind: str | None) -> None:
+def _serve_publisher_format(
+    ctx: dict, format_id: str, asset_types: str, kind: str | None, *, slot_fields: dict[str, Any] | None = None
+) -> None:
     """The seller's catalogue is ONE publisher format, served by its own creative agent.
 
     For a scenario whose subject is what the registry's resolution order does with a format
     the reference agent does not carry: the format's declared asset types, and whether it
     declares a ``canonical`` projection at all, are the two inputs steps 2 and 4 read. It is
     served for real by the tenant's peer agent (``set_served_catalogue``), so every
-    transport resolves the creative against the same served declaration.
+    transport resolves the creative against the same served declaration. *slot_fields* are
+    further members every slot carries (:func:`_publisher_format`).
     """
-    ctx["served_format"] = _publisher_format(format_id, asset_types, kind)
+    ctx["served_format"] = _publisher_format(format_id, asset_types, kind, slot_fields=slot_fields)
     ctx["env"].set_served_catalogue([ctx["served_format"]])
 
 
@@ -2556,12 +2559,8 @@ def given_served_versioned_publisher_format(ctx: dict, format_id: str, asset_typ
     ``requirements.<asset_type>_version`` (``vast_version`` / ``daast_version``): the
     registry's versioned structural entries match on it.
     """
-    ctx["env"].set_served_catalogue(
-        [
-            _publisher_format(
-                format_id, asset_type, None, slot_fields={"requirements": {f"{asset_type}_version": version}}
-            )
-        ]
+    _serve_publisher_format(
+        ctx, format_id, asset_type, None, slot_fields={"requirements": {f"{asset_type}_version": version}}
     )
 
 
