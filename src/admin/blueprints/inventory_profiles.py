@@ -604,15 +604,17 @@ def edit_inventory_profile(tenant_id: str, profile_id: int):
             select(PropertyTag).where(PropertyTag.tenant_id == tenant_id).order_by(PropertyTag.tag_id)
         ).all()
 
-    return render_template(
-        "edit_inventory_profile.html",
-        tenant_id=tenant_id,
-        tenant=tenant,
-        profile=profile,
-        authorized_properties=authorized_properties,
-        property_tags=property_tags_list,
-        active_tab="inventory_profiles",
-    )
+        # Rendered inside the session: a refused POST rolled back above, which expires
+        # ``profile``, and the form reads it back from the stored row.
+        return render_template(
+            "edit_inventory_profile.html",
+            tenant_id=tenant_id,
+            tenant=tenant,
+            profile=profile,
+            authorized_properties=authorized_properties,
+            property_tags=property_tags_list,
+            active_tab="inventory_profiles",
+        )
 
 
 @inventory_profiles_bp.route("/<int:profile_id>/delete", methods=["DELETE", "POST"])

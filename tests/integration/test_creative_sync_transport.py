@@ -23,6 +23,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
+from src.core.database.repositories.uow import CreativeUoW
 from tests.factories.core import set_adapter_type
 from tests.factories.creative_asset import build_assets, image_spec, named_format_assets, prompt_assets, text_spec
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope
@@ -673,10 +674,8 @@ class TestGenerativeBuildUpdatePreserve:
             )
 
         # Verify existing generative data is preserved in DB
-        with get_db_session() as session:
-            db_creative = session.scalars(
-                select(DBCreative).filter_by(creative_id="c_gen_07", tenant_id="test_tenant")
-            ).first()
+        with CreativeUoW("test_tenant") as uow:
+            db_creative = uow.creatives.get_by_id("c_gen_07", "test_principal")
             assert db_creative is not None
             assert db_creative.data.get("generative_status") == "draft"
             assert db_creative.data.get("generative_context_id") == "ctx-test-123"

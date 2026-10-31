@@ -776,7 +776,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_creative_sync_transport.py", "test_good_creative_persists_despite_bad_in_batch"),
     ("tests/integration/test_creative_sync_transport.py", "test_new_creative_created"),
     ("tests/integration/test_creative_sync_transport.py", "test_notification_deferred_for_ai_powered"),
-    ("tests/integration/test_creative_sync_transport.py", "test_update_without_prompt_skips_build"),
     ("tests/integration/test_creative_sync_transport.py", "test_upsert_existing_creative_reports_updated"),
     ("tests/integration/test_creative_sync_transport.py", "test_user_assets_not_overwritten"),
     ("tests/integration/test_creative_v3.py", "_get_db_status"),
