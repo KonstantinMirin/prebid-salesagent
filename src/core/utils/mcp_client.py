@@ -520,7 +520,7 @@ async def call_mcp_tool(
 
     Args:
         agent_url: URL of the MCP agent endpoint
-                  Examples: "https://creative.adcontextprotocol.org/mcp"
+                  Examples: "https://creative.adcontextprotocol.org/api/creative-agent/mcp"
                            "https://audience-agent.fly.dev/FastMCP/"
                   NOTE: Use the exact URL the user provided - no modifications!
         tool: Name of the MCP tool to call
@@ -563,7 +563,7 @@ async def call_mcp_tool(
 
     Example:
         result = await call_mcp_tool(
-            agent_url="https://creative.adcontextprotocol.org/mcp",
+            agent_url="https://creative.adcontextprotocol.org/api/creative-agent/mcp",
             tool="list_creative_formats",
             arguments={},
             auth={"type": "bearer", "credentials": "token123"},

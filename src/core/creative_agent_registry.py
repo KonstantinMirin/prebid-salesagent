@@ -159,6 +159,12 @@ def _get_reference_formats() -> list[Format]:
 # CREATIVE_AGENT_ORIGIN is unset.
 PUBLIC_DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
+# Where the public agent is DIALLED when CREATIVE_AGENT_URL is unset: its MCP endpoint.
+# Its identity above is an origin, and that origin serves a web page, not MCP; the AdCP
+# reference creative agent serves MCP only at <base>/api/creative-agent/mcp (the path
+# docs/deployment/environment-variables.md and every shipped config give CREATIVE_AGENT_URL).
+PUBLIC_DEFAULT_MCP_ENDPOINT = f"{PUBLIC_DEFAULT_AGENT_URL}/api/creative-agent/mcp"
+
 
 def agent_origin(agent_url: str) -> str | None:
     """The origin of *agent_url* after the spec's canonicalization: a creative agent's identity.
@@ -235,20 +241,43 @@ def _lists_as(fmt: Format, agent_url: str, format_id: str, stand_in_origin: str 
     )
 
 
+def operator_agent_endpoint() -> str:
+    """The MCP endpoint the seller dials for the operator agent: CREATIVE_AGENT_URL, else the public one.
+
+    An agent's identity is its origin and is never dialled: the endpoint is a separate
+    fact. With CREATIVE_AGENT_URL unset the operator agent is the public agent
+    (CREATIVE_AGENT_ORIGIN unset too) and is dialled at :data:`PUBLIC_DEFAULT_MCP_ENDPOINT`.
+    A deployment that names another agent by CREATIVE_AGENT_ORIGIN and gives no endpoint
+    for it has nowhere to dial, so the dial is refused as a configuration error rather
+    than guessed at the identity origin.
+
+    Raises:
+        AdCPConfigurationError: CREATIVE_AGENT_ORIGIN is set and CREATIVE_AGENT_URL is not.
+    """
+    integrations = get_settings().integrations
+    if integrations.creative_agent_url:
+        return integrations.creative_agent_url
+    if integrations.creative_agent_origin is None:
+        return PUBLIC_DEFAULT_MCP_ENDPOINT
+    logger.error(
+        "CREATIVE_AGENT_ORIGIN=%s names the operator creative agent, but CREATIVE_AGENT_URL gives no "
+        "MCP endpoint to dial it at",
+        integrations.creative_agent_origin,
+    )
+    raise AdCPConfigurationError()
+
+
 def _connection_agent_url(agent_url: str) -> str:
     """Resolve the TRANSPORT url for an agent reference.
 
     A reference to the operator agent (by origin, see :func:`is_operator_agent`) connects
-    to CREATIVE_AGENT_URL, the MCP endpoint itself, when one is configured. Test/CI stacks
-    use this to reach a pinned container serving the standard catalog instead of the live
-    public host, which rate-limits under CI load and must never be a test dependency (the
-    catalog also drifts). Only the connection reroutes: cache keys and format_id
-    federation identity stay on the reference. Every other agent is untouched.
+    to :func:`operator_agent_endpoint`, never to the origin the reference names. Test/CI
+    stacks set CREATIVE_AGENT_URL to reach a pinned container serving the standard catalog
+    instead of the live public host, which rate-limits under CI load and must never be a
+    test dependency (the catalog also drifts). Only the connection reroutes: cache keys and
+    format_id federation identity stay on the reference. Every other agent is untouched.
     """
-    endpoint = get_settings().integrations.creative_agent_url
-    if endpoint and is_operator_agent(agent_url):
-        return endpoint
-    return agent_url
+    return operator_agent_endpoint() if is_operator_agent(agent_url) else agent_url
 
 
 # The format-discovery filter parameter names shared by every layer that
@@ -1018,8 +1047,9 @@ class CreativeAgentRegistry:
         CREATIVE_AGENT_URL when it is configured: :func:`_connection_agent_url` dials that
         endpoint for every operator reference, and the agent there lists its formats under
         its own address (the reference agent stamps ``<its origin>/api/creative-agent``),
-        not under the operator identity it stands in for. None when the operator agent is
-        dialled at its own identity, whose entries name it already.
+        not under the operator identity it stands in for. None when it is unset: the public
+        agent is then dialled at :data:`PUBLIC_DEFAULT_MCP_ENDPOINT`, on its own origin, so
+        its entries name the operator identity already.
         """
         return get_settings().integrations.creative_agent_url or None
 

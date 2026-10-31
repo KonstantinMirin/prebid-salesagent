@@ -30,6 +30,7 @@ from pydantic import ValidationError
 from src.core.config import IntegrationSettings
 from src.core.creative_agent_registry import (
     PUBLIC_DEFAULT_AGENT_URL,
+    PUBLIC_DEFAULT_MCP_ENDPOINT,
     CreativeAgentRegistry,
     _connection_agent_url,
     is_operator_agent,
@@ -66,9 +67,9 @@ class TestConnectionAgentUrl:
         monkeypatch.setenv("CREATIVE_AGENT_URL", _PINNED)
         assert _connection_agent_url("https://other-agent.example.com") == "https://other-agent.example.com"
 
-    def test_env_unset_unchanged(self, monkeypatch):
+    def test_env_unset_dials_the_public_endpoint_not_the_identity(self, monkeypatch):
         monkeypatch.delenv("CREATIVE_AGENT_URL", raising=False)
-        assert _connection_agent_url(PUBLIC_DEFAULT_AGENT_URL) == PUBLIC_DEFAULT_AGENT_URL
+        assert _connection_agent_url(PUBLIC_DEFAULT_AGENT_URL) == PUBLIC_DEFAULT_MCP_ENDPOINT
 
     def test_the_endpoint_is_not_an_identity(self, monkeypatch):
         """A reference naming the dialled endpoint's own agent is not the operator agent."""
