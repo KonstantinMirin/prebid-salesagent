@@ -2937,6 +2937,13 @@ class BaseTestEnv:
             if not self.is_e2e:
                 import src.app  # noqa: F401
 
+                # 0. The live public creative agent is unreachable from any in-process env,
+                #    and an attempt to reach it fails the env on exit. Not on e2e: the dial
+                #    happens in the server, which reaches the stack's own creative agent.
+                from tests.helpers.peer_creative_agent import refuse_the_public_creative_agent
+
+                refuse_the_public_creative_agent(self._guard)
+
             # 0a. Subclass setup that must precede the database and the mocks.
             self._enter_pre()
 

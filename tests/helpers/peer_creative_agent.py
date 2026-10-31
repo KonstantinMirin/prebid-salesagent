@@ -19,6 +19,7 @@ that states their pinned shape.
 from __future__ import annotations
 
 import atexit
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -45,6 +46,48 @@ def _shared_peer_agent() -> ThreadingHTTPServer:
         atexit.register(close)
         _server = server
     return _server
+
+
+def refuse_the_public_creative_agent(guard: Callable[[str, Callable[[], None]], None]) -> None:
+    """No in-process env reaches the live public creative agent; an attempt fails the env on exit.
+
+    The live host rate-limits, drifts and goes down, so it must never be a test
+    dependency. Refused one layer below the seller, at the resolver the egress gate asks,
+    which is a system the seller does not own: its host does not resolve, so nothing is
+    ever sent there. Every attempt is recorded, and the env's exit raises on any, because
+    a refused dial can be absorbed by its call site and leave the scenario green.
+
+    *guard* is the env's ``_guard``; both the patch and the verdict are released through it.
+    """
+    import socket
+    from unittest.mock import patch
+    from urllib.parse import urlsplit
+
+    from src.core.creative_agent_registry import PUBLIC_DEFAULT_AGENT_URL
+
+    host = urlsplit(PUBLIC_DEFAULT_AGENT_URL).hostname
+    resolve = socket.getaddrinfo
+    attempts: list[str] = []
+
+    def getaddrinfo(name: Any, port: Any, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(name, str) and name.lower().rstrip(".") == host:
+            attempts.append(f"{name}:{port}")
+            raise socket.gaierror(socket.EAI_NONAME, f"in-process tests never resolve {name}")
+        return resolve(name, port, *args, **kwargs)
+
+    def verdict() -> None:
+        if attempts:
+            raise AssertionError(
+                f"production dialled the live public creative agent {attempts} from an in-process env. "
+                "The operator creative agent is dialled at CREATIVE_AGENT_URL: compose PeerCreativeAgentMixin "
+                "(tests/harness/peer_agent.py), whose stand-in answers for it, or host the format on the "
+                "tenant's own peer agent (host_reference_format)."
+            )
+
+    patcher = patch.object(socket, "getaddrinfo", getaddrinfo)
+    patcher.start()
+    guard("public creative agent refusal", patcher.stop)
+    guard("public creative agent verdict", verdict)
 
 
 def new_peer_key() -> str:

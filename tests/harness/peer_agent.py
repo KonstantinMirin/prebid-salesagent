@@ -21,7 +21,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
+from unittest.mock import patch
 
+from src.core.config import get_settings
 from src.core.schemas import Format
 from tests.e2e.webhook_capture_service import PEER_CATALOG_TOOL, PEER_PREVIEW_TOOL
 from tests.harness._realize import realize_e2e
@@ -114,6 +116,29 @@ class PeerCreativeAgentMixin(EgressHatchMixin):
         def ensure_tenant(self, **tenant_kwargs: Any) -> Any: ...
 
         def _commit_factory_data(self) -> None: ...
+
+    def _enter_pre(self) -> None:
+        """In process, the operator creative agent is dialled at a stand-in on this worker's peer.
+
+        A static creative in a format of the operator agent (the standard agent the reference
+        capture lists) is previewed by dialling that agent at CREATIVE_AGENT_URL. The e2e
+        server reaches the stack's own creative agent there; an in-process env would reach
+        the live public host, which no test may depend on. So the env points
+        CREATIVE_AGENT_URL, the deployment's own setting, at a peer under a key of its own
+        that answers ``preview_creative`` with the pinned single preview. The operator
+        agent's catalog is unaffected: the testing registry answers it from the capture.
+        """
+        super()._enter_pre()  # type: ignore[misc]
+        if self.is_e2e:  # type: ignore[attr-defined]
+            return
+        key = new_peer_key()
+        endpoint = patch.object(
+            get_settings().integrations,
+            "creative_agent_url",
+            self.serve_peer_tool(key, PEER_PREVIEW_TOOL, single_preview_document(key)),
+        )
+        endpoint.start()
+        self._guard("operator creative agent stand-in", endpoint.stop)
 
     @realize_e2e(_serve_peer_tool_on_the_live_stack)
     def serve_peer_tool(self, key: str, tool: str, document: dict[str, Any]) -> str:
