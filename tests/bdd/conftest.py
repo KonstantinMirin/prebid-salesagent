@@ -402,6 +402,16 @@ def pytest_configure(config: pytest.Config) -> None:
 # These tags correspond to features not yet implemented in production code.
 # Each xfail has a FIXME pointing to the work needed.
 
+#: The tenant arm of BR-RULE-017 on update_media_buy, for every route that holds a
+#: tenant-only approval scenario or row: the scenario in _XFAIL_TAGS, the boundary row in
+#: _SELECTIVE_XFAIL, and the partition and boundary outline rows in _UC002_UC003_LEDGER.
+_UPDATE_TENANT_REVIEW_DIVERGENCE = (
+    "update_media_buy consults only the adapter's manual_approval_required, never "
+    "tenant.human_review_required, which create_media_buy treats as authoritative, so a "
+    "tenant-only review answers completed where submitted is owed; create and update "
+    "disagree — prebid/salesagent#2483"
+)
+
 _XFAIL_TAGS: dict[str, str] = {
     # ── Wired by this sweep; they FAIL, and that failure is the finding. ──
     # These three scenarios were dormant on main (routed to the uc003/uc006
@@ -482,12 +492,7 @@ _XFAIL_TAGS: dict[str, str] = {
     # The tenant arm of BR-RULE-017. Its Given now sets the tenant flag alone (see
     # given_tenant_human_review_flag), so the scenario grades the tenant column; before, the
     # Given also raised the adapter's flag and the pass rode the adapter arm.
-    "T-UC-003-approval-tenant": (
-        "update_media_buy consults only the adapter's manual_approval_required, never "
-        "tenant.human_review_required, which create_media_buy treats as authoritative, so a "
-        "tenant-only review answers completed where submitted is owed; create and update "
-        "disagree — prebid/salesagent#2483"
-    ),
+    "T-UC-003-approval-tenant": _UPDATE_TENANT_REVIEW_DIVERGENCE,
     # Graduated: T-UC-003-ext-u (new_packages refused UNSUPPORTED_FEATURE). XPASS(strict) on
     # a2a, mcp, rest and e2e_rest in box run innet_291026_0131. Inspected per
     # .claude/rules/workflows/xpass-graduation.md: the scenario states the full obligation
@@ -1549,6 +1554,18 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # bdd_e2e run sa-0a76f566 (test-results/innet_120826_1349) has all 7 rows of both outlines
     # PASSING on e2e_rest, 0 failed. tests/bdd/e2e_rest_known_failures.txt carries no UC-010
     # entry for either outline, so nothing to graduate there.
+    # ── create_media_buy and update_media_buy disagree (#2483), one row ──
+    # The tenant row of the submitted-envelope boundary outline. Its Given
+    # (given_approval_configuration) delegates to given_tenant_human_review_flag, which sets
+    # the tenant flag alone since @T-UC-003-approval-tenant was routed above; before, it also
+    # raised the adapter's flag and the row passed on the adapter arm. The adapter row of the
+    # same outline still passes, so the entry names the one row. Strict on all four
+    # transports; it graduates (XPASS strict) when #2483 lands.
+    (
+        "T-UC-003-bva-approval-workflow",
+        {"tenant flag true (submitted task envelope)"},
+        _UPDATE_TENANT_REVIEW_DIVERGENCE,
+    ),
 ]
 
 
@@ -1893,12 +1910,6 @@ _LEDGER_INVOICE_RECIPIENT = (
     "production accepts an invoice_recipient the account does not authorize (BR-RULE-214 is not "
     "implemented), where the row expects VALIDATION_ERROR"
 )
-_LEDGER_UPDATE_TENANT_REVIEW = (
-    "update_media_buy consults only the adapter's manual_approval_required, never "
-    "tenant.human_review_required, which create_media_buy treats as authoritative, so the "
-    "tenant-only row answers completed where it expects submitted; create and update disagree "
-    "— prebid/salesagent#2483"
-)
 
 
 def _example_row(nodeid: str) -> str:
@@ -2106,7 +2117,7 @@ _UC002_UC003_LEDGER: tuple[_CatchallXfail, ...] = (
         "T-UC-002-v31-planned-delivery-with-governance",
         _dormant('given a valid create_media_buy request with plan_id "<>"'),
     ),
-    _X("T-UC-003-boundary-approval-workflow", _LEDGER_UPDATE_TENANT_REVIEW, rows=("tenant flag true (pending)",)),
+    _X("T-UC-003-boundary-approval-workflow", _UPDATE_TENANT_REVIEW_DIVERGENCE, rows=("tenant flag true (pending)",)),
     _X(
         "T-UC-003-bva-billing-eligibility",
         _LEDGER_INVOICE_RECIPIENT,
@@ -2115,7 +2126,7 @@ _UC002_UC003_LEDGER: tuple[_CatchallXfail, ...] = (
     _X("T-UC-003-cancel-package", _no_datatable_field("canceled")),
     _X("T-UC-003-new-packages-add", _LEDGER_NO_ADD_PACKAGES),
     _X("T-UC-003-new-packages-duplicate", _LEDGER_NO_ADD_PACKAGES),
-    _X("T-UC-003-partition-approval-workflow", _LEDGER_UPDATE_TENANT_REVIEW, rows=("pending_human_review",)),
+    _X("T-UC-003-partition-approval-workflow", _UPDATE_TENANT_REVIEW_DIVERGENCE, rows=("pending_human_review",)),
     _X("T-UC-003-storyboard-creative-fate-after-cancellation", _dormant("given a media buy has been canceled")),
 )
 

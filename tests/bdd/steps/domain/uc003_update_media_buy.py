@@ -2432,8 +2432,10 @@ def given_tenant_human_review_flag(ctx: dict, tenant_flag: str) -> None:
     and on the live server alike. It used to delegate to ``given_tenant_manual_approval``,
     which raises the adapter's flag too, so @T-UC-003-approval-tenant ("tenant requires
     manual review", BR-RULE-017 INV-2) passed on the adapter arm and graded nothing about
-    the tenant. The approval-workflow outlines follow this Given with their own adapter
-    Given, so their rows are unchanged.
+    the tenant. The partition and boundary approval-workflow outlines follow this Given with
+    their own adapter Given; @T-UC-003-bva-approval-workflow reaches it through
+    ``given_approval_configuration``, whose tenant row sets no adapter flag. Every tenant-only
+    row now grades the tenant arm, which update_media_buy does not honour (#2483).
     """
     from tests.bdd.steps.generic.given_media_buy import (
         given_tenant_auto_approval,
