@@ -193,7 +193,13 @@ def load_signing_vectors() -> dict[str, dict[str, Any]]:
     root-named, which is what makes the corpus look root-only), and the remaining two are
     orphans. Only one of those is gradeable here — see the constant.
     """
-    out: dict[str, dict[str, Any]] = {}
+    return {vector_id: json.loads(source.read_text()) for vector_id, source in _selected_vector_sources().items()}
+
+
+@lru_cache(maxsize=1)
+def _selected_vector_sources() -> dict[str, Path]:
+    """The document each vector id is driven with: the selection :func:`load_signing_vectors` describes."""
+    out: dict[str, Path] = {}
     for bucket in ("positive", "negative"):
         directory = VECTORS_DIR / bucket
         if not directory.is_dir():
@@ -204,14 +210,28 @@ def load_signing_vectors() -> dict[str, dict[str, Any]]:
         for path in sorted(directory.glob("*.json")):
             slug = path.stem.split("-", 1)[1]
             named = _PROFILE_SLUG_EXCEPTIONS.get(f"{bucket}/{slug}")
-            source = VECTORS_DIR / "profile-3.2" / bucket / f"{named}.json" if named else counterparts.get(slug, path)
-            out[f"{bucket}/{path.stem}"] = json.loads(source.read_text())
+            out[f"{bucket}/{path.stem}"] = (
+                VECTORS_DIR / "profile-3.2" / bucket / f"{named}.json" if named else counterparts.get(slug, path)
+            )
     for vector_id in _PROFILE_ONLY_VECTORS:
         path = VECTORS_DIR / f"{vector_id}.json"
         if not path.is_file():
             raise AssertionError(f"Profile-only conformance vector not vendored: {path}")
-        out[vector_id] = json.loads(path.read_text())
+        out[vector_id] = path
     return out
+
+
+def profile_document_vector_ids() -> dict[str, str]:
+    """``"profile-3.2/<bucket>/<stem>"`` -> the vector id that document is driven under.
+
+    The inverse of the profile selection, for the profile documents only. A profile
+    document the selection drives under no id (the ungradeable orphan) is absent.
+    """
+    return {
+        str(source.relative_to(VECTORS_DIR).with_suffix("")): vector_id
+        for vector_id, source in _selected_vector_sources().items()
+        if source.relative_to(VECTORS_DIR).parts[0] == "profile-3.2"
+    }
 
 
 @lru_cache(maxsize=1)
