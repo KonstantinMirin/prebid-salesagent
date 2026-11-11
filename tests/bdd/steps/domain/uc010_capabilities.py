@@ -35,6 +35,7 @@ from tests.bdd.steps._outcome_helpers import (
 )
 from tests.bdd.steps.domain.uc006_sync_creatives import _CREATIVE_APPROVAL_MODES
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._table import comma_list
 from tests.harness.capabilities import DERIVE_IDENTITY, OMIT_IDENTITY, IdentityMode
 from tests.helpers import pinned_schema
 from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION
@@ -121,10 +122,7 @@ def _config(ctx: dict) -> dict:
 
 def _quoted_list(text: str) -> list[str]:
     """Parse '"a", "b"' / 'display, social' step fragments into a list."""
-    quoted = re.findall(r'"([^"]*)"', text)
-    if quoted:
-        return quoted
-    return [part.strip() for part in text.split(",") if part.strip()]
+    return re.findall(r'"([^"]*)"', text) or comma_list(text)
 
 
 def _assert_schema_valid(ctx: dict) -> None:
@@ -256,7 +254,7 @@ def given_adapter_unavailable(ctx: dict) -> None:
     and adapter_and_db_fail rows' concern, and they assert the omission directly.
     """
     ctx["env"].make_adapter_unavailable()
-    _seed_publisher_partners(ctx, ["degradation-fixture.com"], verified=True)
+    _hold_publishers(ctx, ["degradation-fixture.com"], authorizing=True)
 
 
 @given("the database query fails")
@@ -286,23 +284,28 @@ def given_portfolio_channels(ctx: dict, channels: str) -> None:
     ctx["env"].set_portfolio_channels(_quoted_list(channels))
 
 
-def _seed_publisher_partners(ctx: dict, domains: list[str], *, verified: bool) -> None:
-    """One partner row per domain, its verification stated: only a verified partner is a
-    publisher the seller may name in ``portfolio.publisher_domains``."""
-    from tests.factories.core import PublisherPartnerFactory
+def _hold_publishers(ctx: dict, domains: list[str], *, authorizing: bool) -> None:
+    """One publisher per domain: its stored adagents.json authorizing this seller, or never fetched.
+
+    Only a publisher whose stored file authorizes the seller is one it may name in
+    ``portfolio.publisher_domains``. The document is stored through the ingest service's
+    apply half (``tests.factories.publisher.authorize_publishers``), the one way a property
+    becomes authorized.
+    """
+    from tests.factories.publisher import PublisherFactory, authorize_publishers
 
     for domain in domains:
-        PublisherPartnerFactory(
-            tenant=ctx["tenant"],
-            publisher_domain=ctx["env"].publisher_address(domain),
-            is_verified=verified,
-            sync_status="success" if verified else "pending",
-        )
+        address = ctx["env"].publisher_address(domain)
+        if authorizing:
+            authorize_publishers(ctx["tenant"], address)
+        else:
+            PublisherFactory(tenant=ctx["tenant"], domain=address)
 
 
 @given(parsers.re(r"the tenant has (?P<state>verified|unverified) publisher partnerships with domains (?P<domains>.+)"))
 def given_publisher_partnerships(ctx: dict, state: str, domains: str) -> None:
-    _seed_publisher_partners(ctx, _quoted_list(domains), verified=state == "verified")
+    """``verified``: the publisher's stored adagents.json authorizes this seller; ``unverified``: never fetched."""
+    _hold_publishers(ctx, _quoted_list(domains), authorizing=state == "verified")
 
 
 @given(
@@ -312,13 +315,44 @@ def given_publisher_partnerships(ctx: dict, state: str, domains: str) -> None:
     )
 )
 def given_authorized_property(ctx: dict, domain: str | None, own_host: str | None, status: str) -> None:
-    """One property the seller sells for the publisher at *domain*, or on the tenant's own
-    host (whose stored hostname is the domain), in one of the ``ck_verification_status``
-    states (pending, verified, failed)."""
-    from tests.factories.core import AuthorizedPropertyFactory
+    """The publisher at *domain* (or the tenant's own host) in one of three states.
+
+    ``verified``: its stored adagents.json authorizes this seller for a property;
+    ``pending``: held but never fetched; ``failed``: its last fetch failed and nothing is
+    stored. Properties come only from a publisher's file, so these are the states a
+    publisher's authorization can be in.
+    """
+    from tests.factories.publisher import PublisherFactory, authorize_publishers
 
     publisher_domain = ctx["tenant"].virtual_host_name if own_host else domain
-    AuthorizedPropertyFactory(tenant=ctx["tenant"], publisher_domain=publisher_domain, verification_status=status)
+    assert publisher_domain is not None
+    if status == "verified":
+        authorize_publishers(ctx["tenant"], publisher_domain)
+    elif status == "pending":
+        PublisherFactory(tenant=ctx["tenant"], domain=publisher_domain)
+    elif status == "failed":
+        PublisherFactory(
+            tenant=ctx["tenant"],
+            domain=publisher_domain,
+            fetch_status="not_found",
+            fetch_error="adagents.json not found for this domain",
+        )
+    else:
+        raise AssertionError(f"no publisher state {status!r}")
+
+
+@given(parsers.parse("the stored adagents.json of the tenant's own host was last fetched {hours:d} hours ago"))
+def given_own_host_document_aged(ctx: dict, hours: int) -> None:
+    """Move the last successful fetch of the tenant's own-host publisher back *hours* (the harness clock)."""
+    from datetime import UTC, datetime, timedelta
+
+    from src.core.database.models import Publisher
+
+    session = ctx["env"].get_session()
+    publisher = session.get(Publisher, (ctx["tenant"].tenant_id, ctx["tenant"].virtual_host_name))
+    assert publisher is not None and publisher.fetched_at is not None, "the tenant holds no stored own-host document"
+    publisher.fetched_at = datetime.now(UTC) - timedelta(hours=hours)
+    session.commit()
 
 
 @given("the adapter provides targeting capabilities including geo")
@@ -472,10 +506,10 @@ def given_state_snapshot(ctx: dict) -> None:
 
 def _db_state_snapshot(env: Any) -> dict[str, int]:
     """Row counts of the mutable tables a capabilities call could touch."""
-    from src.core.database.models import MediaBuy, Principal, PublisherPartner, Tenant
+    from src.core.database.models import MediaBuy, Principal, Publisher, Tenant
 
     env._commit_factory_data()
-    return {model.__tablename__: len(env.query(model)) for model in (Tenant, Principal, PublisherPartner, MediaBuy)}
+    return {model.__tablename__: len(env.query(model)) for model in (Tenant, Principal, Publisher, MediaBuy)}
 
 
 # ── Givens: auth state ───────────────────────────────────────────────
@@ -941,7 +975,7 @@ def then_supported_billing_nonempty(ctx: dict) -> None:
 
 @then(parsers.parse("account.supported_billing should equal {expected_set}"))
 def then_supported_billing_equals(ctx: dict, expected_set: str) -> None:
-    expected = [part.strip() for part in expected_set.strip("[]").split(",") if part.strip()]
+    expected = comma_list(expected_set.strip("[]"))
     value = wire_field(ctx, "account.supported_billing")
     assert sorted(value) == sorted(expected), f"supported_billing {value!r} != {expected!r}"
 
@@ -1720,10 +1754,7 @@ _VENDOR_METRIC_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 def _parse_bracket_list(token: str) -> list[str]:
     """Parse a Gherkin '[a, b]' fragment into a list of bare string tokens."""
-    inner = token.strip().removeprefix("[").removesuffix("]").strip()
-    if not inner:
-        return []
-    return [part.strip() for part in inner.split(",") if part.strip()]
+    return comma_list(token.strip().removeprefix("[").removesuffix("]"))
 
 
 def _grade_array_or_absent(ctx: dict, path: str, expected: str) -> None:

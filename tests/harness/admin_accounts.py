@@ -248,6 +248,19 @@ class AdminAccountEnv:
         """The integer id the edit route takes."""
         return self._inventory_profile(profile_id).id
 
+    def authorize_publisher(self, domain: str) -> None:
+        """Store *domain*'s adagents.json authorizing this tenant for one website, unless it is stored.
+
+        The profile forms accept a publisher selector only for a publisher whose stored file
+        authorizes the seller (``selector_selection``), as ``get_products`` sells it. Stored
+        without a fetch, through the ingest service's apply half, as a seed stores it.
+        """
+        from scripts.setup.seed_products import seed_verified_website
+
+        with get_db_session() as session:
+            if seed_verified_website(session, self._tenant_id, domain):
+                session.commit()
+
     def products_path(self, path: str = "") -> str:
         """The product routes of this tenant, which the product forms post to."""
         return f"/tenant/{self._tenant_id}/products/{path}"

@@ -14,18 +14,19 @@ from sqlalchemy import func, select
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
-    AuthorizedProperty,
     CurrencyLimit,
     GAMInventory,
     Product,
     Tenant,
 )
 from src.core.database.repositories.principal_lookup import count_principals_by_tenant
-from src.core.database.repositories.signing_key import SigningKeyRepository
-from src.core.database.repositories.tenant_config import (
-    TenantConfigRepository,
-    count_verified_publisher_partners_by_tenant,
+from src.core.database.repositories.publisher import (
+    NO_PUBLISHERS,
+    AuthorizedCounts,
+    PublisherRepository,
+    count_authorized_by_tenant,
 )
+from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.database.repositories.tenant_counts import count_by_tenant
 from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 from src.core.signing.posture import KeyBacking, signing_key_backed
@@ -51,12 +52,6 @@ def _mock_adapter_config_state() -> tuple[bool, str]:
     if get_settings().mock_adapter_counts_as_configured:
         return True, "Mock adapter configured (test mode)"
     return False, "Mock adapter - Configure a real ad server for production"
-
-
-def _verified_publisher_count(session, tenant_id: str) -> int:
-    """How many of the tenant's publisher partners have verified it, through the one
-    repository read of "verified partners" that ``get_adcp_capabilities`` also uses."""
-    return len(TenantConfigRepository(session, tenant_id).list_publisher_partners(verified=True))
 
 
 def _is_multi_tenant_mode() -> bool:
@@ -192,11 +187,10 @@ class SetupChecklistService:
                 uncached_ids,
                 CurrencyLimit.max_daily_package_spend.isnot(None),
             )
-            property_counts = count_by_tenant(session, AuthorizedProperty.tenant_id, uncached_ids)
+            authorized_counts = count_authorized_by_tenant(session, uncached_ids, datetime.now(UTC))
             gam_inventory_counts = count_by_tenant(session, GAMInventory.tenant_id, uncached_ids)
             product_counts = count_by_tenant(session, Product.tenant_id, uncached_ids)
             principal_counts = count_principals_by_tenant(session, uncached_ids)
-            verified_publisher_counts = count_verified_publisher_partners_by_tenant(session, uncached_ids)
 
             # Build status for each uncached tenant using pre-fetched data
             for tenant_id in uncached_ids:
@@ -210,8 +204,7 @@ class SetupChecklistService:
                     tenant=tenant,
                     currency_count=currency_counts.get(tenant_id, 0),
                     budget_limit_count=budget_limit_counts.get(tenant_id, 0),
-                    property_count=property_counts.get(tenant_id, 0),
-                    verified_publisher_count=verified_publisher_counts.get(tenant_id, 0),
+                    authorized=authorized_counts.get(tenant_id, NO_PUBLISHERS),
                     gam_inventory_count=gam_inventory_counts.get(tenant_id, 0),
                     product_count=product_counts.get(tenant_id, 0),
                     principal_count=principal_counts.get(tenant_id, 0),
@@ -282,8 +275,7 @@ class SetupChecklistService:
         tenant: Tenant,
         currency_count: int,
         budget_limit_count: int,
-        property_count: int,
-        verified_publisher_count: int,
+        authorized: AuthorizedCounts,
         gam_inventory_count: int,
         product_count: int,
         principal_count: int,
@@ -295,8 +287,7 @@ class SetupChecklistService:
             tenant: Tenant object
             currency_count: Number of currency limits
             budget_limit_count: Number of currency limits with budget controls
-            property_count: Number of authorized properties
-            verified_publisher_count: Number of verified publisher partners
+            authorized: What the tenant's publishers' stored files authorize now
             gam_inventory_count: Number of GAM inventory items
             product_count: Number of products
             principal_count: Number of principals
@@ -310,8 +301,7 @@ class SetupChecklistService:
         critical_tasks = self._build_critical_tasks(
             tenant,
             currency_count,
-            property_count,
-            verified_publisher_count,
+            authorized,
             gam_inventory_count,
             product_count,
             principal_count,
@@ -426,32 +416,10 @@ class SetupChecklistService:
                 )
             )
 
-        # 4. Authorized Properties
-        # Single source of truth: AuthorizedProperty table
-        # (Populated automatically when syncing verified PublisherPartners)
-        stmt = (
-            select(func.count()).select_from(AuthorizedProperty).where(AuthorizedProperty.tenant_id == self.tenant_id)
-        )
-        property_count = session.scalar(stmt) or 0
-
-        # Also check verified publisher count for better messaging
-        verified_publisher_count = _verified_publisher_count(session, self.tenant_id)
-
-        is_complete = property_count > 0
-        details = (
-            f"{property_count} properties from {verified_publisher_count} verified publishers"
-            if property_count > 0
-            else "Add publishers and sync to discover properties"
-        )
-
+        # 4. Authorized Properties: what the publishers' stored adagents.json files authorize now
         tasks.append(
-            SetupTask(
-                key="authorized_properties",
-                name="Authorized Properties",
-                description="Configure properties with adagents.json for verification",
-                is_complete=is_complete,
-                action_url=f"/tenant/{self.tenant_id}/inventory#publishers-pane",
-                details=details,
+            self._authorized_properties_task(
+                PublisherRepository(session, self.tenant_id).count_authorized(datetime.now(UTC))
             )
         )
 
@@ -751,12 +719,37 @@ class SetupChecklistService:
 
         return tasks
 
+    def _authorized_properties_task(self, authorized: AuthorizedCounts) -> SetupTask:
+        """The authorized-properties task from what the publishers' stored files authorize now.
+
+        A publisher whose stored file is past the 24-hour freshness window authorizes nothing
+        until a fetch succeeds (managed-networks.mdx :623-626); the task says so, so an
+        operator whose seeded or fetched publishers went stale learns why they stopped
+        authorizing.
+        """
+        if authorized.properties > 0:
+            details = f"{authorized.properties} properties from {authorized.publishers} authorizing publishers"
+        else:
+            details = "Add publishers and refresh them to read their properties"
+        if authorized.stale:
+            details += (
+                f". {authorized.stale} publisher(s) stopped authorizing this agent: their stored adagents.json "
+                "is older than 24 hours. Sync publishers to fetch them again"
+            )
+        return SetupTask(
+            key="authorized_properties",
+            name="Authorized Properties",
+            description="Add publishers whose adagents.json authorizes this sales agent",
+            is_complete=authorized.properties > 0,
+            action_url=f"/tenant/{self.tenant_id}/inventory#publishers-pane",
+            details=details,
+        )
+
     def _build_critical_tasks(
         self,
         tenant: Tenant,
         currency_count: int,
-        property_count: int,
-        verified_publisher_count: int,
+        authorized: AuthorizedCounts,
         gam_inventory_count: int,
         product_count: int,
         principal_count: int,
@@ -831,27 +824,9 @@ class SetupChecklistService:
                 )
             )
 
-        # 4. Authorized Properties
-        # Single source of truth: AuthorizedProperty table
-        # (Populated automatically when syncing verified PublisherPartners)
-        # Note: property_count and verified_publisher_count are passed as parameters (pre-fetched)
-        properties_is_complete = property_count > 0
-        properties_details = (
-            f"{property_count} properties from {verified_publisher_count} verified publishers"
-            if property_count > 0
-            else "Add publishers and sync to discover properties"
-        )
-
-        tasks.append(
-            SetupTask(
-                key="authorized_properties",
-                name="Authorized Properties",
-                description="Configure properties with adagents.json for verification",
-                is_complete=properties_is_complete,
-                action_url=f"/tenant/{self.tenant_id}/inventory#publishers-pane",
-                details=properties_details,
-            )
-        )
+        # 4. Authorized Properties: what the publishers' stored adagents.json files authorize now
+        # (pre-fetched).
+        tasks.append(self._authorized_properties_task(authorized))
 
         # 4. Inventory Synced - Only show after ad server is configured
         if ad_server_fully_configured:
