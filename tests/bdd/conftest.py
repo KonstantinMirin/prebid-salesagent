@@ -113,7 +113,6 @@ pytest_plugins = [
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",
     "tests.bdd.steps.domain.mcp_endpoint_paths",
-    "tests.bdd.steps.domain.publisher_format_catalog",
     "tests.bdd.steps.domain.publisher_authorization",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
@@ -5400,6 +5399,12 @@ def _uc010_wired_tags() -> frozenset[str]:
             # than for its real, cited reason (#1291).
             "T-UC-010-main-reporting-delivery",
             "T-UC-010-degradation-no-cascade",
+            # portfolio.publisher_domains: the verified publishers, or no portfolio at all
+            "T-UC-010-portfolio-verified-publishers",
+            "T-UC-010-portfolio-no-verified-publisher",
+            "T-UC-010-portfolio-canonical-domain",
+            "T-UC-010-portfolio-rejected-domain",
+            "T-UC-010-portfolio-only-rejected-domain",
             "T-UC-010-main-timestamp",
             "T-UC-010-main-readonly",
             "T-UC-010-pricing",
@@ -5407,6 +5412,8 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-conversion-caps",
             "T-UC-010-creative-caps",
             "T-UC-010-ext-b-schema-valid",
+            # portfolio under each failed dependency: named, or omitted, never a placeholder
+            "T-UC-010-ext-b-degradation",
             "T-UC-010-ext-a",
             "T-UC-010-account-require-operator-auth",
             "T-UC-010-account-authorization-endpoint",
@@ -5486,6 +5493,13 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-local-orphaned-specialism",
             "T-UC-010-local-unbacked-protocol",
             "T-UC-010-local-inline-creative-management",
+            # Batch 17 — the locally-added advertising-policy graders. Their feature was
+            # edited before it was wired, so it had never run; portfolio, and the policy
+            # inside it, now exists only for a seller some publisher has verified.
+            "T-UC-010-local-advertising-policy-declared",
+            "T-UC-010-local-advertising-policy-absent",
+            "T-UC-010-local-advertising-policy-empty-description",
+            "T-UC-010-local-advertising-policy-no-verified-publisher",
             # Batch 14 — account.sandbox boundary outline (#1721 M4). Was dormant
             # (no bound Given for "the tenant account is configured for
             # {boundary_point}"), citing #1855 (generic wiring) instead of the
@@ -6795,19 +6809,6 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
     ),
-    # ── @pubformats (local publisher-format-catalog feature, RFC S3) ────────
-    # An UNSCOPED `when` row for the same reason as the rows around it: T-PUBFORMATS-* tags
-    # carry no T-UC-<n>, so detect_uc returns None and no coarse bucket claims them.
-    #
-    # The product env, because one scenario dispatches get_products and reads the product
-    # off the wire; the adagents.json fetches use `fetch_agent_card`, which every env has.
-    # No seed: the Background's "a tenant is configured for product discovery" seeds the
-    # tenant and principal, as for the canonical-format-filter rows.
-    EnvRoute(
-        tag="pubformats",
-        when=lambda m: "pubformats" in m,
-        env_builder=_build_product_env,
-    ),
     # ── @pubauth (local publisher-authorization feature) ────────────────────
     # A `when` row because its scenarios carry T-ADMIN-PUBAUTH-* tags, which detect_uc
     # files under the ADMIN bucket -- whose env drives the accounts pages and serves no
@@ -6821,6 +6822,16 @@ ENV_ROUTES: list[EnvRoute] = [
     EnvRoute(
         tag="tenantid",
         when=lambda m: "tenantid" in m,
+        env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @adagents (local trust-root adagents.json feature) ──────────────────
+    # The same shape as @agentcard: an unscoped row for T-ADAGENTS-* identity tags, the
+    # capabilities env for its in-process ASGI client, and a tenant declaring its own
+    # virtual_host, whose properties are what the document is built from.
+    EnvRoute(
+        tag="adagents",
+        when=lambda m: "adagents" in m,
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
     ),
