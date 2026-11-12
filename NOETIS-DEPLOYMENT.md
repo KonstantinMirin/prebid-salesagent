@@ -59,8 +59,11 @@ example in compose:
 ### Publishers
 
 - A product is offered only for publishers whose `/.well-known/adagents.json` authorizes the
-  tenant's URL and was fetched in the last 24 hours. Each site's file lists one entry per seller
-  that sells it.
+  tenant's URL and was fetched in the last 24 hours.
+- At AdCP 3.2.7 an `authorized_agents[].url` is the exact endpoint buyers call, path included, and
+  "a bare origin matches only an agent served at the root". List each seller twice, as
+  `https://<sales host>/mcp` and `https://<sales host>/a2a`, and have buyers dial exactly `/mcp`
+  (a trailing slash is a different URL).
 - The image's crontab re-fetches every publisher every 6 hours
   (`scripts/ops/refresh_publishers.py`). If you replace that crontab, keep the job, or products
   disappear a day after the last fetch. Run the script by hand after publishing a site's file.
