@@ -1,118 +1,114 @@
-# noetis deployment: handoff notes
+# Deploying noetis
 
-The `noetis` branch of this fork is what the noetis deployments run: upstream `main` plus the
-owner's open PR branches, each merged in, plus a few `carry/*` branches (this note is one). This
-file records what running it in production taught us, so the next person does not relearn it.
+`noetis` is upstream [prebid/salesagent](https://github.com/prebid/salesagent) `main` with the
+open PRs below merged in. It runs AdCP 3.2.7 (adcp 9.3.0). This note lists what you have to set up
+or know when you deploy it in your own environment. Everything `noetis` already fixes is left out.
 
-Hosts, addresses, secrets, the deploy and seed scripts, and the per-upgrade records live in the
-private `noetis-deploy` repository (ask the owner for access). Its `README.md` is the operating
-manual; `upgrades/2026-11-11-adcp-3.2/README.md` is the most recent upgrade, step by step.
+## What noetis adds to main
 
-State as of 2026-11-12: tag `noetis-2026.11.11-1`, AdCP 3.2.7 (adcp 9.3.0), upstream `main`
-`48e8d9b0c` plus #2313, #2327, #2330, #2411, #2412, #2498, #2189 and
-`carry/alembic-merge-2412-2330`. #2330 has since merged upstream.
+- [#2313](https://github.com/prebid/salesagent/pull/2313): `GET /tls/ask`, so a reverse proxy can
+  gate on-demand TLS by tenant host. Off by default; set `TLS_ASK_ENABLED=true` to use it.
+- [#2327](https://github.com/prebid/salesagent/pull/2327): the capabilities portfolio names
+  verified publishers, and a host that owns no property answers 404 for `adagents.json`.
+- [#2330](https://github.com/prebid/salesagent/pull/2330) (since merged upstream): products derive
+  their publishers and format options from each publisher's stored `adagents.json`.
+- [#2411](https://github.com/prebid/salesagent/pull/2411): MCP tool schemas keep their `$ref`s, so
+  `tools/list` stays small enough for an LLM client.
+- [#2412](https://github.com/prebid/salesagent/pull/2412): a signed request's keyid resolves
+  against the addressed tenant's onboarding records (keys pinned per principal).
+- [#2498](https://github.com/prebid/salesagent/pull/2498): Google Ad Manager booking, creative
+  trafficking, geo targeting and delivery reporting fixes.
+- [#2189](https://github.com/prebid/salesagent/pull/2189): test-run reporting (CI only).
+- An empty alembic revision that joins the migration heads of
+  [#2330](https://github.com/prebid/salesagent/pull/2330) and
+  [#2412](https://github.com/prebid/salesagent/pull/2412).
 
-## Branch model
+## Set up before the first deploy
 
-- `noetis` only ever receives merges: upstream `main`, a PR branch, or a `carry/*` branch. Nothing
-  is committed on it directly. A fix that the integration needs (for example the empty migration
-  that joins two PRs' alembic heads) goes on its own `carry/*` branch and is merged like a PR.
-- A re-cut rebuilds `noetis` from `main` by merging only what should stay. To keep the push a
-  fast-forward, merge the old tip with `git merge -s ours fork/noetis` after the re-cut, and check
-  that the tree is the one you meant (`git rev-parse HEAD^{tree}`).
-- Deploys are tagged `noetis-YYYY.MM.DD-N` on `noetis`.
+### Container health check
 
-## Gotchas
+The image's health check gives the app a 5-second start period, but the first start after a
+release runs the migrations and takes about 2 minutes. The container shows `unhealthy` first, and
+an automatic rollback reads that as a failed deploy. Give the app a longer start period, for
+example in compose:
 
-### Upgrades and migrations
+```yaml
+  app:
+    healthcheck:
+      start_period: 300s
+```
 
-1. **A re-cut can orphan a migration.** If the old `noetis` carried a migration that the new one
-   does not (a PR changed or dropped it), the new image crash-loops with "Can't locate revision".
-   Downgrade that revision with the **old** image before switching
-   (`alembic downgrade <its down_revision>`), then start the new image.
-2. **Two carried PRs can each add an alembic head.** The single-head guard then fails. Join them
-   with an empty merge revision on a `carry/*` branch; upstream needs none, because the second PR
-   to land re-points its `down_revision`.
-3. **The first start after an upgrade takes about 2 minutes** (migrations run on start). The image's
-   own healthcheck has a 5-second start period, so the container reports `unhealthy` before it
-   turns `healthy`, and an automatic rollback reads that as a failure. Give the `app` service a
-   `healthcheck: start_period: 300s` in compose.
-4. **Rehearse data migrations on a copy of the production dump** before the live switch. Migration
-   `b4f1a9c27d53` (#2474) aborts if any creative names a format agent other than the operator's
-   identity; the first production switch crash-looped on it.
+### Creative agent settings
 
-### Creative agent: identity and transport (#2474)
+- `CREATIVE_AGENT_URL` is the agent's MCP endpoint, ending in `/mcp`, not its base URL.
+- `CREATIVE_AGENT_ORIGIN` is the format identity. Unset, it is the public reference agent,
+  `https://creative.adcontextprotocol.org`.
+- **If you self-host the reference creative agent**, set `CREATIVE_AGENT_ORIGIN` to its origin
+  (for example `https://creative.example.com`), and make every product's format references name
+  the address it lists formats under, `<origin>/api/creative-agent`. Without this,
+  `sync_creatives` refuses every format except static display images as `UNSUPPORTED_FEATURE`
+  ([#2546](https://github.com/prebid/salesagent/issues/2546)). Buyers then use the format ids
+  your products list.
+- **HTML banners:** a self-hosted 3.2.x reference agent resolves `display_*_html` as canonical
+  `html5`, so products offer an `html5` option for them, and the buyer's inline HTML reaches Google
+  Ad Manager as a third-party creative. The public agent already serves 3.3 beta, which resolves
+  them as `display_tag`; the seller cannot traffic that yet
+  ([#2547](https://github.com/prebid/salesagent/issues/2547)). Use a self-hosted 3.2.x agent if
+  you sell HTML banners.
 
-5. **`CREATIVE_AGENT_URL` is the MCP endpoint itself** (ending in `/mcp`), not the agent's base URL.
-   `CREATIVE_AGENT_ORIGIN` is the format **identity**; unset, it is the public reference agent,
-   `https://creative.adcontextprotocol.org`.
-6. **A self-hosted reference agent needs `CREATIVE_AGENT_ORIGIN` set to its own origin**, and every
-   stored format reference (products' `format_options[].v1_format_ref`, creatives, packages) must
-   name the address it lists formats under, `<origin>/api/creative-agent`. With `ORIGIN` unset,
-   `sync_creatives` finds no format declaration for any operator reference and refuses every format
-   except static display images as `UNSUPPORTED_FEATURE` (#2546). Buyers then copy the
-   self-hosted agent's format ids from `get_products`, not the public ones.
-7. **Test mode hides creative-path problems.** Under `ADCP_TESTING`, formats resolve from a
-   committed capture that names the public agent, and no creative agent is dialled for resolution.
-   A dry run on a test deployment does not validate the creative path of a production deployment
-   that dials a real agent.
-8. **Inline HTML banners.** The 3.2.x reference catalogue labels `display_*_html` as canonical
-   `html5`, while the 3.2.7 spec text says inline markup is `display_tag`
-   (`docs/creative/channels/display.mdx`: "Inline third-party markup is never an `html5` bundle";
-   fixed upstream only in adcontextprotocol/adcp#8357, 3.3 beta). A self-hosted 3.2.x agent therefore
-   resolves them as `html5`, and products should offer `html5` options for them. The public agent
-   (3.3 beta) says `display_tag`, which today's products and GAM path do not handle (#2547).
-   With #2498, an `html` asset reaches GAM as a `ThirdPartyCreative` snippet.
+### Publishers
 
-### Publishers and products (#2330)
+- A product is offered only for publishers whose `/.well-known/adagents.json` authorizes the
+  tenant's URL and was fetched in the last 24 hours. Each site's file lists one entry per seller
+  that sells it.
+- The image's crontab re-fetches every publisher every 6 hours
+  (`scripts/ops/refresh_publishers.py`). If you replace that crontab, keep the job, or products
+  disappear a day after the last fetch. Run the script by hand after publishing a site's file.
+- A fetch never follows a redirect to another registrable domain, so a tenant's publisher must be
+  the domain that serves the file, not a host that redirects to it.
 
-9. **A product is offered only for publishers whose `adagents.json`, fetched within the last 24
-   hours, authorizes the tenant's URL.** The image's crontab refreshes every 6 hours
-   (`scripts/ops/refresh_publishers.py`); a deployment that mounts its own crontab must keep that
-   job. If products disappear a day after a deploy, check the publisher's `fetch_status`.
-10. **A fetch never follows a redirect off the registrable domain.** Name the domain that serves the
-    file (for example `briefgateway.com`, not a host that 301s to it).
-11. **The file is the publisher's, not the agent's.** It lists one `authorized_agents` entry per
-    seller; one site can authorize several sellers (production and test). Publish the site, then
-    fetch (`refresh_publishers.py`) and check the tenant's products appear.
-12. **The conformance tenant needs a real publisher.** The storyboard test kit's publishers
-    (`*.example`) must stay, because `media_buy_seller/inventory_list_targeting` grades that the
-    seller carries them, but they never resolve, so they never sell. Add a fetchable site that
-    authorizes the conformance tenant and attach it to the tenant's products.
+### Testing a deployment
 
-### Seeding
+On a deployment with `ADCP_TESTING` set, formats resolve from a committed catalogue that names the
+public agent, and no creative agent is asked. A buy that works there does not prove the creative
+path of a production deployment that uses a real (for example self-hosted) agent. Check that on
+production with a dry-run `sync_creatives`.
 
-13. **The storyboard seeders refuse a production deployment** (`scripts/setup/production_guard.py`:
-    `PRODUCTION`, `ENVIRONMENT=production` or `FLY_APP_NAME`), because they write test-kit
-    credentials. A deployment that keeps `ENVIRONMENT=production` and hosts a conformance tenant on
-    purpose runs only the seeding process with `ENVIRONMENT=conformance`.
-14. **The signing seeder needs the compliance bundle on disk.** In a one-off container, call
-    `tests.storyboard.bundle.materialize_bundle()` before `storyboard_signing.seed()`.
-15. **Since AdCP 3.2 a test kit declares the AAO hosted grader's brand**, so
-    `seed_storyboard_tenant` derives its accounts itself. Accounts created for it by hand before 3.2
-    collide on the natural key; delete them and re-seed.
+### A conformance (storyboard) tenant
 
-### Booking
+Only if you host one for AdCP grading:
 
-16. **A buy can be booked and then reported as failed.** If the creative step fails after the
-    adapter booked, the buyer gets a transient error and a retry books a second ad-server order
-    (#2393). On Kevel this happens on every auto-approved buy with a creative (#2416).
-17. **An HTML-only creative passes the pre-adapter check only if `sync_creatives` stored a preview
-    URL and size on it** (#2390). Canonical `html5` zip creatives never become an `Html5Creative`
-    (#2545).
-18. **Readiness is never reported.** `formats_to_provide` stays on a package after its creatives are
-    attached, as the spec requires, but `formats_pending` is never emitted (#2544).
-19. **Only GAM traffics creatives.** Kevel, Triton and Broadstreet do not receive them (#2416);
-    Triton fails in its constructor (#2539), and Broadstreet tenants run on the mock adapter
-    (#2024).
+- The storyboard seeders refuse to run when `PRODUCTION`, `ENVIRONMENT=production` or
+  `FLY_APP_NAME` is set, because they write test-kit credentials. On a deployment that keeps
+  `ENVIRONMENT=production`, run only the seeding process with `ENVIRONMENT=conformance`.
+- The request-signing seeder needs the compliance bundle on disk. In a one-off container, call
+  `tests.storyboard.bundle.materialize_bundle()` before `scripts.setup.storyboard_signing.seed()`.
+- The test kit's publishers (`*.example`) never resolve, so they never sell. Keep them (the
+  `inventory_list_targeting` storyboard checks the seller carries them), and add a real site whose
+  `adagents.json` authorizes the conformance tenant, attached to the tenant's products.
 
-### Buyer clients
+### Upgrading an existing database
 
-20. **MCP headers are fixed when a client connects.** A Claude Code session started without its
-    seller token cannot recover by exporting it later. Use a `headersHelper` on the HTTP MCP server
-    that prints the `Authorization` header, so the token is fetched at connect time.
+Migration `b4f1a9c27d53` (from [#2474](https://github.com/prebid/salesagent/pull/2474)) stops the
+upgrade if any creative names a format agent other than the deployment's `CREATIVE_AGENT_ORIGIN`
+identity. Point those references at the right agent before you switch, and rehearse the upgrade
+on a copy of the production database.
 
-## Open upstream issues to watch
+## Known limitations
 
-#2544 (`formats_pending`), #2545 (`html5` zip), #2546 (format lookup with a self-hosted agent),
-#2547 (`display_tag`), #2390, #2393, #2416, #2024, #2539, #2093, #2236 (canonical format RFC).
+These still happen on `noetis`, which includes all the PRs above:
+
+- A buy can be booked in the ad server and then reported as failed when the creative upload fails,
+  and a retry books a second order
+  ([#2393](https://github.com/prebid/salesagent/issues/2393)).
+- An HTML-only creative passes the pre-booking check only if `sync_creatives` stored a preview URL
+  and size on it ([#2390](https://github.com/prebid/salesagent/issues/2390)).
+- A canonical `html5` zip creative never reaches Google Ad Manager as an `Html5Creative`
+  ([#2545](https://github.com/prebid/salesagent/issues/2545)), and a `display_tag` creative is
+  refused or sent as an image ([#2547](https://github.com/prebid/salesagent/issues/2547)).
+- `get_media_buys` never reports `formats_pending`, so buyers cannot tell when a package's formats
+  are covered ([#2544](https://github.com/prebid/salesagent/issues/2544)).
+- Only Google Ad Manager receives creatives. Kevel and Triton fail
+  ([#2416](https://github.com/prebid/salesagent/issues/2416); Triton already fails in its
+  constructor, [#2539](https://github.com/prebid/salesagent/issues/2539)), and Broadstreet tenants
+  run on the mock adapter ([#2024](https://github.com/prebid/salesagent/issues/2024)).
